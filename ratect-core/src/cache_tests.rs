@@ -209,7 +209,7 @@ fn clean_directory_caches_removes_matching_subdirectories_and_leaves_others() {
     fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
     fs::write(caches_dir.join("key"), "abc123\n").unwrap();
 
-    let removed = clean_directory_caches(&dir, &HashSet::new()).unwrap();
+    let removed = clean_directory_caches(&dir, &HashSet::new(), |_| {}).unwrap();
 
     let mut removed = removed;
     removed.sort();
@@ -231,7 +231,7 @@ fn clean_directory_caches_restricts_to_only_when_given() {
     fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
 
     let only = HashSet::from(["npm-cache".to_string()]);
-    let removed = clean_directory_caches(&dir, &only).unwrap();
+    let removed = clean_directory_caches(&dir, &only, |_| {}).unwrap();
 
     assert_eq!(removed, vec!["npm-cache"]);
     assert!(caches_dir.join("gradle-cache").is_dir());
@@ -244,11 +244,62 @@ fn clean_directory_caches_restricts_to_only_when_given() {
 fn clean_directory_caches_does_nothing_when_the_cache_directory_does_not_exist() {
     let dir = unique_temp_dir();
 
-    let removed = clean_directory_caches(&dir, &HashSet::new()).unwrap();
+    let warnings = std::cell::RefCell::new(Vec::new());
+    let removed =
+        clean_directory_caches(&dir, &HashSet::new(), |w| warnings.borrow_mut().push(w)).unwrap();
 
     assert!(removed.is_empty());
+    // A divergence from Batect, which fails here (ratect#459) — said out
+    // loud, once, so it doesn't read as a clean that found nothing.
+    assert_eq!(
+        warnings.into_inner(),
+        [format!(
+            "There is no cache directory at '{}', so there is nothing to remove.",
+            cache_directory(&dir).display()
+        )]
+    );
 
     fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A cache entry that is a symbolic link is skipped, not followed — Batect
+/// follows it and deletes what it points to, even outside the project
+/// (ratect#459). The link and its target both survive, and the skip is
+/// passed to `warn` once, naming the link.
+#[cfg(unix)]
+#[test]
+fn clean_directory_caches_skips_a_symbolic_link_and_warns_about_it() {
+    let dir = unique_temp_dir();
+    let outside = unique_temp_dir();
+    fs::write(outside.join("precious"), "").unwrap();
+    let caches_dir = cache_directory(&dir);
+    fs::create_dir_all(caches_dir.join("real")).unwrap();
+    std::os::unix::fs::symlink(&outside, caches_dir.join("linked")).unwrap();
+
+    let warnings = std::cell::RefCell::new(Vec::new());
+    let removed =
+        clean_directory_caches(&dir, &HashSet::new(), |w| warnings.borrow_mut().push(w)).unwrap();
+
+    assert_eq!(removed, ["real"]);
+    assert!(caches_dir.join("linked").is_symlink());
+    assert!(outside.join("precious").exists());
+    assert_eq!(
+        warnings.into_inner(),
+        [format!(
+            "Skipped '{}': it is a symbolic link, and a cache clean never follows one.",
+            caches_dir.join("linked").display()
+        )]
+    );
+
+    // A link `only` doesn't name isn't one the clean would have touched, so
+    // it isn't warned about.
+    let warnings = std::cell::RefCell::new(Vec::new());
+    let only = HashSet::from(["other".to_string()]);
+    clean_directory_caches(&dir, &only, |w| warnings.borrow_mut().push(w)).unwrap();
+    assert!(warnings.into_inner().is_empty());
+
+    fs::remove_dir_all(&dir).unwrap();
+    fs::remove_dir_all(&outside).unwrap();
 }
 
 /// A shared cache's volume name carries no project key — that *is* the
@@ -379,7 +430,11 @@ async fn a_shared_only_name_is_refused_without_scope_shared() {
 
     let found = store.list(None).await.unwrap();
     let only = HashSet::from(["registry".to_string()]);
-    let refusal = store.remove(&found, &only).await.unwrap().unwrap_err();
+    let refusal = store
+        .remove(&found, &only, |_| {})
+        .await
+        .unwrap()
+        .unwrap_err();
 
     assert!(matches!(refusal, CacheRefusal::SharedNotNamed(name) if name == "registry"));
 
@@ -399,7 +454,11 @@ async fn a_name_in_both_scopes_is_refused_without_scope_shared() {
 
     let found = store.list(None).await.unwrap();
     let only = HashSet::from(["clash".to_string()]);
-    let refusal = store.remove(&found, &only).await.unwrap().unwrap_err();
+    let refusal = store
+        .remove(&found, &only, |_| {})
+        .await
+        .unwrap()
+        .unwrap_err();
 
     assert!(matches!(refusal, CacheRefusal::SharedNotNamed(name) if name == "clash"));
     // The project's own cache must survive — only the shared one was refused.
@@ -420,7 +479,7 @@ async fn scope_shared_with_no_names_is_refused() {
 
     let found = store.list(Some(CacheScope::Shared)).await.unwrap();
     let refusal = store
-        .remove(&found, &HashSet::new())
+        .remove(&found, &HashSet::new(), |_| {})
         .await
         .unwrap()
         .unwrap_err();
@@ -443,7 +502,7 @@ async fn a_bare_clean_removes_owned_and_never_shared() {
 
     let found = store.list(None).await.unwrap();
     let removed = store
-        .remove(&found, &HashSet::new())
+        .remove(&found, &HashSet::new(), |_| {})
         .await
         .unwrap()
         .unwrap();
@@ -480,24 +539,25 @@ async fn actionable_always_equals_what_remove_would_act_on() {
         // one of this project's own" under Project/None, and is refused
         // outright under Shared — a shared cache is never swept, only
         // removable by naming exactly what `actionable()` already listed.
-        let acted_on: HashSet<String> = match store.remove(&found, &HashSet::new()).await.unwrap() {
-            Ok(removed) => removed.into_iter().map(|cache| cache.name).collect(),
-            Err(CacheRefusal::SharedSweepNotNamed) => {
-                // The refused case: naming exactly `actionable()` must
-                // succeed and remove exactly that set — proving `actionable`
-                // is still "what a clean with these flags would act on",
-                // just requiring the names to be supplied explicitly.
-                store
-                    .remove(&found, &actionable)
-                    .await
-                    .unwrap()
-                    .unwrap()
-                    .into_iter()
-                    .map(|cache| cache.name)
-                    .collect()
-            }
-            Err(other) => panic!("unexpected refusal under scope {scope:?}: {other:?}"),
-        };
+        let acted_on: HashSet<String> =
+            match store.remove(&found, &HashSet::new(), |_| {}).await.unwrap() {
+                Ok(removed) => removed.into_iter().map(|cache| cache.name).collect(),
+                Err(CacheRefusal::SharedSweepNotNamed) => {
+                    // The refused case: naming exactly `actionable()` must
+                    // succeed and remove exactly that set — proving `actionable`
+                    // is still "what a clean with these flags would act on",
+                    // just requiring the names to be supplied explicitly.
+                    store
+                        .remove(&found, &actionable, |_| {})
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .into_iter()
+                        .map(|cache| cache.name)
+                        .collect()
+                }
+                Err(other) => panic!("unexpected refusal under scope {scope:?}: {other:?}"),
+            };
 
         assert_eq!(
             actionable, acted_on,
@@ -520,7 +580,7 @@ async fn removed_caches_carry_both_the_name_and_the_storage() {
 
     let found = store.list(None).await.unwrap();
     let removed = store
-        .remove(&found, &HashSet::new())
+        .remove(&found, &HashSet::new(), |_| {})
         .await
         .unwrap()
         .unwrap();
@@ -555,7 +615,7 @@ async fn a_removed_volume_cache_reports_its_full_volume_name_as_storage() {
 
     let found = store.list(None).await.unwrap();
     let removed = store
-        .remove(&found, &HashSet::new())
+        .remove(&found, &HashSet::new(), |_| {})
         .await
         .unwrap()
         .unwrap();
@@ -563,6 +623,116 @@ async fn a_removed_volume_cache_reports_its_full_volume_name_as_storage() {
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].name, "gradle-cache");
     assert_eq!(removed[0].storage, "batect-cache-abc123-gradle-cache");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// A project holding both kinds of cache under one name, `deps` — a volume
+/// the fake lists and a directory under `.batect/caches` — so a clean of
+/// either type that reached into the other's storage would find something
+/// to remove there. The key is pinned so the volume's name is predictable.
+fn project_with_both_cache_types() -> (PathBuf, FakeRuntime) {
+    let project_dir = unique_temp_dir();
+    touch_cache(&cache_directory(&project_dir), "deps");
+    touch_cache(&cache_directory(&project_dir), "other");
+    fs::write(cache_directory(&project_dir).join("key"), "abc123\n").unwrap();
+    let runtime = FakeRuntime {
+        volumes: vec![
+            "batect-cache-abc123-deps".to_string(),
+            "batect-cache-abc123-other".to_string(),
+        ],
+        ..Default::default()
+    };
+    (project_dir, runtime)
+}
+
+/// Runs `ratect-compat --clean`'s own sequence — `list` scoped to the
+/// project, then `remove` — against a `cache_type` store over the project
+/// `project_with_both_cache_types` built, returning what it removed.
+async fn clean_project(
+    cache_type: CacheType,
+    runtime: &FakeRuntime,
+    project_dir: &Path,
+    only: &[&str],
+) -> Vec<String> {
+    let store =
+        CacheStore::new(cache_type, Some(runtime), project_dir.to_path_buf(), None).unwrap();
+    let found = store.list(Some(CacheScope::Project)).await.unwrap();
+    let only: HashSet<String> = only.iter().map(|name| name.to_string()).collect();
+    let mut removed: Vec<String> = store
+        .remove(&found, &only, |_| {})
+        .await
+        .unwrap()
+        .unwrap()
+        .into_iter()
+        .map(|cache| cache.name)
+        .collect();
+    removed.sort();
+    removed
+}
+
+/// Batect's CCC-5: cleaning volume caches deletes nothing from the host
+/// cache directory.
+#[tokio::test]
+async fn a_volume_clean_leaves_every_cache_directory_in_place() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Volume, &runtime, &project_dir, &[]).await;
+
+    assert_eq!(removed, ["deps", "other"]);
+    assert_eq!(runtime.removed.lock().unwrap().len(), 2);
+    assert!(cache_directory(&project_dir).join("deps").is_dir());
+    assert!(cache_directory(&project_dir).join("other").is_dir());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Batect's CCC-10: cleaning named volume caches leaves the host cache
+/// directory of the same name in place.
+#[tokio::test]
+async fn a_named_volume_clean_leaves_the_same_named_cache_directory_in_place() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Volume, &runtime, &project_dir, &["deps"]).await;
+
+    assert_eq!(removed, ["deps"]);
+    assert_eq!(
+        *runtime.removed.lock().unwrap(),
+        ["batect-cache-abc123-deps"]
+    );
+    assert!(cache_directory(&project_dir).join("deps").is_dir());
+    assert!(cache_directory(&project_dir).join("other").is_dir());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Batect's CCC-15: cleaning directory caches removes no Docker volume,
+/// even from a store that was handed a runtime it could have used.
+#[tokio::test]
+async fn a_directory_clean_removes_no_volume() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Directory, &runtime, &project_dir, &[]).await;
+
+    assert_eq!(removed, ["deps", "other"]);
+    assert!(!cache_directory(&project_dir).join("deps").exists());
+    assert!(runtime.removed.lock().unwrap().is_empty());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Batect's CCC-20: cleaning named directory caches removes no Docker
+/// volume, including the one sharing the name.
+#[tokio::test]
+async fn a_named_directory_clean_removes_no_same_named_volume() {
+    let (project_dir, runtime) = project_with_both_cache_types();
+
+    let removed = clean_project(CacheType::Directory, &runtime, &project_dir, &["deps"]).await;
+
+    assert_eq!(removed, ["deps"]);
+    assert!(!cache_directory(&project_dir).join("deps").exists());
+    assert!(cache_directory(&project_dir).join("other").is_dir());
+    assert!(runtime.removed.lock().unwrap().is_empty());
 
     fs::remove_dir_all(&project_dir).unwrap();
 }
@@ -583,7 +753,7 @@ async fn a_missing_shared_root_reads_as_no_shared_caches() {
     // A name that would be shared under a real root is simply unknown here,
     // not refused — there is nothing to be ambiguous with.
     let only = HashSet::from(["registry".to_string()]);
-    let removed = store.remove(&found, &only).await.unwrap().unwrap();
+    let removed = store.remove(&found, &only, |_| {}).await.unwrap().unwrap();
     assert!(removed.is_empty());
 
     fs::remove_dir_all(&project_dir).unwrap();

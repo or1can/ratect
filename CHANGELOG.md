@@ -82,6 +82,7 @@ history, from when it was the only binary.
 - A Docker daemon that can't be reached at all is reported as unreachable, naming the host tried and what chose it, instead of as a failed API version negotiation.
 - A Docker daemon running Windows containers is refused on connecting, before any task, cache or resource work, naming the operating system it reports.
 - A config-load error about a file inside a Git include names it by its path within the repository plus the remote and ref (`'1.yml' from the bundle '<repo>' at '<ref>'`) instead of its path in the `~/.ratect/incl` clone cache. A missing include also gives the path as written.
+- Cleaning directory caches (`ratect-compat --clean`/`--clean-cache` and `ratect caches clean` with `--cache-type directory`) warns when it skips a cache entry that is a symbolic link, naming the link,, and when the project has no `.batect/caches` directory.
 
 ### Removed
 
@@ -99,6 +100,7 @@ history, from when it was the only binary.
 - `ratect-compat`: `--max-parallelism` rejects values above 2147483647, as Batect does.
 - `ratect-compat`: `--list-tasks` given with `--clean`, `--clean-cache` or `--upgrade`, in either order, lists the tasks, as in Batect, instead of deleting caches or printing the `--upgrade` notice.
 - An `--override-image` naming a container the config doesn't define fails a run only once it reaches a task with a `run`, before that task starts, as in Batect. A run that reaches none — `--skip-prerequisites` on a task with only `prerequisites`, say — succeeds instead of failing.
+- `ratect-compat`: `--clean` and `--clean-cache` with volume caches no longer print `Checking for cache volumes...` when they can't reach Docker, as in Batect.
 - In a YAML config file, a local include whose path starts with `~` (`~/shared.yml`) loads that file from the home directory, as in Batect, instead of looking for a `~` directory beside the file declaring it. A Git include's `path` is still taken as written within the clone.
 - `ratect-compat` loads a `batect.yml` with no `project_name`, as Batect does: the project is named after the root file's directory, lowercased, and one whose name isn't a Docker image-name component fails the load. A root `batect.yml` holding no configuration — empty, only comments, or only a null document such as `---` — fails the load saying so.
 - `ratect config convert` (ratect only) writes a `project_name` into `ratect.toml` when the root `batect.yml` has none — the one `ratect-compat` infers for it.

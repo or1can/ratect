@@ -1179,7 +1179,10 @@ async fn manage_caches(
 
     let only: HashSet<String> = names.into_iter().collect();
 
-    let removed = match store.remove(&found, &only).await? {
+    let removed = match store
+        .remove(&found, &only, |message| stderr.warning(&message))
+        .await?
+    {
         // `--scope shared` with nothing named would silently do nothing,
         // since shared caches are only ever removed by name. Say so instead.
         Err(ratect_core::cache::CacheRefusal::SharedSweepNotNamed) => {

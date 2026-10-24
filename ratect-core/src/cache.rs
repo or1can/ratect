@@ -43,9 +43,10 @@
 //!   depends on matching the *generation* format, only on the file's path
 //!   and layout.
 //! - Cleaning directory caches when the project has no `.batect/caches`
-//!   directory removes nothing, where Batect fails.
+//!   directory removes nothing, with a warning saying so, where Batect fails.
 //! - A cache directory entry that is a symbolic link is skipped when
-//!   cleaning, where Batect follows it and deletes whatever it points to.
+//!   cleaning, with a warning naming it, where Batect follows it and deletes
+//!   whatever it points to.
 //!
 //! The removal *decision* — which volumes or directories match this project,
 //! restricted to `--clean-cache`'s allowlist — lives in plain synchronous
@@ -400,28 +401,55 @@ async fn clean_volume_caches(
 /// alongside them is a plain file, not a directory, so it's never matched
 /// here) — restricted to `only` when non-empty, same convention as above.
 fn matching_cache_directories(cache_dir: &Path, only: &HashSet<String>) -> Result<Vec<String>> {
+    Ok(scan_cache_directories(cache_dir, only)?
+        .map(|found| found.matched)
+        .unwrap_or_default())
+}
+
+/// What [`scan_cache_directories`] found in a cache directory that exists.
+struct CacheDirectoryScan {
+    /// The matching subdirectories' names, sorted.
+    matched: Vec<String>,
+    /// The entries `only` would have matched that are symbolic links, and so
+    /// were skipped rather than followed — sorted, as full paths.
+    skipped_links: Vec<PathBuf>,
+}
+
+/// The subdirectories of `cache_dir` that `only` selects, plus what was
+/// passed over: `None` when `cache_dir` doesn't exist, and every selected
+/// entry that is a symbolic link, skipped rather than followed —
+/// [`clean_directory_caches`] warns about both rather than staying silent.
+fn scan_cache_directories(
+    cache_dir: &Path,
+    only: &HashSet<String>,
+) -> Result<Option<CacheDirectoryScan>> {
     if !cache_dir.is_dir() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
-    let mut matched = Vec::new();
+    let mut found = CacheDirectoryScan {
+        matched: Vec::new(),
+        skipped_links: Vec::new(),
+    };
     for entry in fs::read_dir(cache_dir).with_context(|| format!("Failed to read {cache_dir:?}"))? {
         let entry = entry.with_context(|| format!("Failed to read an entry in {cache_dir:?}"))?;
-        if !entry
-            .file_type()
-            .with_context(|| format!("Failed to inspect {:?}", entry.path()))?
-            .is_dir()
-        {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(only.is_empty() || only.contains(&name)) {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if only.is_empty() || only.contains(&name) {
-            matched.push(name);
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {:?}", entry.path()))?;
+        if file_type.is_symlink() {
+            found.skipped_links.push(entry.path());
+        } else if file_type.is_dir() {
+            found.matched.push(name);
         }
     }
-    matched.sort();
+    found.matched.sort();
+    found.skipped_links.sort();
 
-    Ok(matched)
+    Ok(Some(found))
 }
 
 /// Removes this project's own cache directories (or, with `only` non-empty,
@@ -429,11 +457,29 @@ fn matching_cache_directories(cache_dir: &Path, only: &HashSet<String>) -> Resul
 /// `CacheType::Directory`. Mirrors Batect's own
 /// `CleanupCachesCommand.runForDirectories`, except that a missing cache
 /// directory removes nothing rather than failing, and an entry that is a
-/// symbolic link is skipped rather than followed. Returns the names actually
-/// removed.
-fn clean_directory_caches(project_directory: &Path, only: &HashSet<String>) -> Result<Vec<String>> {
+/// symbolic link is skipped rather than followed — each passed to `warn`,
+/// once, since both would otherwise read exactly like a clean that found
+/// nothing to do. Returns the names actually removed.
+fn clean_directory_caches(
+    project_directory: &Path,
+    only: &HashSet<String>,
+    warn: impl Fn(String),
+) -> Result<Vec<String>> {
     let cache_dir = cache_directory(project_directory);
-    let matched = matching_cache_directories(&cache_dir, only)?;
+    let Some(found) = scan_cache_directories(&cache_dir, only)? else {
+        warn(format!(
+            "There is no cache directory at '{}', so there is nothing to remove.",
+            cache_dir.display()
+        ));
+        return Ok(Vec::new());
+    };
+    for link in &found.skipped_links {
+        warn(format!(
+            "Skipped '{}': it is a symbolic link, and a cache clean never follows one.",
+            link.display()
+        ));
+    }
+    let matched = found.matched;
 
     for name in &matched {
         let dir = cache_dir.join(name);
@@ -663,10 +709,17 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
     /// exactly as narrowed: an explicit `--scope project` clears `found`'s
     /// shared half, so a same-named shared cache is correctly not flagged as
     /// ambiguous when the caller has already said which one they mean.
+    ///
+    /// `warn` receives each warning about what a project-scoped directory
+    /// clean passed over (see `clean_directory_caches`) — a callback, as
+    /// [`crate::docker::DockerClient::new`]'s is, since how a warning is
+    /// printed is each binary's own. [`list`](Self::list) has none: only
+    /// cleaning skips anything, so a list-then-remove run warns once.
     pub async fn remove(
         &self,
         found: &CacheSelection,
         only: &HashSet<String>,
+        warn: impl Fn(String),
     ) -> Result<Result<Vec<RemovedCache>, CacheRefusal>> {
         if only.is_empty() && found.scope == Some(CacheScope::Shared) {
             return Ok(Err(CacheRefusal::SharedSweepNotNamed));
@@ -679,7 +732,7 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
 
         let mut removed = Vec::new();
         if found.covers(CacheScope::Project) {
-            removed.extend(self.remove_project(only).await?);
+            removed.extend(self.remove_project(only, warn).await?);
         }
         if found.covers(CacheScope::Shared) {
             removed.extend(self.remove_shared(only).await?);
@@ -687,7 +740,11 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
         Ok(Ok(removed))
     }
 
-    async fn remove_project(&self, only: &HashSet<String>) -> Result<Vec<RemovedCache>> {
+    async fn remove_project(
+        &self,
+        only: &HashSet<String>,
+        warn: impl Fn(String),
+    ) -> Result<Vec<RemovedCache>> {
         Ok(match self {
             Self::Volume {
                 docker,
@@ -702,7 +759,7 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
                 .collect(),
             Self::Directory {
                 project_directory, ..
-            } => clean_directory_caches(project_directory, only)?
+            } => clean_directory_caches(project_directory, only, warn)?
                 .into_iter()
                 .map(|name| {
                     let storage = cache_directory(project_directory)
