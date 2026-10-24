@@ -6229,6 +6229,84 @@ fn batect_cache_type_directory_cleans_cache_directories() {
     assert!(gone, "the cache directory is still there");
 }
 
+/// #445: a volume-mode `--clean` says it is checking for cache volumes
+/// only once the daemon has been reached, as Batect does — an unreachable
+/// daemon prints the connection error and nothing on stdout. Two failure
+/// points: a missing socket fails at connect, a refused port at version
+/// negotiation.
+#[test]
+fn volume_clean_prints_nothing_on_stdout_when_docker_is_unreachable() {
+    let project = one_task_project("clean-unreachable");
+    let socket = format!("unix://{}", project.join("no.sock").display());
+    for host in [socket.as_str(), "tcp://127.0.0.1:1"] {
+        let output = isolated_docker_command(&project)
+            .args(["--clean", "--docker-host", host])
+            .output()
+            .expect("failed to run ratect");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_ne!(output.status.code(), Some(0), "{host}: {stderr}");
+        assert!(
+            output.stdout.is_empty(),
+            "{host}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(stderr.contains(host), "{host}: {stderr}");
+    }
+    std::fs::remove_dir_all(&project).unwrap();
+}
+
+/// #445's other half: with a reachable daemon, volume mode's output is
+/// unchanged — the progress line first, then each removal, then the
+/// summary — and a plain `--clean` exits 0. Asserted against the daemon's
+/// own volume list too, so a pass doesn't depend on what was printed.
+#[test]
+#[ignore]
+fn volume_clean_reports_progress_then_removals_then_the_summary_via_docker() {
+    let project = one_task_project("clean-volume-order");
+    let caches = project.join(".batect/caches");
+    std::fs::create_dir_all(&caches).unwrap();
+    let key = format!("order{}", std::process::id());
+    std::fs::write(caches.join("key"), format!("{key}\n")).unwrap();
+    let volume = format!("batect-cache-{key}-deps");
+    let created = Command::new("docker")
+        .args(["volume", "create", &volume])
+        .output()
+        .expect("failed to run docker");
+    assert!(created.status.success(), "{created:?}");
+
+    let output = ratect_command()
+        .current_dir(&project)
+        .arg("--clean")
+        .output()
+        .expect("failed to run ratect");
+    let remaining = Command::new("docker")
+        .args(["volume", "ls", "-q", "--filter", &format!("name={volume}")])
+        .output()
+        .expect("failed to run docker");
+    let _ = Command::new("docker")
+        .args(["volume", "rm", &volume])
+        .output();
+    std::fs::remove_dir_all(&project).ok();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        [
+            "Checking for cache volumes...",
+            &format!("Deleting volume '{volume}'..."),
+            "Done! Deleted 1 volume.",
+        ]
+    );
+    assert!(remaining.stdout.is_empty(), "{volume} is still there");
+}
+
 /// #441: an invalid `BATECT_CACHE_TYPE` fails every command before it
 /// does anything — `2` off a run, `125` on one — naming the variable, the
 /// value and the cache types; `--clean` removes nothing.

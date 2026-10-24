@@ -99,6 +99,7 @@ history, from when it was the only binary.
 - `ratect-compat`: `--max-parallelism` rejects values above 2147483647, as Batect does.
 - `ratect-compat`: `--list-tasks` given with `--clean`, `--clean-cache` or `--upgrade`, in either order, lists the tasks, as in Batect, instead of deleting caches or printing the `--upgrade` notice.
 - An `--override-image` naming a container the config doesn't define fails a run only once it reaches a task with a `run`, before that task starts, as in Batect. A run that reaches none — `--skip-prerequisites` on a task with only `prerequisites`, say — succeeds instead of failing.
+- `ratect-compat`: `--clean` and `--clean-cache` with volume caches no longer print `Checking for cache volumes...` when they can't reach Docker, as in Batect.
 - In a YAML config file, a local include whose path starts with `~` (`~/shared.yml`) loads that file from the home directory, as in Batect, instead of looking for a `~` directory beside the file declaring it. A Git include's `path` is still taken as written within the clone.
 - `ratect-compat` loads a `batect.yml` with no `project_name`, as Batect does: the project is named after the root file's directory, lowercased, and one whose name isn't a Docker image-name component fails the load. A root `batect.yml` holding no configuration — empty, only comments, or only a null document such as `---` — fails the load saying so.
 - `ratect config convert` (ratect only) writes a `project_name` into `ratect.toml` when the root `batect.yml` has none — the one `ratect-compat` infers for it.

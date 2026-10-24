@@ -1038,13 +1038,14 @@ async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> R
 
     let docker = match cache_type {
         CacheType::Volume => {
+            let docker = DockerClient::new(&args.docker_connection(), |message| {
+                stderr.warning(&message)
+            })
+            .await?;
+            // Only once the daemon has answered, as Batect's own line is
+            // printed inside its connectivity check (ratect#445).
             println!("Checking for cache volumes...");
-            Some(
-                DockerClient::new(&args.docker_connection(), |message| {
-                    stderr.warning(&message)
-                })
-                .await?,
-            )
+            Some(docker)
         }
         CacheType::Directory => {
             println!(
