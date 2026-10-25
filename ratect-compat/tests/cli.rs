@@ -244,6 +244,214 @@ fn list_tasks_shows_an_unquoted_number_as_written() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Runs `ratect-compat` with `args` and returns its stdout, failing the test
+/// on a non-zero exit.
+fn help_stdout(command: &mut Command, args: &[&str]) -> String {
+    let output = command.args(args).output().expect("failed to run ratect");
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("help is UTF-8")
+}
+
+/// The entry `--help` prints for `option`, if any: its name line, with or
+/// without a short form, and any description lines under it, up to the next
+/// entry, blank line or heading.
+fn help_entry(help: &str, option: &str) -> Option<String> {
+    let mut lines = help.lines().skip_while(|line| {
+        !(line.trim_start().starts_with('-')
+            && line.split_whitespace().take(2).any(|word| word == option))
+    });
+    let name = lines.next()?;
+    Some(
+        std::iter::once(name)
+            .chain(
+                lines.take_while(|line| {
+                    line.starts_with("  ") && !line.trim_start().starts_with('-')
+                }),
+            )
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// #464, #469: an option declared hidden is left out of `--help` and `-h`,
+/// as Batect leaves out one with `showInHelp = false`. Which options are
+/// hidden differs — these three are listed by Batect — and that is the
+/// "Recognized, no effect" row on the differences page, not this test's.
+#[test]
+fn help_leaves_out_the_hidden_no_effect_flags() {
+    for help in ["--help", "-h"] {
+        let stdout = help_stdout(&mut ratect_command(), &[help]);
+        for flag in [
+            "--upgrade",
+            "--no-update-notification",
+            "--no-wrapper-cache-cleanup",
+        ] {
+            // By entry, not substring: unhidden, the other two's
+            // descriptions would say "see --upgrade" and blame the wrong
+            // flag.
+            assert_eq!(
+                help_entry(&stdout, flag),
+                None,
+                "{help} lists {flag}:\n{stdout}"
+            );
+        }
+    }
+}
+
+/// #464: with stdout piped, Batect's help has no width to wrap to, so a
+/// description stays on one line however long it is. `ratect-compat` never
+/// wraps, so a small `COLUMNS` changes nothing either.
+#[test]
+fn help_never_wraps_a_description_when_piped() {
+    const COLUMNS: usize = 40;
+    let stdout = help_stdout(
+        ratect_command().env("COLUMNS", COLUMNS.to_string()),
+        &["--help"],
+    );
+    let entry = help_entry(&stdout, "--override-image")
+        .unwrap_or_else(|| panic!("no --override-image entry:\n{stdout}"));
+    assert!(
+        entry.lines().any(|line| line.len() > COLUMNS
+            && line.contains("Override the image used by a container")
+            && line.contains("IfNotPresent policy")),
+        "--override-image's description is wrapped:\n{entry}"
+    );
+}
+
+/// #469: `--upgrade` is recognized but has nothing to upgrade, so it says so
+/// on stderr and exits `0`, as the CLI reference says.
+#[test]
+fn upgrade_prints_a_notice_and_exits_0() {
+    let output = ratect_command()
+        .arg("--upgrade")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with("--upgrade has no effect:")),
+        "{stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// #469: `--no-update-notification` and `--no-wrapper-cache-cleanup` are
+/// recognized and change nothing, silently.
+#[test]
+fn no_effect_wrapper_flags_leave_list_tasks_unchanged() {
+    let smoke = sample_config_path();
+    let list_tasks = |flags: &[&str]| {
+        let output = ratect_command()
+            .args(["-f", smoke.to_str().unwrap()])
+            .args(flags)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code(), Some(0), "{flags:?}: {stderr}");
+        (output.stdout, stderr)
+    };
+
+    let (plain, _) = list_tasks(&[]);
+    let (flagged, stderr) = list_tasks(&["--no-update-notification", "--no-wrapper-cache-cleanup"]);
+    assert_eq!(
+        String::from_utf8_lossy(&flagged),
+        String::from_utf8_lossy(&plain)
+    );
+    for mention in [
+        "--upgrade has no effect",
+        "no-update-notification",
+        "no-wrapper-cache-cleanup",
+    ] {
+        assert!(!stderr.contains(mention), "{mention}: {stderr}");
+    }
+}
+
+/// #470: `--help` is static, where Batect's says what each `DOCKER_*`
+/// variable is currently set to — a divergence the differences page records.
+#[test]
+fn help_does_not_depend_on_the_docker_environment() {
+    let variables = [
+        ("DOCKER_HOST", "tcp://help-test-host:1"),
+        ("DOCKER_CONTEXT", "help-test-context"),
+        ("DOCKER_TLS_VERIFY", "help-test-tls-verify"),
+        ("DOCKER_BUILDKIT", "help-test-buildkit"),
+        ("DOCKER_CONFIG", "/help-test-config"),
+        ("DOCKER_CERT_PATH", "/help-test-cert-path"),
+    ];
+    let mut unset = ratect_command();
+    for (name, _) in variables {
+        unset.env_remove(name);
+    }
+    let unset = help_stdout(&mut unset, &["--help"]);
+    let set = help_stdout(ratect_command().envs(variables), &["--help"]);
+
+    assert_eq!(set, unset);
+    for (name, value) in variables {
+        assert!(!set.contains(value), "{name}'s value is shown:\n{set}");
+    }
+}
+
+/// #470: `--help` is the same whether or not a `batect.local.yml` exists,
+/// where Batect's says whether it currently does.
+#[test]
+fn help_does_not_depend_on_a_batect_local_yml() {
+    let dir = scratch_directory("help-local-yml");
+    let with = dir.join("with");
+    let without = dir.join("without");
+    std::fs::create_dir_all(&with).unwrap();
+    std::fs::create_dir_all(&without).unwrap();
+    std::fs::write(with.join("batect.local.yml"), "").unwrap();
+
+    let with = help_stdout(ratect_command().current_dir(&with), &["--help"]);
+    let without = help_stdout(ratect_command().current_dir(&without), &["--help"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(with, without);
+}
+
+/// #470: value placeholders are `clap`'s, derived from the field name, and
+/// a fixed default is `clap`'s `[default: …]` — not Batect's
+/// `--override-image=<container>=<image>` or `Defaults to 'batect.yml' if
+/// not set.`
+#[test]
+fn help_uses_clap_placeholders_and_default_format() {
+    let stdout = help_stdout(&mut ratect_command(), &["--help"]);
+    for expected in [
+        "--config-file <CONFIG_FILE>",
+        "[default: batect.yml]",
+        "--override-image <OVERRIDE_IMAGE>",
+    ] {
+        assert!(stdout.contains(expected), "no {expected}:\n{stdout}");
+    }
+}
+
+/// #470: an option with no default shows only its own description, as in
+/// Batect, whose default providers describe nothing for one.
+#[test]
+fn help_shows_no_default_for_an_option_without_one() {
+    let stdout = help_stdout(&mut ratect_command(), &["--help"]);
+    for option in ["--use-network", "--disable-ports"] {
+        let entry =
+            help_entry(&stdout, option).unwrap_or_else(|| panic!("no {option} entry:\n{stdout}"));
+        assert!(
+            entry.lines().count() > 1,
+            "{option} has no description: {entry}"
+        );
+        assert!(!entry.contains("[default:"), "{entry}");
+    }
+}
+
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
 }
