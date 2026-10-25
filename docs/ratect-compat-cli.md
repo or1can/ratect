@@ -40,7 +40,9 @@ yet.
 
 Grouped by purpose, matching `ratect-compat --help`. The grouping is
 presentational only — every flag parses the same regardless of the section it's
-listed under.
+listed under. A value placeholder here, such as `<CONTAINER=IMAGE>`, describes the
+shape of the value; `--help` prints `clap`'s own instead, named after the option
+(`--override-image <OVERRIDE_IMAGE>`).
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
