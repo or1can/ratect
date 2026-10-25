@@ -351,6 +351,44 @@ fn argument_error(arguments: &[&str]) -> String {
     }
 }
 
+/// An unknown option's error names it and never suggests writing it after
+/// `--`, which here passes it to the task (ratect#660) — short, long or in
+/// a cluster, before a flag or a task name. `clap`'s "a similar argument
+/// exists" tip stays.
+#[test]
+fn an_unknown_options_error_never_suggests_passing_it_after_a_double_dash() {
+    for (arguments, named, similar) in [
+        (&["-Z", "--list-tasks"][..], "'-Z'", None),
+        (&["-TZ", "--list-tasks"], "'-Z'", None),
+        (&["--bogus", "--list-tasks"], "'--bogus'", None),
+        (&["--bogus", "build"], "'--bogus'", None),
+        (
+            &["--list-task", "--list-tasks"],
+            "'--list-task'",
+            Some("'--list-tasks'"),
+        ),
+        (
+            &["--no-colour", "build"],
+            "'--no-colour'",
+            Some("'--no-color'"),
+        ),
+    ] {
+        let line = [&[BINARY], arguments].concat();
+        let error = argument_error(&line);
+        assert!(
+            error.contains(&format!("unexpected argument {named} found")),
+            "{arguments:?}: {error}"
+        );
+        assert!(!error.contains("'-- "), "{arguments:?}: {error}");
+        if let Some(similar) = similar {
+            assert!(
+                error.contains(&format!("a similar argument exists: {similar}")),
+                "{arguments:?}: {error}"
+            );
+        }
+    }
+}
+
 /// An empty container or value in `--override-image`/`--tag-image` is
 /// refused while the arguments are parsed, as Batect's `(.+)=(.+)` refuses
 /// it, in both the `--opt k=v` and `--opt=k=v` forms (ratect#438).

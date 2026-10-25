@@ -90,6 +90,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `ratect-compat`: an unknown option's error no longer suggests passing it after `--`.
 - The `ratect-compat` CLI reference says its value placeholders describe a value's shape, not the ones `--help` prints.
 - `ratect run` checks a `--docker-config` or `--docker-cert-path` directory, or one `DOCKER_CONFIG` or `DOCKER_CERT_PATH` gives, before reading its config, as `ratect-compat` does, so an error in the config no longer hides a directory that doesn't exist.
 - A path given to `--docker-config` or `--docker-cert-path`, or by `DOCKER_CONFIG` or `DOCKER_CERT_PATH`, has a leading `~` expanded to the home directory, and `.` and `..` removed before it is used, as in Batect.

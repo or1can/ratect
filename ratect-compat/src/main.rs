@@ -320,6 +320,8 @@ impl Args {
     /// (ratect#438). `--tag-image` may repeat a container, as in Batect. A
     /// `--config-var` also set by a `--config-vars-file` isn't a repeat:
     /// only the command line is counted, and it still wins over the file.
+    /// An unknown option's error loses `clap`'s tip to write it after `--`,
+    /// which here would pass it to the task (ratect#660).
     /// Every error is `clap`'s own kind, so it prints and exits like any
     /// other argument `clap` rejects.
     fn parse_checked<I, T>(arguments: I) -> std::result::Result<Self, clap::Error>
@@ -342,6 +344,15 @@ impl Args {
             // `--help` and `--version` act as soon as `clap` reaches them.
             (Err(error), _) if !error.use_stderr() => return Err(error),
             (_, Some(error)) => return Err(error),
+            // An unknown option's `Suggested` tips are only ever `clap`'s
+            // "to pass '-x' as a value, use '-- -x'" here, with no
+            // subcommands: after `--` it would reach the task instead
+            // (ratect#660). "A similar argument exists" is `SuggestedArg`,
+            // and stays.
+            (Err(mut error), None) if error.kind() == clap::error::ErrorKind::UnknownArgument => {
+                error.remove(clap::error::ContextKind::Suggested);
+                return Err(error);
+            }
             (parsed, None) => parsed?,
         };
         // Batect's `SetOption`: each value is a comma-separated list, each

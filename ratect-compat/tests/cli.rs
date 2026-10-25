@@ -1417,6 +1417,22 @@ fn help_exits_zero_and_a_usage_error_takes_its_paths_code() {
     assert_eq!(exit_code_of(&["--bogus", "--list-tasks"]), Some(2));
 }
 
+/// An unknown option's error doesn't tip writing it after `--`, which would
+/// pass it to the task (ratect#660), and keeps its path's exit code.
+#[test]
+fn an_unknown_options_error_has_no_double_dash_tip() {
+    for (line, code) in [(&["--bogus", "build"][..], 125), (&["--bogus", "-T"], 2)] {
+        let output = ratect_command()
+            .args(line)
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(code), "{line:?}: {stderr}");
+        assert!(stderr.contains("'--bogus'"), "{line:?}: {stderr}");
+        assert!(!stderr.contains("use '-- "), "{line:?}: {stderr}");
+    }
+}
+
 /// Options end at the task name (ratect#435): an argument after it but
 /// `-- ARGS…` is a usage error on a run, `125`, and lists nothing — while a
 /// flag that replaces the task ignores whatever follows the options.
