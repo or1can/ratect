@@ -945,7 +945,7 @@ async fn run(
         // Through a `Console`, not `println!`: a reader that has already gone
         // (`| head -c 0`) is a write error to ignore, as Batect's `PrintStream`
         // does, not a panic (ratect#444).
-        Console::stdout(ColorMode::Off).write_raw(&format!("{listing}\n"));
+        Console::stdout(ColorMode::Off).write_raw(&listing);
         return Ok(());
     }
 

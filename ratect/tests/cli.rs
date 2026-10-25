@@ -1637,6 +1637,31 @@ fn tasks_list_in_quiet_output_is_one_task_per_line_sorted_by_name() {
     );
 }
 
+/// #471: no tasks means no lines — not a lone newline a line-counting
+/// consumer would read as one unnamed task.
+#[test]
+fn tasks_list_in_quiet_output_prints_nothing_when_there_are_no_tasks() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .current_dir(&dir)
+        .args(["tasks", "list", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+}
+
 /// #444: a reader that has already gone (`ratect tasks list | head -c 0`)
 /// is not a crash — the listing exits 0 rather than panicking with 101.
 #[test]

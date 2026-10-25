@@ -2686,23 +2686,25 @@ pub fn container_names_in_task<'a>(
 /// Formats `--list-tasks` output for `--output quiet`: one task per line,
 /// sorted by name, as `name` alone or `name<TAB>description` (the tab only
 /// present when the task has a non-blank description) — no header, no
-/// grouping, nothing else, so the output is machine-parsable. An exact port
-/// of Batect's own `ListTasksCommand.printMachineReadableFormat`.
+/// grouping, nothing else, so the output is machine-parsable. Every line,
+/// the last included, ends in a newline, so a project with no tasks is the
+/// empty string: the whole output, written as is. An exact port of Batect's
+/// own `ListTasksCommand.printMachineReadableFormat`.
 pub fn format_task_list_quiet(tasks: &IndexMap<String, Task>) -> String {
     let mut names: Vec<_> = tasks.keys().collect();
     names.sort();
     names
         .into_iter()
         .map(|name| match non_blank(tasks[name].description.as_deref()) {
-            Some(description) => format!("{name}\t{description}"),
-            None => name.clone(),
+            Some(description) => format!("{name}\t{description}\n"),
+            None => format!("{name}\n"),
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect()
 }
 
 /// Formats `--list-tasks` output: every task's name (and `description`,
-/// unless blank) under a `Tasks in {project_name}:` header. Groups tasks under a
+/// unless blank) under a `Tasks in {project_name}:` header, every line
+/// ending in a newline — the whole output, written as is. Groups tasks under a
 /// `{group}:` heading — with a task that declares no `group` falling into a
 /// trailing `Ungrouped tasks:` bucket — but only once *some* task in the
 /// project actually declares one; a project with no `group` usage at all
@@ -2722,7 +2724,7 @@ pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> S
         for name in names {
             lines.push(format_task_line(name, tasks[name].description.as_deref()));
         }
-        return lines.join("\n");
+        return lines.join("\n") + "\n";
     }
 
     let mut groups: HashMap<Option<&str>, Vec<&String>> = HashMap::new();
@@ -2755,7 +2757,7 @@ pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> S
         }
     }
 
-    lines.join("\n")
+    lines.join("\n") + "\n"
 }
 
 fn format_task_line(name: &str, description: Option<&str>) -> String {

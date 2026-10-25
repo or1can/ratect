@@ -711,6 +711,36 @@ fn list_tasks_with_quiet_output_is_machine_readable() {
     );
 }
 
+/// #471: Batect's machine-readable listing of a project with no tasks is
+/// nothing at all — not a lone newline a line-counting consumer would read
+/// as one unnamed task.
+#[test]
+fn list_tasks_with_quiet_output_prints_nothing_when_there_are_no_tasks() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-no-tasks-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("batect.yml"), "project_name: demo\n").unwrap();
+
+    let output = ratect_command()
+        .current_dir(&dir)
+        .args(["--list-tasks", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+}
+
 /// #444: a reader that has already gone (`--list-tasks | head -c 0`) is not
 /// a crash. Batect's `PrintStream` swallows the write error and exits 0; so
 /// does this, rather than panicking with exit 101.
