@@ -715,6 +715,24 @@ fn format_task_list_is_a_flat_sorted_list_when_no_task_declares_a_group() {
     );
 }
 
+/// #457: a blank description — empty or whitespace only — prints no `: `
+/// separator, matching Batect's `isNotBlank` check and the quiet format.
+#[test]
+fn format_task_list_prints_no_separator_for_a_blank_description() {
+    let tasks = IndexMap::from([
+        (
+            "a".to_string(),
+            task_with_description_and_group(Some(""), None),
+        ),
+        (
+            "b".to_string(),
+            task_with_description_and_group(Some("   "), None),
+        ),
+    ]);
+
+    assert_eq!(format_task_list("demo", &tasks), "Tasks in demo:\n- a\n- b");
+}
+
 #[test]
 fn format_task_list_groups_tasks_with_the_ungrouped_bucket_sorted_last() {
     let tasks = IndexMap::from([

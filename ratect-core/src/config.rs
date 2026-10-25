@@ -2693,18 +2693,16 @@ pub fn format_task_list_quiet(tasks: &IndexMap<String, Task>) -> String {
     names.sort();
     names
         .into_iter()
-        .map(|name| match tasks[name].description.as_deref() {
-            Some(description) if !description.trim().is_empty() => {
-                format!("{name}\t{description}")
-            }
-            _ => name.clone(),
+        .map(|name| match non_blank(tasks[name].description.as_deref()) {
+            Some(description) => format!("{name}\t{description}"),
+            None => name.clone(),
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// Formats `--list-tasks` output: every task's name (and `description`, if
-/// set) under a `Tasks in {project_name}:` header. Groups tasks under a
+/// Formats `--list-tasks` output: every task's name (and `description`,
+/// unless blank) under a `Tasks in {project_name}:` header. Groups tasks under a
 /// `{group}:` heading — with a task that declares no `group` falling into a
 /// trailing `Ungrouped tasks:` bucket — but only once *some* task in the
 /// project actually declares one; a project with no `group` usage at all
@@ -2761,10 +2759,18 @@ pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> S
 }
 
 fn format_task_line(name: &str, description: Option<&str>) -> String {
-    match description {
+    match non_blank(description) {
         Some(description) => format!("- {}: {}", name, description),
         None => format!("- {}", name),
     }
+}
+
+/// A task's `description` only if it has something to show — Batect's
+/// `isNotBlank` check, which both listing formats apply before printing one.
+/// `str::trim` and Kotlin disagree only on a few control characters
+/// (U+001C–U+001F, U+0085), a difference not worth matching.
+fn non_blank(description: Option<&str>) -> Option<&str> {
+    description.filter(|description| !description.trim().is_empty())
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
