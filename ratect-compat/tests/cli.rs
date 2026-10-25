@@ -322,6 +322,61 @@ fn help_never_wraps_a_description_when_piped() {
     );
 }
 
+/// #469: `--upgrade` is recognized but has nothing to upgrade, so it says so
+/// on stderr and exits `0`, as the CLI reference says.
+#[test]
+fn upgrade_prints_a_notice_and_exits_0() {
+    let output = ratect_command()
+        .arg("--upgrade")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with("--upgrade has no effect:")),
+        "{stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// #469: `--no-update-notification` and `--no-wrapper-cache-cleanup` are
+/// recognized and change nothing, silently.
+#[test]
+fn no_effect_wrapper_flags_leave_list_tasks_unchanged() {
+    let smoke = sample_config_path();
+    let list_tasks = |flags: &[&str]| {
+        let output = ratect_command()
+            .args(["-f", smoke.to_str().unwrap()])
+            .args(flags)
+            .arg("--list-tasks")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code(), Some(0), "{flags:?}: {stderr}");
+        (output.stdout, stderr)
+    };
+
+    let (plain, _) = list_tasks(&[]);
+    let (flagged, stderr) = list_tasks(&["--no-update-notification", "--no-wrapper-cache-cleanup"]);
+    assert_eq!(
+        String::from_utf8_lossy(&flagged),
+        String::from_utf8_lossy(&plain)
+    );
+    for mention in [
+        "--upgrade has no effect",
+        "no-update-notification",
+        "no-wrapper-cache-cleanup",
+    ] {
+        assert!(!stderr.contains(mention), "{mention}: {stderr}");
+    }
+}
+
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
 }
