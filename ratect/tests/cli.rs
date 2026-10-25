@@ -1637,6 +1637,58 @@ fn tasks_list_in_quiet_output_is_one_task_per_line_sorted_by_name() {
     );
 }
 
+/// #471: no tasks means no lines — not a lone newline a line-counting
+/// consumer would read as one unnamed task.
+#[test]
+fn tasks_list_in_quiet_output_prints_nothing_when_there_are_no_tasks() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .current_dir(&dir)
+        .args(["tasks", "list", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+}
+
+/// #444: a reader that has already gone (`ratect tasks list | head -c 0`)
+/// is not a crash — the listing exits 0 rather than panicking with 101.
+#[test]
+fn tasks_list_exits_cleanly_when_stdout_is_closed() {
+    for style in ["simple", "quiet"] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+
+        let output = ratect_command()
+            .arg("-f")
+            .arg(native_fixture_path())
+            .args(["tasks", "list", "-o", style])
+            .stdout(writer)
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("failed to run ratect");
+
+        assert!(
+            output.status.success(),
+            "-o {style} exited {:?}:\n{}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "", "-o {style}");
+    }
+}
+
 #[test]
 fn a_missing_config_file_fails_rather_than_listing_nothing() {
     let output = ratect_command()

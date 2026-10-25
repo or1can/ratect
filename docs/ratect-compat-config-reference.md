@@ -805,7 +805,8 @@ because the name doesn't exist at all, or exists but isn't reachable from
 ### List-tasks output
 
 With no task declaring a `group`, `--list-tasks` prints a single flat, alphabetically
-sorted list — each task's name, plus its `description` if set. Against
+sorted list — each task's name, plus its `description` unless that is empty or
+only whitespace. Against
 [`ratect-compat/tests/fixtures/smoke.yml`](https://github.com/or1can/ratect/blob/main/ratect-compat/tests/fixtures/smoke.yml),
 which sets neither:
 
