@@ -244,6 +244,84 @@ fn list_tasks_shows_an_unquoted_number_as_written() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Runs `ratect-compat` with `args` and returns its stdout, failing the test
+/// on a non-zero exit.
+fn help_stdout(command: &mut Command, args: &[&str]) -> String {
+    let output = command.args(args).output().expect("failed to run ratect");
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("help is UTF-8")
+}
+
+/// The entry `--help` prints for `option`, if any: its name line, with or
+/// without a short form, and any description lines under it, up to the next
+/// entry, blank line or heading.
+fn help_entry(help: &str, option: &str) -> Option<String> {
+    let mut lines = help.lines().skip_while(|line| {
+        !(line.trim_start().starts_with('-')
+            && line.split_whitespace().take(2).any(|word| word == option))
+    });
+    let name = lines.next()?;
+    Some(
+        std::iter::once(name)
+            .chain(
+                lines.take_while(|line| {
+                    line.starts_with("  ") && !line.trim_start().starts_with('-')
+                }),
+            )
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// #464, #469: an option declared hidden is left out of `--help` and `-h`,
+/// as Batect leaves out one with `showInHelp = false`. Which options are
+/// hidden differs — these three are listed by Batect — and that is the
+/// "Recognized, no effect" row on the differences page, not this test's.
+#[test]
+fn help_leaves_out_the_hidden_no_effect_flags() {
+    for help in ["--help", "-h"] {
+        let stdout = help_stdout(&mut ratect_command(), &[help]);
+        for flag in [
+            "--upgrade",
+            "--no-update-notification",
+            "--no-wrapper-cache-cleanup",
+        ] {
+            // By entry, not substring: unhidden, the other two's
+            // descriptions would say "see --upgrade" and blame the wrong
+            // flag.
+            assert_eq!(
+                help_entry(&stdout, flag),
+                None,
+                "{help} lists {flag}:\n{stdout}"
+            );
+        }
+    }
+}
+
+/// #464: with stdout piped, Batect's help has no width to wrap to, so a
+/// description stays on one line however long it is. `ratect-compat` never
+/// wraps, so a small `COLUMNS` changes nothing either.
+#[test]
+fn help_never_wraps_a_description_when_piped() {
+    const COLUMNS: usize = 40;
+    let stdout = help_stdout(
+        ratect_command().env("COLUMNS", COLUMNS.to_string()),
+        &["--help"],
+    );
+    let entry = help_entry(&stdout, "--override-image")
+        .unwrap_or_else(|| panic!("no --override-image entry:\n{stdout}"));
+    assert!(
+        entry.lines().any(|line| line.len() > COLUMNS
+            && line.contains("Override the image used by a container")
+            && line.contains("IfNotPresent policy")),
+        "--override-image's description is wrapped:\n{entry}"
+    );
+}
+
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
 }
