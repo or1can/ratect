@@ -377,6 +377,81 @@ fn no_effect_wrapper_flags_leave_list_tasks_unchanged() {
     }
 }
 
+/// #470: `--help` is static, where Batect's says what each `DOCKER_*`
+/// variable is currently set to — a divergence the differences page records.
+#[test]
+fn help_does_not_depend_on_the_docker_environment() {
+    let variables = [
+        ("DOCKER_HOST", "tcp://help-test-host:1"),
+        ("DOCKER_CONTEXT", "help-test-context"),
+        ("DOCKER_TLS_VERIFY", "help-test-tls-verify"),
+        ("DOCKER_BUILDKIT", "help-test-buildkit"),
+        ("DOCKER_CONFIG", "/help-test-config"),
+        ("DOCKER_CERT_PATH", "/help-test-cert-path"),
+    ];
+    let mut unset = ratect_command();
+    for (name, _) in variables {
+        unset.env_remove(name);
+    }
+    let unset = help_stdout(&mut unset, &["--help"]);
+    let set = help_stdout(ratect_command().envs(variables), &["--help"]);
+
+    assert_eq!(set, unset);
+    for (name, value) in variables {
+        assert!(!set.contains(value), "{name}'s value is shown:\n{set}");
+    }
+}
+
+/// #470: `--help` is the same whether or not a `batect.local.yml` exists,
+/// where Batect's says whether it currently does.
+#[test]
+fn help_does_not_depend_on_a_batect_local_yml() {
+    let dir = scratch_directory("help-local-yml");
+    let with = dir.join("with");
+    let without = dir.join("without");
+    std::fs::create_dir_all(&with).unwrap();
+    std::fs::create_dir_all(&without).unwrap();
+    std::fs::write(with.join("batect.local.yml"), "").unwrap();
+
+    let with = help_stdout(ratect_command().current_dir(&with), &["--help"]);
+    let without = help_stdout(ratect_command().current_dir(&without), &["--help"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(with, without);
+}
+
+/// #470: value placeholders are `clap`'s, derived from the field name, and
+/// a fixed default is `clap`'s `[default: …]` — not Batect's
+/// `--override-image=<container>=<image>` or `Defaults to 'batect.yml' if
+/// not set.`
+#[test]
+fn help_uses_clap_placeholders_and_default_format() {
+    let stdout = help_stdout(&mut ratect_command(), &["--help"]);
+    for expected in [
+        "--config-file <CONFIG_FILE>",
+        "[default: batect.yml]",
+        "--override-image <OVERRIDE_IMAGE>",
+    ] {
+        assert!(stdout.contains(expected), "no {expected}:\n{stdout}");
+    }
+}
+
+/// #470: an option with no default shows only its own description, as in
+/// Batect, whose default providers describe nothing for one.
+#[test]
+fn help_shows_no_default_for_an_option_without_one() {
+    let stdout = help_stdout(&mut ratect_command(), &["--help"]);
+    for option in ["--use-network", "--disable-ports"] {
+        let entry =
+            help_entry(&stdout, option).unwrap_or_else(|| panic!("no {option} entry:\n{stdout}"));
+        assert!(
+            entry.lines().count() > 1,
+            "{option} has no description: {entry}"
+        );
+        assert!(!entry.contains("[default:"), "{entry}");
+    }
+}
+
 fn environment_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/environment.yml")
 }
