@@ -2853,13 +2853,21 @@ pub(crate) enum IncludeEntry {
         /// `allow_nested_git_includes: false` there would otherwise look
         /// accepted while describing the opposite of what that format does.
         allow_nested_git_includes: Option<bool>,
+        /// The Ratect version this entry's author has reviewed the bundle
+        /// against — its reviewed-for version, see
+        /// [`crate::written_for::check_bundle`] and
+        /// [decisions/0020](../../decisions/0020-bundle-records-its-written-for-version.md).
+        /// Not a grant, so it counts in any file declaring the entry. Kept
+        /// as written; the check parses it. Native-only, like
+        /// `allow_nested_git_includes`.
+        reviewed_ratect_version: Option<String>,
     },
 }
 
 /// Writes an entry the way the native format documents it — the object form,
 /// with only what the entry sets: a local file's `path`; a Git include's
-/// `type`, `repo` and `ref`, then `path`, `allow_host_paths` and
-/// `allow_nested_git_includes` only when set. The inverse of the
+/// `type`, `repo` and `ref`, then `path`, `allow_host_paths`,
+/// `allow_nested_git_includes` and `reviewed_ratect_version` only when set. The inverse of the
 /// `Deserialize` below for everything that model keeps (a `type: file`
 /// written out comes back as a bare `path`), which is what lets
 /// [`crate::convert`] prove a converted file round-trips.
@@ -2881,6 +2889,7 @@ impl Serialize for IncludeEntry {
                 path,
                 allow_host_paths,
                 allow_nested_git_includes,
+                reviewed_ratect_version,
             } => {
                 let mut map = serializer.serialize_map(None)?;
                 map.serialize_entry("type", "git")?;
@@ -2894,6 +2903,9 @@ impl Serialize for IncludeEntry {
                 }
                 if let Some(nested) = allow_nested_git_includes {
                     map.serialize_entry("allow_nested_git_includes", nested)?;
+                }
+                if let Some(reviewed) = reviewed_ratect_version {
+                    map.serialize_entry(crate::written_for::REVIEWED_FIELD, reviewed)?;
                 }
                 map.end()
             }
@@ -2946,6 +2958,8 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                     allow_host_paths: Option<bool>,
                     #[serde(default, deserialize_with = "present")]
                     allow_nested_git_includes: Option<bool>,
+                    #[serde(default, deserialize_with = "present")]
+                    reviewed_ratect_version: Option<String>,
                 }
                 let IncludeEntryFields {
                     path,
@@ -2954,6 +2968,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                     git_ref,
                     allow_host_paths,
                     allow_nested_git_includes,
+                    reviewed_ratect_version,
                 } = object_fields(map)?;
 
                 match include_type.as_deref() {
@@ -2969,6 +2984,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                             path,
                             allow_host_paths: allow_host_paths.unwrap_or(false),
                             allow_nested_git_includes,
+                            reviewed_ratect_version,
                         })
                     }
                     Some(other) if other != "file" => Err(serde::de::Error::custom(format!(
@@ -2996,6 +3012,13 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                         if allow_nested_git_includes.is_some() {
                             return Err(serde::de::Error::custom(
                                 "'allow_nested_git_includes' is only valid for 'type: git' includes",
+                            ));
+                        }
+                        // A local file is the project owner's own, covered by
+                        // the root's version, so there is no bundle to review.
+                        if reviewed_ratect_version.is_some() {
+                            return Err(serde::de::Error::custom(
+                                "'reviewed_ratect_version' is only valid on a Git include",
                             ));
                         }
                         let path = path.ok_or_else(|| serde::de::Error::missing_field("path"))?;
@@ -3498,15 +3521,123 @@ fn native_field_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::
     }
 }
 
+/// A Git include entry naming a YAML bundle entry file, kept until the load
+/// knows whether the bundle reaches a TOML file — what
+/// [`crate::written_for::check_bundle`] judges it by.
+struct YamlBundleEntry {
+    entry: PathBuf,
+    boundary: Boundary,
+    entry_file: String,
+    declared_in: String,
+    reviewed: Option<crate::written_for::Version>,
+}
+
+impl YamlBundleEntry {
+    fn check(
+        &self,
+        local_includes: &HashMap<PathBuf, Vec<PathBuf>>,
+        running: crate::written_for::Version,
+    ) -> Result<()> {
+        let first_toml = first_toml_reached(&self.entry, local_includes)
+            .map(|toml| self.boundary.describe(&toml));
+        crate::written_for::check_bundle(
+            &crate::written_for::BundleEntry {
+                entry_file: &self.entry_file,
+                declared_in: &self.declared_in,
+                written_for: crate::written_for::WrittenFor::YamlRoot,
+                first_toml: first_toml.as_deref(),
+                reviewed: self.reviewed,
+            },
+            running,
+            crate::written_for::BREAKING_CHANGES,
+        )
+    }
+}
+
+/// Judges one Git include entry reaching the bundle entry file `resolved`
+/// against `running` ([`crate::written_for::check_bundle`]): a TOML entry
+/// file now, before it is parsed, and a YAML one returned to be judged once
+/// the load knows what it reaches. `declared_in` names the file declaring
+/// the entry; `reviewed` is the entry's `reviewed_ratect_version`.
+fn check_bundle_entry(
+    resolved: &Path,
+    boundary: &Boundary,
+    declared_in: String,
+    reviewed: Option<&str>,
+    running: crate::written_for::Version,
+) -> Result<Option<YamlBundleEntry>> {
+    let reviewed = reviewed
+        .map(str::parse::<crate::written_for::Version>)
+        .transpose()
+        .with_context(|| {
+            format!(
+                "Invalid '{}' on the Git include of '{}' in {declared_in}",
+                crate::written_for::REVIEWED_FIELD,
+                boundary.bundle.id.remote
+            )
+        })?;
+    let entry_file = boundary.describe(resolved);
+    match crate::written_for::read(resolved)? {
+        Some(crate::written_for::WrittenFor::YamlRoot) => Ok(Some(YamlBundleEntry {
+            entry: resolved.to_path_buf(),
+            boundary: boundary.clone(),
+            entry_file,
+            declared_in,
+            reviewed,
+        })),
+        Some(written_for) => {
+            crate::written_for::check_bundle(
+                &crate::written_for::BundleEntry {
+                    entry_file: &entry_file,
+                    declared_in: &declared_in,
+                    written_for,
+                    first_toml: None,
+                    reviewed,
+                },
+                running,
+                crate::written_for::BREAKING_CHANGES,
+            )?;
+            Ok(None)
+        }
+        // Unreadable, or not TOML: the parse says so.
+        None => Ok(None),
+    }
+}
+
+/// The first TOML file `entry` reaches through local includes alone, in the
+/// order they are declared — what makes a YAML bundle entry file subject to
+/// the written-for check. A nested bundle is judged through its own entry,
+/// so a Git include ends the search.
+fn first_toml_reached(
+    entry: &Path,
+    local_includes: &HashMap<PathBuf, Vec<PathBuf>>,
+) -> Option<PathBuf> {
+    let mut seen = HashSet::from([entry.to_path_buf()]);
+    let mut queue = VecDeque::from([entry.to_path_buf()]);
+    while let Some(file) = queue.pop_front() {
+        for target in local_includes.get(&file).into_iter().flatten() {
+            if matches!(config_file_format(target), Ok(FileFormat::Toml)) {
+                return Some(target.clone());
+            }
+            if seen.insert(target.clone()) {
+                queue.push_back(target.clone());
+            }
+        }
+    }
+    None
+}
+
 /// Refuses `ratect_version` anywhere but a native project's root TOML file
-/// (decisions/0015): a YAML file keeps Batect's own shape whichever project
-/// includes it, and the version is the project's, not one file's.
+/// (decisions/0015) or a TOML bundle entry file — the file a Git include
+/// names (decisions/0020): a YAML file keeps Batect's own shape whichever
+/// project includes it, and a declaration partway down an include tree
+/// would leave what it covers ambiguous.
 fn reject_misplaced_ratect_version(
     path: &Path,
     boundary: Option<&Boundary>,
     file: &ConfigFile,
     format: ConfigFormat,
-    is_root: bool,
+    may_declare: bool,
 ) -> Result<()> {
     if file.ratect_version.is_none() {
         return Ok(());
@@ -3522,10 +3653,10 @@ fn reject_misplaced_ratect_version(
             describe_file(path, boundary)
         );
     }
-    if !is_root {
+    if !may_declare {
         anyhow::bail!(
             "Included file {} declares 'ratect_version', but only the root configuration \
-             file can do so.",
+             file, or the file a Git include names, can do so.",
             describe_file(path, boundary)
         );
     }
@@ -4037,27 +4168,44 @@ impl Config {
         path: &Path,
         git_cache: &crate::git_include::GitIncludeCache<G>,
     ) -> Result<LoadedConfig> {
-        Self::load_from_file_impl(path, git_cache, ConfigFormat::Compat).await
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Compat, None).await
     }
 
     /// Native-mode counterpart of
     /// [`load_from_file_with_git_cache`](Self::load_from_file_with_git_cache).
+    /// Checks no bundle's written-for version, as it checks no root's —
+    /// [`load_project_native`] is the load that does.
     pub async fn load_from_file_native_with_git_cache<G: crate::git_include::GitClient>(
         path: &Path,
         git_cache: &crate::git_include::GitIncludeCache<G>,
     ) -> Result<LoadedConfig> {
-        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native).await
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native, None).await
+    }
+
+    /// [`load_from_file_native_with_git_cache`](Self::load_from_file_native_with_git_cache),
+    /// also refusing a bundle whose written-for version `running` — the
+    /// `ratect` binary's own version — can't honour
+    /// ([`crate::written_for::check_bundle`], decisions/0020). Each Git
+    /// include entry is checked as it is reached, even one reaching a bundle
+    /// already loaded; a TOML entry file before it is parsed, and a YAML one
+    /// once the load knows whether the bundle reaches a TOML file.
+    pub(crate) async fn load_from_file_native_written_for<G: crate::git_include::GitClient>(
+        path: &Path,
+        git_cache: &crate::git_include::GitIncludeCache<G>,
+        running: crate::written_for::Version,
+    ) -> Result<LoadedConfig> {
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native, Some(running)).await
     }
 
     async fn load_from_file_impl<G: crate::git_include::GitClient>(
         path: &Path,
         git_cache: &crate::git_include::GitIncludeCache<G>,
         format: ConfigFormat,
+        running: Option<crate::written_for::Version>,
     ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
         let root_file = format.parse(path, None)?;
         reject_misplaced_ratect_version(path, None, &root_file, format, true)?;
-        let root_dir = root_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
         seen.insert(root_path.clone());
@@ -4066,12 +4214,22 @@ impl Config {
 
         let mut git_repo_paths: HashMap<(String, String), PathBuf> = HashMap::new();
 
+        // Each entry with the file declaring it, which a written-for
+        // refusal names.
         let mut queue: VecDeque<(PathBuf, Option<Boundary>, IncludeEntry)> = root_file
             .include
             .iter()
             .cloned()
-            .map(|include| (root_dir.clone(), None, include))
+            .map(|include| (root_path.clone(), None, include))
             .collect();
+
+        // Every local include a bundle file declares, by the file declaring
+        // it — loaded or already seen — so a YAML bundle entry file can be
+        // judged by every file it reaches, not only those loaded through it.
+        let mut bundle_local_includes: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+        // Git include entries naming a YAML entry file, judged once the load
+        // knows what each reaches.
+        let mut yaml_bundle_entries: Vec<YamlBundleEntry> = Vec::new();
 
         let mut loaded: Vec<LoadedFile> = vec![LoadedFile {
             path: root_path,
@@ -4079,25 +4237,41 @@ impl Config {
             boundary: None,
         }];
 
-        while let Some((containing_dir, boundary, include)) = queue.pop_front() {
+        while let Some((declaring_file, boundary, include)) = queue.pop_front() {
+            let containing_dir = declaring_file.parent().unwrap_or(Path::new(""));
+            // Before `boundary` becomes a Git include's own, below.
+            let declared_in = describe_origin(&declaring_file, boundary.as_ref());
             let (resolved, boundary) = match &include {
-                IncludeEntry::File { path } => (
-                    resolve_file_include(&containing_dir, path, boundary.as_ref())?,
-                    boundary,
-                ),
+                IncludeEntry::File { path } => {
+                    let resolved = resolve_file_include(containing_dir, path, boundary.as_ref())?;
+                    if boundary.is_some() {
+                        bundle_local_includes
+                            .entry(declaring_file.clone())
+                            .or_default()
+                            .push(resolved.clone());
+                    }
+                    (resolved, boundary)
+                }
                 IncludeEntry::Git {
                     repo,
                     git_ref,
                     path,
                     allow_host_paths,
                     allow_nested_git_includes,
+                    reviewed_ratect_version,
                 } => {
                     let asked = Grants {
                         host_paths: *allow_host_paths,
                         nested_git: *allow_nested_git_includes,
                     };
                     let declaring = boundary.as_ref().map(|boundary| &boundary.bundle);
-                    include_trust::check_dialect(asked, declaring, repo, format)?;
+                    include_trust::check_dialect(
+                        asked,
+                        reviewed_ratect_version.is_some(),
+                        declaring,
+                        repo,
+                        format,
+                    )?;
                     // The single value every native-only behaviour below keys
                     // off, derived once so the nested-Git permission and the
                     // clone-detail redaction can never disagree about which
@@ -4160,6 +4334,26 @@ impl Config {
             // `type: git` include) or does not apply at all (a local one) —
             // only containment remains to check here.
             include_trust::boundary_contains(boundary.as_ref(), &resolved)?;
+            // Before the `seen` check below, since every entry reaching a
+            // bundle is judged, and before the parse, so a bundle written for
+            // a newer Ratect is refused for that.
+            if let (
+                Some(running),
+                IncludeEntry::Git {
+                    reviewed_ratect_version,
+                    ..
+                },
+                Some(entry_boundary),
+            ) = (running, &include, boundary.as_ref())
+            {
+                yaml_bundle_entries.extend(check_bundle_entry(
+                    &resolved,
+                    entry_boundary,
+                    declared_in,
+                    reviewed_ratect_version.as_deref(),
+                    running,
+                )?);
+            }
             // `None` where there is no boundary — an owned file, contained
             // by nothing. Kept distinct from a boundary granting nothing all
             // the way into `EffectiveGrants`, since the two are opposites.
@@ -4189,7 +4383,13 @@ impl Config {
             effective_grants.record(resolved.clone(), effective);
 
             let file = format.parse(&resolved, boundary.as_ref())?;
-            reject_misplaced_ratect_version(&resolved, boundary.as_ref(), &file, format, false)?;
+            reject_misplaced_ratect_version(
+                &resolved,
+                boundary.as_ref(),
+                &file,
+                format,
+                matches!(include, IncludeEntry::Git { .. }),
+            )?;
             if file.project_name.is_some() {
                 anyhow::bail!(
                     "Included file {} declares 'project_name', but only the root \
@@ -4205,18 +4405,23 @@ impl Config {
                 );
             }
 
-            let file_dir = resolved.parent().unwrap_or(Path::new("")).to_path_buf();
             queue.extend(
                 file.include
                     .iter()
                     .cloned()
-                    .map(|include| (file_dir.clone(), boundary.clone(), include)),
+                    .map(|include| (resolved.clone(), boundary.clone(), include)),
             );
             loaded.push(LoadedFile {
                 path: resolved,
                 file,
                 boundary,
             });
+        }
+
+        if let Some(running) = running {
+            for entry in &yaml_bundle_entries {
+                entry.check(&bundle_local_includes, running)?;
+            }
         }
 
         let project_name =
@@ -5402,6 +5607,9 @@ fn collect_completion_task_names(
                 // stays one rule.
                 allow_host_paths,
                 allow_nested_git_includes,
+                // Like the root's own `ratect_version`, not judged here:
+                // completion has no binary version to judge it against.
+                reviewed_ratect_version: _,
             } => {
                 // The loader refuses this include, so offering its tasks would
                 // complete a `ratect run` that then fails. Completion is
@@ -5484,14 +5692,27 @@ fn collect_completion_task_names(
 /// caller so far wants to fail fast, and doing it in one place means the
 /// message is identical whichever binary is running.
 pub async fn load_project(config_file: &Path) -> Result<LoadedProject> {
-    load_project_impl(config_file, ConfigFormat::Compat).await
+    check_config_file(config_file)?;
+    let loaded = Config::load_from_file(config_file).await?;
+    load_project_impl(config_file, ConfigFormat::Compat, loaded)
 }
 
 /// Native-mode counterpart of [`load_project`] — `ratect`'s entry point. A
 /// TOML root file, TOML/YAML includes by extension (see
-/// `ConfigFormat::Native`).
-pub async fn load_project_native(config_file: &Path) -> Result<LoadedProject> {
-    load_project_impl(config_file, ConfigFormat::Native).await
+/// `ConfigFormat::Native`). `running` is the `ratect` binary's own version,
+/// which every Git bundle's written-for version is checked against
+/// (`written_for::check_bundle`). The root's own checks are the caller's,
+/// either side of this: [`crate::written_for::check`] before it, and
+/// [`crate::written_for::check_yaml_root`] after it for a YAML root.
+pub async fn load_project_native(
+    config_file: &Path,
+    running: crate::written_for::Version,
+) -> Result<LoadedProject> {
+    check_config_file(config_file)?;
+    let git_cache = crate::git_include::GitIncludeCache::new();
+    let loaded =
+        Config::load_from_file_native_written_for(config_file, &git_cache, running).await?;
+    load_project_impl(config_file, ConfigFormat::Native, loaded)
 }
 
 /// `--config-vars-file`'s own check: the file it names exists and is a
@@ -5532,12 +5753,13 @@ pub fn check_config_file(config_file: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn load_project_impl(config_file: &Path, format: ConfigFormat) -> Result<LoadedProject> {
-    check_config_file(config_file)?;
-    let loaded = match format {
-        ConfigFormat::Compat => Config::load_from_file(config_file).await?,
-        ConfigFormat::Native => Config::load_from_file_native(config_file).await?,
-    };
+/// What [`load_project`] and [`load_project_native`] do once `format`'s
+/// loader has read `loaded` from `config_file`.
+fn load_project_impl(
+    config_file: &Path,
+    format: ConfigFormat,
+    loaded: LoadedConfig,
+) -> Result<LoadedProject> {
     // Before `check_values` below — see
     // `ConfigFormat::reject_incompatible_fields`'s own doc comment for why.
     format.reject_incompatible_fields(

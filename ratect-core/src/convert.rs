@@ -357,6 +357,9 @@ fn convert_include(
             path,
             allow_host_paths,
             allow_nested_git_includes: _,
+            // A Batect-format source can't set it, and no tool writes one: a
+            // review can't be automated (decisions/0020).
+            reviewed_ratect_version: _,
         } => {
             let clone = loaded
                 .git_clones
@@ -398,6 +401,7 @@ fn convert_include(
                 path,
                 allow_host_paths: *allow_host_paths,
                 allow_nested_git_includes: None,
+                reviewed_ratect_version: None,
             })
         }
     }

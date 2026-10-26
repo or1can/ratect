@@ -413,7 +413,7 @@ async fn each_twin_pair_evaluates_to_the_same_config_except_listed_divergences()
     let mut problems = Vec::new();
     for case in cases() {
         let yaml = load_project(&case.join("batect.yml")).await.unwrap();
-        let toml = load_project_native(&case.join("ratect.toml"))
+        let toml = load_project_native(&case.join("ratect.toml"), running_0_12())
             .await
             .unwrap();
         problems.extend(unlisted_differences(
@@ -497,10 +497,10 @@ async fn converting_each_twins_yaml_gives_its_toml_twins_config() {
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
             std::fs::write(target, &file.toml).unwrap();
         }
-        let from_converted = load_project_native(&copy.join("ratect.toml"))
+        let from_converted = load_project_native(&copy.join("ratect.toml"), running_0_12())
             .await
             .unwrap();
-        let twin = load_project_native(&case.join("ratect.toml"))
+        let twin = load_project_native(&case.join("ratect.toml"), running_0_12())
             .await
             .unwrap();
 
@@ -573,6 +573,11 @@ const UNCOVERABLE: &[Uncoverable] = &[
     Uncoverable {
         schema: "ratect-config.schema.json",
         label: "Include#1.path",
+        because: GIT_INCLUDE,
+    },
+    Uncoverable {
+        schema: "ratect-config.schema.json",
+        label: "Include#1.reviewed_ratect_version",
         because: GIT_INCLUDE,
     },
     Uncoverable {
@@ -856,4 +861,10 @@ fn every_case_file_is_loaded_by_its_case() {
         .filter(|file| !loaded.contains(file))
         .collect();
     assert!(unloaded.is_empty(), "no case loads {unloaded:#?}");
+}
+
+/// The `ratect` version a native load in these tests runs as. No case has a
+/// Git include, so no bundle's written-for version is checked.
+fn running_0_12() -> ratect_core::written_for::Version {
+    "0.12.0".parse().unwrap()
 }

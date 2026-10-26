@@ -1439,7 +1439,7 @@ async fn a_refused_null_in_an_included_file_names_the_file_and_its_path() {
         ),
         format!(
             "{:#}",
-            load_project_native(&dir.join("ratect.toml"))
+            load_project_native(&dir.join("ratect.toml"), running_0_12())
                 .await
                 .unwrap_err()
         ),
@@ -6515,7 +6515,7 @@ async fn load_native_toml(body: &str) -> Result<LoadedProject> {
     let dir = unique_temp_dir();
     let path = dir.join("ratect.toml");
     std::fs::write(&path, body).unwrap();
-    let result = load_project_native(&path).await;
+    let result = load_project_native(&path, running_0_12()).await;
     std::fs::remove_dir_all(&dir).ok();
     result
 }
@@ -6650,7 +6650,7 @@ run = { container = "app" }
 "#,
     )
     .unwrap();
-    let project = load_project_native(&path).await.unwrap();
+    let project = load_project_native(&path, running_0_12()).await.unwrap();
     let evaluated = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
@@ -6693,7 +6693,9 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     let evaluated = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
@@ -6743,7 +6745,7 @@ async fn load_native_including(
         ),
     )
     .unwrap();
-    let result = load_project_native(&dir.join("ratect.toml")).await;
+    let result = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
     std::fs::remove_dir_all(&dir).ok();
     (fragment_path, result)
 }
@@ -6849,7 +6851,7 @@ async fn a_yaml_root_file_is_batect_shaped_even_under_the_native_binary() {
          stop_signal: SIGINT\ntasks:\n  t:\n    run:\n      container: app\n",
     )
     .unwrap();
-    let error = load_project_native(&path)
+    let error = load_project_native(&path, running_0_12())
         .await
         .expect_err("a YAML root file keeps Batect's rules");
     let error = format!("{error:#}");
@@ -7022,7 +7024,9 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     let app = &project.config.containers["app"];
     assert_eq!(app.image.as_deref(), Some("alpine:3.18"));
     assert_eq!(app.working_directory.as_deref(), Some("/base"));
@@ -9735,14 +9739,16 @@ container = "app"
     };
 
     std::fs::write(&path, config("relative/home")).unwrap();
-    let err = load_project_native(&path).await.unwrap_err();
+    let err = load_project_native(&path, running_0_12())
+        .await
+        .unwrap_err();
     assert!(
         format!("{err:#}").contains("is not an absolute path"),
         "a literal relative home is a mistake in the file: {err:#}"
     );
 
     std::fs::write(&path, config("$HOME_DIR")).unwrap();
-    let project = load_project_native(&path)
+    let project = load_project_native(&path, running_0_12())
         .await
         .expect("an expression can't be judged before it is evaluated");
     let relative = |_: &str| Some("relative/home".to_string());
@@ -9854,7 +9860,7 @@ run_as_current_user = { enabled = true, home_directory = "$HOME_DIR" }
 "#,
     )
     .unwrap();
-    let project = load_project_native(&path).await.unwrap();
+    let project = load_project_native(&path, running_0_12()).await.unwrap();
 
     let relative = |_: &str| Some("relative/home".to_string());
     let whole = project
@@ -10337,7 +10343,9 @@ async fn native_includes_follow_the_same_rules() {
         "project_name = \"demo\"\ninclude = [{ path = \"extra.toml\" }]\n",
     )
     .unwrap();
-    load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -13238,7 +13246,9 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     let defaulted = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
@@ -13878,7 +13888,9 @@ async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
          run_as_current_user = { enabled = true, home_directory = \"/home/<user\" }\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
@@ -13913,7 +13925,9 @@ async fn an_inherited_batect_format_home_directory_stays_literal() {
          [containers.child]\nextends = \"base\"\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["child"], [], &HashMap::new(), no_host_env)
@@ -14025,7 +14039,9 @@ async fn a_compact_volume_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
          [containers.from-toml]\nimage = \"alpine:3.18\"\nvolumes = [\"<sub:/c\"]\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
@@ -14401,7 +14417,9 @@ async fn an_inherited_compact_volume_keeps_its_suppliers_format() {
          [containers.from-toml]\nextends = \"toml-base\"\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
@@ -14491,7 +14509,7 @@ async fn the_load_error(file_name: &str, body: &str) -> String {
     std::fs::write(&path, body).unwrap();
     let load = || async {
         let result = if file_name == "ratect.toml" {
-            load_project_native(&path).await
+            load_project_native(&path, running_0_12()).await
         } else {
             load_project(&path).await
         };
@@ -14771,7 +14789,7 @@ impl Twin {
         std::fs::write(dir.join("batect.yml"), self.yaml).unwrap();
         std::fs::write(dir.join("ratect.toml"), self.toml).unwrap();
         let yaml = load_project(&dir.join("batect.yml")).await;
-        let toml = load_project_native(&dir.join("ratect.toml")).await;
+        let toml = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
         std::fs::remove_dir_all(&dir).unwrap();
         [("batect.yml", yaml), ("ratect.toml", toml)]
     }
@@ -14891,9 +14909,9 @@ async fn a_malformed_value_in_a_literal_field_loads() {
     )
     .unwrap();
     let compat = load_project(&dir.join("batect.yml")).await;
-    let native = load_project_native(&dir.join("ratect.toml")).await;
-    let image = load_project_native(&dir.join("image.toml")).await;
-    let volume = load_project_native(&dir.join("volume.toml")).await;
+    let native = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
+    let image = load_project_native(&dir.join("image.toml"), running_0_12()).await;
+    let volume = load_project_native(&dir.join("volume.toml"), running_0_12()).await;
     std::fs::remove_dir_all(&dir).unwrap();
 
     for (format, loaded) in [("batect.yml", compat), ("included .yml", native)] {
@@ -15033,7 +15051,9 @@ async fn an_inherited_batect_format_image_stays_literal() {
          [containers.child]\nextends = \"base\"\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml")).await.unwrap();
+    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["child"], [], &HashMap::new(), no_host_env)
@@ -15099,8 +15119,12 @@ async fn a_loaded_project_lists_the_toml_files_it_read() {
     )
     .unwrap();
     std::fs::write(dir.join("alone.yml"), "project_name: demo\n").unwrap();
-    let with_toml = load_project_native(&dir.join("batect.yml")).await.unwrap();
-    let yaml_alone = load_project_native(&dir.join("alone.yml")).await.unwrap();
+    let with_toml = load_project_native(&dir.join("batect.yml"), running_0_12())
+        .await
+        .unwrap();
+    let yaml_alone = load_project_native(&dir.join("alone.yml"), running_0_12())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let [first, second] = with_toml.toml_files() else {
         panic!("{:?}", with_toml.toml_files());
@@ -15263,7 +15287,7 @@ async fn a_name_batect_refuses_in_an_included_file_fails_the_load() {
     .unwrap();
     std::fs::write(dir.join("1.toml"), "[tasks.'a!a']\n").unwrap();
     let yaml = load_project(&dir.join("batect.yml")).await;
-    let toml = load_project_native(&dir.join("ratect.toml")).await;
+    let toml = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
     std::fs::remove_dir_all(&dir).ok();
 
     let yaml = format!("{:#}", yaml.expect_err("batect.yml loaded"));
@@ -15328,7 +15352,7 @@ async fn a_refused_name_in_a_native_projects_yaml_include_is_located_at_its_valu
         "tasks:\n  'a*':\n    description: x\n",
     )
     .unwrap();
-    let error = load_project_native(&dir.join("ratect.toml")).await;
+    let error = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
     std::fs::remove_dir_all(&dir).ok();
 
     let error = format!("{:#}", error.expect_err("ratect.toml loaded"));
@@ -15882,7 +15906,7 @@ async fn a_container_name_that_isnt_an_image_name_component_in_an_included_file_
     )
     .unwrap();
     let yaml = load_project(&dir.join("batect.yml")).await;
-    let toml = load_project_native(&dir.join("ratect.toml")).await;
+    let toml = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
     std::fs::remove_dir_all(&dir).ok();
 
     let yaml = format!("{:#}", yaml.expect_err("batect.yml loaded"));
@@ -16442,4 +16466,457 @@ tasks:
     assert!(customisation.environment.is_none());
     assert!(customisation.ports.is_none());
     assert!(customisation.working_directory.is_none());
+}
+
+// --- A bundle's written-for version (decisions/0020) ---
+
+/// The version these tests run as: the release the first rows landed in, so
+/// every row in the real table applies to an unmarked bundle.
+fn running_0_12() -> crate::written_for::Version {
+    "0.12.0".parse().unwrap()
+}
+
+/// A native project whose root includes one bundle, `files` committed at
+/// `v1`. `entry` is written verbatim onto the root's include entry, after its
+/// `repo` and `ref` — a `path`, a `reviewed_ratect_version`, or nothing.
+fn native_project_including_a_bundle(files: &[(&str, &str)], entry: &str) -> (PathBuf, PathBuf) {
+    let bundle = git_bundle_repo(files);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\nratect_version = \"0.12.0\"\n\n[[include]]\ntype = \"git\"\n\
+             repo = \"{}\"\nref = \"v1\"\n{entry}",
+            bundle.display()
+        ),
+    )
+    .unwrap();
+    (bundle, project)
+}
+
+/// Loads `project` as `ratect` does, with the bundle check, as `running`.
+async fn load_bundled(
+    project: &Path,
+    running: crate::written_for::Version,
+) -> Result<LoadedConfig> {
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+    let result = Config::load_from_file_native_written_for(
+        &project.join("ratect.toml"),
+        &git_cache,
+        running,
+    )
+    .await;
+    std::fs::remove_dir_all(&cache_root).ok();
+    result
+}
+
+const BUNDLE_TASK: &str = "[tasks.bundled.run]\ncontainer = \"c\"\n";
+
+/// An unmarked bundle with no acknowledgement is refused once any row
+/// applies, and the refusal says which bundle, from where, and both ways out.
+/// The root's own `ratect_version` being current doesn't cover it.
+#[tokio::test]
+async fn an_unmarked_bundle_is_refused_whatever_the_root_declares() {
+    let (bundle, project) =
+        native_project_including_a_bundle(&[("ratect-bundle.toml", BUNDLE_TASK)], "");
+
+    let error = load_bundled(&project, running_0_12())
+        .await
+        .expect_err("an unmarked bundle predates every row");
+    let error = format!("{error:#}");
+    for expected in [
+        &format!("'{}'", bundle.display()),
+        "'v1'",
+        "'ratect-bundle.toml'",
+        &format!("{:?}", project.join("ratect.toml")),
+        "doesn't set 'ratect_version'",
+        "ratect 0.12.0: ",
+        "raise its 'ratect_version'",
+        "set 'reviewed_ratect_version' to 0.12.0",
+    ] {
+        assert!(error.contains(expected), "missing {expected:?} in: {error}");
+    }
+    assert!(
+        !error.contains("ratect_version ="),
+        "names fields, never syntax: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// The error a load gave, as `ratect` prints it.
+async fn bundled_refusal(project: &Path) -> String {
+    format!(
+        "{:#}",
+        load_bundled(project, running_0_12())
+            .await
+            .expect_err("the bundle should be refused")
+    )
+}
+
+/// Either side can cover a bundle: its author by declaring a version, or the
+/// include's author by acknowledging one — and the later of the two counts,
+/// whichever side it is on.
+#[tokio::test]
+async fn a_bundle_loads_once_its_version_or_its_review_covers_every_row() {
+    for (bundle_declares, entry) in [
+        ("ratect_version = \"0.12.0\"\n", ""),
+        ("", "reviewed_ratect_version = \"0.12.0\"\n"),
+        (
+            "ratect_version = \"0.11.0\"\n",
+            "reviewed_ratect_version = \"0.12.0\"\n",
+        ),
+        (
+            "ratect_version = \"0.12.0\"\n",
+            "reviewed_ratect_version = \"0.11.0\"\n",
+        ),
+    ] {
+        let (bundle, project) = native_project_including_a_bundle(
+            &[(
+                "ratect-bundle.toml",
+                &format!("{bundle_declares}{BUNDLE_TASK}"),
+            )],
+            entry,
+        );
+
+        let config = load_bundled(&project, running_0_12())
+            .await
+            .unwrap_or_else(|error| panic!("{bundle_declares:?} {entry:?}: {error:#}"));
+        assert!(config.config.tasks.contains_key("bundled"));
+
+        std::fs::remove_dir_all(&bundle).ok();
+        std::fs::remove_dir_all(&project).ok();
+    }
+}
+
+/// Neither side reaching the newest row is still refused, saying what each
+/// side claimed.
+#[tokio::test]
+async fn a_bundle_written_and_reviewed_before_a_row_is_refused() {
+    let (bundle, project) = native_project_including_a_bundle(
+        &[(
+            "ratect-bundle.toml",
+            &format!("ratect_version = \"0.11.0\"\n{BUNDLE_TASK}"),
+        )],
+        "reviewed_ratect_version = \"0.11.0\"\n",
+    );
+
+    let error = bundled_refusal(&project).await;
+    assert!(
+        error.contains(
+            "was written for ratect 0.11.0, and its include was reviewed for ratect 0.11.0"
+        ),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// A bundle written for a newer Ratect is refused for that, before its
+/// fields are parsed — not for the field this binary doesn't know.
+#[tokio::test]
+async fn a_bundle_from_the_future_is_refused_before_it_is_parsed() {
+    let (bundle, project) = native_project_including_a_bundle(
+        &[(
+            "ratect-bundle.toml",
+            &format!("ratect_version = \"0.13.0\"\nfield_from_the_future = true\n{BUNDLE_TASK}"),
+        )],
+        "",
+    );
+
+    let error = bundled_refusal(&project).await;
+    for expected in [
+        "its 'ratect_version' is 0.13.0, so it needs ratect 0.13 or later",
+        "Upgrade ratect, or set the include's 'ref'",
+    ] {
+        assert!(error.contains(expected), "missing {expected:?} in: {error}");
+    }
+    assert!(!error.contains("field_from_the_future"), "got: {error}");
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// A review against rules this binary doesn't have can't be checked — and
+/// accepting one would let a typo silence every row.
+#[tokio::test]
+async fn a_review_from_the_future_is_refused() {
+    let (bundle, project) = native_project_including_a_bundle(
+        &[("ratect-bundle.toml", BUNDLE_TASK)],
+        "reviewed_ratect_version = \"0.13.0\"\n",
+    );
+
+    let error = bundled_refusal(&project).await;
+    assert!(
+        error.contains("the include's 'reviewed_ratect_version' is 0.13.0, newer than this ratect"),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+#[tokio::test]
+async fn a_review_that_is_not_a_version_is_refused() {
+    let (bundle, project) = native_project_including_a_bundle(
+        &[("ratect-bundle.toml", BUNDLE_TASK)],
+        "reviewed_ratect_version = \"latest\"\n",
+    );
+
+    let error = bundled_refusal(&project).await;
+    assert!(
+        error.contains("Invalid 'reviewed_ratect_version' on the Git include of"),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// Only the file a Git include names may declare a version: anywhere further
+/// down, what it covers would be ambiguous, and a YAML file keeps Batect's
+/// fields.
+#[tokio::test]
+async fn ratect_version_is_refused_in_a_bundle_file_no_git_include_names() {
+    let (bundle, project) = native_project_including_a_bundle(
+        &[
+            (
+                "ratect-bundle.toml",
+                "ratect_version = \"0.12.0\"\ninclude = [\"more.toml\"]\n",
+            ),
+            (
+                "more.toml",
+                &format!("ratect_version = \"0.12.0\"\n{BUNDLE_TASK}"),
+            ),
+        ],
+        "",
+    );
+
+    let error = bundled_refusal(&project).await;
+    assert!(
+        error.contains(
+            "Included file 'more.toml' from the bundle '{}' at 'v1' declares 'ratect_version'"
+                .replace("{}", &bundle.display().to_string())
+                .as_str()
+        ),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+#[tokio::test]
+async fn ratect_version_is_refused_in_a_yaml_bundle_entry_file() {
+    let (bundle, project) = native_project_including_a_bundle(
+        &[(
+            "batect-bundle.yml",
+            "ratect_version: 0.12.0\ntasks:\n  bundled:\n    run:\n      container: c\n",
+        )],
+        "",
+    );
+
+    let error = bundled_refusal(&project).await;
+    assert!(
+        error.contains("declares 'ratect_version', which only a native ratect.toml can do"),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+#[tokio::test]
+async fn ratect_version_is_still_refused_in_an_owned_included_file() {
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [\"more.toml\"]\n",
+    )
+    .unwrap();
+    std::fs::write(project.join("more.toml"), "ratect_version = \"0.12.0\"\n").unwrap();
+
+    let error = bundled_refusal(&project).await;
+    assert!(
+        error.contains("more.toml' declares 'ratect_version', but only the root"),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// A nested bundle is its own bundle, covered by neither its parent's
+/// version nor the root's — but its parent's entry for it can acknowledge it.
+#[tokio::test]
+async fn a_nested_bundle_is_covered_by_its_parents_entry_for_it() {
+    for (acknowledgement, loads) in [
+        ("", false),
+        ("reviewed_ratect_version = \"0.12.0\"\n", true),
+    ] {
+        let inner = git_bundle_repo(&[("ratect-bundle.toml", BUNDLE_TASK)]);
+        let (outer, project) = native_project_including_a_bundle(
+            &[(
+                "ratect-bundle.toml",
+                &format!(
+                    "ratect_version = \"0.12.0\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\n\
+                     ref = \"v1\"\n{acknowledgement}",
+                    inner.display()
+                ),
+            )],
+            "allow_nested_git_includes = true\n",
+        );
+
+        let result = load_bundled(&project, running_0_12()).await;
+        if loads {
+            result.unwrap();
+        } else {
+            let error = format!("{:#}", result.unwrap_err());
+            assert!(
+                error.contains(&format!(
+                    "Refusing to load 'ratect-bundle.toml' from the bundle '{}' at 'v1', included \
+                     by 'ratect-bundle.toml' from the bundle '{}' at 'v1'",
+                    inner.display(),
+                    outer.display()
+                )),
+                "got: {error}"
+            );
+        }
+
+        std::fs::remove_dir_all(&inner).ok();
+        std::fs::remove_dir_all(&outer).ok();
+        std::fs::remove_dir_all(&project).ok();
+    }
+}
+
+/// Every entry reaching a bundle is judged on its own, so an acknowledgement
+/// on one doesn't excuse another — whichever of them loads the bundle.
+#[tokio::test]
+async fn every_entry_reaching_a_bundle_must_cover_it() {
+    for acknowledged_first in [true, false] {
+        let bundle = git_bundle_repo(&[("ratect-bundle.toml", BUNDLE_TASK)]);
+        let entry = |reviewed: bool| {
+            format!(
+                "\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n{}",
+                bundle.display(),
+                if reviewed {
+                    "reviewed_ratect_version = \"0.12.0\"\n"
+                } else {
+                    ""
+                }
+            )
+        };
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("ratect.toml"),
+            format!(
+                "project_name = \"demo\"\n\n[[include]]\npath = \"other.toml\"\n{}",
+                entry(acknowledged_first)
+            ),
+        )
+        .unwrap();
+        std::fs::write(project.join("other.toml"), entry(!acknowledged_first)).unwrap();
+        let unacknowledging = if acknowledged_first {
+            format!("{:?}", project.join("other.toml"))
+        } else {
+            format!("{:?}", project.join("ratect.toml"))
+        };
+
+        let error = bundled_refusal(&project).await;
+        assert!(
+            error.contains(&format!("included by {unacknowledging}:")),
+            "acknowledged first: {acknowledged_first}; got: {error}"
+        );
+
+        std::fs::remove_dir_all(&bundle).ok();
+        std::fs::remove_dir_all(&project).ok();
+    }
+}
+
+/// A YAML entry file follows the YAML-root rule: Batect's meaning while the
+/// bundle is YAML throughout, unmarked once it reaches a TOML file.
+#[tokio::test]
+async fn a_yaml_bundle_is_judged_only_once_it_reaches_a_toml_file() {
+    const YAML_TASK: &str = "tasks:\n  bundled:\n    run:\n      container: c\n";
+    let yaml_only = [
+        ("batect-bundle.yml", "include:\n  - more.yml\n"),
+        ("more.yml", YAML_TASK),
+    ];
+    let reaching_toml = [
+        ("batect-bundle.yml", "include:\n  - more.yml\n"),
+        ("more.yml", "include:\n  - last.toml\n"),
+        ("last.toml", BUNDLE_TASK),
+    ];
+    let (bundle, project) = native_project_including_a_bundle(&yaml_only, "");
+    load_bundled(&project, running_0_12()).await.unwrap();
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+
+    let (bundle, project) = native_project_including_a_bundle(&reaching_toml, "");
+    let error = bundled_refusal(&project).await;
+    for expected in [
+        &format!(
+            "has a Batect-format (YAML) entry file, which can't set 'ratect_version', and \
+             includes 'last.toml' from the bundle '{}' at 'v1'",
+            bundle.display()
+        ),
+        "give it a TOML entry file",
+    ] {
+        assert!(error.contains(expected), "missing {expected:?} in: {error}");
+    }
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+
+    let (bundle, project) =
+        native_project_including_a_bundle(&reaching_toml, "reviewed_ratect_version = \"0.12.0\"\n");
+    load_bundled(&project, running_0_12()).await.unwrap();
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// A local include is the project owner's own, so there is nothing to review.
+#[test]
+fn reviewed_ratect_version_is_refused_on_a_local_include() {
+    let error = toml::from_str::<ConfigFile>(
+        "[[include]]\npath = \"more.toml\"\nreviewed_ratect_version = \"0.12.0\"\n",
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("'reviewed_ratect_version' is only valid on a Git include"),
+        "got: {error}"
+    );
+}
+
+/// Native-only: a `batect.yml` gains no field, and `ratect-compat` runs no
+/// bundle check — refused before anything is cloned.
+#[tokio::test]
+async fn ratect_compat_refuses_reviewed_ratect_version() {
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("batect.yml"),
+        "project_name: demo\ninclude:\n  - type: git\n    repo: https://example.com/never-cloned.git\n    \
+         ref: v1\n    reviewed_ratect_version: 0.12.0\n",
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git = FakeGitClient::new();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git.clone(), 1000);
+
+    let error = Config::load_from_file_with_git_cache(&project.join("batect.yml"), &git_cache)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains(
+            "sets 'reviewed_ratect_version', which is a ratect-native field not supported in \
+             Batect-compatible configuration"
+        ),
+        "got: {error:#}"
+    );
+
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&project).ok();
 }

@@ -61,7 +61,7 @@ async fn project_from(file_name: &str, text: &str) -> LoadedProject {
     let path = directory.join(file_name);
     std::fs::write(&path, text).unwrap();
 
-    let project = crate::config::load_project_native(&path)
+    let project = crate::config::load_project_native(&path, running_0_12())
         .await
         .expect("fixture config should load");
     std::fs::remove_dir_all(&directory).unwrap();
@@ -817,4 +817,9 @@ fn docker_environment_findings_reports_each_invalid_boolean_variable() {
             "{value:?}"
         );
     }
+}
+
+/// The `ratect` version a native load in these tests runs as.
+fn running_0_12() -> crate::written_for::Version {
+    "0.12.0".parse().unwrap()
 }

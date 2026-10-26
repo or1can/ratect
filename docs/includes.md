@@ -352,6 +352,62 @@ bundle grant itself. A grant in your own configuration that loses the race
 above is **refused** — the load stops, because you wrote something that cannot
 take effect and nothing else would tell you.
 
+## The version a bundle was written for
+
+In a `ratect.toml` project, a bundle is checked the way the project itself is
+by its [`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for):
+`ratect` refuses it when a later release has changed what its configuration
+means, and lists those changes. The project's own `ratect_version` doesn't
+cover it — raising yours says you reviewed your configuration, not every
+bundle it includes. Either of two fields covers a bundle, and whichever names
+the later version counts:
+
+- **The bundle's own `ratect_version`**, set by its author in the file the Git
+  include names — its *entry file*. It covers every file reached from there,
+  as a root's covers its project. It is refused in any other file a bundle
+  loads, and in a YAML file.
+- **The include entry's `reviewed_ratect_version`**: you, as the author of the
+  include, saying you reviewed the bundle against the changes up to that
+  version. It lets you answer a refusal for a bundle you don't own without
+  waiting for its author:
+
+  ```toml
+  [[include]]
+  type = "git"
+  repo = "https://github.com/my-org/infra-bundle.git"
+  ref = "1.2.3"
+  reviewed_ratect_version = "0.12.0"
+  ```
+
+A bundle that sets neither counts as written for 0.3.0, the first release
+with `ratect.toml`, so it is refused under any release that has changed what a
+configuration means since. The refusal names the bundle's repository, ref and
+entry file, and the file declaring the include, and offers both ways out.
+
+- **Every entry is checked on its own.** Two entries reaching one bundle each
+  need covering, by the bundle's version or their own `reviewed_ratect_version`
+  — unlike a [grant](#a-grant-goes-on-the-entry-that-reaches-the-file-first),
+  no entry wins.
+- **A nested bundle is a bundle of its own**, covered by neither its parent's
+  version nor yours. The parent bundle's entry for it may set
+  `reviewed_ratect_version`: it widens no permission, so unlike a grant it
+  counts in a bundle file too.
+- **A YAML entry file follows Batect's rules**, as a `batect.yml` root does:
+  it can't set `ratect_version`, and a bundle whose files are all YAML loads
+  whatever has changed. Once it includes a `.toml` file it counts as written
+  for 0.3.0, until its include sets `reviewed_ratect_version`.
+- **A version newer than `ratect` is refused, on either side.** A bundle
+  written for a newer Ratect is refused before anything but that field is
+  read, rather than for a field this one doesn't know: upgrade `ratect`, or
+  point the include's `ref` at a release of the bundle written for this one.
+  A `reviewed_ratect_version` newer than `ratect` is refused too, since it
+  can't check a review against changes it doesn't know.
+
+The acknowledgement isn't tied to a ref: it still counts after you change the
+include's `ref`, which is itself a change to review. No command writes it —
+`ratect config convert` never does. `ratect-compat` rejects
+`reviewed_ratect_version` as a ratect-native field, and checks no bundle.
+
 ## What this does and doesn't buy you
 
 None of this makes a bundle *safe* to include blindly — it still runs code you

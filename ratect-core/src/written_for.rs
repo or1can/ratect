@@ -38,6 +38,14 @@
 //!   existed was retrofitted, since every unmarked project would then have
 //!   refused on the spot; the first row (0.12.0, #382) is what made them
 //!   refuse.
+//! - **A Git bundle is checked too, by `check_bundle`**, against the later
+//!   of its entry file's own `ratect_version` and its include entry's
+//!   `reviewed_ratect_version` — never the root's
+//!   ([decisions/0020](../../decisions/0020-bundle-records-its-written-for-version.md)).
+//!   The loader runs it, since only the loader finds bundles, at each Git
+//!   include entry as it's reached: before parsing a TOML entry file, for the
+//!   same reason as the root, and after the load for a YAML one, which —
+//!   like a YAML root — is judged only once it reaches a TOML file.
 //! - **Native dialect only.** `ratect-compat` never calls this, and a
 //!   `batect.yml` can't declare the field; a native project whose root file
 //!   is YAML is `WrittenFor::YamlRoot`. Its YAML files follow Batect's
@@ -114,6 +122,12 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         summary: "a 'command', 'entrypoint', 'run.command', 'run.entrypoint' or setup command \
                   that can't be split into arguments (an unbalanced quote, a trailing '\\') \
                   fails the load, even where no task runs it",
+    },
+    BreakingChange {
+        version: "0.12.0",
+        summary: "a Git bundle is refused until the 'ratect_version' of the file its include \
+                  names, or the include's 'reviewed_ratect_version', covers every change since; \
+                  the root's 'ratect_version' doesn't cover a bundle",
     },
 ];
 
@@ -287,21 +301,9 @@ fn check_against(
             declared.minor
         );
     }
-    let since: Vec<&BreakingChange> = table
-        .iter()
-        .filter(|row| {
-            row.version
-                .parse::<Version>()
-                .is_ok_and(|version| version.release_line() > declared.release_line())
-        })
-        .collect();
-    if since.is_empty() {
+    let Some(changes) = changes_since(declared, table) else {
         return Ok(());
-    }
-    let changes = since
-        .iter()
-        .map(|row| format!("\n  - ratect {}: {}", row.version, row.summary))
-        .collect::<String>();
+    };
     let written = match written_for {
         WrittenFor::Declared(version) => format!("was written for ratect {version}"),
         WrittenFor::Unmarked => {
@@ -330,6 +332,129 @@ fn check_against(
     anyhow::bail!(
         "This project {written}, and ratect has changed what a configuration means since:\
          {changes}\n{next}"
+    )
+}
+
+/// Every row of `table` newer than `declared`, one per line as a refusal
+/// lists them — `None` when there are none.
+fn changes_since(declared: Version, table: &[BreakingChange]) -> Option<String> {
+    let changes = table
+        .iter()
+        .filter(|row| {
+            row.version
+                .parse::<Version>()
+                .is_ok_and(|version| version.release_line() > declared.release_line())
+        })
+        .map(|row| format!("\n  - ratect {}: {}", row.version, row.summary))
+        .collect::<String>();
+    (!changes.is_empty()).then_some(changes)
+}
+
+/// One Git include entry reaching a bundle, as [`check_bundle`] judges it
+/// (decisions/0020). Every entry is judged on its own, even one reaching a
+/// bundle another entry already loaded.
+pub(crate) struct BundleEntry<'a> {
+    /// The bundle's entry file — the file the include names — as an error
+    /// names it, with the bundle's repository and ref.
+    pub(crate) entry_file: &'a str,
+    /// The file declaring the include, as an error names it.
+    pub(crate) declared_in: &'a str,
+    /// What the entry file says, as [`read`] reads it: `YamlRoot` for a
+    /// Batect-format entry file, which can't say.
+    pub(crate) written_for: WrittenFor,
+    /// The first TOML file a YAML entry file reaches through its own local
+    /// includes, if any. A bundle of YAML files alone follows Batect's rules,
+    /// so it is judged by no row, as a YAML root is.
+    pub(crate) first_toml: Option<&'a str>,
+    /// The include entry's `reviewed_ratect_version`.
+    pub(crate) reviewed: Option<Version>,
+}
+
+/// The include-entry field a bundle's user acknowledges a review in.
+pub const REVIEWED_FIELD: &str = "reviewed_ratect_version";
+
+/// Refuses a bundle written or reviewed for a newer `ratect` than `running`,
+/// or one a row of `table` has changed the meaning of since the later of
+/// its own written-for version and its entry's reviewed-for version. An
+/// unmarked bundle counts as written for 0.3.0, as an unmarked root does;
+/// the root's own version never covers it.
+///
+/// The loader calls this before parsing a TOML entry file, so a bundle
+/// written for a newer Ratect is refused for that rather than for whichever
+/// of its fields this binary doesn't know.
+pub(crate) fn check_bundle(
+    entry: &BundleEntry<'_>,
+    running: Version,
+    table: &[BreakingChange],
+) -> Result<()> {
+    let BundleEntry {
+        entry_file,
+        declared_in,
+        written_for,
+        first_toml,
+        reviewed,
+    } = entry;
+    let refusing = || format!("Refusing to load {entry_file}, included by {declared_in}");
+    let declared = match written_for {
+        WrittenFor::Declared(version) => Some(*version),
+        WrittenFor::Unmarked | WrittenFor::YamlRoot => None,
+    };
+    if let Some(declared) = declared.filter(|v| v.release_line() > running.release_line()) {
+        anyhow::bail!(
+            "{}: its '{FIELD}' is {declared}, so it needs ratect {}.{} or later; this is \
+             ratect {running}. Upgrade ratect, or set the include's 'ref' to a release of the \
+             bundle written for this version.",
+            refusing(),
+            declared.major,
+            declared.minor
+        );
+    }
+    if let Some(reviewed) = reviewed.filter(|v| v.release_line() > running.release_line()) {
+        anyhow::bail!(
+            "{}: the include's '{REVIEWED_FIELD}' is {reviewed}, newer than this ratect \
+             ({running}), which can't check a review against changes it doesn't know. Upgrade \
+             ratect, or set '{REVIEWED_FIELD}' to the version you reviewed the bundle against.",
+            refusing()
+        );
+    }
+    if *written_for == WrittenFor::YamlRoot && first_toml.is_none() {
+        return Ok(());
+    }
+    let effective = [declared, *reviewed]
+        .into_iter()
+        .flatten()
+        .max_by_key(|version| version.release_line())
+        .unwrap_or(FIRST_NATIVE_RELEASE);
+    let Some(changes) = changes_since(effective, table) else {
+        return Ok(());
+    };
+    let mut written = match (written_for, first_toml) {
+        (WrittenFor::Declared(version), _) => format!("was written for ratect {version}"),
+        (WrittenFor::YamlRoot, Some(toml)) => format!(
+            "has a Batect-format (YAML) entry file, which can't set '{FIELD}', and includes \
+             {toml}, so it counts as written for ratect {FIRST_NATIVE_RELEASE}"
+        ),
+        _ => format!(
+            "doesn't set '{FIELD}', so it counts as written for ratect {FIRST_NATIVE_RELEASE}"
+        ),
+    };
+    if let Some(reviewed) = reviewed {
+        written.push_str(&format!(
+            ", and its include was reviewed for ratect {reviewed}"
+        ));
+    }
+    let author = match written_for {
+        WrittenFor::YamlRoot => format!(
+            "its author can review them and give it a TOML entry file whose '{FIELD}' is \
+             {running}"
+        ),
+        _ => format!("its author can review them and raise its '{FIELD}' to {running}"),
+    };
+    anyhow::bail!(
+        "{}: the bundle {written}, and ratect has changed what a configuration means since:\
+         {changes}\nEither {author}, or — once you have reviewed the bundle against them \
+         yourself — set '{REVIEWED_FIELD}' to {running} on its include in {declared_in}.",
+        refusing()
     )
 }
 
