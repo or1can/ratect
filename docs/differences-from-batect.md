@@ -449,6 +449,25 @@ tables above:
   the manual cleanup commands it prints. While that container is still attached
   to the network, Docker refuses, and that refusal is reported in the same
   `Cleanup failed:` error as the container's, which lists both as left behind.
+- **What cleanup leaves is reported in one line, in every style.** A
+  `--no-cleanup*` run ends with `Left in place (--no-cleanup): …`, and a cleanup
+  that failed with `Error: Cleanup failed: …; left behind: …`, each naming the
+  containers by config name and short id and ending `Remove with:` one `docker
+  rm -f -v` for every container, then `docker network rm` for the network. After
+  a `--no-cleanup*` run, a line per kept container gives Batect's `docker logs`
+  and `docker exec -it` hints, with `docker start` first for one that isn't
+  running. Where they differ from Batect's:
+  - They are printed under `-o quiet` too; Batect's `quiet` prints none of them.
+  - After a failed cleanup only what was actually left behind is listed;
+    Batect lists a command for every container and network the run created,
+    removed or not, and says "some or all" of them may be needed.
+  - Containers are named by the twelve-character id `docker ps` shows, and the
+    network by its name; Batect gives each container's full id and the
+    network's id, one `docker rm --force --volumes` per container.
+  - Under `-o all` a failed cleanup is that one `Error:` line, with no
+    container prefix; Batect prints `Could not stop container <name>.` or
+    `Could not remove container <name>.` on each container's own prefix, and
+    `Could not delete the task network.` on the task's.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is

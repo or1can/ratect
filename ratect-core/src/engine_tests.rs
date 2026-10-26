@@ -161,10 +161,20 @@ struct FakeContainerRuntime {
     // Container ids whose main command has exited, as `container_is_running`
     // reports them.
     exited_containers: Arc<Mutex<HashSet<String>>>,
+    // Container ids that were ever started — by `start_background_container`
+    // or `run_container` — so `container_is_running` reports one that was
+    // only created as not running, as the daemon does.
+    started_containers: Arc<Mutex<HashSet<String>>>,
     // What `container_is_running` answers instead of the truth, when set —
     // `Ok(true)` for a daemon that hasn't yet recorded an exit, `Err` for an
     // inspect that fails (see `with_running_probe`).
     running_probe: Arc<Mutex<Option<std::result::Result<bool, String>>>>,
+    // When set, `container_is_running` never answers, as a daemon that has
+    // stopped responding (see `with_hanging_running_probe`).
+    running_probe_hangs: Arc<Mutex<bool>>,
+    // Container name -> how long `container_is_running` takes to answer for
+    // it (see `with_running_probe_delay`).
+    running_probe_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     // When set, `wait_for_container_healthy` and `exec_in_container` fail
     // as Docker does on a container `exited_containers` holds by the time
     // they resolve — its own `die` event and its 409 "is not running" —
@@ -262,7 +272,10 @@ impl Default for FakeContainerRuntime {
             run_delays: Default::default(),
             run_drain_delays: Default::default(),
             exited_containers: Default::default(),
+            started_containers: Default::default(),
             running_probe: Default::default(),
+            running_probe_hangs: Default::default(),
+            running_probe_delays: Default::default(),
             gate_observes_exits: Default::default(),
             dependency_exits: Default::default(),
             container_outputs: Default::default(),
@@ -538,6 +551,23 @@ impl FakeContainerRuntime {
                 .lock()
                 .unwrap()
                 .contains(container_id)
+    }
+
+    /// See the `running_probe_hangs` field.
+    fn with_hanging_running_probe(self) -> Self {
+        *self.running_probe_hangs.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `container_is_running` for container `name` take `delay` to
+    /// answer — used with `#[tokio::test(start_paused = true)]` to prove two
+    /// lookups overlap.
+    fn with_running_probe_delay(self, name: &str, delay: std::time::Duration) -> Self {
+        self.running_probe_delays
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
     }
 
     /// See the `running_probe` field.
@@ -1027,6 +1057,10 @@ impl ContainerRuntime for FakeContainerRuntime {
         if self.failing_starts.lock().unwrap().contains(alias) {
             anyhow::bail!("Failed to start container '{alias}'");
         }
+        self.started_containers
+            .lock()
+            .unwrap()
+            .insert(container_id.to_string());
         self.push(format!(
             "sidecar-start:{alias}:{}",
             network_label(&spec.shared.network)
@@ -1068,14 +1102,29 @@ impl ContainerRuntime for FakeContainerRuntime {
     }
 
     async fn container_is_running(&self, container_id: &str) -> Result<bool> {
+        if *self.running_probe_hangs.lock().unwrap() {
+            std::future::pending::<()>().await;
+        }
+        let name = container_id
+            .strip_prefix("sidecar-id-")
+            .unwrap_or(container_id);
+        let delay = self.running_probe_delays.lock().unwrap().get(name).copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         if let Some(answer) = self.running_probe.lock().unwrap().clone() {
             return answer.map_err(|message| anyhow::anyhow!(message));
         }
-        Ok(!self
-            .exited_containers
+        Ok(self
+            .started_containers
             .lock()
             .unwrap()
-            .contains(container_id))
+            .contains(container_id)
+            && !self
+                .exited_containers
+                .lock()
+                .unwrap()
+                .contains(container_id))
     }
 
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64> {
@@ -1147,6 +1196,10 @@ impl ContainerRuntime for FakeContainerRuntime {
             format!("sidecar-id-{name}"),
             "the task container is run by the id its own creation returned"
         );
+        self.started_containers
+            .lock()
+            .unwrap()
+            .insert(container_id.to_string());
         self.push(format!(
             "run:{name}:{}:args=[{}]:{}",
             spec.shared.command.as_deref().unwrap_or_default(),
@@ -7296,14 +7349,26 @@ async fn without_cleanup_after_failure_leaves_everything_in_place_on_an_infrastr
 async fn without_cleanup_after_failure_has_no_effect_on_a_successful_run() {
     let config = config_with_database_dependency(|_| {});
     let docker = FakeContainerRuntime::default();
-    let engine = engine(config, docker.clone())
-        .with_settings(TaskEngineSettings {
-            cleanup_after_failure: false,
-            ..Default::default()
-        })
-        .unwrap();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
 
     engine.run_task("start", &[]).await.unwrap();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(
+        notices.is_empty(),
+        "nothing was kept, so no notice and no hints: {notices:?}"
+    );
 
     let events = docker.events();
     assert!(
@@ -12808,7 +12873,11 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     engine.run_task("start", &[]).await.unwrap();
 
     let notices = messages(&sink.events(), notice);
-    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices.len(),
+        3,
+        "the notice, then a hint per container: {notices:?}"
+    );
     assert!(
         notices[0].starts_with(
             "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
@@ -12852,7 +12921,11 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     engine.run_task("start", &[]).await.unwrap_err();
 
     let notices = messages(&sink.events(), notice);
-    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices.len(),
+        3,
+        "the notice, then a hint per container: {notices:?}"
+    );
     // The task's own container is created before `database`'s gate fails
     // (decisions/0019), so it was kept too — never started, but there.
     assert!(
@@ -12863,6 +12936,186 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
         "{}",
         notices[0]
     );
+}
+
+/// What a `--no-cleanup*` flag keeps comes with Batect's investigation
+/// hints, one line per container in name order after the notice: its
+/// output, and a command in it — started first where it isn't running, as
+/// the task's own container isn't once its command has exited (ratect#308).
+#[tokio::test]
+async fn disabled_cleanup_says_how_to_investigate_each_container_it_kept() {
+    let docker = FakeContainerRuntime::default();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices[1..],
+        [
+            "Investigate app with: docker logs sidecar-id-a, or docker start sidecar-id-a; \
+             docker exec -it sidecar-id-a <command>",
+            "Investigate database with: docker logs sidecar-id-d, or docker exec -it \
+             sidecar-id-d <command>",
+        ],
+        "{notices:?}"
+    );
+}
+
+/// Asking the daemon which kept containers are running can't hold the
+/// process: the questions go out together, and a further signal stops
+/// waiting for their answers — each hint then starts its container first,
+/// which is harmless if it was running (ratect#308).
+#[tokio::test(start_paused = true)]
+async fn a_daemon_that_never_says_what_is_running_cannot_hold_the_hints() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().with_hanging_running_probe();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let signaller = signal_later(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Interrupt],
+    );
+
+    let started = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+    signaller.await.unwrap();
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the signal ended the wait: {:?}",
+        started.elapsed()
+    );
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices[1..],
+        [
+            "Investigate app with: docker logs sidecar-id-a, or docker start sidecar-id-a; \
+             docker exec -it sidecar-id-a <command>",
+            "Investigate database with: docker logs sidecar-id-d, or docker start \
+             sidecar-id-d; docker exec -it sidecar-id-d <command>",
+        ],
+        "{notices:?}"
+    );
+}
+
+/// The lookups behind the hints go out together, so a slow daemon costs the
+/// slowest answer, not the sum of them — one request timeout at most when
+/// it has stopped answering altogether.
+#[tokio::test(start_paused = true)]
+async fn the_hints_ask_about_every_kept_container_at_once() {
+    const ANSWER: std::time::Duration = std::time::Duration::from_secs(10);
+    let docker = FakeContainerRuntime::default()
+        .with_running_probe_delay("app", ANSWER)
+        .with_running_probe_delay("database", ANSWER);
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let started = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert!(
+        started.elapsed() < ANSWER * 2,
+        "the two lookups took {:?}, so they ran one after the other",
+        started.elapsed()
+    );
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices.len(),
+        3,
+        "both hints, from real answers: {notices:?}"
+    );
+    assert!(
+        notices[2]
+            .starts_with("Investigate database with: docker logs sidecar-id-d, or docker exec"),
+        "the running dependency's answer was waited for: {notices:?}"
+    );
+}
+
+/// A dependency that was created but never started isn't running either,
+/// so its hint starts it first.
+#[tokio::test]
+async fn a_kept_dependency_that_never_started_is_started_before_its_exec_hint() {
+    let docker = FakeContainerRuntime::default().failing_start("database");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(
+        notices.contains(
+            &"Investigate database with: docker logs sidecar-id-d, or docker start \
+              sidecar-id-d; docker exec -it sidecar-id-d <command>"
+                .to_string()
+        ),
+        "{notices:?}"
+    );
+}
+
+/// With nothing kept there is nothing to say: no notice, no hints.
+#[tokio::test]
+async fn disabled_cleanup_says_nothing_when_nothing_was_created() {
+    let docker = FakeContainerRuntime::default().failing_network_creation();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(notices.is_empty(), "{notices:?}");
 }
 
 /// The loopback-proxy warning is a warning event — printed in every style —

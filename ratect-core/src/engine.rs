@@ -675,6 +675,22 @@ impl LeftBehind {
             .join(", ")
     }
 
+    /// `Investigate db with: docker logs a1b2c3d4e5f6, or docker exec -it
+    /// a1b2c3d4e5f6 <command>` — Batect's two hints for a kept container,
+    /// the `exec` preceded by a `docker start` when it isn't `running`, so
+    /// the line works when pasted either way.
+    fn investigation(name: &str, id: &str, running: bool) -> String {
+        let id = Self::short_id(id);
+        let start = if running {
+            String::new()
+        } else {
+            format!("docker start {id}; ")
+        };
+        format!(
+            "Investigate {name} with: docker logs {id}, or {start}docker exec -it {id} <command>"
+        )
+    }
+
     /// `docker rm -f -v a1b2c3d4e5f6 0f1e2d3c4b5a; docker network rm
     /// ratect-…` — the network last, since it can't go while a container
     /// is still attached. Joined with `;`, not `&&`: an abandoned removal
@@ -3025,6 +3041,46 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     left.list(),
                     left.command()
                 ));
+                // Then how to look inside each, as Batect says — but not a
+                // readiness companion, which nothing else names either
+                // (ratect#202). Whether one is running is the daemon's to
+                // say: the task's own container has usually exited, but not
+                // after a signal, and a dependency may never have started.
+                // Asked all at once, and raced against the next signal as
+                // cleanup's own daemon calls are, so a daemon that has
+                // stopped answering costs one request timeout at most, and
+                // a signal since the run ended — one that cut cleanup's own
+                // waits short included — ends this one rather than being
+                // swallowed by it.
+                // Unknown — no answer, or an error — counts as stopped,
+                // since starting a running container does nothing.
+                let mut investigable: Vec<(&str, &str)> = kept_task_container
+                    .into_iter()
+                    .chain(
+                        created_sidecars
+                            .iter()
+                            .filter(|(name, _)| {
+                                containers.get(name.as_str()).is_none_or(|container| {
+                                    container.reports_readiness_for.is_none()
+                                })
+                            })
+                            .map(|(name, id)| (name.as_str(), id.as_str())),
+                    )
+                    .collect();
+                investigable.sort();
+                let answers = futures::future::join_all(
+                    investigable
+                        .iter()
+                        .map(|(_, id)| self.docker.container_is_running(id)),
+                );
+                let running = self
+                    .until_interrupted(self.interrupt.wait_for(escalate_at), answers)
+                    .await
+                    .unwrap_or_default();
+                for (index, (name, id)) in investigable.into_iter().enumerate() {
+                    let running = matches!(running.get(index), Some(Ok(true)));
+                    self.post_notice(LeftBehind::investigation(name, id, running));
+                }
             }
         }
 

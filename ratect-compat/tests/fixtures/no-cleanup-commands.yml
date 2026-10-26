@@ -1,0 +1,21 @@
+# What `--no-cleanup` keeps, and the commands its notice prints to remove
+# it: the test runs those commands exactly as printed and then expects
+# nothing of this project left (ratect#308). `database` stays running and
+# `app` has exited, so the notice's hints cover both forms. `database`'s image
+# declares a `VOLUME`, so Docker gives it an anonymous volume that only the
+# printed `docker rm -v` removes.
+project_name: ratect-no-cleanup-commands-test
+
+containers:
+  database:
+    build_directory: no-cleanup-commands
+    command: sleep 300
+  app:
+    image: alpine:3.18
+    dependencies: [database]
+
+tasks:
+  check:
+    run:
+      container: app
+      command: "true"
