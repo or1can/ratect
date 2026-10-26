@@ -298,6 +298,14 @@ tables above:
 
   `SIGKILL` remains untrappable by either tool, same underlying OS limitation — the
   same labels are what a post-hoc `ratect resources clean` needs to find what it left.
+- **A closed stdout cleans up**: a run whose stdout reader goes away (`| head -n 1`)
+  stops its containers, removes them and the task network, and exits `141`, with a
+  notice on stderr saying why. Batect's container output is written
+  by its Go wrapper straight to its stdout, and Go's runtime ends a process whose write
+  to stdout meets a closed pipe by `SIGPIPE` — from reading its source rather than
+  running it, the same `141`, with nothing cleaned up. Ratect matches the code and
+  declines the leak
+  ([decisions/0013](../decisions/0013-when-ratect-compat-copies-batect.md) rule 3).
 - **A run that fails without its task's command exiting exits `125`**: a config
   that doesn't load, an unknown task, an unreachable daemon, a failed image pull or
   build, a dependency that never becomes ready, a setup command that fails. `125` is

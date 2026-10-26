@@ -65,6 +65,9 @@ struct FakeContainerRuntime {
     // Container name -> the exit code its `run_container` reports, overriding
     // `fail_run` for that container alone (see `with_run_exit`).
     run_exits: Arc<Mutex<HashMap<String, i64>>>,
+    // Container names whose `run_container` fails with `StdoutClosed` while
+    // the container is still running (see `with_stdout_closed_during_run`).
+    stdout_closed_runs: Arc<Mutex<HashSet<String>>>,
     // Every `create_container` call, in order — see `CapturedSpecs`'s own
     // doc comment.
     specs: CapturedSpecs,
@@ -206,6 +209,7 @@ impl Default for FakeContainerRuntime {
             events: Default::default(),
             fail_run: Default::default(),
             run_exits: Default::default(),
+            stdout_closed_runs: Default::default(),
             specs: Default::default(),
             build_specs: Default::default(),
             network_exists_result: Arc::new(Mutex::new(true)),
@@ -266,6 +270,17 @@ impl FakeContainerRuntime {
             .lock()
             .unwrap()
             .insert(name.to_string(), exit_code);
+        self
+    }
+
+    /// Makes `run_container` for container `name` fail as the real one does
+    /// when stdout's reader goes mid-run: with `StdoutClosed`, the container
+    /// started and still running.
+    fn with_stdout_closed_during_run(self, name: &str) -> Self {
+        self.stdout_closed_runs
+            .lock()
+            .unwrap()
+            .insert(name.to_string());
         self
     }
 
@@ -1064,6 +1079,9 @@ impl ContainerRuntime for FakeContainerRuntime {
         // container.
         if let Some(started) = started {
             let _ = started.send(());
+        }
+        if self.stdout_closed_runs.lock().unwrap().contains(name) {
+            return Err(crate::docker::StdoutClosed.into());
         }
         let delay = self.run_delays.lock().unwrap().get(name).copied();
         if let Some(delay) = delay {
@@ -5020,6 +5038,70 @@ async fn an_interrupt_removes_the_tasks_own_container_too() {
     assert!(
         events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
         "and the dependency too: {events:?}"
+    );
+}
+
+/// A run whose stdout reader has gone is ended like a signalled one: the
+/// task's own container, still running, is stopped and removed with
+/// everything else, and the failure stays `StdoutClosed` so both binaries
+/// exit 141 (ratect#670). Each removal asserted on its own.
+#[tokio::test]
+async fn a_closed_stdout_ends_the_run_and_cleans_up() {
+    let docker = FakeContainerRuntime::default().with_stdout_closed_during_run("app");
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<crate::docker::StdoutClosed>(), "{error:#}");
+    assert_eq!(crate::exit_code::for_error(&error), 141);
+    let events = docker.events();
+    assert!(
+        events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+        "the task's own container must be stopped and removed: {events:?}"
+    );
+    assert!(
+        events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
+        "the dependency must be removed: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("network-remove:")),
+        "the task's network must be removed: {events:?}"
+    );
+}
+
+/// Like a signal, a closed stdout is a failure, so
+/// `--no-cleanup-after-failure` governs it.
+#[tokio::test]
+async fn a_closed_stdout_leaves_everything_alone_with_cleanup_after_failure_disabled() {
+    let docker = FakeContainerRuntime::default().with_stdout_closed_during_run("app");
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<crate::docker::StdoutClosed>(), "{error:#}");
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("sidecar-stop:")),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| e.starts_with("network-remove:")),
+        "{events:?}"
     );
 }
 
@@ -11364,6 +11446,46 @@ async fn an_interrupted_run_posts_the_interrupt_notice() {
             messages(&events, error_line).is_empty(),
             "a clean cleanup after a signal is no error: {events:?}"
         );
+    }
+}
+
+/// A closed stdout says why the run stopped as a signal does — a notice on
+/// stderr, since `main` prints no `Error:` for it — and offers the same
+/// cleanup ladder, which any signal climbs (ratect#670).
+#[tokio::test]
+async fn a_run_whose_stdout_closed_posts_a_notice() {
+    for (cleanup_after_failure, expected) in [
+        (
+            true,
+            "Stdout closed; cleaning up. Press Ctrl+C to force-remove what's left, and \
+             Ctrl+C after that to stop cleaning up.",
+        ),
+        (false, "Stdout closed; not cleaning up."),
+    ] {
+        let sink = RecordingEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_database_dependency(|_| {})),
+            FakeContainerRuntime::default().with_stdout_closed_during_run("app"),
+            Arc::new(sink.clone()),
+            crate::interrupt::Interrupt::new(),
+        )
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+
+        assert!(error.is::<crate::docker::StdoutClosed>(), "{error:#}");
+        let events = sink.events();
+        let notices = messages(&events, notice);
+        assert_eq!(
+            notices.first().map(String::as_str),
+            Some(expected),
+            "{events:?}"
+        );
+        assert!(messages(&events, error_line).is_empty(), "{events:?}");
     }
 }
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::ui::test_support::FailingWriter;
 use std::time::Duration;
 
 /// The entry `proxy::ProxyEnvironment::host_gateway` produces for a run that
@@ -43,10 +44,13 @@ fn unique_temp_dir() -> PathBuf {
 }
 
 /// Records every posted `ContainerOutput` event's line, in order — the
-/// only variant `drain_interleaved_log_stream`'s tests need.
+/// only variant `drain_interleaved_log_stream`'s tests need — and reports
+/// its result stream's reader gone once `reader_gone_after` lines have been
+/// posted, if set.
 #[derive(Default)]
 struct RecordingEventSink {
     lines: std::sync::Mutex<Vec<String>>,
+    reader_gone_after: Option<usize>,
 }
 
 impl EventSink for RecordingEventSink {
@@ -55,6 +59,61 @@ impl EventSink for RecordingEventSink {
             self.lines.lock().unwrap().push(line);
         }
     }
+
+    fn result_reader_gone(&self) -> bool {
+        self.reader_gone_after
+            .is_some_and(|after| self.lines.lock().unwrap().len() >= after)
+    }
+}
+
+/// A reader that has gone is what `StdoutClosed` means, and nothing else
+/// is: any other failed write is Ratect failing to deliver the output, not
+/// the user deciding they have read enough (ratect#670).
+#[test]
+fn a_container_output_write_to_a_gone_reader_is_stdout_closed() {
+    let error =
+        write_container_output(&mut FailingWriter(std::io::ErrorKind::BrokenPipe), b"one\n")
+            .unwrap_err();
+    assert!(error.is::<StdoutClosed>(), "{error:#}");
+
+    let error = write_container_output(&mut FailingWriter(std::io::ErrorKind::Other), b"one\n")
+        .unwrap_err();
+    assert!(!error.is::<StdoutClosed>(), "{error:#}");
+}
+
+#[test]
+fn a_container_output_write_reaches_the_writer_whole() {
+    let mut written = Vec::new();
+    write_container_output(&mut written, b"one\ntwo").unwrap();
+    assert_eq!(written, b"one\ntwo");
+}
+
+/// Under `-o all` the container's lines reach stdout through the logger's
+/// `Console`, which ignores a failed write — so the stream asks the sink
+/// after each chunk, and stops the run the moment its reader has gone
+/// rather than following the container to its end (ratect#670).
+#[tokio::test]
+async fn drain_interleaved_log_stream_stops_once_the_result_reader_has_gone() {
+    let chunks = vec![
+        Ok(bollard::container::LogOutput::StdOut {
+            message: bytes::Bytes::from_static(b"one\n"),
+        }),
+        Ok(bollard::container::LogOutput::StdOut {
+            message: bytes::Bytes::from_static(b"two\n"),
+        }),
+    ];
+    let sink = std::sync::Arc::new(RecordingEventSink {
+        reader_gone_after: Some(1),
+        ..Default::default()
+    });
+    let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+
+    let error = drain_interleaved_log_stream(futures::stream::iter(chunks), &dyn_sink, "app")
+        .await
+        .unwrap_err();
+
+    assert!(error.is::<StdoutClosed>(), "{error:#}");
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["one"]);
 }
 
 #[tokio::test]

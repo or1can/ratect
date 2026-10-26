@@ -40,6 +40,43 @@ fn logger_with_streams(
     (logger, buffer, stderr, result)
 }
 
+/// Only the result stream's reader counts: a closed stderr never stops a run
+/// (ratect#669), and the progress console is not where the run's output goes.
+#[test]
+fn the_result_reader_is_gone_only_when_the_result_console_refused_a_write() {
+    use super::super::test_support::FailingWriter;
+
+    let broken = || {
+        Console::new(
+            Box::new(FailingWriter(std::io::ErrorKind::BrokenPipe)),
+            false,
+        )
+    };
+    let working = || Console::new(Box::new(SharedBuffer::default()), false);
+    let task_container = TaskContainerInfo {
+        is_task_container: true,
+        ..info("app", Some("alpine"), None)
+    };
+    let output = || TaskEvent::ContainerOutput {
+        container: "app".into(),
+        line: "one".into(),
+    };
+
+    let logger = InterleavedEventLogger::new(working(), working(), broken());
+    start_task(&logger, vec![task_container.clone()]);
+    assert!(!logger.result_reader_gone(), "nothing written to it yet");
+    logger.post(output());
+    assert!(logger.result_reader_gone());
+
+    let logger = InterleavedEventLogger::new(broken(), broken(), working());
+    start_task(&logger, vec![task_container]);
+    logger.post(output());
+    logger.post(TaskEvent::Notice {
+        message: "a notice".into(),
+    });
+    assert!(!logger.result_reader_gone());
+}
+
 fn logger() -> (InterleavedEventLogger, SharedBuffer) {
     let (logger, buffer, _, _) = logger_with_streams(false);
     (logger, buffer)

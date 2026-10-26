@@ -2587,6 +2587,23 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             } else {
                 format!("{}; not cleaning up.", signal.ended_run())
             });
+        } else if result
+            .as_ref()
+            .is_err_and(|error| error.is::<crate::docker::StdoutClosed>())
+        {
+            // A reader that has gone ends the run as a signal would
+            // (ratect#670), and says so the same way: nothing else reports
+            // it, and the same ladder applies — but no signal arrived, so
+            // there is nothing to send "again".
+            self.post_notice(
+                if should_cleanup {
+                    "Stdout closed; cleaning up. Press Ctrl+C to force-remove what's left, \
+                     and Ctrl+C after that to stop cleaning up."
+                } else {
+                    "Stdout closed; not cleaning up."
+                }
+                .to_string(),
+            );
         }
         if should_cleanup {
             let narrates_cleanup =

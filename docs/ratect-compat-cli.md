@@ -242,7 +242,11 @@ did the task's own container run to an exit code of its own?
    *second* signal does. A signal that arrives only during the cleanup of a run that
    had already finished ended nothing, so rule 1 applies: a passing run whose cleanup
    then completes still exits `0`. One that arrives during a prerequisite's cleanup
-   ends the run before the next task starts, and exits 128 + its number.
+   ends the run before the next task starts, and exits 128 + its number. A run whose
+   **stdout** reader goes away — `ratect-compat test | head -n 1`, once `head` has its
+   line — ends the same way, as though `SIGPIPE` had ended it: it exits `141`, after the
+   same cleanup, with a notice on stderr saying the stdout closed. A closed stderr
+   never ends a run.
 3. **It never ran, or never finished, for any other reason: `125`** — `docker run`'s own
    code for "the `docker` command itself failed". An unknown or misused flag
    (`ratect-compat --bogus build`, or a bare `ratect-compat --bogus`), no task name, a missing or
@@ -271,8 +275,8 @@ under `RUST_LOG=off` or a filter that excludes Ratect's own target — including
 [`-o quiet`](output-styles.md#quiet). Two kinds of failed run print no `Error:` line,
 because something else already reported them: a task's own non-zero exit (rule 1 — the
 exit code, and outside `quiet` the `finished with exit code N` summary line, say it,
-and the container's own output says why), and a run ended by a signal (rule 2 — the
-interrupt notice said so when it arrived). A cleanup failure is reported once, as it
+and the container's own output says why), and a run ended by a signal or a closed
+stdout (rule 2 — the notice said so when it happened). A cleanup failure is reported once, as it
 happens, by a line naming what was left behind and the `docker` command that removes
 it.
 
