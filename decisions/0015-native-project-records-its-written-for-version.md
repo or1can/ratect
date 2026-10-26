@@ -1,6 +1,6 @@
 # 0015 — A native project records the Ratect version it was written for
 
-**Status:** Accepted — planned (ratect-compat 0.32.0 · ratect 0.11.0,
+**Status:** Accepted — shipped (ratect-compat 0.32.0 · ratect 0.11.0,
 [#149](https://github.com/or1can/ratect/issues/149)).
 
 ## Context
