@@ -1529,6 +1529,328 @@ async fn builder_version_is_classic_when_the_daemon_ping_advertises_it_or_nothin
     }
 }
 
+/// One request a [`recording_daemon`] received: its method, its path with
+/// the `/vX.Y` API-version prefix stripped (so `/containers/abc/stop`, not
+/// `/v1.41/containers/abc/stop`), and its raw query string, empty when it
+/// had none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordedRequest {
+    method: String,
+    path: String,
+    query: String,
+}
+
+impl RecordedRequest {
+    /// The query's `key=value` pairs, in the order sent.
+    fn query_pairs(&self) -> Vec<(String, String)> {
+        self.query
+            .split('&')
+            .filter(|pair| !pair.is_empty())
+            .map(|pair| match pair.split_once('=') {
+                Some((key, value)) => (key.to_string(), value.to_string()),
+                None => (pair.to_string(), String::new()),
+            })
+            .collect()
+    }
+
+    /// The value of the query's `key`, if it was sent.
+    fn query_value(&self, key: &str) -> Option<String> {
+        self.query_pairs()
+            .into_iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, value)| value)
+    }
+}
+
+/// A stand-in Docker daemon that records every request and answers each
+/// with whatever `route` returns for its method and (version-stripped)
+/// path: an HTTP status and a JSON body. It answers `DockerClient::new`'s
+/// own `/version` requests itself, at Ratect's API floor on Linux, so the
+/// route only has to cover what the test is about; those are recorded too.
+///
+/// Returns the options connecting to it and the shared request log. Built
+/// for any `DockerClient` method whose request sequence is the contract
+/// under test, not only `stop_and_remove_container`'s.
+async fn recording_daemon(
+    route: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
+) -> (
+    DockerConnectionOptions,
+    std::sync::Arc<std::sync::Mutex<Vec<RecordedRequest>>>,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let route = std::sync::Arc::new(route);
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = log.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let route = route.clone();
+            let recorded = recorded.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buf).await.unwrap();
+                    if read == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buf[..read]);
+                }
+                let request = String::from_utf8_lossy(&request);
+                let mut request_line = request.split_whitespace();
+                let method = request_line.next().unwrap_or_default().to_string();
+                let target = request_line.next().unwrap_or_default();
+                let (path, query) = target.split_once('?').unwrap_or((target, ""));
+                let path = match path.strip_prefix("/v") {
+                    Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => {
+                        rest.find('/').map_or(path, |slash| &rest[slash..])
+                    }
+                    _ => path,
+                }
+                .to_string();
+                recorded.lock().unwrap().push(RecordedRequest {
+                    method: method.clone(),
+                    path: path.clone(),
+                    query: query.to_string(),
+                });
+                let (status, body) = if path == "/version" {
+                    (200, r#"{"ApiVersion":"1.41","Os":"linux"}"#.to_string())
+                } else {
+                    route(&method, &path)
+                };
+                let response = format!(
+                    "HTTP/1.1 {status} Stub\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+    (
+        DockerConnectionOptions {
+            host: Some(format!("tcp://127.0.0.1:{port}")),
+            ..Default::default()
+        },
+        log,
+    )
+}
+
+/// A `DockerClient` connected to a [`recording_daemon`] answering with
+/// `route`, and that daemon's request log with `DockerClient::new`'s own
+/// requests already cleared — so the log holds only what the test did.
+async fn client_for_recording_daemon(
+    route: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
+) -> (
+    DockerClient,
+    std::sync::Arc<std::sync::Mutex<Vec<RecordedRequest>>>,
+) {
+    let (options, log) = recording_daemon(route).await;
+    let client = DockerClient::new(&options, |_| {})
+        .await
+        .expect("the recording daemon should be connectable");
+    log.lock().unwrap().clear();
+    (client, log)
+}
+
+/// A [`recording_daemon`] route for container cleanup: the stop of a
+/// container answers with `stop_status` (`stop_status_for` picking it per
+/// id), its forced delete with 204, and anything else with a 404.
+fn cleanup_route(
+    stop_status_for: impl Fn(&str) -> u16 + Send + Sync + 'static,
+) -> impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static {
+    move |method, path| {
+        let id = path
+            .strip_prefix("/containers/")
+            .map(|rest| rest.split('/').next().unwrap_or_default());
+        match (method, id) {
+            ("POST", Some(id)) if path.ends_with("/stop") => {
+                let status = stop_status_for(id);
+                let body = match status {
+                    204 | 304 => String::new(),
+                    404 => format!(r#"{{"message":"No such container: {id}"}}"#),
+                    _ => r#"{"message":"stub daemon refused the stop"}"#.to_string(),
+                };
+                (status, body)
+            }
+            ("DELETE", Some(_)) => (204, String::new()),
+            _ => (404, r#"{"message":"not found"}"#.to_string()),
+        }
+    }
+}
+
+/// The `(method, path)` of every request in `log`, in the order received.
+fn requests_sent(log: &std::sync::Mutex<Vec<RecordedRequest>>) -> Vec<(String, String)> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .map(|request| (request.method.clone(), request.path.clone()))
+        .collect()
+}
+
+fn stop_of(id: &str) -> (String, String) {
+    ("POST".to_string(), format!("/containers/{id}/stop"))
+}
+
+fn delete_of(id: &str) -> (String, String) {
+    ("DELETE".to_string(), format!("/containers/{id}"))
+}
+
+/// Batect's RMC-1/RMC-3 (ratect#310): a started container is stopped, and
+/// only then removed — one stop, one delete, same id, nothing before the
+/// stop.
+#[tokio::test]
+async fn stop_and_remove_container_stops_before_it_removes() {
+    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
+
+    client
+        .stop_and_remove_container("abc", None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(requests_sent(&log), vec![stop_of("abc"), delete_of("abc")]);
+}
+
+/// Batect's EST-4/CSP-9 (ratect#310): a stop the daemon fails means no
+/// removal — what `docs/differences-from-batect.md`'s "A container whose
+/// stop fails isn't removed" says.
+#[tokio::test]
+async fn stop_and_remove_container_does_not_remove_after_a_failed_stop() {
+    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 500)).await;
+
+    let err = client
+        .stop_and_remove_container("abc", None, None)
+        .await
+        .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("Failed to stop container 'abc'"),
+        "{err:#}"
+    );
+    assert_eq!(requests_sent(&log), vec![stop_of("abc")]);
+}
+
+/// Batect's U31 (ratect#310): stopping a container that's already gone is
+/// an error naming both the container and the daemon's own reason, and no
+/// removal follows.
+#[tokio::test]
+async fn stop_and_remove_container_reports_a_missing_container_without_removing() {
+    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 404)).await;
+
+    let err = client
+        .stop_and_remove_container("abc", None, None)
+        .await
+        .unwrap_err();
+
+    let chain = format!("{err:#}");
+    assert!(chain.contains("Failed to stop container 'abc'"), "{chain}");
+    assert!(chain.contains("No such container: abc"), "{chain}");
+    assert_eq!(requests_sent(&log), vec![stop_of("abc")]);
+}
+
+/// Batect's U32 and NRM-5/ECS-3 (ratect#310): a container created but
+/// never started answers its stop with a 304, which isn't a failure — it
+/// is still removed.
+#[tokio::test]
+async fn stop_and_remove_container_removes_a_never_started_container() {
+    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 304)).await;
+
+    client
+        .stop_and_remove_container("abc", None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(requests_sent(&log), vec![stop_of("abc"), delete_of("abc")]);
+}
+
+/// Batect's NRM-1 (ratect#310): the removal is forced and takes the
+/// container's anonymous volumes with it.
+#[tokio::test]
+async fn stop_and_remove_container_removes_forcibly_with_volumes() {
+    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
+
+    client
+        .stop_and_remove_container("abc", None, None)
+        .await
+        .unwrap();
+
+    let log = log.lock().unwrap();
+    let delete = log
+        .iter()
+        .find(|request| request.method == "DELETE")
+        .expect("a delete should have been sent");
+    assert_eq!(delete.query_value("force").as_deref(), Some("true"));
+    assert_eq!(delete.query_value("v").as_deref(), Some("true"));
+}
+
+/// Batect's NST-1 (ratect#310): with neither `stop_signal` nor
+/// `stop_grace_period` set, the stop carries neither `signal` nor `t`, so
+/// the daemon's own default applies.
+#[tokio::test]
+async fn stop_and_remove_container_sends_no_stop_options_by_default() {
+    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
+
+    client
+        .stop_and_remove_container("abc", None, None)
+        .await
+        .unwrap();
+
+    let log = log.lock().unwrap();
+    let stop = log
+        .iter()
+        .find(|request| request.method == "POST")
+        .expect("a stop should have been sent");
+    assert_eq!(stop.query_value("signal"), None, "{stop:?}");
+    assert_eq!(stop.query_value("t"), None, "{stop:?}");
+}
+
+/// ratect#310: `stop_signal` passes through as the stop's `signal`, and
+/// `stop_grace_period` becomes `t` rounded *up* to whole seconds.
+#[tokio::test]
+async fn stop_and_remove_container_sends_the_signal_and_a_rounded_up_grace_period() {
+    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
+
+    client
+        .stop_and_remove_container("abc", Some("SIGINT"), Some(Duration::from_millis(500)))
+        .await
+        .unwrap();
+
+    let log = log.lock().unwrap();
+    let stop = log
+        .iter()
+        .find(|request| request.method == "POST")
+        .expect("a stop should have been sent");
+    assert_eq!(stop.query_value("signal").as_deref(), Some("SIGINT"));
+    assert_eq!(stop.query_value("t").as_deref(), Some("1"));
+}
+
+/// Batect's RMC-2 (ratect#310): a container's removal waits on its own stop
+/// only — one container's failed stop neither removes it nor holds back
+/// another's stop and removal.
+#[tokio::test]
+async fn stop_and_remove_container_gates_each_removal_on_its_own_stop() {
+    let (client, log) =
+        client_for_recording_daemon(cleanup_route(|id| if id == "first" { 500 } else { 204 }))
+            .await;
+
+    assert!(client
+        .stop_and_remove_container("first", None, None)
+        .await
+        .is_err());
+    client
+        .stop_and_remove_container("second", None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        requests_sent(&log),
+        vec![stop_of("first"), stop_of("second"), delete_of("second")]
+    );
+}
+
 /// A [`RegistryCredentialResolver`] returning a fixed, pre-arranged answer
 /// for every registry — no subprocess, no filesystem, no daemon — so
 /// `resolve_pull_credential`'s own decision (what credential to pass,
