@@ -96,9 +96,13 @@ sequenceDiagram
 
     Note over Engine: cleanup — runs even if the task's container failed,<br/>unless --no-cleanup* says otherwise
     Engine->>Docker: stop_and_remove_container() for the task's own container
-    Engine->>Docker: stop_and_remove_container() for each dependency
+    Engine->>Docker: stop_and_remove_container() for each dependency, in reverse dependency order
     Engine->>Docker: remove_network()
 ```
+
+Dependencies are stopped and removed in reverse dependency order: a container only
+after every container that depends on it, so a dependent shutting down can still reach
+what it depends on. A dependency whose dependent's stop failed is still stopped.
 
 If the container has no `dependencies`, the dependency steps (the `loop` above) are
 skipped — but the network is still created and the task's own container still joins

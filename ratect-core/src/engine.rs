@@ -370,6 +370,64 @@ fn build_dependency_graph(
     Ok(graph)
 }
 
+/// For each container in `created`, the others in `created` that depend on
+/// it — directly, or through a container that was never created — and so
+/// must have their stop attempted before it: Batect's `StopContainerStepRule`
+/// waits on each container's dependents, which at any depth is the same
+/// order. A dependent only has to have been *created* to count: one that
+/// never started is stopped at once (Docker answers `304`), so it holds
+/// nothing back, which is what Batect gets by counting only started
+/// dependents. A container `graph` doesn't know waits on nothing.
+fn dependents_to_stop_first(
+    graph: &HashMap<String, Vec<String>>,
+    created: &[&str],
+) -> HashMap<String, HashSet<String>> {
+    fn reach<'g>(graph: &'g HashMap<String, Vec<String>>, name: &str, seen: &mut HashSet<&'g str>) {
+        for dependency in graph.get(name).into_iter().flatten() {
+            if seen.insert(dependency.as_str()) {
+                reach(graph, dependency, seen);
+            }
+        }
+    }
+
+    let mut dependents: HashMap<String, HashSet<String>> = created
+        .iter()
+        .map(|name| (name.to_string(), HashSet::new()))
+        .collect();
+    for dependent in created {
+        let mut dependencies = HashSet::new();
+        reach(graph, dependent, &mut dependencies);
+        for dependency in dependencies {
+            if let Some(waiting) = dependents.get_mut(dependency) {
+                waiting.insert(dependent.to_string());
+            }
+        }
+    }
+    dependents
+}
+
+/// `created` in an order that stops every container after the ones
+/// `dependents_to_stop_first` says must go before it. Ties go by name, so
+/// the order is the same every run.
+fn reverse_dependency_order(graph: &HashMap<String, Vec<String>>, created: &[&str]) -> Vec<String> {
+    let mut waiting = dependents_to_stop_first(graph, created);
+    let mut order = Vec::with_capacity(waiting.len());
+    while !waiting.is_empty() {
+        let next = waiting
+            .iter()
+            .filter(|(_, dependents)| dependents.is_empty())
+            .map(|(name, _)| name.clone())
+            .min()
+            .expect("the dependency graph is acyclic, so something is always ready to stop");
+        waiting.remove(&next);
+        for dependents in waiting.values_mut() {
+            dependents.remove(&next);
+        }
+        order.push(next);
+    }
+    order
+}
+
 /// Builds the anchored, case-sensitive regex a `*`-wildcard prerequisite
 /// pattern expands to — a direct port of Batect's own
 /// `TaskExecutionOrderResolver.toWildcardRegex`: each literal segment
@@ -2076,6 +2134,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // resolution failed) — the cleanup section below only ever removes
         // a network it can see was actually created.
         let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
+        // The task's dependency graph, set once it is built inside the
+        // block below — startup walks it, and cleanup stops containers in
+        // its reverse order. Unset exactly when building it failed, which
+        // is before anything is created.
+        let dependency_graph: std::sync::OnceLock<HashMap<String, Vec<String>>> =
+            std::sync::OnceLock::new();
 
         // Every container Docker creates for this run, registered the
         // moment `create_container` hands its id back — see
@@ -2177,8 +2241,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // proves the whole graph acyclic before any concurrent execution
             // starts, so `ensure_container_ready` doesn't need its own
             // runtime cycle guard.
-            let graph =
+            let built =
                 build_dependency_graph(&containers, &run.container, task.dependencies.as_deref())?;
+            let graph = dependency_graph.get_or_init(|| built);
             // The resolved graph, for per-container progress displays (see
             // `TaskEvent::TaskGraphResolved`). A node missing from config
             // can't happen for a graph that just built successfully, but
@@ -2221,7 +2286,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             });
             let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
             let context = TaskRunContext {
-                graph: &graph,
+                graph,
                 containers: &containers,
                 network: &network_name,
                 created_cells: &created_cells,
@@ -2459,9 +2524,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .and_then(|error| error.downcast_ref::<crate::interrupt::TaskInterrupted>())
             .map(|interrupted| interrupted.signal);
         // Everything Docker created, however far each got — see
-        // `CreatedContainers`. The task's own container is pulled out
-        // first: cleanup removes it before the dependencies it was using,
-        // matching Batect's own dependency-ordered cleanup.
+        // `CreatedContainers`. The task's own container is pulled out: what
+        // was kept or left behind is reported with it first.
         let mut created = created_containers.into_inner().unwrap();
         let task_container_id = created.remove(&run.container);
         let created_sidecars = created;
@@ -2678,33 +2742,45 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 }
             };
 
-            // First, and unconditionally: `run_container` never removes the
-            // container it creates, so this is the only place the task's own
-            // container is removed — however the run ended. `Some` exactly
-            // when Docker got as far as creating one, which is also the only
-            // case where there is anything to remove. Before the sidecars it
-            // depends on, matching Batect's own dependency-ordered cleanup.
-            let mut removals: std::collections::VecDeque<Removal<'_>> =
-                std::collections::VecDeque::new();
+            // `run_container` never removes the container it creates, so
+            // this is the only place the task's own container is removed —
+            // however the run ended. `Some` exactly when Docker got as far
+            // as creating one, which is also the only case where there is
+            // anything to remove.
+            //
+            // In reverse dependency order, as Batect's cleanup is: a
+            // container is stopped only once every container depending on
+            // it has been, so its dependents' shutdown can still reach it.
+            // The task's own container depends on everything and nothing on
+            // it, so it goes first.
+            let mut created_ids: HashMap<&str, &str> = created_sidecars
+                .iter()
+                .map(|(name, id)| (name.as_str(), id.as_str()))
+                .collect();
             if let Some(container_id) = task_container_id.as_deref() {
-                removals.push_back(Removal {
-                    name: run.container.as_str(),
-                    container_id,
-                    narrate: true,
-                    is_task_container: true,
-                });
+                created_ids.insert(run.container.as_str(), container_id);
             }
-            for (name, container_id) in &created_sidecars {
-                let narrate = containers
-                    .get(name)
-                    .is_none_or(|container| container.reports_readiness_for.is_none());
-                removals.push_back(Removal {
-                    name: name.as_str(),
-                    container_id: container_id.as_str(),
-                    narrate,
-                    is_task_container: false,
-                });
-            }
+            let created_names: Vec<&str> = created_ids.keys().copied().collect();
+            let order = reverse_dependency_order(
+                dependency_graph.get().unwrap_or(&HashMap::new()),
+                &created_names,
+            );
+            let mut removals: std::collections::VecDeque<Removal<'_>> = order
+                .iter()
+                .filter_map(|name| created_ids.get_key_value(name.as_str()))
+                .map(|(&name, &container_id)| {
+                    let is_task_container = name == run.container;
+                    Removal {
+                        name,
+                        container_id,
+                        narrate: is_task_container
+                            || containers
+                                .get(name)
+                                .is_none_or(|container| container.reports_readiness_for.is_none()),
+                        is_task_container,
+                    }
+                })
+                .collect();
             // Everything cleanup set out to remove, for the report at the
             // end — `removals` itself is consumed by the rungs below.
             let to_remove: Vec<(&str, &str)> = removals
@@ -2712,7 +2788,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .map(|removal| (removal.name, removal.container_id))
                 .collect();
 
-            // Graceful, one at a time in dependency order, until the ladder's
+            // Graceful, one at a time in that order, until the ladder's
             // first rung — reached either by a signal cutting a stop short or
             // by one landing between two stops, which the count check catches
             // so no stop is requested only to be dropped at once.

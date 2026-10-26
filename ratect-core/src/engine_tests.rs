@@ -4118,6 +4118,183 @@ fn assert_removed_before_network(events: &[String], container: &str) {
     );
 }
 
+/// `start` runs `app`, and each container in `containers` (name and its
+/// dependencies) is declared as given — the shape of a cleanup-order test.
+fn config_with_containers(app_dependencies: &[&str], containers: &[(&str, &[&str])]) -> Config {
+    let names = |names: &[&str]| -> Option<Vec<String>> {
+        (!names.is_empty()).then(|| names.iter().map(|name| name.to_string()).collect())
+    };
+    let mut declared = IndexMap::new();
+    for (name, dependencies) in containers {
+        declared.insert(
+            name.to_string(),
+            container("alpine:3.18", names(dependencies)),
+        );
+    }
+    declared.insert(
+        "app".to_string(),
+        container("alpine:3.18", names(app_dependencies)),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers: declared,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Where in `events` `container`'s graceful stop was recorded.
+fn stop_index(events: &[String], container: &str) -> usize {
+    events
+        .iter()
+        .position(|e| e == &format!("sidecar-stop:sidecar-id-{container}"))
+        .unwrap_or_else(|| panic!("'{container}' must be stopped: {events:?}"))
+}
+
+/// A chain is stopped from the task's end: a container only once the one
+/// depending on it has stopped, so its shutdown can still reach what it
+/// depends on (ratect#307). Eight links, so a hash order passing by luck is
+/// a one-in-40,000 event.
+#[tokio::test]
+async fn a_dependency_chain_is_stopped_in_reverse_dependency_order() {
+    let links = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
+    let declared: Vec<(&str, Vec<&str>)> = links
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (*name, links.get(i + 1).into_iter().copied().collect()))
+        .collect();
+    let declared: Vec<(&str, &[&str])> = declared
+        .iter()
+        .map(|(name, dependencies)| (*name, dependencies.as_slice()))
+        .collect();
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_containers(&["c1"], &declared), docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    let mut previous = stop_index(&events, "app");
+    for link in links {
+        let index = stop_index(&events, link);
+        assert!(
+            previous < index,
+            "'{link}' is stopped after the container depending on it: {events:?}"
+        );
+        previous = index;
+    }
+}
+
+/// A dependency shared by several dependents waits for all of them. Six
+/// dependents and five runs, so a hash order can't pass by luck.
+#[tokio::test]
+async fn a_shared_dependency_is_stopped_after_every_container_depending_on_it() {
+    let dependents = ["a1", "a2", "a3", "a4", "a5", "a6"];
+    let mut declared: Vec<(&str, &[&str])> = dependents
+        .iter()
+        .map(|name| (*name, &["shared"][..]))
+        .collect();
+    declared.push(("shared", &[]));
+    for _ in 0..5 {
+        let docker = FakeContainerRuntime::default();
+        let engine = engine(
+            config_with_containers(&dependents, &declared),
+            docker.clone(),
+        );
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let events = docker.events();
+        let shared = stop_index(&events, "shared");
+        for dependent in dependents {
+            assert!(
+                stop_index(&events, dependent) < shared,
+                "'shared' is stopped after '{dependent}': {events:?}"
+            );
+        }
+        assert!(
+            stop_index(&events, "app") < stop_index(&events, "a1"),
+            "the task's own container is still stopped first: {events:?}"
+        );
+    }
+}
+
+/// A dependent whose stop the daemon refuses doesn't hold up what it depends
+/// on: cleanup carries on past it, as differences-from-batect.md records.
+#[tokio::test]
+async fn a_dependency_is_still_stopped_after_its_dependents_stop_fails() {
+    let docker = FakeContainerRuntime::default().refusing_container_removal("sidecar-id-a");
+    let engine = engine(
+        config_with_containers(&["a"], &[("a", &["b"]), ("b", &[])]),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    assert!(
+        docker.stop_options_for("sidecar-id-a").is_some(),
+        "'a''s stop is attempted: {events:?}"
+    );
+    assert!(
+        !events.contains(&"sidecar-stop:sidecar-id-a".to_string()),
+        "'a''s stop is refused: {events:?}"
+    );
+    stop_index(&events, "b");
+    assert_removed_before_network(&events, "b");
+}
+
+/// A dependent that was created but never started doesn't keep its
+/// dependency from being stopped and removed (Batect's CSP-14).
+#[tokio::test]
+async fn a_dependency_is_still_stopped_when_its_dependent_never_started() {
+    let docker = FakeContainerRuntime::default().failing_start("a");
+    let engine = engine(
+        config_with_containers(&["a"], &[("a", &["b"]), ("b", &[])]),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    assert!(
+        stop_index(&events, "a") < stop_index(&events, "b"),
+        "the unstarted dependent comes first, and its dependency still goes: {events:?}"
+    );
+    assert_removed_before_network(&events, "b");
+}
+
+/// A container that was never created passes its dependents' order on to
+/// what it depends on: `c` still waits for `a`, through `b`.
+#[test]
+fn the_stop_order_runs_through_a_container_that_was_never_created() {
+    let graph: HashMap<String, Vec<String>> = [
+        ("app", vec!["a"]),
+        ("a", vec!["b"]),
+        ("b", vec!["c"]),
+        ("c", vec![]),
+    ]
+    .into_iter()
+    .map(|(name, dependencies)| {
+        (
+            name.to_string(),
+            dependencies.into_iter().map(str::to_string).collect(),
+        )
+    })
+    .collect();
+
+    assert_eq!(
+        reverse_dependency_order(&graph, &["c", "a", "app"]),
+        ["app", "a", "c"]
+    );
+    assert_eq!(
+        dependents_to_stop_first(&graph, &["c", "a"])["c"],
+        HashSet::from(["a".to_string()])
+    );
+}
+
 /// A sibling whose start is abandoned because another dependency failed is
 /// still removed, as long as Docker had created it: `peer` is created at
 /// once, `fails` is reported unhealthy a second later, and `peer`'s start
