@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Print through a `Console`, not these macros, which panic on a closed
+// stream; its doc comment has the rule and the two exceptions (ratect#669).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use ratect_core::cache::CacheType;

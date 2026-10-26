@@ -1689,6 +1689,181 @@ fn tasks_list_exits_cleanly_when_stdout_is_closed() {
     }
 }
 
+/// The write end of a pipe whose reader has already gone — what a child's
+/// stdout or stderr is under `| head -c 0` or `2>&-`, where every write
+/// fails (#669).
+fn closed_pipe() -> std::io::PipeWriter {
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    writer
+}
+
+/// Runs `command` with its stdout closed and asserts it exits 0 with
+/// nothing on stderr, as it would with a reader (#669).
+fn assert_succeeds_with_stdout_closed(command: &mut Command) {
+    let output = command
+        .stdout(closed_pipe())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{command:?}:\n{stderr}");
+    assert_eq!(stderr, "", "{command:?}");
+}
+
+/// #669: `caches list` and `caches clean` carry on to completion when
+/// stdout's reader has gone, and `clean` still removes every cache.
+#[test]
+fn caches_succeeds_when_stdout_is_closed() {
+    let project = project_with_directory_caches(&["npm-cache", "gradle-cache"]);
+    for style in ["simple", "quiet"] {
+        assert_succeeds_with_stdout_closed(caches_command(&project).args([
+            "caches",
+            "list",
+            "--cache-type",
+            "directory",
+            "--scope",
+            "project",
+            "-o",
+            style,
+        ]));
+    }
+    assert_succeeds_with_stdout_closed(caches_command(&project).args([
+        "caches",
+        "clean",
+        "--cache-type",
+        "directory",
+        "--scope",
+        "project",
+    ]));
+    let npm_gone = !project.join(".batect/caches/npm-cache").exists();
+    let gradle_gone = !project.join(".batect/caches/gradle-cache").exists();
+    std::fs::remove_dir_all(&project).unwrap();
+    assert!(npm_gone, "npm-cache is still there");
+    assert!(gradle_gone, "gradle-cache is still there");
+}
+
+/// #669: `includes list` and `includes clean` carry on when stdout's
+/// reader has gone. The clean's threshold is a century, so it removes
+/// nothing from the real `~/.ratect/incl` it can't be pointed away from;
+/// `includes refresh` isn't run at all, since it would re-clone every
+/// include cached there.
+#[test]
+fn includes_succeeds_when_stdout_is_closed() {
+    for style in ["simple", "quiet"] {
+        assert_succeeds_with_stdout_closed(
+            ratect_command().args(["includes", "list", "-o", style]),
+        );
+    }
+    assert_succeeds_with_stdout_closed(ratect_command().args([
+        "includes",
+        "clean",
+        "--older-than",
+        "36500d",
+    ]));
+}
+
+/// #669: `config validate` carries on when stdout's reader has gone.
+#[test]
+fn config_validate_succeeds_when_stdout_is_closed() {
+    for style in ["simple", "quiet"] {
+        assert_succeeds_with_stdout_closed(
+            ratect_command()
+                .arg("-f")
+                .arg(native_fixture_path())
+                .args(["config", "validate", "-o", style]),
+        );
+    }
+}
+
+/// #669: `doctor` exits as it does with a reader when stdout's reader has
+/// gone — whether that's `0` depends on this machine's daemon, so the code
+/// is compared rather than pinned.
+#[test]
+fn doctor_exits_as_usual_when_stdout_is_closed() {
+    let doctor = || {
+        let mut command = ratect_command();
+        command.arg("-f").arg(native_fixture_path()).arg("doctor");
+        command
+    };
+    let open = doctor().output().expect("failed to run ratect");
+    let closed = doctor()
+        .stdout(closed_pipe())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&closed.stderr);
+    assert_ne!(closed.status.code(), Some(101), "{stderr}");
+    assert_eq!(closed.status.code(), open.status.code(), "{stderr}");
+}
+
+/// #669: `completions` exits 0 when stdout's reader has gone.
+#[test]
+fn completions_succeeds_when_stdout_is_closed() {
+    assert_succeeds_with_stdout_closed(ratect_command().args(["completions", "bash"]));
+}
+
+/// A `batect.yml` whose conversion has an item to check, so `config
+/// convert` writes to both streams.
+const CONVERTED_WITH_A_CHECK: &str = "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    setup_commands:\n      - command: ./migrate.sh\ntasks:\n  t:\n    run:\n      container: app\n";
+
+/// #669: `config convert` writes its file, and `--stdout` finishes, when
+/// stdout's reader has gone; and `--stdout` still prints the document when
+/// stderr's has.
+#[test]
+fn config_convert_succeeds_when_either_stream_is_closed() {
+    let dir = unique_project_dir();
+    std::fs::write(dir.join("batect.yml"), CONVERTED_WITH_A_CHECK).unwrap();
+    let convert = |extra: &[&str]| {
+        let mut command = ratect_command();
+        command
+            .arg("-f")
+            .arg(dir.join("batect.yml"))
+            .args(["config", "convert"])
+            .args(extra);
+        command
+    };
+
+    let written = convert(&[])
+        .stdout(closed_pipe())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("failed to run ratect");
+    let file_written = dir.join("ratect.toml").exists();
+
+    let printed = convert(&["--stdout"])
+        .stdout(closed_pipe())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("failed to run ratect");
+
+    let without_stderr = convert(&["--stdout"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(closed_pipe())
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    let written_stderr = String::from_utf8_lossy(&written.stderr);
+    assert_eq!(written.status.code(), Some(0), "{written_stderr}");
+    assert_eq!(written_stderr, "");
+    // `--stdout` moves the list of what to check to stderr, so the document
+    // is all that's on stdout.
+    let printed_stderr = String::from_utf8_lossy(&printed.stderr);
+    assert_eq!(printed.status.code(), Some(0), "{printed_stderr}");
+    assert!(
+        printed_stderr.contains("'setup_commands'"),
+        "{printed_stderr}"
+    );
+    assert!(file_written, "the converted file was not written");
+    assert_eq!(without_stderr.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&without_stderr.stdout).contains("project_name = \"demo\""),
+        "{}",
+        String::from_utf8_lossy(&without_stderr.stdout)
+    );
+}
+
 #[test]
 fn a_missing_config_file_fails_rather_than_listing_nothing() {
     let output = ratect_command()
@@ -2858,6 +3033,52 @@ fn resources_finds_and_removes_what_a_previous_run_left_behind() {
         String::from_utf8_lossy(&after.stdout).contains("Nothing left over."),
         "everything should be gone:\n{}",
         String::from_utf8_lossy(&after.stdout)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// #669: `resources list` and `resources clean` carry on when stdout's
+/// reader has gone, and `clean` still removes what a run left behind.
+/// Shares `resources.yml` with the test above, which `serial_docker` keeps
+/// from overlapping it.
+#[test]
+#[ignore]
+fn resources_succeeds_when_stdout_is_closed() {
+    let _guard = serial_docker();
+    let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml");
+    let ratect = |arguments: &[&str]| {
+        let mut command = ratect_command();
+        command.arg("-f").arg(&config);
+        command.args(arguments);
+        command
+    };
+
+    ratect(&["resources", "clean"])
+        .output()
+        .expect("failed to run ratect");
+    let run = ratect(&["run", "build", "--no-cleanup-after-success"])
+        .output()
+        .expect("failed to run ratect");
+    assert!(
+        run.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    for style in ["simple", "quiet"] {
+        assert_succeeds_with_stdout_closed(&mut ratect(&["resources", "list", "-o", style]));
+    }
+    assert_succeeds_with_stdout_closed(&mut ratect(&["resources", "clean"]));
+
+    let after = ratect(&["resources", "list", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(
+        String::from_utf8_lossy(&after.stdout),
+        "",
+        "everything should be gone"
     );
 }
 

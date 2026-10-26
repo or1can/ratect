@@ -889,6 +889,7 @@ async fn resources_clean_fails_after_trying_everything_when_a_removal_is_refused
         &inventory,
         &[leftover("a"), leftover("b"), leftover("c")],
         true,
+        &Console::new(Box::new(std::io::sink()), false),
     )
     .await
     .unwrap_err();
@@ -909,7 +910,12 @@ async fn resources_clean_fails_after_trying_everything_when_a_removal_is_refused
         refused: vec![],
         attempted: Default::default(),
     };
-    remove_leftovers(&clean, &[leftover("a")], true)
-        .await
-        .expect("nothing refused, nothing to report");
+    remove_leftovers(
+        &clean,
+        &[leftover("a")],
+        true,
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .await
+    .expect("nothing refused, nothing to report");
 }

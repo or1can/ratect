@@ -25,6 +25,10 @@
 //! `ui::create_event_sink`, the engine and UI unchanged from what
 //! `ratect-compat` already proved.
 
+// Print through a `Console`, not these macros, which panic on a closed
+// stream; its doc comment has the rule and the two exceptions (ratect#669).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 use anyhow::{Context, Result};
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
 use ratect_core::config::{
@@ -773,10 +777,11 @@ async fn main() {
     // Resolved before `run`, because the subscriber and the fatal-error
     // line below both need stderr's colour decision and both sit outside it.
     let stderr = Console::stderr(color_mode);
+    let stdout = Console::stdout(color_mode);
     init_tracing(stderr.color_enabled());
 
     let is_run = matches!(cli.command, Command::Run(_));
-    let exit_code = match run(cli, color_mode, &stderr).await {
+    let exit_code = match run(cli, color_mode, &stdout, &stderr).await {
         Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(error) => {
             // Straight to stderr, never through `tracing::error!`, which
@@ -813,9 +818,10 @@ const PROGRESS: ProgressStream = ProgressStream::Stderr;
 
 /// `color_mode` is `main`'s already-resolved `--no-color`/`NO_COLOR`/
 /// `CLICOLOR_FORCE` verdict; `global.no_color` is already folded too.
-/// `stderr` is `main`'s own stderr console, so the colour decision is made
-/// once and every line on stderr goes through one writer.
-async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
+/// `stdout` and `stderr` are `main`'s own consoles, so the colour decision is
+/// made once and every line this binary prints itself goes through one writer
+/// per stream — never `println!`, which panics where [`Console`] carries on.
+async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console) -> Result<()> {
     let Cli { global, command } = cli;
 
     // Gathered once and shared between the output-format decisions and
@@ -853,22 +859,23 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
                 _ => format_task_list(&project.config.project_name, &project.config.tasks),
             };
-            // Through a `Console`, not `println!`: a reader that has already gone
-            // (`| head -c 0`) is a write error to ignore, as Batect's `PrintStream`
-            // does, not a panic (ratect#444).
-            Console::stdout(ColorMode::Off).write_raw(&listing);
+            stdout.write_raw(&listing);
             Ok(())
         }
         // Deliberately no `load` call: see `CachesArgs`.
-        Command::Caches { command } => manage_caches(command, &global, style, stderr).await,
-        Command::Includes { command } => manage_includes(command, style).await,
-        Command::Resources { command } => manage_resources(command, &global, style, stderr).await,
+        Command::Caches { command } => manage_caches(command, &global, style, stdout, stderr).await,
+        Command::Includes { command } => manage_includes(command, style, stdout).await,
+        Command::Resources { command } => {
+            manage_resources(command, &global, style, stdout, stderr).await
+        }
         Command::Config { command } => match command {
-            ConfigCommand::Validate(args) => validate_config(args, &global, style).await,
-            ConfigCommand::Convert(args) => convert_config(args, &global, style).await,
+            ConfigCommand::Validate(args) => validate_config(args, &global, style, stdout).await,
+            ConfigCommand::Convert(args) => {
+                convert_config(args, &global, style, stdout, stderr).await
+            }
         },
-        Command::Doctor(args) => diagnose(args, &global, style).await,
-        Command::Completions(args) => generate_completions(args),
+        Command::Doctor(args) => diagnose(args, &global, style, stdout).await,
+        Command::Completions(args) => generate_completions(args, stdout),
     }
 }
 
@@ -882,21 +889,20 @@ async fn run(cli: Cli, color_mode: ColorMode, stderr: &Console) -> Result<()> {
 /// command/flag surface. Generating the script itself reads nothing and reaches
 /// nothing — it's a fixed bit of shell glue; the config is only read later, on
 /// an actual completion request, and always side-effect-free.
-fn generate_completions(args: CompletionsArgs) -> Result<()> {
+fn generate_completions(args: CompletionsArgs, stdout: &Console) -> Result<()> {
     let shell = args.shell.to_string();
     let shells = clap_complete::env::Shells::builtins();
     let completer = shells
         .completer(&shell)
         .ok_or_else(|| anyhow::anyhow!("no completion support for shell '{shell}'"))?;
+    // Rendered first and written through `stdout`, so a reader that has
+    // gone is ignored like any other line of output, not an error.
+    let mut script = Vec::new();
     completer
-        .write_registration(
-            "COMPLETE",
-            "ratect",
-            "ratect",
-            "ratect",
-            &mut std::io::stdout(),
-        )
-        .context("writing the completion registration script")
+        .write_registration("COMPLETE", "ratect", "ratect", "ratect", &mut script)
+        .context("writing the completion registration script")?;
+    stdout.write_raw(&String::from_utf8_lossy(&script));
+    Ok(())
 }
 
 /// Completes a `run <task>` argument with the project's task names — the
@@ -1152,6 +1158,7 @@ async fn manage_caches(
     command: CachesCommand,
     global: &GlobalArgs,
     style: OutputStyle,
+    stdout: &Console,
     stderr: &Console,
 ) -> Result<()> {
     let (args, names) = match command {
@@ -1193,32 +1200,32 @@ async fn manage_caches(
             // construction exactly what a `clean` with these same flags
             // would act on, so it is always safe to pipe back.
             for name in found.actionable() {
-                println!("{name}");
+                stdout.println(name);
             }
         } else if found.is_empty() {
             // Named after what was searched, not after the project: with
             // `--scope shared` this project's caches were never looked at.
             match args.scope {
-                Some(CacheScopeArg::Shared) => println!("There are no shared caches."),
-                Some(CacheScopeArg::Project) => println!("This project has no caches."),
-                None => println!("This project has no caches, and there are no shared ones."),
+                Some(CacheScopeArg::Shared) => stdout.println("There are no shared caches."),
+                Some(CacheScopeArg::Project) => stdout.println("This project has no caches."),
+                None => stdout.println("This project has no caches, and there are no shared ones."),
             }
         } else {
             if !found.owned.is_empty() {
-                println!("Caches for this project:");
+                stdout.println("Caches for this project:");
                 for name in &found.owned {
-                    println!("- {name}");
+                    stdout.println(&format!("- {name}"));
                 }
             }
             // Never under "this project's": these are machine-wide, and most
             // will belong to other projects.
             if !found.shared.is_empty() {
                 if !found.owned.is_empty() {
-                    println!();
+                    stdout.println("");
                 }
-                println!("Shared caches on this machine:");
+                stdout.println("Shared caches on this machine:");
                 for name in &found.shared {
-                    println!("- {name}");
+                    stdout.println(&format!("- {name}"));
                 }
             }
         }
@@ -1256,9 +1263,9 @@ async fn manage_caches(
         // own Docker name carries a prefix, which is an implementation
         // detail of where it's kept, not what the user called it.
         for cache in &removed {
-            println!("Removed cache '{}'.", cache.name);
+            stdout.println(&format!("Removed cache '{}'.", cache.name));
         }
-        println!("Removed {} cache(s).", removed.len());
+        stdout.println(&format!("Removed {} cache(s).", removed.len()));
     }
 
     // A name that matched nothing is worth saying out loud: the likeliest
@@ -1311,6 +1318,7 @@ async fn manage_resources(
     command: ResourcesCommand,
     global: &GlobalArgs,
     style: OutputStyle,
+    stdout: &Console,
     stderr: &Console,
 ) -> Result<()> {
     let (args, removing) = match command {
@@ -1350,21 +1358,18 @@ async fn manage_resources(
 
     if leftovers.is_empty() {
         if !quiet {
-            println!(
-                "{}",
-                match args.older_than {
-                    Some(_) => "Nothing left over that old.",
-                    None => "Nothing left over.",
-                }
-            );
+            stdout.println(match args.older_than {
+                Some(_) => "Nothing left over that old.",
+                None => "Nothing left over.",
+            });
         }
         return Ok(());
     }
 
     if removing {
-        remove_leftovers(&docker, &leftovers, quiet).await?;
+        remove_leftovers(&docker, &leftovers, quiet, stdout).await?;
     } else {
-        report_leftovers(&leftovers, quiet);
+        report_leftovers(&leftovers, quiet, stdout);
     }
     Ok(())
 }
@@ -1388,12 +1393,12 @@ fn format_age(seconds: i64) -> String {
 /// Grouped by run, because that's the unit a leftover actually belongs to:
 /// one interrupted task leaves a network and every container it started,
 /// and they're only meaningful together.
-fn report_leftovers(leftovers: &[Leftover], quiet: bool) {
+fn report_leftovers(leftovers: &[Leftover], quiet: bool, stdout: &Console) {
     if quiet {
         // Machine-readable, same contract as `tasks list`/`caches list`:
         // one id per line and nothing else, ready to pipe into `docker rm`.
         for leftover in leftovers {
-            println!("{}", leftover.resource.id);
+            stdout.println(&leftover.resource.id);
         }
         return;
     }
@@ -1402,22 +1407,22 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool) {
     runs.sort_unstable();
     runs.dedup();
 
-    println!(
+    stdout.println(&format!(
         "{} left over from {} previous run{}:",
         leftovers.len(),
         runs.len(),
         if runs.len() == 1 { "" } else { "s" }
-    );
+    ));
     for run in runs {
         let group: Vec<&Leftover> = leftovers.iter().filter(|l| l.run == run).collect();
         let task = &group[0].task;
         let age = format_age(group.iter().map(|l| l.age_seconds).max().unwrap_or(0));
-        println!("\n  {task} ({age} ago, run {run}):");
+        stdout.println(&format!("\n  {task} ({age} ago, run {run}):"));
         for leftover in group {
-            println!("    - {}", leftover.describe());
+            stdout.println(&format!("    - {}", leftover.describe()));
         }
     }
-    println!("\nRemove them with: ratect resources clean");
+    stdout.println("\nRemove them with: ratect resources clean");
 }
 
 /// Reports each removal as it happens rather than after the sweep, so a slow
@@ -1428,7 +1433,12 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool) {
 /// once the sweep is done — one `Error:` from `main` listing every refusal,
 /// and exit `1`, so CI sees a clean that didn't clean (decisions/0017:
 /// `Error:` is Ratect failing at what was asked).
-async fn remove_leftovers<D>(docker: &D, leftovers: &[Leftover], quiet: bool) -> Result<()>
+async fn remove_leftovers<D>(
+    docker: &D,
+    leftovers: &[Leftover],
+    quiet: bool,
+    stdout: &Console,
+) -> Result<()>
 where
     D: ratect_core::resources::ResourceInventory + Send + Sync,
 {
@@ -1437,7 +1447,7 @@ where
         ratect_core::resources::remove(docker, leftovers, |leftover, result| match result {
             Ok(()) => {
                 if !quiet {
-                    println!("Removed {}.", leftover.describe());
+                    stdout.println(&format!("Removed {}.", leftover.describe()));
                 }
             }
             Err(error) => failures.push(format!("{} ({error:#})", leftover.describe())),
@@ -1445,7 +1455,7 @@ where
         .await;
 
     if !quiet {
-        println!("Removed {removed} of {}.", leftovers.len());
+        stdout.println(&format!("Removed {removed} of {}.", leftovers.len()));
     }
     anyhow::ensure!(
         failures.is_empty(),
@@ -1466,7 +1476,12 @@ where
 /// itself won't load: "your config is broken *and* your Docker daemon
 /// isn't running" is more useful than being told one and having to fix it
 /// to discover the other.
-async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> Result<()> {
+async fn diagnose(
+    args: DoctorArgs,
+    global: &GlobalArgs,
+    style: OutputStyle,
+    stdout: &Console,
+) -> Result<()> {
     let mut findings = Vec::new();
 
     // Docker first: nothing else about a task can work without it, so it's
@@ -1542,14 +1557,19 @@ async fn diagnose(args: DoctorArgs, global: &GlobalArgs, style: OutputStyle) -> 
         ))),
     }
 
-    report_findings(&global.config_file, &findings, style)
+    report_findings(&global.config_file, &findings, style, stdout)
 }
 
 /// Renders a set of [`Finding`]s and turns them into an exit status — shared
 /// by `doctor` and `config validate`, so the two agree on formatting and on
 /// "a problem fails, a warning doesn't". Quiet prints only what needs acting
 /// on; otherwise a `Checking <file>...` header, every finding, and a summary.
-fn report_findings(config_file: &Path, findings: &[Finding], style: OutputStyle) -> Result<()> {
+fn report_findings(
+    config_file: &Path,
+    findings: &[Finding],
+    style: OutputStyle,
+    stdout: &Console,
+) -> Result<()> {
     let problems = findings
         .iter()
         .filter(|finding| matches!(finding, Finding::Problem(_)))
@@ -1566,18 +1586,18 @@ fn report_findings(config_file: &Path, findings: &[Finding], style: OutputStyle)
             .iter()
             .filter(|finding| !matches!(finding, Finding::Fine(_)))
         {
-            println!("{}", finding.render().trim_start());
+            stdout.println(finding.render().trim_start());
         }
     } else {
-        println!("Checking {}...", config_file.display());
+        stdout.println(&format!("Checking {}...", config_file.display()));
         for finding in findings {
-            println!("{}", finding.render());
+            stdout.println(&finding.render());
         }
-        println!();
-        println!(
+        stdout.println("");
+        stdout.println(&format!(
             "{} check(s): {problems} problem(s), {warnings} warning(s).",
             findings.len()
-        );
+        ));
     }
 
     if problems > 0 {
@@ -1595,6 +1615,7 @@ async fn validate_config(
     args: ConfigValidateArgs,
     global: &GlobalArgs,
     style: OutputStyle,
+    stdout: &Console,
 ) -> Result<()> {
     let mut findings = Vec::new();
     match load_and_evaluate(global, &args.config_vars).await {
@@ -1612,7 +1633,7 @@ async fn validate_config(
             global.config_file.display()
         ))),
     }
-    report_findings(&global.config_file, &findings, style)
+    report_findings(&global.config_file, &findings, style, stdout)
 }
 
 /// `ratect config convert` — translate a Batect-format `batect.yml` project
@@ -1642,6 +1663,8 @@ async fn convert_config(
     args: ConfigConvertArgs,
     global: &GlobalArgs,
     style: OutputStyle,
+    stdout: &Console,
+    stderr: &Console,
 ) -> Result<()> {
     // `config convert` reads a `batect.yml` and writes a `ratect.toml`. The
     // global `-f` defaults to `ratect.toml` — the *output* — which is the wrong
@@ -1710,17 +1733,14 @@ async fn convert_config(
                 // A banner names each document when there's more than one;
                 // a single file is the file, unmarked.
                 if index > 0 {
-                    println!();
+                    stdout.println("");
                 }
-                println!("# === {} ===", document.target.display());
+                stdout.println(&format!("# === {} ===", document.target.display()));
             }
-            print!("{}", document.text);
+            stdout.write_raw(&document.text);
         }
         for document in &documents {
-            eprint!(
-                "{}",
-                conversion_check_list(&document.target, &document.checks)
-            );
+            stderr.write_raw(&conversion_check_list(&document.target, &document.checks));
         }
         return Ok(());
     }
@@ -1754,28 +1774,25 @@ async fn convert_config(
 
     if style != OutputStyle::Quiet {
         for document in &documents {
-            println!(
+            stdout.println(&format!(
                 "Converted {} to {}.",
                 document.source.display(),
                 document.target.display()
-            );
+            ));
         }
         let sources: Vec<String> = documents
             .iter()
             .map(|document| document.source.display().to_string())
             .collect();
-        println!(
+        stdout.println(&format!(
             "Review {}, then remove {}.",
             if sources.len() == 1 { "it" } else { "them" },
             join_names(&sources)
-        );
+        ));
     }
     // Even in quiet: what's left to check is what needs acting on.
     for document in &documents {
-        print!(
-            "{}",
-            conversion_check_list(&document.target, &document.checks)
-        );
+        stdout.write_raw(&conversion_check_list(&document.target, &document.checks));
     }
     Ok(())
 }
@@ -1911,7 +1928,11 @@ fn write_generated_config(output: &Path, document: &str, force: bool) -> Result<
 /// clones only when the working copy is missing, and the 30-day sweep never
 /// catches an actively-used entry — so a `ref` that moves (a branch, or a
 /// re-pushed tag) is invisible to a project forever.
-async fn manage_includes(command: IncludesCommand, style: OutputStyle) -> Result<()> {
+async fn manage_includes(
+    command: IncludesCommand,
+    style: OutputStyle,
+    stdout: &Console,
+) -> Result<()> {
     let cache = ratect_core::git_include::GitIncludeCache::new();
     let quiet = style == OutputStyle::Quiet;
 
@@ -1920,7 +1941,7 @@ async fn manage_includes(command: IncludesCommand, style: OutputStyle) -> Result
             let entries = cache.list().await?;
             if entries.is_empty() {
                 if !quiet {
-                    println!("No Git includes are cached.");
+                    stdout.println("No Git includes are cached.");
                 }
                 return Ok(());
             }
@@ -1928,23 +1949,23 @@ async fn manage_includes(command: IncludesCommand, style: OutputStyle) -> Result
                 // Machine-readable, same contract as the other `list`
                 // verbs: the identifying pair, tab-separated.
                 for entry in entries {
-                    println!("{}\t{}", entry.remote, entry.git_ref);
+                    stdout.println(&format!("{}\t{}", entry.remote, entry.git_ref));
                 }
                 return Ok(());
             }
             let total: u64 = entries.iter().map(|entry| entry.size_bytes).sum();
-            println!(
+            stdout.println(&format!(
                 "{} cached Git include(s), {} on disk:",
                 entries.len(),
                 format_size(total)
-            );
+            ));
             for entry in entries {
-                println!("\n  {} at {}", entry.remote, entry.git_ref);
-                println!(
+                stdout.println(&format!("\n  {} at {}", entry.remote, entry.git_ref));
+                stdout.println(&format!(
                     "    {}, last used {} ago",
                     format_size(entry.size_bytes),
                     format_age(age_of(entry.last_used))
-                );
+                ));
             }
         }
         IncludesCommand::Clean(args) => {
@@ -1959,18 +1980,21 @@ async fn manage_includes(command: IncludesCommand, style: OutputStyle) -> Result
             let removed = cache.clean(minimum_age).await?;
             if !quiet {
                 for entry in &removed {
-                    println!("Removed {} at {}.", entry.remote, entry.git_ref);
+                    stdout.println(&format!("Removed {} at {}.", entry.remote, entry.git_ref));
                 }
-                println!("Removed {} cached Git include(s).", removed.len());
+                stdout.println(&format!("Removed {} cached Git include(s).", removed.len()));
             }
         }
         IncludesCommand::Refresh => {
             let refreshed = cache.refresh().await?;
             if !quiet {
                 for entry in &refreshed {
-                    println!("Re-cloned {} at {}.", entry.remote, entry.git_ref);
+                    stdout.println(&format!("Re-cloned {} at {}.", entry.remote, entry.git_ref));
                 }
-                println!("Re-cloned {} cached Git include(s).", refreshed.len());
+                stdout.println(&format!(
+                    "Re-cloned {} cached Git include(s).",
+                    refreshed.len()
+                ));
             }
         }
     }

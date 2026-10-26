@@ -2563,6 +2563,9 @@ impl DockerClient {
             );
             while let Some(log) = logs.next().await {
                 match log {
+                    // Still panics when stdout is closed, where `Console`
+                    // would carry on: a run needs its own fix (ratect#670).
+                    #[allow(clippy::print_stdout)]
                     Ok(output) => print!("{}", output),
                     Err(e) => return Err(e).context("Failed to get container logs"),
                 }

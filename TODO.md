@@ -106,17 +106,6 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   it, so a release that fixes it fails that test: then make it assert the
   text as written, and delete this.
 
-- **19.** **Every other `println!` to stdout still panics when its reader has
-  gone** (`ratect-compat/src/main.rs`'s `--clean` progress lines;
-  `ratect/src/main.rs`'s `caches`, `resources`, `includes`, `doctor` and
-  `config` output) — `println!` panics on `EPIPE`, so `ratect caches list |
-  head -c 0` exits `101` with the bug-report banner. ratect#444 fixed only
-  the task listings, which write through `Console::write_raw` and ignore
-  the error as Batect's `PrintStream` does. The rest is ~40 sites, mostly
-  in `ratect`'s own verbs, which Batect has no equivalent of; the fix is
-  the same shape (a stdout `Console`, or one helper every listing calls),
-  with a closed-pipe CLI test per verb.
-
 ## Test coverage
 
 - **4.** **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
