@@ -200,6 +200,13 @@ impl EventSink for InterleavedEventLogger {
         true
     }
 
+    /// The `result` console's alone: the task container's lines are the only
+    /// writes whose failure ends a run, and a closed stderr never does
+    /// (ratect#669).
+    fn result_reader_gone(&self) -> bool {
+        self.result.reader_gone()
+    }
+
     fn post(&self, event: TaskEvent) {
         if self.stderr.print_stderr_class(&event) {
             return;

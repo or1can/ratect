@@ -140,6 +140,8 @@ history, from when it was the only binary.
 - `ratect-compat --list-tasks` and `ratect tasks list` exit `0` when their output's reader has already closed (`| head -c 0`), as in Batect, instead of crashing with exit `101`.
 - `ratect-compat --clean` and `--clean-cache` remove the caches and exit `0` when their output's reader has already closed, as in Batect, instead of crashing with exit `101` before removing anything.
 - `ratect`: the `caches`, `resources`, `includes`, `doctor` and `config` commands finish, and exit as they otherwise would, when stdout or stderr is closed, instead of crashing with exit `101`. `completions` exits `0` when stdout is closed, instead of `1`.
+- A run whose stdout's reader closes stops its containers, cleans up, and exits `141`, with a `Stdout closed` notice on stderr, instead of crashing, hanging and leaving its containers and network behind.
+- A crash exits `101` instead of hanging when the run was forwarding stdin.
 - `ratect-compat --list-tasks` and `ratect tasks list` print no `: ` after a task whose `description` is empty or only whitespace, as in Batect.
 - `ratect-compat --list-tasks` and `ratect tasks list` with `-o quiet` print nothing for a project with no tasks, as in Batect, instead of an empty line.
 

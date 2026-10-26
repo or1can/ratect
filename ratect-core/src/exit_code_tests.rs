@@ -46,6 +46,24 @@ fn a_signalled_run_exits_with_that_signals_code() {
     assert_eq!(code(TerminationSignal::Hangup), 129);
 }
 
+/// A run whose stdout reader has gone exits 141 — 128 + `SIGPIPE`, the code a
+/// shell reports for a writer killed by a closed pipe (ratect#670) — so
+/// `ratect run build | head` reads as what happened rather than as Ratect
+/// failing. Through context, like every other case.
+#[test]
+fn a_run_whose_stdout_closed_exits_141() {
+    use anyhow::Context;
+
+    assert_eq!(
+        for_error(&anyhow::Error::new(crate::docker::StdoutClosed)),
+        141
+    );
+    let wrapped = Err::<(), _>(anyhow::Error::new(crate::docker::StdoutClosed))
+        .context("while running 'build'")
+        .unwrap_err();
+    assert_eq!(for_error(&wrapped), 141);
+}
+
 /// Everything else is one code: the task's command never ran, or never
 /// finished, and Ratect is what failed. `125` is `docker run`'s own code for
 /// that, and coreutils' for any command-running wrapper — decisions/0016's
@@ -155,7 +173,7 @@ fn only_a_runs_failure_goes_through_the_mapping() {
 /// `Error:` from `main`; everything else does. Through `anyhow` context too,
 /// since the binaries see the error after the engine's own wrapping.
 #[test]
-fn already_reported_names_exactly_the_three_failures_reported_elsewhere() {
+fn already_reported_names_exactly_the_four_failures_reported_elsewhere() {
     use anyhow::Context;
 
     assert!(already_reported(&anyhow::Error::new(
@@ -165,6 +183,9 @@ fn already_reported_names_exactly_the_three_failures_reported_elsewhere() {
         TerminationSignal::Terminate
     ))));
     assert!(already_reported(&anyhow::Error::new(cleanup_failed())));
+    assert!(already_reported(&anyhow::Error::new(
+        crate::docker::StdoutClosed
+    )));
     let wrapped = Err::<(), _>(anyhow::Error::new(crate::docker::ContainerExitedNonZero {
         exit_code: 3,
     }))

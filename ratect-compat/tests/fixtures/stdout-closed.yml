@@ -1,0 +1,29 @@
+# Proves that a run whose stdout reader has gone ends like a signalled one —
+# exit 141, its containers stopped and removed, its network removed — rather
+# than panicking, hanging, and leaving all three behind (ratect#670).
+#
+# The task keeps printing and then sleeps for a long time: if the closed
+# stdout went unnoticed the run would outlive the test's timeout, so the
+# test can only pass by the run stopping itself. The dependency proves the
+# cleanup reaches a container started down the other path
+# (`start_background_container`) too, as interrupt.yml does for signals.
+#
+# `project_name` is its own so the label filters in the test can't match a
+# concurrently-running test's containers.
+project_name: ratect-stdout-closed-test
+
+containers:
+  database:
+    image: alpine:3.18
+    command: sleep 600
+
+  app:
+    image: alpine:3.18
+    dependencies:
+      - database
+
+tasks:
+  print:
+    run:
+      container: app
+      command: sh -c 'echo one; sleep 1; echo two; sleep 1; echo three; sleep 600'

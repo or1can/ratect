@@ -26,8 +26,22 @@
 //! The backtrace hint only fires when `RUST_BACKTRACE` isn't already
 //! enabled, since a report is far more useful with one and this is the one
 //! thing the default hook is deliberately silent about *unless* it's set.
+//!
+//! [`run_main`] is the other half: it makes sure a panic *ends* the process.
+//! A panic that unwinds out of `#[tokio::main]` drops the runtime on its way,
+//! and dropping a runtime waits for its blocking threads — one of which, on
+//! any run that forwards stdin, is parked in a `read()` that only more input
+//! or EOF ends. That is why both `main`s already leave with
+//! `std::process::exit` rather than returning; a panic skipped that exit and
+//! left the process alive, its containers never cleaned up, until something
+//! killed it (ratect#670). Only a panic on the main thread unwinds that far:
+//! one in a spawned task ends that task alone, and tokio reports it to
+//! whatever awaits it.
 
 use std::panic;
+
+/// What a panic exits with — Rust's own default for one.
+const PANIC_EXIT_CODE: i32 = 101;
 
 /// Installs the hook. `binary_name`/`version` are almost always
 /// `env!("CARGO_PKG_NAME")`/`env!("CARGO_PKG_VERSION")` from the calling
@@ -49,6 +63,19 @@ pub fn install(binary_name: &'static str, version: &'static str) {
             );
         }
     }));
+}
+
+/// Runs `main` to completion on a new multi-threaded runtime — the one
+/// `#[tokio::main]` would build — and exits `101` without
+/// dropping the runtime if it panics, so the panic can't hang the process
+/// (see the module doc). [`install`] first, so the panic is reported before
+/// the exit.
+pub fn run_main(main: impl std::future::Future<Output = ()>) {
+    let runtime = tokio::runtime::Runtime::new().expect("failed to start the async runtime");
+    let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| runtime.block_on(main)));
+    if outcome.is_err() {
+        std::process::exit(PANIC_EXIT_CODE);
+    }
 }
 
 fn report_message(binary_name: &str, version: &str, backtrace_enabled: bool) -> String {

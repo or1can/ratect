@@ -97,6 +97,7 @@ pub mod simple;
 
 use std::io::IsTerminal;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -764,6 +765,15 @@ pub trait EventSink: Send + Sync {
     fn wants_progress_detail(&self) -> bool {
         false
     }
+
+    /// Whether the stream this logger writes the task container's own output
+    /// to has refused a write because its reader has gone — see
+    /// [`crate::docker::StdoutClosed`]. Only a logger that writes that output
+    /// itself (the [`ContainerIoStreaming::Interleaved`] one) can know;
+    /// otherwise `docker.rs` writes it and sees the failure directly.
+    fn result_reader_gone(&self) -> bool {
+        false
+    }
 }
 
 /// Discards every event — the default sink wired into
@@ -847,11 +857,14 @@ impl Color {
 /// which panic there: a `clean` verb would stop before or partway through
 /// its removal and exit `101` (ratect#444, ratect#668, ratect#669). The
 /// crates deny `clippy::print_stdout`/`print_stderr` to keep it that way;
-/// the panic hook and a run's container output (ratect#670) are the two
-/// allowed exceptions.
+/// the panic hook is the one allowed exception. A run's own output is the
+/// one thing that must *not* carry on, so a console also remembers a reader
+/// that has gone ([`Console::reader_gone`]) for the run to ask about
+/// (ratect#670).
 pub struct Console {
     writer: Mutex<Box<dyn Write + Send>>,
     color_enabled: bool,
+    reader_gone: AtomicBool,
 }
 
 impl Console {
@@ -889,6 +902,21 @@ impl Console {
         Self {
             writer: Mutex::new(writer),
             color_enabled,
+            reader_gone: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether a write has failed because this console's reader has gone —
+    /// a closed pipe. Any other failed write doesn't count.
+    pub fn reader_gone(&self) -> bool {
+        self.reader_gone.load(Ordering::Relaxed)
+    }
+
+    /// Ignores `result`'s failure, as every write here does, but remembers a
+    /// reader that has gone.
+    fn note_failure(&self, result: std::io::Result<()>) {
+        if result.is_err_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe) {
+            self.reader_gone.store(true, Ordering::Relaxed);
         }
     }
 
@@ -951,7 +979,7 @@ impl Console {
         // `std::io::stdout()`, whose internal `LineWriter` already flushes
         // on every `\n` this always writes — an extra flush call would just
         // be a second, redundant syscall per line.
-        let _ = writeln!(writer, "{line}");
+        self.note_failure(writeln!(writer, "{line}"));
     }
 
     /// `text` wrapped in `color`'s ANSI escape when color is enabled,
@@ -995,8 +1023,8 @@ impl Console {
     /// axes here (see the type-level docs).
     pub fn write_raw(&self, text: &str) {
         let mut writer = self.writer.lock().unwrap();
-        let _ = write!(writer, "{text}");
-        let _ = writer.flush();
+        let result = write!(writer, "{text}").and_then(|()| writer.flush());
+        self.note_failure(result);
     }
 }
 
@@ -1097,6 +1125,20 @@ pub(crate) mod test_support {
 
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
+        }
+    }
+
+    /// A writer whose every write and flush fails with its error kind —
+    /// `BrokenPipe` for a reader that has gone.
+    pub(crate) struct FailingWriter(pub(crate) std::io::ErrorKind);
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(self.0.into())
         }
     }
 }

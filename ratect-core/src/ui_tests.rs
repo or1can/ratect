@@ -148,6 +148,38 @@ fn console_println_writes_line_with_newline() {
     assert_eq!(buffer.contents(), "hello\nworld\n");
 }
 
+/// A write a gone reader refused is still ignored — the command carries on —
+/// but the console remembers it, so a run can ask whether its output still
+/// has anywhere to go (ratect#670). Only a gone reader counts: any other
+/// failure is not the user deciding they have read enough.
+#[test]
+fn console_remembers_a_reader_that_has_gone() {
+    use test_support::FailingWriter;
+
+    let console = Console::new(Box::new(test_support::SharedBuffer::default()), false);
+    console.println("hello");
+    assert!(!console.reader_gone());
+
+    let console = Console::new(
+        Box::new(FailingWriter(std::io::ErrorKind::BrokenPipe)),
+        false,
+    );
+    assert!(!console.reader_gone(), "nothing has been written yet");
+    console.println("hello");
+    assert!(console.reader_gone());
+
+    let console = Console::new(
+        Box::new(FailingWriter(std::io::ErrorKind::BrokenPipe)),
+        false,
+    );
+    console.write_raw("hello");
+    assert!(console.reader_gone());
+
+    let console = Console::new(Box::new(FailingWriter(std::io::ErrorKind::Other)), false);
+    console.println("hello");
+    assert!(!console.reader_gone());
+}
+
 #[test]
 fn once_flag_fires_exactly_once_until_reset() {
     let mut flag = OnceFlag::default();

@@ -2772,6 +2772,125 @@ fn signalling_a_run_cleans_up_via_docker(
     );
 }
 
+/// Requires a running Docker daemon with network access to pull `alpine:3.18`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// A run whose stdout reader has gone exits 141 and leaves nothing behind
+/// (ratect#670), in both the style that writes container output itself
+/// (`simple`) and the one whose logger does (`all`). Stdin is a pipe held
+/// open throughout, so a run that forwards it has a blocked read in flight —
+/// the read that used to keep a panicked process alive.
+#[test]
+#[ignore]
+fn a_run_whose_stdout_closed_exits_141_and_cleans_up_via_docker() {
+    let project_filter = "label=eu.orican.ratect.project=ratect-stdout-closed-test";
+
+    fn ids(kind: &str, filters: &[&str], all: bool) -> Vec<String> {
+        let mut arguments = vec![kind, "ls", "-q"];
+        if all {
+            arguments.push("-a");
+        }
+        for filter in filters {
+            arguments.extend(["--filter", filter]);
+        }
+        let output = Command::new("docker")
+            .args(&arguments)
+            .output()
+            .expect("failed to run docker ls");
+        assert!(output.status.success(), "docker {kind} ls failed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+    let force_cleanup = || {
+        for id in ids("container", &[project_filter], true) {
+            let _ = Command::new("docker").args(["rm", "-fv", &id]).output();
+        }
+        for id in ids("network", &[project_filter], false) {
+            let _ = Command::new("docker").args(["network", "rm", &id]).output();
+        }
+    };
+
+    for style in ["simple", "all"] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut child = ratect_command()
+            .arg("-f")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stdout-closed.yml"))
+            .args(["-o", style, "print"])
+            .stdin(Stdio::piped())
+            .stdout(writer)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn ratect");
+        let _stdin = child.stdin.take();
+
+        // `try_wait` rather than `wait`, so a hang fails this test instead of
+        // hanging CI. Generous: a cold daemon may be pulling alpine, and the
+        // task container ignores the graceful stop's `SIGTERM`.
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let mut status = None;
+        while status.is_none() && Instant::now() < deadline {
+            status = child.try_wait().expect("failed to poll ratect");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        let Some(status) = status else {
+            let _ = child.kill();
+            let _ = child.wait();
+            force_cleanup();
+            panic!("-o {style}: ratect did not exit after its stdout closed");
+        };
+        let mut stderr = String::new();
+        child
+            .stderr
+            .take()
+            .expect("stderr was piped")
+            .read_to_string(&mut stderr)
+            .expect("failed to read ratect's stderr");
+
+        let left = |kind: &str, filters: &[&str], all: bool| {
+            let mut filters = filters.to_vec();
+            filters.push(project_filter);
+            ids(kind, &filters, all)
+        };
+        let task_container = left("container", &["label=eu.orican.ratect.container=app"], true);
+        let dependency = left(
+            "container",
+            &["label=eu.orican.ratect.container=database"],
+            true,
+        );
+        let networks = left("network", &[], false);
+        force_cleanup();
+
+        assert_eq!(
+            status.code(),
+            Some(141),
+            "-o {style}: a run whose stdout closed exits 128 + SIGPIPE:\n{stderr}"
+        );
+        assert!(
+            task_container.is_empty(),
+            "-o {style}: the task container was left behind: {task_container:?}"
+        );
+        assert!(
+            dependency.is_empty(),
+            "-o {style}: the dependency was left behind: {dependency:?}"
+        );
+        assert!(
+            networks.is_empty(),
+            "-o {style}: the task network was left behind: {networks:?}"
+        );
+        assert!(
+            stderr.contains("Stdout closed; cleaning up."),
+            "-o {style}: the notice says why the run stopped:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked") && !stderr.contains("Error:"),
+            "-o {style}: a closed stdout is neither a crash nor an error:\n{stderr}"
+        );
+    }
+}
+
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`
 /// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///

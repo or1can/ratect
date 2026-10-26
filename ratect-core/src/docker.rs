@@ -165,6 +165,53 @@ impl fmt::Display for ContainerExitedNonZero {
 
 impl std::error::Error for ContainerExitedNonZero {}
 
+/// The task's own container output could not be written because stdout's
+/// reader has gone — `ratect run build | head` once `head` has read enough.
+///
+/// A run treats it as it treats a termination signal: the run ends, the
+/// engine cleans up, and the process exits [`StdoutClosed::EXIT_CODE`] —
+/// what a shell reports for a writer `SIGPIPE` killed (ratect#670). Only the
+/// task container's own output raises it — under `-o all` written by the
+/// logger, which reports the gone reader through
+/// [`crate::ui::EventSink::result_reader_gone`]. Every other write ignores a
+/// failure, and a closed stderr never stops a run (ratect#669).
+#[derive(Debug)]
+pub struct StdoutClosed;
+
+impl StdoutClosed {
+    /// 128 + `SIGPIPE`'s number, 13 — decisions/0016's `128 + n`.
+    pub const EXIT_CODE: u8 = 141;
+}
+
+impl fmt::Display for StdoutClosed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("stdout closed")
+    }
+}
+
+impl std::error::Error for StdoutClosed {}
+
+/// Writes one chunk of container output to `out` and flushes it — so output
+/// appears as the container produces it, and a reader that has gone is found
+/// at this chunk rather than whenever a buffer next fills. A failed write is
+/// [`StdoutClosed`] when the reader has gone and Ratect's own failure
+/// otherwise.
+fn write_container_output(out: &mut impl std::io::Write, chunk: &[u8]) -> Result<()> {
+    out.write_all(chunk)
+        .and_then(|()| out.flush())
+        .map_err(output_write_error)
+}
+
+/// [`write_container_output`]'s classification of a failed write, shared
+/// with the interactive path, which writes through `tokio`'s stdout.
+fn output_write_error(error: std::io::Error) -> anyhow::Error {
+    if error.kind() == std::io::ErrorKind::BrokenPipe {
+        StdoutClosed.into()
+    } else {
+        anyhow::Error::new(error).context("Failed to write container output")
+    }
+}
+
 /// Why [`ContainerRuntime::create_container`] failed — and, when Docker's own
 /// create had already succeeded, the container it left behind.
 ///
@@ -1160,6 +1207,13 @@ async fn drain_interleaved_log_stream(
             Some(Ok(output)) => line_buffer.push(output.as_ref(), emit),
             Some(Err(e)) => break Err(e).context("Failed to get container logs"),
             None => break Ok(()),
+        }
+        // The logger's `Console` ignores a failed write, so its reader having
+        // gone is asked for rather than seen here — see `StdoutClosed`. Only
+        // the task container's lines can make it true, but a dependency's
+        // follower stops on it too: the run is ending by then.
+        if event_sink.result_reader_gone() {
+            break Err(StdoutClosed.into());
         }
     };
     line_buffer.flush(emit);
@@ -2503,8 +2557,11 @@ impl DockerClient {
         let output_result: Result<()> = async {
             while let Some(chunk) = attach_output.next().await {
                 let log_output = chunk.context("Failed to read container output")?;
-                stdout.write_all(log_output.as_ref()).await?;
-                stdout.flush().await?;
+                stdout
+                    .write_all(log_output.as_ref())
+                    .await
+                    .map_err(output_write_error)?;
+                stdout.flush().await.map_err(output_write_error)?;
             }
             Ok(())
         }
@@ -2562,13 +2619,8 @@ impl DockerClient {
                 }),
             );
             while let Some(log) = logs.next().await {
-                match log {
-                    // Still panics when stdout is closed, where `Console`
-                    // would carry on: a run needs its own fix (ratect#670).
-                    #[allow(clippy::print_stdout)]
-                    Ok(output) => print!("{}", output),
-                    Err(e) => return Err(e).context("Failed to get container logs"),
-                }
+                let output = log.context("Failed to get container logs")?;
+                write_container_output(&mut std::io::stdout().lock(), output.as_ref())?;
             }
         }
 

@@ -750,10 +750,14 @@ fn parse_cli() -> Cli {
     })
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    // Not `#[tokio::main]`: a panic unwinding out of that would drop the
+    // runtime and wait forever on a blocked stdin read (ratect#670).
+    ratect_core::panic_hook::run_main(async_main());
+}
 
+async fn async_main() {
     // Dynamic shell completion (prototype, `unstable-dynamic`). At `<TAB>` the
     // shell — driven by the script `ratect completions <shell>` installs — sets
     // `COMPLETE=<shell>` and re-invokes `ratect`; this handles that request and
@@ -804,7 +808,7 @@ async fn main() {
 
     // `std::process::exit`, not returning `ExitCode`: an interactive run
     // leaves a blocking stdin read abandoned, and dropping the runtime
-    // normally would wait for it forever. See `ratect-compat`'s own `main`
+    // normally would wait for it forever. See `ratect-compat`'s own `async_main`
     // for the full explanation — everything needing to run on a clean exit
     // already has by the time `run` returns.
     std::process::exit(exit_code.into());

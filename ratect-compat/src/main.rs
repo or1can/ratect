@@ -764,10 +764,14 @@ fn parse_args() -> Args {
     })
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    // Not `#[tokio::main]`: a panic unwinding out of that would drop the
+    // runtime and wait forever on a blocked stdin read (ratect#670).
+    ratect_core::panic_hook::run_main(async_main());
+}
 
+async fn async_main() {
     let mut args = parse_args();
     let runs_a_task = args.runs_a_task();
     let failed = |error: &anyhow::Error| ratect_core::exit_code::for_failure(error, runs_a_task);
@@ -839,7 +843,7 @@ async fn main() {
     // only stops polling it — the underlying OS thread stays blocked in a
     // real `read()` syscall until stdin next produces data or EOF, which a
     // real terminal's stdin never does on its own). Returning `ExitCode`
-    // normally would drop the `tokio::main`-managed runtime first, which
+    // normally would drop the runtime `panic_hook::run_main` built, which
     // waits for exactly that lingering task — hanging the whole process
     // indefinitely after every interactive session. `process::exit` skips
     // that wait entirely; everything that needed to run on a clean exit
@@ -976,7 +980,7 @@ async fn run(
     // whether this particular config uses a Git include, after the
     // config loads and before Docker is reached. Never awaited: a
     // failure (or simply not finishing before the process exits —
-    // see `main`'s own comment on `std::process::exit`) is
+    // see `async_main`'s own comment on `std::process::exit`) is
     // inherently best-effort, same as a JVM daemon thread not
     // blocking process exit either.
     let sweep = sweep();

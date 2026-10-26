@@ -525,7 +525,10 @@ container run to an exit code of its own?
    whatever is left, a Ctrl+C after that stops the cleanup, and `ratect resources list`
    finds whatever that leaves. A signal that arrives only during the cleanup of a run
    that had already finished doesn't change its exit code; one during a prerequisite's
-   cleanup ends the run before the next task starts.
+   cleanup ends the run before the next task starts. A run whose **stdout** reader goes
+   away — `ratect run test | head -n 1`, once `head` has its line — ends the same way,
+   as though `SIGPIPE` had ended it: `141`, after the same cleanup. A closed stderr never
+   ends a run.
 3. **It never ran, or never finished, for any other reason: `125`** — an unknown or
    misused flag (`ratect run --bogus`, `ratect -o bogus run test`), a config file that
    isn't there, a config that doesn't load, an unknown task, an unreachable daemon, a
@@ -545,7 +548,8 @@ Every failure of Ratect's own reaches stderr as `Error: <message>`, in every out
 including `quiet`, whatever `RUST_LOG` says. Two kinds of failed run print no `Error:`
 line, because something else already reported them: a task's own non-zero exit (rule 1 —
 the code itself and, outside `quiet`, the `finished with exit code N` summary line), and
-a run ended by a signal (rule 2 — the interrupt notice). [`ratect-compat`'s
+a run ended by a signal or a closed stdout (rule 2 — the notice saying so).
+[`ratect-compat`'s
 section](ratect-compat-cli.md#exit-codes-and-error-reporting) has each rule in full.
 
 - `RUST_LOG` controls Ratect's own internal logging (default `info`, on stderr — see

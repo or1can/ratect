@@ -24,8 +24,8 @@
 //!
 //! It lives here rather than in either binary because the errors it dispatches
 //! over live here too: [`crate::docker::ContainerExitedNonZero`],
-//! [`crate::interrupt::TaskInterrupted`], [`crate::engine::CleanupFailed`]
-//! and [`InvalidOptionValue`] are all `ratect-core` types, and neither binary
+//! [`crate::interrupt::TaskInterrupted`], [`crate::docker::StdoutClosed`],
+//! [`crate::engine::CleanupFailed`] and [`InvalidOptionValue`] are all `ratect-core` types, and neither binary
 //! defines an error of its own. This is the mapping's only home, and adding
 //! a third binary would not give it a second.
 //!
@@ -50,7 +50,7 @@
 //!
 //! How a failure is printed is not here either — each `main` prints its own
 //! `Error:` line — but *whether* it needs printing is, as [`already_reported`]:
-//! the same three error types [`for_error`] dispatches over are the ones a
+//! the same four error types [`for_error`] dispatches over are the ones a
 //! run has already reported by another route (decisions/0017), and two
 //! `main`s deciding that by hand could only ever differ by one being wrong.
 //! This takes an `anyhow::Error` rather than returning one for the same
@@ -116,7 +116,7 @@ impl std::error::Error for InvalidOptionValue {}
 
 /// The process exit code for a failed run.
 ///
-/// Three cases, in the order they are asked — the order is the precedence:
+/// Four cases, in the order they are asked — the order is the precedence:
 ///
 /// - **The task's own command exited non-zero** — that exact code is
 ///   propagated as Ratect's own, matching `docker run`'s convention rather
@@ -127,6 +127,8 @@ impl std::error::Error for InvalidOptionValue {}
 ///   did afterwards. See [`crate::interrupt::TerminationSignal::exit_code`].
 ///   A signal that arrived only during cleanup ended nothing, and the engine
 ///   doesn't report one.
+/// - **Stdout's reader went** — 141, 128 + `SIGPIPE`, as though that signal
+///   had ended it: see [`crate::docker::StdoutClosed`].
 /// - **Anything else** — [`RATECT_FAILED`], including
 ///   [`crate::engine::CleanupFailed`] after a command that exited `0`.
 ///
@@ -140,6 +142,9 @@ pub fn for_error(error: &anyhow::Error) -> u8 {
     }
     if let Some(interrupted) = error.downcast_ref::<crate::interrupt::TaskInterrupted>() {
         return interrupted.signal.exit_code();
+    }
+    if error.is::<crate::docker::StdoutClosed>() {
+        return crate::docker::StdoutClosed::EXIT_CODE;
     }
     RATECT_FAILED
 }
@@ -155,6 +160,8 @@ pub fn for_error(error: &anyhow::Error) -> u8 {
 /// - **A termination signal ended the run** — reported by the interrupt
 ///   notice when it arrived and by the exit code. Never a trailing
 ///   `Error: Interrupted`.
+/// - **Stdout's reader went** — reported, like a signal, by the engine's
+///   notice and by the exit code.
 /// - **Cleanup failed after a passing run** — reported by the engine's own
 ///   `Error:` line at the time, which names what was left behind and how to
 ///   remove it; a second `Error:` from `main` would say less, twice.
@@ -166,6 +173,7 @@ pub fn for_error(error: &anyhow::Error) -> u8 {
 pub fn already_reported(error: &anyhow::Error) -> bool {
     error.is::<crate::docker::ContainerExitedNonZero>()
         || error.is::<crate::interrupt::TaskInterrupted>()
+        || error.is::<crate::docker::StdoutClosed>()
         || error.is::<crate::engine::CleanupFailed>()
 }
 
