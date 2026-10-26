@@ -468,6 +468,14 @@ tables above:
     container prefix; Batect prints `Could not stop container <name>.` or
     `Could not remove container <name>.` on each container's own prefix, and
     `Could not delete the task network.` on the task's.
+- **A crash skips cleanup.** If Ratect itself crashes mid-run — a bug, which
+  exits `101` and asks for a report — the run's containers and network are left
+  behind. Batect catches an internal error in a step and still cleans up. What
+  a crash leaves carries Ratect's ownership labels: `ratect resources clean`
+  removes it (`ratect`-only), and from `ratect-compat`, which has no such
+  command, `docker` does, filtering on the project's label — `docker rm -f -v
+  $(docker ps -aq --filter label=eu.orican.ratect.project=<project>)`, then the
+  same filter on `docker network ls -q` for `docker network rm`.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is

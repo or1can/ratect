@@ -54,7 +54,8 @@ reference](ratect-compat-config-reference.md#task)), unioned in alongside the co
 — it is then not reachable by name — while every other container still joins it.)
 All of this — network, dependencies, and the task's own container — is scoped
 to **this one task execution** and torn down before moving on, regardless of whether
-the task succeeded — unless `--no-cleanup`/`--no-cleanup-after-failure`/
+the task succeeded (though not if Ratect itself crashes — see [Differences from
+Batect](differences-from-batect.md#runtime-behavior-gaps)) — unless `--no-cleanup`/`--no-cleanup-after-failure`/
 `--no-cleanup-after-success` says otherwise, in which case everything below is left
 genuinely running instead, for investigation (see [CLI
 reference](ratect-compat-cli.md)):
