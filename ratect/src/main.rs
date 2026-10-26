@@ -974,7 +974,7 @@ async fn load_around<T>(
 ) -> Result<(ratect_core::config::LoadedProject, T)> {
     ratect_core::written_for::check(&global.config_file, running_version())?;
     let between = between()?;
-    let project = load_project_native(&global.config_file).await?;
+    let project = load_project_native(&global.config_file, running_version()).await?;
     ratect_core::written_for::check_yaml_root(
         &global.config_file,
         project.toml_files(),

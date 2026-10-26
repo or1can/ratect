@@ -83,7 +83,11 @@ run the project in two cases:
   An upgrade that crosses none of them is silent.
 
 Only the major and minor numbers are compared, and only the root file may set
-it — an included file, or any YAML file, that does is rejected. A project
+it — an included file, or any YAML file, that does is rejected, except the
+file a Git include names, which declares a bundle's own. The root's version
+never covers a bundle: each is checked against its own, or against its include
+entry's `reviewed_ratect_version` — see [The version a bundle was written
+for](includes.md#the-version-a-bundle-was-written-for). A project
 without one counts as written for 0.3.0, the first release with `ratect.toml`,
 so since 0.12.0 changed what a configuration means it's refused until it sets
 one; `ratect config convert` writes it for you.
@@ -255,7 +259,8 @@ includes are merged.
 
 Some top-level keys are root-only. An included file, in either format, fails
 the load naming that file if it declares `project_name` or
-[`ratect_version`](#ratect_version-the-version-a-project-was-written-for), or
+[`ratect_version`](#ratect_version-the-version-a-project-was-written-for) —
+except a bundle's entry file, which may declare its own — or
 sets `forbid_telemetry` to `true` — a key with no effect, accepted so a file
 written for Batect still loads, as in a [`batect.yml`](ratect-compat-config-reference.md#top-level).
 Setting `forbid_telemetry` to `false` in an included file is allowed.

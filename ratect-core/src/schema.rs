@@ -184,7 +184,8 @@ fn make_native(json: &mut serde_json::Value) {
                 "description": "The Ratect version this project was written for, e.g. \
                                 \"0.11.0\". Ratect refuses to run the project if it is older \
                                 than this, or if a later release has changed what a \
-                                configuration means. Root file only.",
+                                configuration means. Root file only — or, for a bundle, the \
+                                file a Git include names, covering the bundle.",
             }),
         );
     }
@@ -247,6 +248,19 @@ fn make_native(json: &mut serde_json::Value) {
                                 default. Applies only to the bundle named here — the bundles \
                                 it admits cannot pass the permission on — and only when set \
                                 in your own configuration. Defaults to false.",
+            }),
+        );
+        add_native_property(
+            definition,
+            "git",
+            crate::written_for::REVIEWED_FIELD,
+            serde_json::json!({
+                "type": "string",
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-.+)?$",
+                "description": "The Ratect version you have reviewed this bundle against, \
+                                e.g. \"0.12.0\". Ratect checks the bundle against the later of \
+                                this and the bundle's own ratect_version, and refuses it if a \
+                                later release has changed what its configuration means.",
             }),
         );
     }

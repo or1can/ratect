@@ -129,8 +129,14 @@ fn refuse_read_declines_exactly_when_the_check_it_is_given_errs() {
 
 #[test]
 fn the_native_only_field_is_refused_in_a_compat_project() {
-    let error =
-        check_dialect(asks(false, Some(true)), None, "inner", ConfigFormat::Compat).unwrap_err();
+    let error = check_dialect(
+        asks(false, Some(true)),
+        false,
+        None,
+        "inner",
+        ConfigFormat::Compat,
+    )
+    .unwrap_err();
     let message = format!("{error:#}");
     assert!(message.contains("The Git include of 'inner' sets 'allow_nested_git_includes'"));
     assert!(message.contains("not supported in Batect-compatible configuration"));
@@ -144,6 +150,7 @@ fn the_compat_refusal_names_the_bundle_that_wrote_the_field() {
     let declaring = Bundle::granted(None, id("outer"), asks(false, None));
     let error = check_dialect(
         asks(false, Some(true)),
+        false,
         Some(&declaring),
         "inner",
         ConfigFormat::Compat,
@@ -161,13 +168,28 @@ fn the_compat_refusal_names_the_bundle_that_wrote_the_field() {
 fn a_compat_project_refuses_the_field_set_to_false_too() {
     assert!(check_dialect(
         asks(false, Some(false)),
+        false,
         None,
         "inner",
         ConfigFormat::Compat
     )
     .is_err());
-    assert!(check_dialect(asks(false, None), None, "inner", ConfigFormat::Compat).is_ok());
-    assert!(check_dialect(asks(false, Some(true)), None, "inner", ConfigFormat::Native).is_ok());
+    assert!(check_dialect(
+        asks(false, None),
+        false,
+        None,
+        "inner",
+        ConfigFormat::Compat
+    )
+    .is_ok());
+    assert!(check_dialect(
+        asks(false, Some(true)),
+        false,
+        None,
+        "inner",
+        ConfigFormat::Native
+    )
+    .is_ok());
 }
 
 #[test]

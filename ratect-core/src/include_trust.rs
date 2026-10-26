@@ -458,8 +458,10 @@ pub(crate) fn restricting(declaring: Option<&Bundle>, format: ConfigFormat) -> O
     }
 }
 
-/// Refuses `allow_nested_git_includes` in a Batect-compatible project, where
-/// it is not merely inert but a field Batect has never had.
+/// Refuses a Git include's ratect-native fields in a Batect-compatible
+/// project — `allow_nested_git_includes`, and `reviewed_ratect_version` when
+/// `reviews` — where they are not merely inert but fields Batect has never
+/// had.
 ///
 /// Rejects `false` as well as `true`: the field is unsupported, not the
 /// permission. Names *where it was written*, because it can appear inside a
@@ -467,27 +469,37 @@ pub(crate) fn restricting(declaring: Option<&Bundle>, format: ConfigFormat) -> O
 /// file the `ratect-compat` user has never seen.
 pub(crate) fn check_dialect(
     asked: Grants,
+    reviews: bool,
     declaring: Option<&Bundle>,
     repo: &str,
     format: ConfigFormat,
 ) -> Result<()> {
-    if asked.nested_git.is_none() || !matches!(format, ConfigFormat::Compat) {
+    if !matches!(format, ConfigFormat::Compat) {
         return Ok(());
     }
+    let (field, remark) = if asked.nested_git.is_some() {
+        (
+            "allow_nested_git_includes",
+            "A bundle may declare Git includes of its own here regardless, matching Batect.",
+        )
+    } else if reviews {
+        (
+            crate::written_for::REVIEWED_FIELD,
+            "No bundle's written-for version is checked here.",
+        )
+    } else {
+        return Ok(());
+    };
     let subject = match declaring {
         Some(declaring) => format!(
-            "The bundle '{}' at '{}' sets 'allow_nested_git_includes' on its \
-             Git include of '{repo}'",
+            "The bundle '{}' at '{}' sets '{field}' on its Git include of '{repo}'",
             declaring.id.remote, declaring.id.git_ref
         ),
-        None => {
-            format!("The Git include of '{repo}' sets 'allow_nested_git_includes'")
-        }
+        None => format!("The Git include of '{repo}' sets '{field}'"),
     };
     anyhow::bail!(
         "{subject}, which is a ratect-native field not supported in \
-         Batect-compatible configuration. A bundle may declare Git includes \
-         of its own here regardless, matching Batect."
+         Batect-compatible configuration. {remark}"
     );
 }
 
