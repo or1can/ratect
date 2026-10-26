@@ -93,6 +93,52 @@ fn raw(line: &[&str]) -> Vec<String> {
     line.iter().map(|word| word.to_string()).collect()
 }
 
+/// The error `parse_cli_from` gives `line`, after the program name, rendered.
+fn argument_error(line: &[&str]) -> String {
+    match parse_cli_from([&["ratect"], line].concat()) {
+        Ok(cli) => panic!("{line:?} should be rejected, parsed as {cli:?}"),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// An unknown option to `run` never gets `clap`'s tip to write it after
+/// `--`, which passes it to the task instead (ratect#673) — short or long,
+/// before or after the task name. Every other tip stays, including that
+/// one where `--` does give a value to the argument it names.
+#[test]
+fn an_unknown_option_to_run_never_suggests_passing_it_after_a_double_dash() {
+    for (line, named) in [
+        (&["run", "-Z", "build"][..], "'-Z'"),
+        (&["run", "build", "--bogus"], "'--bogus'"),
+        (&["run", "--no-colour", "build"], "'--no-colour'"),
+    ] {
+        let error = argument_error(line);
+        assert!(
+            error.contains(&format!("unexpected argument {named} found")),
+            "{line:?}: {error}"
+        );
+        let option = named.trim_matches('\'');
+        assert!(
+            !error.contains(&format!("-- {option}")),
+            "{line:?}: {error}"
+        );
+    }
+    for (line, tip) in [
+        (
+            &["run", "--no-colour", "build"][..],
+            "a similar argument exists: '--no-color'",
+        ),
+        (
+            &["--max-parallelism", "run"],
+            "'run --max-parallelism' exists",
+        ),
+        (&["caches", "clean", "-Z"], "use '-- -Z'"),
+    ] {
+        let error = argument_error(line);
+        assert!(error.contains(tip), "{line:?}: {error}");
+    }
+}
+
 /// A line `clap` rejects is a run when the subcommand `clap` would read is
 /// `run`: a global option's value is skipped, an unknown option takes no
 /// value, and nothing after `--` counts (decisions/0016).
