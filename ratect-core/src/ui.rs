@@ -839,6 +839,16 @@ impl Color {
 ///
 /// Writes are serialized by an internal lock so loggers can render from
 /// concurrent event posts without interleaving partial lines.
+///
+/// **A failed write is ignored, and the command carries on to completion** —
+/// a pipe whose reader has gone (`| head -c 0`), a closed stderr (`2>&-`) —
+/// as Batect's `PrintStream` does. That's why every line either binary
+/// prints itself goes through a `Console`, never `println!`/`eprintln!`,
+/// which panic there: a `clean` verb would stop before or partway through
+/// its removal and exit `101` (ratect#444, ratect#668, ratect#669). The
+/// crates deny `clippy::print_stdout`/`print_stderr` to keep it that way;
+/// the panic hook and a run's container output (ratect#670) are the two
+/// allowed exceptions.
 pub struct Console {
     writer: Mutex<Box<dyn Write + Send>>,
     color_enabled: bool,

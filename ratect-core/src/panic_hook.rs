@@ -39,10 +39,15 @@ pub fn install(binary_name: &'static str, version: &'static str) {
     panic::set_hook(Box::new(move |info| {
         default_hook(info);
         let backtrace_enabled = std::env::var_os("RUST_BACKTRACE").is_some_and(|v| v != "0");
-        eprintln!(
-            "{}",
-            report_message(binary_name, version, backtrace_enabled)
-        );
+        // The one write that may panic: this already is one, and a failure
+        // here can't be reported anywhere else.
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!(
+                "{}",
+                report_message(binary_name, version, backtrace_enabled)
+            );
+        }
     }));
 }
 

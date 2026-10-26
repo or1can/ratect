@@ -29,6 +29,9 @@
 //! deliberately keeps the strict default, since it is meant to be publishable
 //! on its own.
 #![allow(rustdoc::private_intra_doc_links)]
+// Print through a `ui::Console`, not these macros, which panic on a closed
+// stream; its doc comment has the rule and the two exceptions (ratect#669).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
 
 pub mod cache;
 pub mod config;
