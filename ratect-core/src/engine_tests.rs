@@ -12411,6 +12411,127 @@ async fn a_refused_removal_reports_the_daemons_reason_and_what_was_left() {
     );
 }
 
+/// A failure before any container exists still removes the network the
+/// engine created for the run — with nothing to wait for, it goes at once
+/// (Batect's DTN-1; ratect#309).
+#[tokio::test]
+async fn a_failure_before_any_container_is_created_still_removes_the_network() {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "build-env".to_string(),
+        container_with_build_directory("./docker", None),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("build".to_string(), task("build-env", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+    let docker = FakeContainerRuntime::default().failing_image_build();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("build", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "{events:?}");
+    assert!(
+        !events.iter().any(|e| e.starts_with("create:")),
+        "no container was created: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the network is still removed: {events:?}"
+    );
+}
+
+/// A container whose removal the daemon refuses doesn't stop cleanup: the
+/// task's other containers are still removed, the network is still removed
+/// after them, and the refused one is never reported removed (ratect#309,
+/// the divergence differences-from-batect.md records).
+#[tokio::test]
+async fn a_refused_removal_still_removes_the_other_containers_and_the_network() {
+    let docker = FakeContainerRuntime::default().refusing_container_removal("sidecar-id-b");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["a", "b", "c"],
+            &[("a", &[]), ("b", &[]), ("c", &[])],
+        )),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<CleanupFailed>(), "{error:#}");
+    let events = docker.events();
+    assert!(
+        docker.stop_options_for("sidecar-id-b").is_some(),
+        "the refused removal was attempted: {events:?}"
+    );
+    for removed in ["app", "a", "c"] {
+        assert_removed_before_network(&events, removed);
+    }
+    let removed: Vec<String> = sink
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::ContainerRemoved { container } => Some(container),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !removed.contains(&"b".to_string()),
+        "the refused container is never reported removed: {removed:?}"
+    );
+    for container in ["app", "a", "c"] {
+        assert!(
+            removed.contains(&container.to_string()),
+            "'{container}' is reported removed: {removed:?}"
+        );
+    }
+}
+
+/// When the network's removal is refused too — as it is while a refused
+/// container is still attached — both refusals are reported in the one
+/// cleanup-failure error, not as a line each.
+#[tokio::test]
+async fn a_refused_removal_and_a_refused_network_are_reported_together() {
+    let docker = FakeContainerRuntime::default()
+        .refusing_container_removal("sidecar-id-database")
+        .refusing_network_removal();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let errors = messages(&sink.events(), error_line);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].starts_with(
+            "Cleanup failed: No such container: sidecar-id-database; error while removing \
+             network: network ratect-"
+        ),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[0].contains("left behind: database (sidecar-id-d), network ratect-"),
+        "{}",
+        errors[0]
+    );
+}
+
 /// What a `--no-cleanup*` flag keeps is a notice — not a failure, so no
 /// marker — with the same `left behind`/`Remove with` tail as the cleanup
 /// failure, whichever of the two flags did the keeping.

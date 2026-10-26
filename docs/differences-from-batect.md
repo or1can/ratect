@@ -443,8 +443,8 @@ tables above:
   on; Batect's cleanup stalls there and leaves them running. Ratect also still
   goes on to remove the task network, where Batect keeps it and lists it among
   the manual cleanup commands it prints. While that container is still attached
-  to the network, Docker refuses, and Ratect logs a second warning naming the
-  network.
+  to the network, Docker refuses, and that refusal is reported in the same
+  `Cleanup failed:` error as the container's, which lists both as left behind.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is
