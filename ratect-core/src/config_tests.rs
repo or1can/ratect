@@ -12454,7 +12454,7 @@ include:
     let cache_root = unique_temp_dir();
     let git_cache = GitIncludeCache::for_test(cache_root.clone(), FakeGitClient::new(), 1000);
     let result = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
-    assert!(format!("{:?}", result.unwrap_err()).contains("only valid for 'type: git'"));
+    assert!(format!("{:?}", result.unwrap_err()).contains("only valid on a Git include"));
 
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).ok();
@@ -12480,7 +12480,7 @@ async fn the_nested_include_flag_is_rejected_on_a_non_git_include() {
     let result =
         Config::load_from_file_native_with_git_cache(&dir.join("ratect.toml"), &git_cache).await;
     assert!(format!("{:?}", result.unwrap_err())
-        .contains("'allow_nested_git_includes' is only valid for 'type: git' includes"));
+        .contains("'allow_nested_git_includes' is only valid on a Git include"));
 
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).ok();

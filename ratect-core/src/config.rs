@@ -2926,7 +2926,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.write_str(
                     "an include path, or an object with 'path'/'type' fields (plus 'repo'/'ref' \
-                     for 'type: git')",
+                     for a Git include)",
                 )
             }
 
@@ -2994,7 +2994,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                     _ => {
                         if repo.is_some() || git_ref.is_some() {
                             return Err(serde::de::Error::custom(
-                                "'repo' and 'ref' are only valid for 'type: git' includes",
+                                "'repo' and 'ref' are only valid on a Git include",
                             ));
                         }
                         // A local file is always the project owner's own, so
@@ -3003,7 +3003,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                         // otherwise.
                         if allow_host_paths.is_some() {
                             return Err(serde::de::Error::custom(
-                                "'allow_host_paths' is only valid for 'type: git' includes",
+                                "'allow_host_paths' is only valid on a Git include",
                             ));
                         }
                         // Same reasoning: a local file can't be the thing that
@@ -3011,7 +3011,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                         // nothing here to permit.
                         if allow_nested_git_includes.is_some() {
                             return Err(serde::de::Error::custom(
-                                "'allow_nested_git_includes' is only valid for 'type: git' includes",
+                                "'allow_nested_git_includes' is only valid on a Git include",
                             ));
                         }
                         // A local file is the project owner's own, covered by
