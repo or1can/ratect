@@ -1,6 +1,6 @@
 # 0015 — A native project records the Ratect version it was written for
 
-**Status:** Accepted — planned (ratect-compat 0.32.0 · ratect 0.11.0,
+**Status:** Accepted — shipped (ratect-compat 0.32.0 · ratect 0.11.0,
 [#149](https://github.com/or1can/ratect/issues/149)).
 
 ## Context
@@ -118,13 +118,15 @@ exact version a project ran. Ratect ships no wrapper, deliberately
 - **A written-for version per Git bundle.** A bundle written for 0.10 and used
   under 0.13 is reinterpreted too, and the project owner updating their own
   `ratect_version` doesn't mean they reviewed the bundle. Deferred, not
-  rejected — see Consequences.
+  rejected — see Consequences. *(Taken up by
+  [0020](0020-bundle-records-its-written-for-version.md).)*
 
 ## Consequences
 
 - A `### Breaking` entry that changes what a `ratect.toml` means or accepts
   adds a table row in the same commit.
 - A bundle's own meaning changing under it is not caught: only the root file's
-  written-for version is checked. A bundle carrying its own is follow-on work.
+  written-for version is checked. A bundle carrying its own is follow-on work,
+  decided in [0020](0020-bundle-records-its-written-for-version.md).
 - Per-task evaluation ([0014](0014-config-checked-at-load-evaluated-per-task.md),
   #314) is a relaxation — nothing that ran stops running — so it adds no row.

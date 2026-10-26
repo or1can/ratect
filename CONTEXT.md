@@ -26,6 +26,10 @@ through a Git include.
 include, including any file it then imports with a file include. Determined by
 the route to a file, not by the kind of the last step that reached it.
 
+**Bundle entry file** — the bundle file a Git include names directly. Stands
+to the bundle files reached from it as a root configuration file stands to its
+project, except that nothing runs it on its own.
+
 ## Trust
 
 **Grant** — a permission widening what one bundle may do, written on a Git
@@ -52,8 +56,13 @@ this file's and the code's; user docs name the binary instead.
 **File syntax** — whether a file is parsed as TOML or YAML. A property of a
 file, independent of its project's dialect.
 
-**Written-for version** — the Ratect version a native project's configuration
-was written for. A property of a project, not of a file.
+**Written-for version** — the Ratect version a native project's configuration,
+or a bundle entry file and what it reaches, was written for. A property of a
+project or of a bundle entry, not of a single file.
+
+**Reviewed-for version** — the Ratect version a Git include entry's author has
+checked a bundle against, standing in for the bundle's own written-for version
+when it is the later of the two. A property of a Git include entry.
 
 ## Batect parity
 
