@@ -113,7 +113,10 @@ task's own container ran to completion instead, regardless of its exit code (a
 non-zero exit is still "success" for this purpose — it's the task's own container
 actually running that matters, not what it returned); `--no-cleanup` is both at once.
 Either way, everything above is left genuinely running, not just present-but-stopped
-— see [CLI reference](ratect-compat-cli.md).
+— see [CLI reference](ratect-compat-cli.md). The success flag keeps the named task's
+resources alone: a prerequisite is always cleaned up after success, so only the task
+you asked for is left to investigate. The failure flag applies to whichever task
+failed, prerequisites included.
 
 `pull_image()` in the diagram above is conditional on `image_pull_policy` (see [config
 reference](ratect-compat-config-reference.md#container)): `IfNotPresent`, the default, checks whether

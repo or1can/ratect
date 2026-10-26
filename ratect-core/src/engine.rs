@@ -751,15 +751,20 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// `docker::ContainerRuntime::run_container`'s own doc comment for why
     /// a nonzero exit is still "success" here), its dependency containers,
     /// and the task's own network are all left in place instead of removed.
-    /// `true` (the default) always cleans up. See `run_task_internal`.
+    /// Applies to the top-level task — the one named — alone: a
+    /// prerequisite is always cleaned up after success, as Batect's
+    /// `RunOptions` does for every task but the main one. `true` (the
+    /// default) always cleans up. See `run_task_internal`.
     cleanup_after_success: bool,
     /// `false` when `--no-cleanup`/`--no-cleanup-after-failure` was given:
     /// same as `cleanup_after_success`, but for a genuine infrastructure
     /// failure (a build/pull/health-check/setup-command failure, or
-    /// anything else that never reaches the task's own container exiting)
-    /// — matching Batect's own success/failure split for cleanup-gating
-    /// purposes exactly (`TaskEvent::TaskFinished` vs `TaskEvent::TaskFailed`
-    /// already encode it). `true` (the default) always cleans up.
+    /// anything else that never reaches the task's own container exiting),
+    /// and for every task the run reaches, prerequisites included — Batect's
+    /// split between the two buckets (`TaskEvent::TaskFinished` vs
+    /// `TaskEvent::TaskFailed` already encode it), and its scope, where only
+    /// the success flag is limited to the main task. `true` (the default)
+    /// always cleans up.
     cleanup_after_failure: bool,
     /// Set via `--max-parallelism <N>`: caps how many resource-intensive
     /// operations run concurrently across the whole invocation — image
@@ -2492,8 +2497,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .downcast_ref::<crate::docker::ContainerExitedNonZero>()
                 .map(|failure| failure.exit_code),
         };
+        // The success flag keeps the named task's resources alone: a
+        // prerequisite is always cleaned up after success, as Batect's
+        // `RunOptions` does for every task but the main one. The failure
+        // flag applies to every task, prerequisites included.
         let should_cleanup = if exit_code.is_some() {
-            self.cleanup_after_success
+            self.cleanup_after_success || !top_level
         } else {
             self.cleanup_after_failure
         };

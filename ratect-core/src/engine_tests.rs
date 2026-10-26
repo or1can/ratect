@@ -6838,6 +6838,354 @@ async fn without_cleanup_after_failure_has_no_effect_on_a_successful_run() {
     );
 }
 
+/// `test` runs `app` (with dependency `app-db`) once its prerequisite
+/// `prepare` has run `prep` (with dependency `prep-db`): each task has a
+/// container, a dependency and a network of its own, so a test can tell
+/// which task's cleanup a flag applied to.
+fn config_with_a_prerequisite_that_has_a_dependency() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("prep-db".to_string(), container("postgres:16", None));
+    containers.insert(
+        "prep".to_string(),
+        container("alpine:3.18", Some(vec!["prep-db".to_string()])),
+    );
+    containers.insert("app-db".to_string(), container("postgres:16", None));
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["app-db".to_string()])),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("prepare".to_string(), task("prep", "echo prepare"));
+    let mut test = task("app", "echo test");
+    test.prerequisites = Some(vec!["prepare".to_string()]);
+    tasks.insert("test".to_string(), test);
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// The networks the fake was asked to create, in order — one per task run.
+fn created_networks(events: &[String]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| event.strip_prefix("network-create:"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn removed(events: &[String], container: &str) -> bool {
+    events.contains(&format!("sidecar-stop:sidecar-id-{container}"))
+}
+
+fn network_removed(events: &[String], network: &str) -> bool {
+    events.contains(&format!("network-remove:{network}"))
+}
+
+/// The prerequisite's container, its dependency and its network are removed
+/// and the named task's are kept — one assertion per resource, so a run that
+/// removes only some of them can't pass.
+fn assert_only_the_named_task_was_kept(docker: &FakeContainerRuntime) {
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 2, "one network per task: {events:?}");
+    assert!(
+        removed(&events, "prep"),
+        "the prerequisite's own container is removed: {events:?}"
+    );
+    assert!(
+        removed(&events, "prep-db"),
+        "the prerequisite's dependency is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
+    );
+    assert!(
+        !removed(&events, "app"),
+        "the named task's own container is kept: {events:?}"
+    );
+    assert!(
+        !removed(&events, "app-db"),
+        "the named task's dependency is kept: {events:?}"
+    );
+    assert!(
+        !network_removed(&events, &networks[1]),
+        "the named task's network is kept: {events:?}"
+    );
+}
+
+/// Batect's `RunOptions`: `--no-cleanup-after-success` applies to the main
+/// task alone, and every other task is cleaned up after success whatever it
+/// says (ratect#320).
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisite() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        config_with_a_prerequisite_that_has_a_dependency(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    assert_only_the_named_task_was_kept(&docker);
+}
+
+/// A prerequisite whose command exits non-zero is in the success bucket too,
+/// so it is cleaned up — and the run ends with its code before the named
+/// task's container is ever created.
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisite_that_exits_non_zero() {
+    let docker = FakeContainerRuntime::default().with_run_exit("prep", 3);
+    let engine = engine(
+        config_with_a_prerequisite_that_has_a_dependency(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let error = engine.run_task("test", &[]).await.unwrap_err();
+
+    assert_eq!(
+        error
+            .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .map(|exited| exited.exit_code),
+        Some(3),
+        "the prerequisite's own exit code: {error:#}"
+    );
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "the named task never ran: {events:?}");
+    assert!(
+        !events.iter().any(|event| event.starts_with("create:app:")),
+        "the named task's container is never created: {events:?}"
+    );
+    assert!(
+        removed(&events, "prep"),
+        "the prerequisite's own container is removed: {events:?}"
+    );
+    assert!(
+        removed(&events, "prep-db"),
+        "the prerequisite's dependency is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
+    );
+}
+
+/// A named task with only `prerequisites` has no container of its own, so
+/// with every task it runs being a prerequisite, nothing is kept.
+#[tokio::test]
+async fn without_cleanup_after_success_keeps_nothing_for_a_prerequisites_only_task() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_a_prerequisites_only_task(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_success: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "only the prerequisite runs: {events:?}");
+    assert!(
+        removed(&events, "build-env"),
+        "the prerequisite's own container is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
+    );
+}
+
+/// The same scope in a native project, loaded through the native loader:
+/// `ratect` follows the fix too, and nothing the engine reads from a native
+/// project may restore the old behaviour.
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisite_in_a_native_project() {
+    let directory = std::env::temp_dir().join(format!("ratect-320-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("ratect.toml");
+    std::fs::write(
+        &file,
+        r#"project_name = "demo"
+
+[containers.prep-db]
+image = "postgres:16"
+
+[containers.prep]
+image = "alpine:3.18"
+dependencies = ["prep-db"]
+
+[containers.app-db]
+image = "postgres:16"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["app-db"]
+
+[tasks.prepare]
+run = { container = "prep", command = "echo prepare" }
+
+[tasks.test]
+prerequisites = ["prepare"]
+run = { container = "app", command = "echo test" }
+"#,
+    )
+    .unwrap();
+    let running: crate::written_for::Version = "0.12.0".parse().unwrap();
+    let project = crate::config::load_project_native(&file, running)
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    let dialect = project.dialect;
+    assert_eq!(dialect, Dialect::Native);
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        dialect,
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    assert_only_the_named_task_was_kept(&docker);
+}
+
+/// With `--skip-prerequisites` the named task is still the top-level one,
+/// so the flag still keeps its resources — the scope is "the task named",
+/// not "a task with no prerequisites".
+#[tokio::test]
+async fn without_cleanup_after_success_keeps_the_named_task_when_prerequisites_are_skipped() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        config_with_a_prerequisite_that_has_a_dependency(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        run_prerequisites: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "only the named task runs: {events:?}");
+    assert!(
+        !removed(&events, "app"),
+        "the named task's own container is kept: {events:?}"
+    );
+    assert!(
+        !removed(&events, "app-db"),
+        "the named task's dependency is kept: {events:?}"
+    );
+    assert!(
+        !network_removed(&events, &networks[0]),
+        "the named task's network is kept: {events:?}"
+    );
+}
+
+/// `prepare`'s dependency `prep-db` has a setup command that fails — an
+/// infrastructure failure in a prerequisite.
+fn config_with_a_prerequisite_whose_dependency_fails_setup() -> Config {
+    let mut config = config_with_a_prerequisite_that_has_a_dependency();
+    config.containers.get_mut("prep-db").unwrap().setup_commands =
+        Some(vec![crate::config::SetupCommand {
+            command: "./migrate.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    config
+}
+
+/// Batect's `RunOptions` applies `--no-cleanup-after-failure` to every task,
+/// prerequisites included — unlike the success flag. Ratect already did;
+/// this pins it (Batect's XRO-3).
+#[tokio::test]
+async fn without_cleanup_after_failure_keeps_a_prerequisites_resources_after_its_failure() {
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let engine = engine(
+        config_with_a_prerequisite_whose_dependency_fails_setup(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "the named task never ran: {events:?}");
+    assert!(
+        !events.iter().any(|event| event.starts_with("create:app:")),
+        "the named task's container is never created: {events:?}"
+    );
+    assert!(
+        !removed(&events, "prep-db"),
+        "the prerequisite's failed dependency is kept: {events:?}"
+    );
+    assert!(
+        !network_removed(&events, &networks[0]),
+        "the prerequisite's network is kept: {events:?}"
+    );
+}
+
+/// The reverse: the success flag doesn't reach a prerequisite's failure.
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisites_failure() {
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let engine = engine(
+        config_with_a_prerequisite_whose_dependency_fails_setup(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "the named task never ran: {events:?}");
+    assert!(
+        removed(&events, "prep-db"),
+        "the prerequisite's failed dependency is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
+    );
+}
+
 #[tokio::test]
 async fn nested_dependencies_start_in_order_on_same_network() {
     let mut containers = IndexMap::new();
