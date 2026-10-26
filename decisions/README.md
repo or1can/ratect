@@ -87,3 +87,4 @@ record refined this way.
 | [0017](0017-output-streams-and-styles.md) | Output: what each stream is for, and how a style shapes it | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0018](0018-built-images-named-for-people-found-by-labels.md) | Built images are named for people and found by labels | Accepted — naming planned (ratect-compat 0.33.0 · ratect 0.12.0); lifecycle unscheduled |
 | [0019](0019-readiness-gates-starting-only.md) | A dependency's readiness gates only the start of what depends on it | Accepted — image work shipped (ratect-compat 0.33.0 · ratect 0.12.0); container creation planned |
+| [0020](0020-bundle-records-its-written-for-version.md) | A bundle records the Ratect version it was written for | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
