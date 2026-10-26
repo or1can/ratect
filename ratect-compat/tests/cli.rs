@@ -2395,6 +2395,45 @@ fn docker_ids(kind: &str, filter: &str, all: bool) -> Vec<String> {
         .collect()
 }
 
+/// A create the daemon already had when a sibling's failure dropped it is
+/// removed by cleanup (ratect#318) — run twice, and judged by what Docker
+/// still has, since a run that leaks nothing and one that cleans up exit the
+/// same.
+#[test]
+#[ignore]
+fn a_create_dropped_by_a_siblings_failure_leaves_nothing_behind_via_docker() {
+    let filter = "label=eu.orican.ratect.project=ratect-create-leak-test";
+    for run in 1..=2 {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/create-leak.yml"))
+            .args(["-o", "simple", "t"])
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let containers = docker_ids("container", filter, true);
+        let networks = docker_ids("network", filter, false);
+        for id in &containers {
+            let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+        }
+        for id in &networks {
+            let _ = Command::new("docker").args(["network", "rm", id]).output();
+        }
+        assert!(
+            !output.status.success() && stderr.contains("bad"),
+            "run {run}: `bad`'s create should fail the run: {stderr}"
+        );
+        assert!(
+            containers.is_empty(),
+            "run {run} left containers behind: {containers:?}\n{stderr}"
+        );
+        assert!(
+            networks.is_empty(),
+            "run {run} left its network behind: {networks:?}\n{stderr}"
+        );
+    }
+}
+
 /// Polls `condition` every 200 ms until it holds or `timeout` passes.
 fn poll_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;

@@ -401,7 +401,11 @@ tables above:
   task's containers can't be started — its image won't pull or build, or it
   doesn't become ready — whatever else was starting alongside it is dropped
   there and then, and cleanup begins. Batect cancels that work and waits for it
-  to wind down first.
+  to wind down first. A container whose create the daemon already had is still
+  removed: cleanup waits for that create's answer before it removes anything,
+  as Batect waits for its creates to finish. A further signal ends that wait
+  as it would a graceful stop — everything else is force-removed — and a
+  warning names the container and the run label that finds it.
 - **Docker 20.10 or newer is required.** Ratect refuses a daemon whose API
   is older than 1.41 (Docker 20.10) when it connects — before any task runs,
   whether or not BuildKit is asked for — because its proxy support needs

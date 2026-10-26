@@ -146,6 +146,7 @@ history, from when it was the only binary.
 - A crash exits `101` instead of hanging when the run was forwarding stdin.
 - `ratect-compat --list-tasks` and `ratect tasks list` print no `: ` after a task whose `description` is empty or only whitespace, as in Batect.
 - `ratect-compat --list-tasks` and `ratect tasks list` with `-o quiet` print nothing for a project with no tasks, as in Batect, instead of an empty line.
+- A run that fails or is interrupted while a container is being created no longer leaves that container behind in Created state: cleanup waits for the create to finish and removes it. A further signal ends that wait and force-removes everything else, and a warning names the container and the label that finds it.
 - Dependency containers are stopped in reverse dependency order during cleanup, as in Batect: a container only after every container that depends on it.
 - With `--no-cleanup-after-success` or `--no-cleanup`, prerequisite tasks are cleaned up after success, as in Batect; only the named task's containers and network are left in place.
 

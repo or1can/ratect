@@ -121,6 +121,11 @@ struct FakeContainerRuntime {
     // either state — created but not started is the window a sibling's
     // failure lands in (ratect#224), and the state decisions/0019 adds.
     create_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // How long `create_container` for a container name takes to answer
+    // *after* Docker has created it — the window in which the daemon has
+    // the container and the client hasn't heard yet (see
+    // `with_create_reply_delay`, ratect#318).
+    create_reply_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     start_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     // Container names whose `start_background_container` fails (see
     // `failing_start`).
@@ -245,6 +250,7 @@ impl Default for FakeContainerRuntime {
             rejected_tags: Default::default(),
             locally_present_images: Default::default(),
             create_delays: Default::default(),
+            create_reply_delays: Default::default(),
             start_delays: Default::default(),
             failing_starts: Default::default(),
             pull_delays: Default::default(),
@@ -454,6 +460,18 @@ impl FakeContainerRuntime {
     /// overlap (or don't, under `--max-parallelism`).
     fn with_create_delay(self, name: &str, delay: std::time::Duration) -> Self {
         self.create_delays
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
+    }
+
+    /// Makes `create_container` for container name `name` record the
+    /// container as created — Docker has it — and only then wait `delay`
+    /// before answering, so a sibling's failure or a signal landing in that
+    /// window drops a create the daemon has already done.
+    fn with_create_reply_delay(self, name: &str, delay: std::time::Duration) -> Self {
+        self.create_reply_delays
             .lock()
             .unwrap()
             .insert(name.to_string(), delay);
@@ -973,6 +991,10 @@ impl ContainerRuntime for FakeContainerRuntime {
         // shows up as the same `sidecar-stop:sidecar-id-{name}` event,
         // which is what the cleanup-flag tests assert on.
         let container_id = format!("sidecar-id-{name}");
+        let reply_delay = self.create_reply_delays.lock().unwrap().get(name).copied();
+        if let Some(reply_delay) = reply_delay {
+            tokio::time::sleep(reply_delay).await;
+        }
         if self
             .failing_creations_after_docker_created
             .lock()
@@ -12530,6 +12552,238 @@ async fn a_refused_removal_and_a_refused_network_are_reported_together() {
         "{}",
         errors[0]
     );
+}
+
+const REPLY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether `container`'s create reached the daemon — the fake records it
+/// before any reply delay.
+fn created_on_the_daemon(events: &[String], container: &str) -> bool {
+    events
+        .iter()
+        .any(|e| e.starts_with(&format!("create:{container}:")))
+}
+
+/// A create the daemon has already done is removed by cleanup even when a
+/// sibling's failure drops the future waiting for its answer (ratect#318).
+#[tokio::test(start_paused = true)]
+async fn a_create_dropped_by_a_siblings_failure_is_still_cleaned_up() {
+    let docker = FakeContainerRuntime::default()
+        .with_create_reply_delay("slow", REPLY)
+        .with_create_delay("bad", std::time::Duration::from_secs(1))
+        .failing_creation("bad");
+    let engine = engine(
+        config_with_containers(&["slow", "bad"], &[("slow", &[]), ("bad", &[])]),
+        docker.clone(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("Failed to create container 'bad'"),
+        "the sibling's failure is what's reported: {error:#}"
+    );
+    let events = docker.events();
+    assert!(created_on_the_daemon(&events, "slow"), "{events:?}");
+    assert_removed_before_network(&events, "slow");
+}
+
+/// The same for a dependency of a dependency.
+#[tokio::test(start_paused = true)]
+async fn a_nested_create_dropped_by_a_siblings_failure_is_still_cleaned_up() {
+    let docker = FakeContainerRuntime::default()
+        .with_create_reply_delay("slow", REPLY)
+        .with_create_delay("bad", std::time::Duration::from_secs(1))
+        .failing_creation("bad");
+    let engine = engine(
+        config_with_containers(
+            &["mid"],
+            &[("mid", &["slow", "bad"]), ("slow", &[]), ("bad", &[])],
+        ),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    assert!(created_on_the_daemon(&events, "slow"), "{events:?}");
+    assert_removed_before_network(&events, "slow");
+}
+
+/// Sends `signals` on `interrupt`, one a second, starting a second from now.
+fn signal_later(
+    interrupt: &Arc<crate::interrupt::Interrupt>,
+    signals: &[crate::interrupt::TerminationSignal],
+) -> tokio::task::JoinHandle<()> {
+    let interrupt = Arc::clone(interrupt);
+    let signals = signals.to_vec();
+    tokio::spawn(async move {
+        for signal in signals {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            interrupt.record_signal(signal);
+        }
+    })
+}
+
+/// A signal ending the run while a create is waiting for its answer still
+/// leaves that container to cleanup — a dependency's, or the task's own.
+#[tokio::test(start_paused = true)]
+async fn a_create_dropped_by_a_signal_is_still_cleaned_up() {
+    for slow in ["dependency", "app"] {
+        let interrupt = crate::interrupt::Interrupt::new();
+        let docker = FakeContainerRuntime::default().with_create_reply_delay(slow, REPLY);
+        let engine = TaskEngine::new(
+            project(config_with_containers(
+                &["dependency"],
+                &[("dependency", &[])],
+            )),
+            docker.clone(),
+            Arc::new(NullEventSink),
+            Arc::clone(&interrupt),
+        );
+        let signaller = signal_later(
+            &interrupt,
+            &[crate::interrupt::TerminationSignal::Terminate],
+        );
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+        signaller.await.unwrap();
+
+        assert!(
+            error.is::<crate::interrupt::TaskInterrupted>(),
+            "the run ends as an interrupted one: {error:#}"
+        );
+        let events = docker.events();
+        assert!(created_on_the_daemon(&events, slow), "{events:?}");
+        assert_removed_before_network(&events, slow);
+    }
+}
+
+/// Waiting for a create's answer is part of cleanup, so the ladder applies
+/// to it: the first further signal stops the wait and force-removes
+/// everything known, as it would any graceful stop. A supervisor's
+/// `SIGINT`, `SIGTERM`, `SIGKILL` ladder only ever sends one more signal
+/// before the kill, so a wait only the abandon rung could end would leak
+/// every container already created (ratect#249).
+#[tokio::test(start_paused = true)]
+async fn a_signal_during_a_wait_for_creates_force_removes_what_is_known() {
+    for slow in [&["slow"][..], &["slow1", "slow2"][..]] {
+        let interrupt = crate::interrupt::Interrupt::new();
+        let mut docker = FakeContainerRuntime::default()
+            .with_create_delay("bad", std::time::Duration::from_millis(500))
+            .failing_creation("bad");
+        for name in slow {
+            docker =
+                docker.with_create_reply_delay(name, std::time::Duration::from_secs(1_000_000));
+        }
+        let mut dependencies: Vec<&str> = slow.to_vec();
+        dependencies.push("bad");
+        let declared: Vec<(&str, &[&str])> =
+            dependencies.iter().map(|name| (*name, &[][..])).collect();
+        let sink = RecordingEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_containers(&dependencies, &declared)),
+            docker.clone(),
+            Arc::new(sink.clone()),
+            Arc::clone(&interrupt),
+        );
+        let signaller = signal_later(
+            &interrupt,
+            &[crate::interrupt::TerminationSignal::Terminate],
+        );
+
+        let started = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap_err();
+        signaller.await.unwrap();
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "one signal ended the wait: {:?}",
+            started.elapsed()
+        );
+        let events = docker.events();
+        assert!(
+            events.contains(&"force-remove:sidecar-id-app".to_string()),
+            "the container already created is force-removed: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "and the network is still removed: {events:?}"
+        );
+        let errors = messages(&sink.events(), error_line);
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.starts_with("Cleanup abandoned")),
+            "hurried, not abandoned: {errors:?}"
+        );
+        assert_unanswered_creates_warned(&sink, slow);
+    }
+}
+
+/// The creates that never answered are named in a warning of their own,
+/// with the label that finds what they may have made — not appended to a
+/// line that ends on a command to paste.
+fn assert_unanswered_creates_warned(sink: &RecordingEventSink, containers: &[&str]) {
+    let expected = match containers {
+        [one] => format!(
+            "Stopped waiting for the create of {one} to answer, so it may exist; find it with \
+             docker ps -a --filter label=eu.orican.ratect.run="
+        ),
+        many => format!(
+            "Stopped waiting for the creates of {} to answer, so they may exist; find them \
+             with docker ps -a --filter label=eu.orican.ratect.run=",
+            many.join(", ")
+        ),
+    };
+    let warnings = messages(&sink.events(), warning);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.starts_with(&expected)),
+        "expected {expected:?} in {warnings:?}"
+    );
+}
+
+/// The same with cleanup disabled: one signal ends the wait there too, the
+/// notice lists what is known to be kept, and the create cut short while it
+/// was waited for is still named.
+#[tokio::test(start_paused = true)]
+async fn disabled_cleanup_names_a_create_that_never_answered() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_create_reply_delay("slow", std::time::Duration::from_secs(1_000_000))
+        .with_create_delay("bad", std::time::Duration::from_millis(500))
+        .failing_creation("bad");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["slow", "bad"],
+            &[("slow", &[]), ("bad", &[])],
+        )),
+        docker,
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let signaller = signal_later(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+    signaller.await.unwrap();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(
+        notices[0].starts_with("Left in place (--no-cleanup): app (sidecar-id-a), network "),
+        "{notices:?}"
+    );
+    assert_unanswered_creates_warned(&sink, &["slow"]);
 }
 
 /// What a `--no-cleanup*` flag keeps is a notice — not a failure, so no
