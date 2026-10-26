@@ -138,6 +138,7 @@ history, from when it was the only binary.
 - `DOCKER_BUILDKIT` accepts `yes` and `no`, in any case, as in Batect.
 - An empty `DOCKER_BUILDKIT` counts as unset, so the daemon's own builder is used, instead of failing the first build.
 - `ratect-compat --list-tasks` and `ratect tasks list` exit `0` when their output's reader has already closed (`| head -c 0`), as in Batect, instead of crashing with exit `101`.
+- `ratect-compat --clean` and `--clean-cache` remove the caches and exit `0` when their output's reader has already closed, as in Batect, instead of crashing with exit `101` before removing anything.
 - `ratect-compat --list-tasks` and `ratect tasks list` print no `: ` after a task whose `description` is empty or only whitespace, as in Batect.
 - `ratect-compat --list-tasks` and `ratect tasks list` with `-o quiet` print nothing for a project with no tasks, as in Batect, instead of an empty line.
 

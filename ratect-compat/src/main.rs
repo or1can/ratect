@@ -784,13 +784,18 @@ async fn main() {
     // Resolved before `run`, because the subscriber and the fatal-error
     // line below both need stderr's colour decision and both sit outside it.
     let stderr = Console::stderr(color_mode);
+    // Every line this binary prints itself on stdout goes through this, not
+    // `println!`: a reader that has already gone (`| head -c 0`) is a write
+    // error to ignore, as Batect's `PrintStream` does, not a panic that stops
+    // a `--clean` before it removes anything (ratect#444, ratect#668).
+    let stdout = Console::stdout(color_mode);
 
     if let Err(err) = init_tracing(args.log_file.as_deref(), stderr.color_enabled()) {
         stderr.error(&format!("{err:?}"));
         std::process::exit(failed(&err).into());
     }
 
-    let exit_code = match run(args, color_mode, &stderr, sweep_git_include_cache).await {
+    let exit_code = match run(args, color_mode, &stdout, &stderr, sweep_git_include_cache).await {
         Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(err) => {
             // Printed directly to stderr, not through `tracing::error!` —
@@ -883,15 +888,16 @@ const PROGRESS: ProgressStream = ProgressStream::Stdout;
 /// be unit-tested without a Docker daemon — see its own doc comment.
 /// `color_mode` is `main`'s already-resolved `--no-color`/`NO_COLOR`/
 /// `CLICOLOR_FORCE` verdict; `args.no_color` is already folded too.
-/// `stderr` is `main`'s own stderr console, for the notices and warnings
-/// this function prints itself — the run's own go through the event sink
-/// (decisions/0017). `sweep` makes the background Git include cache sweep:
+/// `stdout` and `stderr` are `main`'s own consoles, for the output, notices
+/// and warnings this function prints itself — the run's own go through the
+/// event sink (decisions/0017). `sweep` makes the background Git include cache sweep:
 /// always [`sweep_git_include_cache`] outside this binary's tests, which pass
 /// a recording fake so they can see whether and when it starts without
 /// touching the real `~/.ratect/incl`.
 async fn run(
     args: Args,
     color_mode: ColorMode,
+    stdout: &Console,
     stderr: &Console,
     sweep: impl FnOnce() -> Sweep,
 ) -> Result<()> {
@@ -935,7 +941,7 @@ async fn run(
     }
 
     if (args.clean || !args.clean_cache.is_empty()) && !args.list_tasks {
-        return clean_caches(&args, cache_type, stderr).await;
+        return clean_caches(&args, cache_type, stdout, stderr).await;
     }
 
     let project = load_project(&args.config_file).await?;
@@ -953,10 +959,7 @@ async fn run(
             OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
             _ => format_task_list(&project.config.project_name, &project.config.tasks),
         };
-        // Through a `Console`, not `println!`: a reader that has already gone
-        // (`| head -c 0`) is a write error to ignore, as Batect's `PrintStream`
-        // does, not a panic (ratect#444).
-        Console::stdout(ColorMode::Off).write_raw(&listing);
+        stdout.write_raw(&listing);
         return Ok(());
     }
 
@@ -1045,7 +1048,12 @@ fn sweep_git_include_cache() -> Sweep {
 /// the two combine: the explicit `cleanCaches` list (if non-empty) always
 /// wins over `--clean`'s "everything" default, regardless of whether
 /// `--clean` was also given. Which command runs at all is [`run`]'s.
-async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> Result<()> {
+async fn clean_caches(
+    args: &Args,
+    cache_type: CacheType,
+    stdout: &Console,
+    stderr: &Console,
+) -> Result<()> {
     let base_path = ratect_core::config::base_path_for(&args.config_file);
     let project_directory = ratect_core::config::project_directory_path(base_path)?;
     let only: HashSet<String> = args.clean_cache.iter().cloned().collect();
@@ -1058,14 +1066,14 @@ async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> R
             .await?;
             // Only once the daemon has answered, as Batect's own line is
             // printed inside its connectivity check (ratect#445).
-            println!("Checking for cache volumes...");
+            stdout.println("Checking for cache volumes...");
             Some(docker)
         }
         CacheType::Directory => {
-            println!(
+            stdout.println(&format!(
                 "Checking for cache directories in '{}'...",
                 ratect_core::cache::cache_directory(&project_directory).display()
-            );
+            ));
             None
         }
     };
@@ -1084,9 +1092,9 @@ async fn clean_caches(args: &Args, cache_type: CacheType, stderr: &Console) -> R
         .expect("a Project-scoped selection can never trigger CacheStore's shared-cache refusal");
 
     for cache in &removed {
-        println!("{}", deleting_line(cache_type, &cache.storage));
+        stdout.println(&deleting_line(cache_type, &cache.storage));
     }
-    println!("{}", done_line(cache_type, removed.len()));
+    stdout.println(&done_line(cache_type, removed.len()));
 
     Ok(())
 }

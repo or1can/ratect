@@ -1214,6 +1214,7 @@ async fn clean_cache_type_directory_short_circuits_before_touching_the_config_fi
         args,
         ColorMode::Off,
         &Console::new(Box::new(std::io::sink()), false),
+        &Console::new(Box::new(std::io::sink()), false),
         unreachable_sweep,
     )
     .await
@@ -1270,6 +1271,7 @@ async fn upgrade_flag_short_circuits_before_touching_the_config_file() {
     run(
         args,
         ColorMode::Off,
+        &Console::new(Box::new(std::io::sink()), false),
         &Console::new(Box::new(std::io::sink()), false),
         unreachable_sweep,
     )
@@ -1534,6 +1536,7 @@ async fn run_with_fake_sweep(arguments: &[&str], fake: FakeSweep) -> Swept {
         run(
             args(arguments),
             ColorMode::Off,
+            &Console::new(Box::new(std::io::sink()), false),
             &Console::new(Box::new(std::io::sink()), false),
             sweep,
         ),
