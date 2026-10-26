@@ -683,17 +683,62 @@ fn takes_value(command: &clap::Command, word: Word<'_>) -> bool {
         .is_some_and(|arg| arg.get_action().takes_values())
 }
 
+/// `clap`'s parse of `arguments`, the program name first, less one tip:
+/// on a run, an unknown option's "to pass '-x' as a value, use '-- -x'",
+/// since what follows `run`'s `--` reaches the task instead (ratect#673).
+/// Only the tip naming `-- <the option>` goes, not the list `clap` keeps it
+/// in: a line `is_a_run` counts can have `'run --x' exists` there instead
+/// (`ratect --max-parallelism run`). Off a run the tip stays, since
+/// `caches clean -- -Z` does give `-Z` to the argument it names.
+fn parse_cli_from<I, T>(arguments: I) -> std::result::Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    let arguments: Vec<std::ffi::OsString> = arguments.into_iter().map(Into::into).collect();
+    Cli::try_parse_from(&arguments).map_err(|mut error| {
+        let words: Vec<String> = arguments
+            .iter()
+            .skip(1)
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect();
+        if error.kind() != ErrorKind::UnknownArgument || !is_a_run(&words) {
+            return error;
+        }
+        let (Some(ContextValue::String(option)), Some(ContextValue::StyledStrs(tips))) = (
+            error.get(ContextKind::InvalidArg),
+            error.get(ContextKind::Suggested),
+        ) else {
+            return error;
+        };
+        let after_double_dash = format!("'-- {option}'");
+        let kept: Vec<_> = tips
+            .iter()
+            .filter(|tip| !tip.to_string().contains(&after_double_dash))
+            .cloned()
+            .collect();
+        error.remove(ContextKind::Suggested);
+        if !kept.is_empty() {
+            error.insert(ContextKind::Suggested, ContextValue::StyledStrs(kept));
+        }
+        error
+    })
+}
+
 /// Parses the command line, exiting as decisions/0016 says when `clap`
 /// rejects it rather than with `clap`'s own `2` on either path: `125` on a
 /// run, `2` otherwise. A `--help` or `--version` `clap` reached still prints
 /// and exits `0`.
 fn parse_cli() -> Cli {
-    Cli::try_parse().unwrap_or_else(|error| {
+    let arguments: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    parse_cli_from(&arguments).unwrap_or_else(|error| {
         if !error.use_stderr() {
             error.exit();
         }
         let _ = error.print();
-        let args: Vec<String> = std::env::args_os()
+        let args: Vec<String> = arguments
+            .iter()
             .skip(1)
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();

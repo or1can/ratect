@@ -1744,6 +1744,7 @@ fn help_exits_zero_and_a_usage_error_exits_two() {
     assert_eq!(exit_code_in(here, &["tasks", "list", "--bogus"]), Some(2));
     assert_eq!(exit_code_in(here, &["--bogus", "--help"]), Some(2));
     assert_eq!(exit_code_in(here, &["doctor", "--bogus"]), Some(2));
+    assert_eq!(exit_code_in(here, &["caches", "--bogus"]), Some(2));
 
     assert_eq!(exit_code_in(here, &["run", "--bogus"]), Some(125));
     assert_eq!(
@@ -1751,6 +1752,21 @@ fn help_exits_zero_and_a_usage_error_exits_two() {
         Some(125)
     );
     assert_eq!(exit_code_in(here, &["--bogus", "run", "test"]), Some(125));
+}
+
+/// An unknown option to `run` gets no tip to write it after `--`, which
+/// would pass it to the task (ratect#673), and still exits `125`.
+#[test]
+fn an_unknown_option_to_run_has_no_double_dash_tip() {
+    let output = ratect_command()
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")))
+        .args(["run", "--bogus", "build"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(125), "{stderr}");
+    assert!(stderr.contains("'--bogus'"), "{stderr}");
+    assert!(!stderr.contains("-- --bogus"), "{stderr}");
 }
 
 /// A `-f` naming no file — given, or defaulted to a `ratect.toml` that isn't
