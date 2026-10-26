@@ -103,6 +103,8 @@ sequenceDiagram
 Dependencies are stopped and removed in reverse dependency order: a container only
 after every container that depends on it, so a dependent shutting down can still reach
 what it depends on. A dependency whose dependent's stop failed is still stopped.
+Containers with nothing left depending on them are stopped at the same time, so
+independent dependencies take one grace period between them, not one each.
 
 If the container has no `dependencies`, the dependency steps (the `loop` above) are
 skipped — but the network is still created and the task's own container still joins

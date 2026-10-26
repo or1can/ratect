@@ -160,6 +160,9 @@ container's own `dependencies` gate: independent branches of the graph start
 and health-wait at the same time, and a container — already created — starts
 once every container it depends on has passed its readiness gate (see [decision
 0019](https://github.com/or1can/ratect/blob/main/decisions/0019-readiness-gates-starting-only.md)).
+Cleanup is concurrent the same way, in reverse: a container is stopped once every
+container depending on it has been, and every container ready to stop is stopped at
+once, so independent dependencies wait out their grace periods together.
 The task's network is created before any of that
 starts, where Batect creates it alongside — see [Differences from
 Batect](differences-from-batect.md#runtime-behavior-gaps). Running independent prerequisites concurrently too is

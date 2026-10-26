@@ -201,6 +201,27 @@ struct FakeContainerRuntime {
     // Makes `remove_network` fail, as a daemon refusing to remove a network
     // with an endpoint still attached does (see `refusing_network_removal`).
     refuse_network_removal: Arc<Mutex<bool>>,
+    // Container name -> how long its graceful `stop_and_remove_container`
+    // takes, as a container waiting out its grace period does (see
+    // `with_stop_delay`).
+    stop_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // A signal to record the moment a container's graceful stop finishes,
+    // so it lands while sibling stops that finished at the same instant
+    // haven't been reported yet (see `signalling_as_stop_of`).
+    #[allow(clippy::type_complexity)]
+    signal_as_stop_of: Arc<
+        Mutex<
+            Option<(
+                String,
+                Arc<crate::interrupt::Interrupt>,
+                crate::interrupt::TerminationSignal,
+            )>,
+        >,
+    >,
+    // Container name -> when its graceful stop began and, once it returned,
+    // ended, in (virtual) time — see `stop_window`.
+    #[allow(clippy::type_complexity)]
+    stop_windows: Arc<Mutex<HashMap<String, (tokio::time::Instant, Option<tokio::time::Instant>)>>>,
 }
 
 impl Default for FakeContainerRuntime {
@@ -242,6 +263,9 @@ impl Default for FakeContainerRuntime {
             signals_on_removal: Default::default(),
             refused_container_removals: Default::default(),
             refuse_network_removal: Default::default(),
+            stop_delays: Default::default(),
+            signal_as_stop_of: Default::default(),
+            stop_windows: Default::default(),
         }
     }
 }
@@ -300,6 +324,40 @@ impl FakeContainerRuntime {
     fn refusing_network_removal(self) -> Self {
         *self.refuse_network_removal.lock().unwrap() = true;
         self
+    }
+
+    /// Makes the graceful `stop_and_remove_container` of container `name`
+    /// take `delay` before it returns — used with
+    /// `#[tokio::test(start_paused = true)]` to prove two stops overlap in
+    /// (virtual) time, or that one waits for another.
+    fn with_stop_delay(self, name: &str, delay: std::time::Duration) -> Self {
+        self.stop_delays
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
+    }
+
+    /// Records `signal` on `interrupt` as container `name`'s graceful stop
+    /// finishes — see the `signal_as_stop_of` field.
+    fn signalling_as_stop_of(
+        self,
+        name: &str,
+        interrupt: &Arc<crate::interrupt::Interrupt>,
+        signal: crate::interrupt::TerminationSignal,
+    ) -> Self {
+        *self.signal_as_stop_of.lock().unwrap() =
+            Some((name.to_string(), Arc::clone(interrupt), signal));
+        self
+    }
+
+    /// When container `name`'s graceful stop began and ended — `None` if it
+    /// was never attempted; the end is `None` if it never returned.
+    fn stop_window(
+        &self,
+        name: &str,
+    ) -> Option<(tokio::time::Instant, Option<tokio::time::Instant>)> {
+        self.stop_windows.lock().unwrap().get(name).copied()
     }
 
     fn refuses_removal_of(&self, container_id: &str) -> Result<()> {
@@ -1156,7 +1214,31 @@ impl ResourceInventory for FakeContainerRuntime {
             container_id.to_string(),
             (stop_signal.map(str::to_string), stop_grace_period),
         );
+        let name = container_id
+            .strip_prefix("sidecar-id-")
+            .unwrap_or(container_id)
+            .to_string();
+        self.stop_windows
+            .lock()
+            .unwrap()
+            .insert(name.clone(), (tokio::time::Instant::now(), None));
         self.signal_from_removal().await;
+        let delay = self.stop_delays.lock().unwrap().get(&name).copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        if let Some(window) = self.stop_windows.lock().unwrap().get_mut(&name) {
+            window.1 = Some(tokio::time::Instant::now());
+        }
+        if let Some((_, interrupt, signal)) = self
+            .signal_as_stop_of
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(stopping, _, _)| *stopping == name)
+        {
+            interrupt.record_signal(*signal);
+        }
         self.refuses_removal_of(container_id)?;
         self.push(format!("sidecar-stop:{container_id}"));
         Ok(())
@@ -4286,12 +4368,215 @@ fn the_stop_order_runs_through_a_container_that_was_never_created() {
     .collect();
 
     assert_eq!(
-        reverse_dependency_order(&graph, &["c", "a", "app"]),
-        ["app", "a", "c"]
-    );
-    assert_eq!(
         dependents_to_stop_first(&graph, &["c", "a"])["c"],
         HashSet::from(["a".to_string()])
+    );
+}
+
+const GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Independent dependencies are stopped together, as Batect runs every
+/// ready stop at once: three that each wait out a grace period take one,
+/// not three (ratect#317).
+#[tokio::test(start_paused = true)]
+async fn independent_dependencies_are_stopped_concurrently() {
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE)
+        .with_stop_delay("c", GRACE);
+    let engine = engine(
+        config_with_containers(&["a", "b", "c"], &[("a", &[]), ("b", &[]), ("c", &[])]),
+        docker.clone(),
+    );
+
+    let started = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert!(
+        started.elapsed() < GRACE * 2,
+        "cleanup took {:?}, not one grace period",
+        started.elapsed()
+    );
+    let windows: Vec<_> = ["a", "b", "c"]
+        .iter()
+        .map(|name| docker.stop_window(name).expect("stopped"))
+        .collect();
+    for (_, ended) in &windows {
+        for (other_begun, _) in &windows {
+            assert!(
+                other_begun < &ended.expect("returned"),
+                "every stop begins before any of the others ends: {windows:?}"
+            );
+        }
+    }
+    for name in ["a", "b", "c"] {
+        assert_removed_before_network(&docker.events(), name);
+    }
+}
+
+/// A chain still waits: `b` is stopped only once `a`, which depends on it,
+/// has finished stopping.
+#[tokio::test(start_paused = true)]
+async fn a_chain_is_stopped_one_link_at_a_time() {
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE);
+    let engine = engine(
+        config_with_containers(&["a"], &[("a", &["b"]), ("b", &[])]),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (_, a_ended) = docker.stop_window("a").unwrap();
+    let (b_begun, _) = docker.stop_window("b").unwrap();
+    assert!(
+        a_ended.unwrap() <= b_begun,
+        "'b' begins stopping only after 'a' has stopped"
+    );
+    let (app_begun, app_ended) = docker.stop_window("app").unwrap();
+    let (a_begun, _) = docker.stop_window("a").unwrap();
+    assert!(app_begun <= a_begun && app_ended.unwrap() <= a_begun);
+}
+
+/// A shared dependency waits for every dependent, however long each takes.
+#[tokio::test(start_paused = true)]
+async fn a_shared_dependency_waits_for_its_slowest_dependent() {
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE * 2);
+    let engine = engine(
+        config_with_containers(
+            &["a", "b"],
+            &[("a", &["shared"]), ("b", &["shared"]), ("shared", &[])],
+        ),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (shared_begun, _) = docker.stop_window("shared").unwrap();
+    for dependent in ["a", "b"] {
+        let (_, ended) = docker.stop_window(dependent).unwrap();
+        assert!(
+            ended.unwrap() <= shared_begun,
+            "'shared' begins stopping only after '{dependent}' has stopped"
+        );
+    }
+    let (a_begun, _) = docker.stop_window("a").unwrap();
+    let (b_begun, _) = docker.stop_window("b").unwrap();
+    assert_eq!(a_begun, b_begun, "the two dependents stop together");
+}
+
+/// A stop that finished alongside the one a signal landed on is reported
+/// as removed, not handed to the forced rung as though it were still in
+/// flight: what cleanup says it removed is what it removed.
+#[tokio::test(start_paused = true)]
+async fn a_stop_that_finished_when_a_signal_landed_is_not_force_removed() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE)
+        .signalling_as_stop_of(
+            "a",
+            &interrupt,
+            crate::interrupt::TerminationSignal::Terminate,
+        );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["a", "b"],
+            &[("a", &[]), ("b", &[])],
+        )),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    for name in ["a", "b"] {
+        assert!(
+            events.contains(&format!("sidecar-stop:sidecar-id-{name}")),
+            "'{name}' finished its graceful stop: {events:?}"
+        );
+        assert!(
+            !events.contains(&format!("force-remove:sidecar-id-{name}")),
+            "'{name}' isn't force-removed after it: {events:?}"
+        );
+    }
+    let removed: Vec<String> = sink
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::ContainerRemoved { container } => Some(container),
+            _ => None,
+        })
+        .collect();
+    for name in ["a", "b"] {
+        assert!(
+            removed.contains(&name.to_string()),
+            "'{name}' is reported removed: {removed:?}"
+        );
+    }
+}
+
+/// A signal during concurrent stops hands every one of them — the two in
+/// flight and the one still waiting for them — to the forced rung.
+#[tokio::test(start_paused = true)]
+async fn a_signal_during_concurrent_stops_force_removes_every_one_left() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", std::time::Duration::from_secs(60))
+        .with_stop_delay("b", std::time::Duration::from_secs(60));
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["a", "b"],
+            &[("a", &["c"]), ("b", &[]), ("c", &[])],
+        )),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+    let signaller = {
+        let interrupt = Arc::clone(&interrupt);
+        let docker = docker.clone();
+        tokio::spawn(async move {
+            while docker.stop_window("a").is_none() || docker.stop_window("b").is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            interrupt.record_signal(crate::interrupt::TerminationSignal::Terminate);
+        })
+    };
+
+    engine.run_task("start", &[]).await.unwrap();
+    signaller.await.unwrap();
+
+    let events = docker.events();
+    assert!(
+        events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+        "the task's own container was stopped before the signal: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-a".to_string()),
+        "'a', in flight, is force-removed: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-b".to_string()),
+        "'b', in flight, is force-removed: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-c".to_string()),
+        "'c', still waiting, is force-removed: {events:?}"
+    );
+    assert!(
+        docker.stop_window("c").is_none(),
+        "'c' never begins a graceful stop: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("network-remove:")),
+        "and the network is still removed: {events:?}"
     );
 }
 

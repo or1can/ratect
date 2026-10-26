@@ -406,28 +406,6 @@ fn dependents_to_stop_first(
     dependents
 }
 
-/// `created` in an order that stops every container after the ones
-/// `dependents_to_stop_first` says must go before it. Ties go by name, so
-/// the order is the same every run.
-fn reverse_dependency_order(graph: &HashMap<String, Vec<String>>, created: &[&str]) -> Vec<String> {
-    let mut waiting = dependents_to_stop_first(graph, created);
-    let mut order = Vec::with_capacity(waiting.len());
-    while !waiting.is_empty() {
-        let next = waiting
-            .iter()
-            .filter(|(_, dependents)| dependents.is_empty())
-            .map(|(name, _)| name.clone())
-            .min()
-            .expect("the dependency graph is acyclic, so something is always ready to stop");
-        waiting.remove(&next);
-        for dependents in waiting.values_mut() {
-            dependents.remove(&next);
-        }
-        order.push(next);
-    }
-    order
-}
-
 /// Builds the anchored, case-sensitive regex a `*`-wildcard prerequisite
 /// pattern expands to — a direct port of Batect's own
 /// `TaskExecutionOrderResolver.toWildcardRegex`: each literal segment
@@ -2699,6 +2677,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // possibly left behind, which is the honest reading.
             let mut abandoned = false;
 
+            #[derive(Clone, Copy)]
             struct Removal<'a> {
                 name: &'a str,
                 container_id: &'a str,
@@ -2748,11 +2727,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // as creating one, which is also the only case where there is
             // anything to remove.
             //
-            // In reverse dependency order, as Batect's cleanup is: a
-            // container is stopped only once every container depending on
-            // it has been, so its dependents' shutdown can still reach it.
-            // The task's own container depends on everything and nothing on
-            // it, so it goes first.
+            // Listed with the task's own container first and the rest by
+            // name, so what cleanup reports comes in the same order every
+            // run. The order things are *stopped* in is the graceful loop's
+            // below.
             let mut created_ids: HashMap<&str, &str> = created_sidecars
                 .iter()
                 .map(|(name, id)| (name.as_str(), id.as_str()))
@@ -2760,14 +2738,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             if let Some(container_id) = task_container_id.as_deref() {
                 created_ids.insert(run.container.as_str(), container_id);
             }
-            let created_names: Vec<&str> = created_ids.keys().copied().collect();
-            let order = reverse_dependency_order(
-                dependency_graph.get().unwrap_or(&HashMap::new()),
-                &created_names,
-            );
-            let mut removals: std::collections::VecDeque<Removal<'_>> = order
+            let mut created_names: Vec<&str> = created_ids.keys().copied().collect();
+            created_names.sort_by_key(|name| (*name != run.container, *name));
+            let removals: Vec<Removal<'_>> = created_names
                 .iter()
-                .filter_map(|name| created_ids.get_key_value(name.as_str()))
+                .filter_map(|name| created_ids.get_key_value(name))
                 .map(|(&name, &container_id)| {
                     let is_task_container = name == run.container;
                     Removal {
@@ -2788,34 +2763,86 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .map(|removal| (removal.name, removal.container_id))
                 .collect();
 
-            // Graceful, one at a time in that order, until the ladder's
-            // first rung — reached either by a signal cutting a stop short or
-            // by one landing between two stops, which the count check catches
-            // so no stop is requested only to be dropped at once.
-            while let Some(removal) = removals.pop_front() {
+            // Graceful, until the ladder's first rung, and concurrent as
+            // Batect's is: each container's stop begins the moment every
+            // container depending on it has had its own attempt — whatever
+            // the outcome, so a refused stop holds nothing back — and every
+            // container ready at once is stopped at once, so independent
+            // dependencies wait out their grace periods together rather
+            // than one after another. Not gated by `--max-parallelism`
+            // (see `max_parallelism`). The rung is reached either by a
+            // signal cutting the stops in flight short or by one landing
+            // between two batches, which the count check catches so no stop
+            // is requested only to be dropped at once.
+            let mut waiting = dependents_to_stop_first(
+                dependency_graph.get().unwrap_or(&HashMap::new()),
+                &created_names,
+            );
+            let mut queued = removals;
+            let mut in_flight: Vec<Removal<'_>> = Vec::new();
+            let mut stops = futures::stream::FuturesUnordered::new();
+            loop {
                 if self.interrupt.count() >= escalate_at {
-                    removals.push_front(removal);
                     break;
                 }
-                let container_config = containers.get(removal.name);
-                let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
-                let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
-                let graceful = self.docker.stop_and_remove_container(
-                    removal.container_id,
-                    stop_signal,
-                    stop_grace_period,
-                );
+                let (ready, still_waiting): (Vec<_>, Vec<_>) =
+                    queued.into_iter().partition(|removal| {
+                        waiting
+                            .get(removal.name)
+                            .is_none_or(|dependents| dependents.is_empty())
+                    });
+                queued = still_waiting;
+                for removal in ready {
+                    in_flight.push(removal);
+                    let container_config = containers.get(removal.name);
+                    let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
+                    let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
+                    stops.push(async move {
+                        let outcome = self
+                            .docker
+                            .stop_and_remove_container(
+                                removal.container_id,
+                                stop_signal,
+                                stop_grace_period,
+                            )
+                            .await;
+                        (removal, outcome)
+                    });
+                }
+                let next = futures::StreamExt::next(&mut stops);
                 match self
-                    .until_interrupted(self.interrupt.wait_for(escalate_at), graceful)
+                    .until_interrupted(self.interrupt.wait_for(escalate_at), next)
                     .await
                 {
-                    Some(outcome) => report(&removal, outcome),
-                    None => {
-                        removals.push_front(removal);
-                        break;
+                    Some(Some((removal, outcome))) => {
+                        report(&removal, outcome);
+                        in_flight.retain(|other| other.container_id != removal.container_id);
+                        for dependents in waiting.values_mut() {
+                            dependents.remove(removal.name);
+                        }
                     }
+                    // Nothing in flight, so nothing is left to start either:
+                    // the graph is acyclic, so whatever is still queued is
+                    // waiting on something in flight.
+                    Some(None) => break,
+                    None => break,
                 }
             }
+            // A stop that finished in the same instant as the one the signal
+            // landed on, but wasn't reported yet, is reported as it is —
+            // handing it to the forced rung would remove it twice and never
+            // say it was removed. Polled once, never awaited: the rest are
+            // still in flight.
+            while let Some(Some((removal, outcome))) =
+                futures::FutureExt::now_or_never(futures::StreamExt::next(&mut stops))
+            {
+                report(&removal, outcome);
+                in_flight.retain(|other| other.container_id != removal.container_id);
+            }
+            // Dropping the stops in flight cancels their requests; they go to
+            // the forced rung with everything not yet started.
+            drop(stops);
+            let removals: Vec<Removal<'_>> = in_flight.into_iter().chain(queued).collect();
             // Forced, all at once: dependency order only mattered for the
             // graceful stops, and a supervisor's `SIGKILL` is on a timer, so
             // what is left goes out in one round-trip rather than one each.
