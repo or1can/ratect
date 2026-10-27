@@ -2317,6 +2317,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .get(&run.container)
             .with_context(|| undeclared_container_bug(&run.container))?;
 
+        // Up-front cycle check (see `build_dependency_graph`): before the
+        // task starts and before any Docker call — the network included — as
+        // Batect builds its graph before `onTaskStarting`, so a cycle prints
+        // only the error and creates nothing. Proving the graph acyclic before
+        // any concurrent execution starts is also why `ensure_container_ready`
+        // needs no runtime cycle guard of its own. Startup walks this graph,
+        // and cleanup stops containers in its reverse order.
+        let dependency_graph =
+            build_dependency_graph(&containers, &run.container, task.dependencies.as_deref())?;
+
         // The user-facing "Running <task>..." line is the event sink's job
         // now (see `crate::ui`) — this stays at `debug` so `RUST_LOG=info`
         // doesn't duplicate it on stderr.
@@ -2335,12 +2345,6 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // resolution failed) — the cleanup section below only ever removes
         // a network it can see was actually created.
         let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
-        // The task's dependency graph, set once it is built inside the
-        // block below — startup walks it, and cleanup stops containers in
-        // its reverse order. Unset exactly when building it failed, which
-        // is before anything is created.
-        let dependency_graph: std::sync::OnceLock<HashMap<String, Vec<String>>> =
-            std::sync::OnceLock::new();
 
         // Every container Docker creates for this run, registered the
         // moment `create_container` hands its id back — see
@@ -2447,17 +2451,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // `created_containers`.
             *network_name_cell.lock().unwrap() = Some(network_name.clone());
 
-            // Static, up-front cycle check (see `build_dependency_graph`) —
-            // proves the whole graph acyclic before any concurrent execution
-            // starts, so `ensure_container_ready` doesn't need its own
-            // runtime cycle guard.
-            let built =
-                build_dependency_graph(&containers, &run.container, task.dependencies.as_deref())?;
-            let graph = dependency_graph.get_or_init(|| built);
             // The resolved graph, for per-container progress displays (see
             // `TaskEvent::TaskGraphResolved`). A node missing from config
-            // can't happen for a graph that just built successfully, but
-            // degrade to bare info rather than panic if it somehow does.
+            // can't happen for a graph `build_dependency_graph` built from
+            // these same containers, but degrade to bare info rather than
+            // panic if it somehow does.
             // A container whose readiness is reported as another's gets no
             // line of its own, and is not something anything is shown
             // waiting for (ratect#202) — an `external_health_check`'s
@@ -2467,7 +2465,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // companion beside the container it checks, which is therefore
             // still in that list and is what the display drains on.
             let narrated = |name: &String| is_narrated(&containers, name);
-            let container_infos = graph
+            let container_infos = dependency_graph
                 .iter()
                 .filter(|(name, _)| narrated(name))
                 .map(|(name, dependencies)| {
@@ -2490,9 +2488,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             self.event_sink.post(TaskEvent::TaskGraphResolved {
                 containers: container_infos,
             });
-            let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
+            let root_dependencies = dependency_graph
+                .get(&run.container)
+                .cloned()
+                .unwrap_or_default();
             let context = TaskRunContext {
-                graph,
+                graph: &dependency_graph,
                 containers: &containers,
                 network: &network_name,
                 created_cells: &created_cells,
@@ -2526,7 +2527,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // container's work *starts* in is fixed, rather than a
             // `HashMap`'s; the work runs concurrently, so what finishes
             // first — and when its milestones post — is the daemon's.
-            let mut container_names: Vec<&String> = graph.keys().collect();
+            let mut container_names: Vec<&String> = dependency_graph.keys().collect();
             container_names.sort();
             let creations = futures::future::try_join_all(
                 container_names
@@ -2540,7 +2541,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // starting, and only starting (see docs/dependency-readiness.md).
             // Kept for the same reason as the fan-out inside
             // `ensure_container_ready`: the task container's own `run_in`
-            // setup commands (ratect#111) resolve through it. `graph`'s root
+            // setup commands (ratect#111) resolve through it. The graph's root
             // adjacency is the union of the container's own `dependencies`
             // and the task's, so it is a superset of what the config loader
             // allows as a target.
@@ -3074,10 +3075,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // signal cutting the stops in flight short or by one landing
             // between two batches, which the count check catches so no stop
             // is requested only to be dropped at once.
-            let mut waiting = dependents_to_stop_first(
-                dependency_graph.get().unwrap_or(&HashMap::new()),
-                &created_names,
-            );
+            let mut waiting = dependents_to_stop_first(&dependency_graph, &created_names);
             let mut queued = removals;
             let mut in_flight: Vec<Removal<'_>> = Vec::new();
             let mut stops = futures::stream::FuturesUnordered::new();

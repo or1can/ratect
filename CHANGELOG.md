@@ -96,6 +96,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A container dependency cycle, or a container depending on itself, is reported before the task starts, as in Batect: no `Running` line, no task network created, and no cleanup. With `--use-network`, the cycle is reported rather than a missing network.
 - Every container a run creates — each prerequisite task's own, and every dependency and sidecar — gets the host's `TERM`, as in Batect, not only the invoked task's own container.
 - A task's containers are no longer also attached to Docker's default bridge network, only to the task network.
 - A container that doesn't set `enable_init_process` runs without an init process even when the daemon is configured with `"init": true`, as in Batect.

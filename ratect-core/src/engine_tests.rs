@@ -9893,6 +9893,144 @@ async fn a_task_level_cycle_without_the_task_container_is_refused() {
     assert_graph_refused(config, "b").await;
 }
 
+/// Runs `config`'s `start` task under `settings`, expecting a container
+/// dependency cycle, and returns the posted events and the fake's.
+async fn run_cyclic_task(
+    config: Config,
+    docker: FakeContainerRuntime,
+    settings: TaskEngineSettings,
+) -> (Vec<TaskEvent>, Vec<String>) {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(settings)
+    .unwrap();
+
+    let err = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("Circular container dependency detected"),
+        "the cycle is what's reported: {err:#}"
+    );
+    (sink.events(), docker.events())
+}
+
+/// Batect builds a task's container graph before `onTaskStarting`, so a
+/// cycle in it prints only the error: no task start, no network, no cleanup.
+fn assert_refused_before_the_task_started(events: &[TaskEvent], docker_events: &[String]) {
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            TaskEvent::TaskStarting { task } | TaskEvent::TaskFailed { task } if task == "start"
+        )),
+        "the task never starts, so never fails either: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, TaskEvent::CleanupStarting)),
+        "nothing is cleaned up: {events:?}"
+    );
+    assert!(
+        !docker_events.iter().any(|e| e.starts_with("network-")),
+        "no network is checked, created or removed: {docker_events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_container_dependency_cycle_is_refused_before_the_task_starts() {
+    let config = config_with_containers(&["a"], &[("a", &["b"]), ("b", &["a"])]);
+
+    let (events, docker_events) = run_cyclic_task(
+        config,
+        FakeContainerRuntime::default(),
+        TaskEngineSettings::default(),
+    )
+    .await;
+
+    assert_refused_before_the_task_started(&events, &docker_events);
+}
+
+#[tokio::test]
+async fn a_self_dependency_is_refused_before_the_task_starts() {
+    for config in [
+        config_with_containers(&["a"], &[("a", &["a"])]),
+        config_with_task_dependencies(&[], &["b"], &[("b", &["b"])]),
+    ] {
+        let (events, docker_events) = run_cyclic_task(
+            config,
+            FakeContainerRuntime::default(),
+            TaskEngineSettings::default(),
+        )
+        .await;
+
+        assert_refused_before_the_task_started(&events, &docker_events);
+    }
+}
+
+#[tokio::test]
+async fn a_container_dependency_cycle_is_reported_over_a_missing_use_network() {
+    let config = config_with_containers(&["a"], &[("a", &["a"])]);
+
+    let (events, docker_events) = run_cyclic_task(
+        config,
+        FakeContainerRuntime::default().without_existing_network(),
+        TaskEngineSettings {
+            existing_network: Some("missing".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    assert_refused_before_the_task_started(&events, &docker_events);
+}
+
+#[tokio::test]
+async fn a_valid_prerequisite_runs_before_its_task_refuses_a_container_cycle() {
+    let mut config = config_with_containers(&["a"], &[("a", &["a"]), ("tool", &[])]);
+    config
+        .tasks
+        .insert("prepare".to_string(), task("tool", "echo prepare"));
+    config.tasks.get_mut("start").unwrap().prerequisites = Some(names(&["prepare"]));
+
+    let (events, docker_events) = run_cyclic_task(
+        config,
+        FakeContainerRuntime::default(),
+        TaskEngineSettings::default(),
+    )
+    .await;
+
+    assert!(
+        docker_events
+            .iter()
+            .any(|e| e.starts_with("run:tool:echo prepare:")),
+        "the prerequisite runs: {docker_events:?}"
+    );
+    let prerequisite_networks = created_networks(&docker_events);
+    assert_eq!(prerequisite_networks.len(), 1, "{docker_events:?}");
+    assert!(
+        network_removed(&docker_events, &prerequisite_networks[0]),
+        "the prerequisite is cleaned up as normal: {docker_events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TaskEvent::TaskStarting { task } if task == "prepare")),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, TaskEvent::TaskStarting { task } if task == "start")),
+        "{events:?}"
+    );
+}
+
 #[tokio::test]
 async fn detects_dependency_cycle() {
     let docker = FakeContainerRuntime::default();

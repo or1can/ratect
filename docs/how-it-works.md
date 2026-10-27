@@ -112,7 +112,9 @@ where that lives and stays current.
    **evaluated**, before any Docker work of its own: every container in its graph,
    its `run.environment` and its `customise` environments go through
    `LoadedProject::evaluate`, and the rest of the task reads only those values. A
-   container no task in the run uses is never evaluated. A task with no `run` of
+   container no task in the run uses is never evaluated. Its container graph is
+   built then too, and a cycle in it fails the task before it starts — no
+   network is created, as in Batect. A task with no `run` of
    its own stops here and succeeds — it exists purely to chain prerequisites (see
    [config reference](ratect-compat-config-reference.md#task)), matching Batect's own
    `TaskRunner`.
