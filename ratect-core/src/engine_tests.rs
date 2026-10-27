@@ -4015,11 +4015,11 @@ async fn dependency_starts_before_main_container_and_is_cleaned_up() {
     let database_created_index = events
         .iter()
         .position(|e| *e == format!("create:database:{network}"))
-        .expect("dependency should have been created, joined to the network");
+        .expect("dependency should have been created on the network");
     let app_created_index = events
         .iter()
         .position(|e| *e == format!("create:app:{network}"))
-        .expect("main container should have been created, joined to the network");
+        .expect("main container should have been created on the network");
     let sidecar_index = events
         .iter()
         .position(|e| *e == format!("sidecar-start:database:{network}"))
@@ -4027,7 +4027,7 @@ async fn dependency_starts_before_main_container_and_is_cleaned_up() {
     let run_index = events
         .iter()
         .position(|e| *e == format!("run:app:echo hi:args=[]:{network}"))
-        .expect("main container should have run, joined to the dependency's network");
+        .expect("main container should have run on the dependency's network");
     // The total order a run has: network, then every create (each after
     // the network, before its own start), then the dependency's start
     // before the main container's. Where the main container's create

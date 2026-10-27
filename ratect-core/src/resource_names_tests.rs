@@ -36,7 +36,8 @@ fn separate_generators_draw_separate_suffixes() {
     let suffixes: std::collections::HashSet<String> = (0..100)
         .map(|_| ResourceNames::new("demo").suffix.clone())
         .collect();
-    // 36^6 values: a repeat in 100 draws is a broken generator, not luck.
+    // 36^6 values: a repeat in 100 draws has about a 1-in-440,000 chance,
+    // so one is almost certainly a broken generator, not luck.
     assert_eq!(suffixes.len(), 100);
 }
 

@@ -749,7 +749,7 @@ impl LeftBehind {
         id.get(..12).unwrap_or(id)
     }
 
-    /// `db (a1b2c3d4e5f6), app (0f1e2d3c4b5a), network ratect-…`.
+    /// `db (a1b2c3d4e5f6), app (0f1e2d3c4b5a), network demo-network-…`.
     fn list(&self) -> String {
         self.containers
             .iter()
@@ -780,7 +780,7 @@ impl LeftBehind {
     }
 
     /// `docker rm -f -v a1b2c3d4e5f6 0f1e2d3c4b5a; docker network rm
-    /// ratect-…` — the network last, since it can't go while a container
+    /// demo-network-…` — the network last, since it can't go while a container
     /// is still attached. Joined with `;`, not `&&`: an abandoned removal
     /// the daemon finished anyway is listed too, and `docker rm` failing on
     /// that one id must not stop the network's removal after it.

@@ -1,10 +1,11 @@
-5 left over from 1 previous run:
+6 left over from 1 previous run:
 
-  journey-test (8 seconds ago, run 5ec01125-bf96-4d62-8613-525525947ee1):
+  journey-test (26 seconds ago, run e8868fa3-b676-4b43-9a12-d0b75043e8b9):
+    - container db (running)
     - container journey-test (exited)
     - container app (running)
-    - container db (running)
     - container cache (running)
-    - network ratect-5ec01125-bf96-4d62-8613-525525947ee1
+    - container ratect-health-check-app (exited)
+    - network ratect-full-stack-network-yv84tk
 
 Remove them with: ratect resources clean
