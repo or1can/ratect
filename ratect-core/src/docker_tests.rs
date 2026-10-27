@@ -1623,6 +1623,26 @@ async fn stub_daemon_for(
     }
 }
 
+/// Batect's `DockerClientConfigurationFactorySpec`: the Docker config
+/// directory connecting chose is the one the client reads `config.json`
+/// from, for a build's proxies and the registries it authenticates to.
+#[tokio::test]
+async fn docker_client_new_reads_config_json_from_the_chosen_config_directory() {
+    let config_directory = unique_temp_dir();
+    let options = DockerConnectionOptions {
+        config_directory: Some(config_directory.clone()),
+        ..stub_daemon(stub_version_body(Some("27.3.1")), None).await
+    };
+
+    let client = DockerClient::new(&options, |_| {}).await.unwrap();
+
+    assert_eq!(
+        client.docker_config_path,
+        config_directory.join("config.json")
+    );
+    std::fs::remove_dir_all(&config_directory).unwrap();
+}
+
 /// `stub_daemon`'s `/version` body, reporting `version` as the daemon's
 /// own version (none when `None`) and an API version at Ratect's floor.
 fn stub_version_body(version: Option<&str>) -> serde_json::Value {

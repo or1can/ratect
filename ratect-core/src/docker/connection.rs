@@ -937,8 +937,10 @@ fn connect_over_tls(target: &str, address: &str, tls: &TlsSettings) -> Result<Do
 /// `bollard`'s default certificate paths — whenever `DOCKER_TLS_VERIFY` is
 /// set at all, `0` and `false` included, though [`tls_enabled`] has already
 /// read those as "off" ([ratect#257](https://github.com/or1can/ratect/issues/257)).
-/// Every other scheme (`unix://`, `npipe://`, `ssh://`) is `connect_with_host`'s
-/// to dispatch; `https://` never gets here (see [`connect`]).
+/// Every other scheme is `connect_with_host`'s to dispatch: `unix://` it
+/// connects to, and any other — `npipe://` off Windows, or `ssh://`, which
+/// `bollard` is built here without — it refuses. `https://` never gets here
+/// (see [`connect`]).
 fn connect_plain(host: &str) -> Result<Docker, bollard::errors::Error> {
     if host.starts_with("tcp://") || host.starts_with("http://") {
         Docker::connect_with_http(host, 120, bollard::API_DEFAULT_VERSION)

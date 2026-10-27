@@ -556,6 +556,40 @@ fn connect_via_an_explicit_context_errors_clearly_when_it_does_not_exist() {
     );
 }
 
+/// Batect's `DockerClientConfigurationBuilderSpec`, "a host whose protocol
+/// isn't available on this OS": a named pipe off Windows is refused when
+/// connecting, before any request — as is `ssh://`, which Ratect's client
+/// library is built without. The wording is Ratect's (Batect's is
+/// `protocol not available`): the host as given, and the library's reason.
+/// In a child with `DOCKER_TLS_VERIFY` empty, so an exported one can't turn
+/// this into a TLS connection, and with its own config directory, so
+/// `DOCKER_CONFIG` isn't read.
+#[test]
+fn connect_refuses_a_host_whose_scheme_it_cannot_use_naming_it() {
+    in_child_with_env(
+        "docker::connection::tests::connect_refuses_a_host_whose_scheme_it_cannot_use_naming_it",
+        &[("DOCKER_TLS_VERIFY", "")],
+        || {
+            for host in ["npipe:////./pipe/docker_engine", "ssh://user@example.com"] {
+                let options = DockerConnectionOptions {
+                    host: Some(host.to_string()),
+                    config_directory: Some(unique_temp_dir()),
+                    ..Default::default()
+                };
+                let err = connect(&options).unwrap_err();
+                assert_eq!(
+                    err.to_string(),
+                    format!("Failed to connect to Docker host '{host}'")
+                );
+                assert!(
+                    format!("{err:#}").contains(&format!("URI scheme is not supported: {host}")),
+                    "{err:#}"
+                );
+            }
+        },
+    );
+}
+
 #[test]
 fn conflicting_option_with_context_names_whichever_tls_option_was_given() {
     let base = DockerConnectionOptions {
