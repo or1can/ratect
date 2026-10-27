@@ -5481,6 +5481,37 @@ fn build_secrets_error_clearly_when_the_classic_builder_is_forced() {
     );
 }
 
+/// Same requirements as `build_secrets_error_clearly_when_the_classic_builder_is_forced`.
+///
+/// Batect's rule U72 (ratect#521): `build_ssh` is refused on a classic
+/// builder `DOCKER_BUILDKIT=0` forces, too. `SSH_AUTH_SOCK` is removed, so
+/// the refusal is the failure, not an agent that isn't there.
+#[test]
+#[ignore]
+fn build_ssh_errors_clearly_when_the_classic_builder_is_forced() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_ssh_config_path())
+        .arg("print-keys")
+        .env_remove("SSH_AUTH_SOCK")
+        .env("RATECT_BUILD_SSH_TEST_CACHE_BUST", "irrelevant")
+        .env("DOCKER_BUILDKIT", "0")
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "the build should have been refused: {stderr}"
+    );
+    // Ratect's own refusal, not the classic builder's: a `RUN --mount` it
+    // was sent anyway fails saying it "requires BuildKit" too.
+    assert!(
+        stderr.contains("requires BuildKit ('build_secrets'/'build_ssh' cannot be served"),
+        "the error should be the refusal, before anything is built: {stderr}"
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`, and the ability to allocate a local pseudo-terminal —
 /// `portable-pty` emulates one in-process, so this works on regular

@@ -1883,6 +1883,33 @@ pub struct DockerClient {
     daemon_host: String,
 }
 
+/// Refuses a build whose `buildkit` options (`build_secrets`/`build_ssh`)
+/// the selected `builder_version` can't serve: the classic builder has no
+/// session for the daemon to request secret bytes or ssh-agent proxying
+/// over, so these fields are impossible without BuildKit, and the build
+/// fails clearly rather than running without them. Called before any
+/// credential is resolved or the build context is made, and pure — a daemon
+/// advertising no builder, which selects the classic one, is otherwise
+/// untestable.
+fn refuse_buildkit_options_on_the_classic_builder(
+    builder_version: &bollard::query_parameters::BuilderVersion,
+    buildkit: Option<&BuildKitOptions>,
+    tag: &str,
+) -> Result<()> {
+    if *builder_version == bollard::query_parameters::BuilderVersion::BuilderV1
+        && buildkit.is_some()
+    {
+        anyhow::bail!(
+            "Building '{}' requires BuildKit ('build_secrets'/'build_ssh' cannot \
+             be served by the classic builder), but the classic builder is \
+             selected — the Docker daemon doesn't advertise BuildKit as its \
+             default builder, or DOCKER_BUILDKIT=0 forces it off.",
+            tag
+        );
+    }
+    Ok(())
+}
+
 /// Splits a full image reference (as given to `--tag-image`, e.g.
 /// `myrepo/myimage:v2` or `myrepo/myimage`) into the repository and tag
 /// components Docker's tag API takes separately. A colon before the last
@@ -2806,6 +2833,14 @@ impl ContainerRuntime for DockerClient {
     ) -> Result<String> {
         let build_directory = spec.build_directory.as_path();
         let dockerfile = spec.dockerfile.as_str();
+        // First, so a build that can't be served asks no credential helper
+        // anything before it is refused.
+        let builder_version = self.builder_version().await?;
+        refuse_buildkit_options_on_the_classic_builder(
+            &builder_version,
+            spec.buildkit.as_ref(),
+            &spec.tag,
+        )?;
         // Read fresh on every build, not cached: `DockerClient` is
         // long-lived across a whole invocation's builds, and nothing says
         // `config.json` can't change between them (a `docker login` mid-run,
@@ -2840,7 +2875,7 @@ impl ContainerRuntime for DockerClient {
         // carrying an empty JSON object.
         let credentials = (!credentials.is_empty()).then_some(credentials);
 
-        match self.builder_version().await? {
+        match builder_version {
             bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
                 return build_image_via_buildkit(
                     &self.docker,
@@ -2858,21 +2893,7 @@ impl ContainerRuntime for DockerClient {
                 )
                 .await;
             }
-            bollard::query_parameters::BuilderVersion::BuilderV1 => {
-                if buildkit.is_some() {
-                    // The classic builder has no session for the daemon to
-                    // request secret bytes / ssh-agent proxying over —
-                    // these fields are impossible without BuildKit, so fail
-                    // clearly rather than building without them.
-                    anyhow::bail!(
-                        "Building '{}' requires BuildKit ('build_secrets'/'build_ssh' cannot \
-                         be served by the classic builder), but the classic builder is \
-                         selected — the Docker daemon doesn't advertise BuildKit as its \
-                         default builder, or DOCKER_BUILDKIT=0 forces it off.",
-                        tag
-                    );
-                }
-            }
+            bollard::query_parameters::BuilderVersion::BuilderV1 => {}
         }
 
         let build_directory = build_directory.to_path_buf();

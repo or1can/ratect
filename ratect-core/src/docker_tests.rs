@@ -1110,6 +1110,65 @@ fn builder_selection_falls_back_to_classic_when_the_daemon_advertises_nothing() 
     );
 }
 
+fn secrets_only() -> BuildKitOptions {
+    BuildKitOptions {
+        secrets: HashMap::from([(
+            "token".to_string(),
+            BuildSecretSource::Environment("TOKEN".to_string()),
+        )]),
+        ssh_agents: HashMap::new(),
+    }
+}
+
+fn ssh_agents_only() -> BuildKitOptions {
+    BuildKitOptions {
+        secrets: HashMap::new(),
+        ssh_agents: HashMap::from([("default".to_string(), SshAgentSource::HostAgent)]),
+    }
+}
+
+/// Batect's rules U70 and U71 (ratect#521): a daemon that advertises no
+/// builder gets the classic one, which can serve neither `build_secrets`
+/// nor `build_ssh`, so the build is refused.
+#[test]
+fn a_daemon_advertising_no_builder_refuses_buildkit_only_build_fields() {
+    let builder = select_builder_version(None, None).unwrap();
+    for options in [secrets_only(), ssh_agents_only()] {
+        let refusal =
+            refuse_buildkit_options_on_the_classic_builder(&builder, Some(&options), "demo-app")
+                .unwrap_err()
+                .to_string();
+        assert!(
+            refusal.contains("requires BuildKit") && refusal.contains("'demo-app'"),
+            "{refusal}"
+        );
+    }
+}
+
+/// Batect's rule U72: `DOCKER_BUILDKIT=0` forces the classic builder even
+/// on a daemon advertising BuildKit, and `build_ssh` is refused there too.
+#[test]
+fn a_forced_classic_builder_refuses_build_ssh() {
+    let builder = select_builder_version(Some("0"), Some("2")).unwrap();
+    assert!(refuse_buildkit_options_on_the_classic_builder(
+        &builder,
+        Some(&ssh_agents_only()),
+        "t"
+    )
+    .is_err());
+}
+
+#[test]
+fn a_build_is_refused_only_for_buildkit_fields_on_the_classic_builder() {
+    let classic = select_builder_version(None, None).unwrap();
+    let buildkit = select_builder_version(None, Some("2")).unwrap();
+    assert!(refuse_buildkit_options_on_the_classic_builder(&classic, None, "t").is_ok());
+    assert!(
+        refuse_buildkit_options_on_the_classic_builder(&buildkit, Some(&secrets_only()), "t")
+            .is_ok()
+    );
+}
+
 #[test]
 fn builder_selection_treats_an_empty_header_as_classic() {
     use bollard::query_parameters::BuilderVersion;
