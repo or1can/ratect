@@ -1,0 +1,19 @@
+# Exercises what a container gets when its config sets none of
+# `working_directory`, `run_as_current_user`, `shm_size` and `entrypoint`:
+# the image's working directory and user, the daemon's default `/dev/shm`,
+# and the image's own `ENTRYPOINT`, which a task's `command` is appended to.
+project_name: ratect-container-defaults-test
+containers:
+  plain:
+    image: alpine:3.18.2
+  own-entrypoint:
+    build_directory: ./container-defaults
+tasks:
+  print-defaults:
+    run:
+      container: plain
+      command: sh -c "pwd; id -u; id -g; df -k /dev/shm | tail -1"
+  run-own-entrypoint:
+    run:
+      container: own-entrypoint
+      command: from-the-command

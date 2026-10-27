@@ -12301,6 +12301,35 @@ async fn task_run_entrypoint_overrides_container_entrypoint() {
     );
 }
 
+/// Batect's `DockerContainerCreationSpecFactorySpec`, "no entrypoint", and
+/// docker-client's no-shm-size default: a container setting neither, with a
+/// `run` that sets neither, reaches the runtime with neither, so the image's
+/// `ENTRYPOINT` and the daemon's `/dev/shm` size apply.
+#[tokio::test]
+async fn a_container_with_no_entrypoint_or_shm_size_reaches_the_container_with_neither() {
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    engine(config, docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+
+    assert!(docker.spec_for("app").is_some(), "app was never created");
+    assert_eq!(docker.entrypoint_for("app"), None);
+    assert_eq!(docker.shm_size_for("app"), None);
+}
+
 #[tokio::test]
 async fn proxy_environment_variables_reach_a_tasks_own_container() {
     let mut containers = IndexMap::new();

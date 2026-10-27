@@ -3073,3 +3073,24 @@ async fn a_stdin_forwarding_task_container_attaches_stdin_and_output_before_it_s
         );
     }
 }
+
+/// Batect's `DockerClientContainerManagementSpec`, run with no working
+/// directory, user, shm size or entrypoint set, and
+/// `DockerContainerCreationSpecFactorySpec`'s "no entrypoint": the create
+/// request carries none of the four, so the image's own working directory,
+/// user and `ENTRYPOINT`, and the daemon's 64 MiB `/dev/shm`, apply.
+#[tokio::test]
+async fn container_config_leaves_unset_defaults_to_the_image_and_daemon() {
+    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+
+    let config = client.container_config(&spec).unwrap();
+
+    assert_eq!(config.entrypoint, None);
+    assert_eq!(config.working_dir, None);
+    assert_eq!(config.user, None);
+    assert_eq!(config.host_config.unwrap().shm_size, None);
+}
