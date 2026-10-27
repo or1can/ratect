@@ -3704,6 +3704,91 @@ fn an_infrastructure_failure_is_reported_once_before_cleanup_via_docker() {
 }
 
 /// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A container the daemon can't create, set up for `run_as_current_user`, or
+/// start — the task's own or a dependency — fails the task with an error
+/// naming that container as configured, never by Docker id alone, with the
+/// daemon's own reason still in it (ratect#345). Nothing is left behind.
+#[test]
+#[ignore]
+fn a_container_that_cannot_be_created_or_started_is_named_via_docker() {
+    let config =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/container-setup-failures.yml");
+    let filter = "label=eu.orican.ratect.project=ratect-container-setup-failures-test";
+    for (task, container, says, cause) in [
+        (
+            "task-create",
+            "bad-log-driver",
+            "Failed to create container 'bad-log-driver'",
+            "does-not-exist-345",
+        ),
+        (
+            "dependency-create",
+            "bad-log-driver",
+            "Failed to create container 'bad-log-driver'",
+            "does-not-exist-345",
+        ),
+        (
+            "task-user-mapping",
+            "bad-home",
+            "Failed to apply run_as_current_user to container 'bad-home'",
+            "/does-not-exist-345/home",
+        ),
+        (
+            "dependency-user-mapping",
+            "bad-home",
+            "Failed to apply run_as_current_user to container 'bad-home'",
+            "/does-not-exist-345/home",
+        ),
+        (
+            "task-start",
+            "bad-device",
+            "Failed to start container 'bad-device'",
+            "/dev/does-not-exist-345",
+        ),
+        (
+            "dependency-start",
+            "bad-device",
+            "Failed to start container 'bad-device'",
+            "/dev/does-not-exist-345",
+        ),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .args(["-o", "quiet", task])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(125), "{task}:\n{stderr}");
+        assert!(
+            stderr.starts_with(&format!("Error: {says}")),
+            "{task} names {container} first:\n{stderr}"
+        );
+        assert_eq!(
+            stderr.matches(&format!("'{container}'")).count(),
+            1,
+            "{task} names it once:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(cause),
+            "{task} keeps the daemon's reason:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("sidecar"),
+            "{task} calls a dependency a container:\n{stderr}"
+        );
+        assert!(
+            docker_ids("container", filter, true).is_empty()
+                && docker_ids("network", filter, false).is_empty(),
+            "{task} left something behind"
+        );
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
 /// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
 /// `cargo test -- --ignored`.
 ///

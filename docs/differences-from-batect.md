@@ -373,11 +373,16 @@ tables above:
   whose output ends without one loses that last line.
 - **Failure messages are Ratect's own.** A task fails at the same step as under
   Batect — an image that won't pull or build, a task network that can't be
-  created, a dependency that doesn't become healthy, a failing setup command, a
-  dependency cycle — but Batect's headline and wording aren't reproduced:
-  `Failed to pull image X` and its `Caused by:` list, for example, rather than
-  `Could not pull image X.` and the daemon's message, and a failed build's
-  output under `Build output:` rather than `Output from Docker was:`. See
+  created, a container that can't be created, set up for
+  `run_as_current_user`, or started, a dependency that doesn't become healthy,
+  a failing setup command, a dependency cycle — but Batect's headline and
+  wording aren't reproduced: `Failed to pull image X` and its `Caused by:`
+  list, for example, rather than `Could not pull image X.` and the daemon's
+  message, a failed build's output under `Build output:` rather than `Output
+  from Docker was:`, and `Failed to start container 'X'` rather than `Could
+  not run container X.`. A `run_as_current_user` or network failure is
+  reported as itself, not, as Batect frames it, as a failure to create the
+  container; either way the container is named as configured. See
   [Load errors](#load-errors) for the cause chain. The message is an
   unprefixed `Error: …` line on stderr in every output style, `all` included,
   where Batect's `all` prints `<task> ! ` or `<container> ! ` lines on stdout;

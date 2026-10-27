@@ -1,0 +1,60 @@
+# Containers the daemon can't create, set up for run_as_current_user, or
+# start — each as a task's own container and as a dependency. Every failure
+# must name the container as configured here, and still carry the daemon's
+# own reason (ratect#345).
+#
+#   - bad-log-driver: a log driver no daemon has, so create fails.
+#   - bad-home: a home directory whose parent doesn't exist in the image, so
+#     run_as_current_user's setup fails after create.
+#   - bad-device: a device that doesn't exist on the host, so start fails.
+project_name: ratect-container-setup-failures-test
+containers:
+  bad-log-driver:
+    image: alpine:3.18.2
+    command: "true"
+    log_driver: does-not-exist-345
+  bad-home:
+    image: alpine:3.18.2
+    command: "true"
+    run_as_current_user:
+      enabled: true
+      home_directory: /does-not-exist-345/home
+  bad-device:
+    image: alpine:3.18.2
+    command: "true"
+    devices:
+      - /dev/does-not-exist-345:/dev/does-not-exist-345
+  app-log-driver:
+    image: alpine:3.18.2
+    dependencies:
+      - bad-log-driver
+  app-home:
+    image: alpine:3.18.2
+    dependencies:
+      - bad-home
+  app-device:
+    image: alpine:3.18.2
+    dependencies:
+      - bad-device
+tasks:
+  task-create:
+    run:
+      container: bad-log-driver
+  task-user-mapping:
+    run:
+      container: bad-home
+  task-start:
+    run:
+      container: bad-device
+  dependency-create:
+    run:
+      container: app-log-driver
+      command: echo never
+  dependency-user-mapping:
+    run:
+      container: app-home
+      command: echo never
+  dependency-start:
+    run:
+      container: app-device
+      command: echo never

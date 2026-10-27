@@ -1012,11 +1012,13 @@ impl ContainerRuntime for FakeContainerRuntime {
             tokio::time::sleep(delay).await;
         }
         // Before anything is recorded: nothing was created (see
-        // `failing_creation`).
+        // `failing_creation`). The daemon's own words, naming nothing: the
+        // name is `DockerClient`'s to attach, and a fake supplying it would
+        // hide an engine path that lost it (ratect#345).
         if self.failing_creations.lock().unwrap().contains(name) {
             self.push(format!("create-failed:{name}"));
             return Err(crate::docker::CreateContainerError::before_creation(
-                anyhow::anyhow!("Failed to create container '{name}'"),
+                anyhow::anyhow!("Docker responded with status code 400: create refused"),
             ));
         }
         self.specs
@@ -1066,8 +1068,9 @@ impl ContainerRuntime for FakeContainerRuntime {
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
         }
+        // Unnamed, as `failing_creation`'s is.
         if self.failing_starts.lock().unwrap().contains(alias) {
-            anyhow::bail!("Failed to start container '{alias}'");
+            anyhow::bail!("Docker responded with status code 500: start refused");
         }
         self.started_containers
             .lock()
@@ -4789,7 +4792,7 @@ async fn a_dependency_whose_start_fails_after_creation_is_still_cleaned_up() {
 
     let message = format!("{:#}", result.unwrap_err());
     assert!(
-        message.contains("Failed to start container 'fails'"),
+        message.contains("start refused"),
         "the run must report the start failure: {message}"
     );
     assert_removed_before_network(&docker.events(), "fails");
@@ -4883,7 +4886,7 @@ async fn a_dependency_whose_create_fails_stops_the_run_before_any_setup_command(
 
     let message = format!("{:#}", result.unwrap_err());
     assert!(
-        message.contains("Failed to create container 'fails'"),
+        message.contains("create refused"),
         "the run must report the create failure: {message}"
     );
     let events = docker.events();
@@ -6969,7 +6972,7 @@ async fn a_task_container_whose_create_fails_fails_the_run_and_still_cleans_up()
 
     let message = format!("{:#}", result.unwrap_err());
     assert!(
-        message.contains("Failed to create container 'app'"),
+        message.contains("create refused"),
         "the creation failure must be reported: {message}"
     );
 
@@ -13192,7 +13195,7 @@ async fn a_create_dropped_by_a_siblings_failure_is_still_cleaned_up() {
     let error = engine.run_task("start", &[]).await.unwrap_err();
 
     assert!(
-        format!("{error:#}").contains("Failed to create container 'bad'"),
+        format!("{error:#}").contains("create refused"),
         "the sibling's failure is what's reported: {error:#}"
     );
     let events = docker.events();
