@@ -540,6 +540,11 @@ fn build_failure_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure.yml")
 }
 
+/// Serializes the tests that build `tests/fixtures/build-failure.yml` with
+/// the classic builder: one counts the failed step's containers that weren't
+/// there before its own run, and the other's run would add to them.
+static CLASSIC_BUILD_FAILURE_PROJECT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn build_failure_buildkit_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure-buildkit.yml")
 }
@@ -4921,6 +4926,9 @@ fn build_context_files_are_root_owned_in_a_buildkit_build() {
 #[test]
 #[ignore]
 fn failing_build_output_reaches_the_error() {
+    let _shared_project = CLASSIC_BUILD_FAILURE_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let output = ratect_command()
         .arg("-f")
         .arg(build_failure_config_path())
@@ -4939,6 +4947,61 @@ fn failing_build_output_reaches_the_error() {
     assert!(
         stderr.contains("this line should reach the user"),
         "the Dockerfile's RUN output should be in the error: {stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A classic build whose `RUN` step fails leaves no stopped intermediate
+/// container behind, as Batect's builds don't (ratect#292): the daemon only
+/// removes a failed step's container when asked to force it. That container
+/// carries none of Ratect's labels, so it is found by the failing step's own
+/// command text, among the containers that weren't there before the run.
+#[test]
+#[ignore]
+fn a_failed_classic_build_leaves_no_intermediate_container() {
+    let _shared_project = CLASSIC_BUILD_FAILURE_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let failed_step_containers = || -> Vec<String> {
+        let output = Command::new("docker")
+            .args(["ps", "-a", "--no-trunc", "--format", "{{.ID}} {{.Command}}"])
+            .output()
+            .expect("failed to run docker ps");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.contains("this line should reach the user"))
+            .filter_map(|line| line.split_whitespace().next())
+            .map(str::to_string)
+            .collect()
+    };
+    let before = failed_step_containers();
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_failure_config_path())
+        .arg("build")
+        .env("DOCKER_BUILDKIT", "0")
+        .output()
+        .expect("failed to run ratect");
+
+    let left: Vec<String> = failed_step_containers()
+        .into_iter()
+        .filter(|id| !before.contains(id))
+        .collect();
+    for id in &left {
+        let _ = Command::new("docker").args(["rm", "-f", id]).output();
+    }
+    assert!(
+        !output.status.success(),
+        "the build should have failed: stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        left,
+        Vec::<String>::new(),
+        "the failed step's container was left behind"
     );
 }
 

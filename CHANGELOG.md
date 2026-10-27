@@ -157,6 +157,7 @@ history, from when it was the only binary.
 - A run ended by a signal prints `Cleanup complete.` on stderr once its cleanup has removed everything, in every style. A cleanup that left something behind still ends with its `Error:` line instead.
 - An error for a task's container that can't be started or attached to, or for any container whose `run_as_current_user` setup fails, names the container as configured, instead of nothing or its Docker id.
 - A BuildKit image build that a run stops waiting for — because of a termination signal, or because another container failed — is cancelled in the Docker daemon, as in Batect, instead of running on to the end of its steps. A cancel the daemon refuses or doesn't answer is a warning naming the container.
+- A classic-builder image build whose step fails no longer leaves that step's stopped intermediate container behind, as in Batect.
 
 ### Security
 

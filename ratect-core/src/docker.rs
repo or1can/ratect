@@ -898,6 +898,7 @@ async fn build_image_via_buildkit(
         .dockerfile(dockerfile)
         .t(tag)
         .rm(true)
+        .forcerm(true)
         .version(bollard::query_parameters::BuilderVersion::BuilderBuildKit)
         .session(&session_id)
         .buildid(build_id);
@@ -2828,7 +2829,11 @@ impl ContainerRuntime for DockerClient {
         let mut options_builder = BuildImageOptionsBuilder::default()
             .dockerfile(dockerfile)
             .t(tag)
-            .rm(true);
+            // `forcerm` as well as `rm`, as Batect sets both: `rm` alone
+            // removes a step's intermediate container only when the step
+            // succeeds, and leaves a failed `RUN`'s behind, unlabelled.
+            .rm(true)
+            .forcerm(true);
         if let Some(build_args) = build_args {
             options_builder = options_builder.buildargs(build_args);
         }
