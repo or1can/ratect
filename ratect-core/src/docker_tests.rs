@@ -1365,6 +1365,27 @@ fn pull_request_reference_sends_a_digest_reference_unchanged() {
     }
 }
 
+/// The pulled image is found by the digest the pull reported, not by a tag
+/// that may have moved since (ratect#301) — any tag or earlier digest in
+/// the configured reference gives way to it.
+#[test]
+fn digest_pinned_reference_names_the_repository_at_the_pulled_digest() {
+    let digest = format!("sha256:{}", "b".repeat(64));
+    let older = format!("sha256:{}", "a".repeat(64));
+    for (reference, pinned) in [
+        ("alpine".to_string(), format!("alpine@{digest}")),
+        ("alpine:3.20".to_string(), format!("alpine@{digest}")),
+        (
+            "localhost:5000/team/tool:v2".to_string(),
+            format!("localhost:5000/team/tool@{digest}"),
+        ),
+        (format!("alpine@{older}"), format!("alpine@{digest}")),
+        (format!("alpine:3.20@{older}"), format!("alpine@{digest}")),
+    ] {
+        assert_eq!(digest_pinned_reference(&reference, &digest), pinned);
+    }
+}
+
 #[test]
 fn enable_buildkit_flag_forces_buildkit_regardless_of_the_real_env_var() {
     assert_eq!(

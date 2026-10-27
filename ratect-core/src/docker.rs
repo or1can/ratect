@@ -1520,13 +1520,18 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
 /// `ContainerRuntime` and gets both for free.
 #[async_trait::async_trait]
 pub trait ContainerRuntime: ResourceInventory + VolumeStore {
-    async fn pull_image(&self, image: &str) -> Result<()>;
+    /// Pulls `image` and returns the ID of exactly the image pulled, as
+    /// Batect's docker-client does — not `image`, a mutable tag another
+    /// pull or `docker tag` could move before the container is created
+    /// (ratect#301). Callers run the returned ID, as a built image's is run.
+    async fn pull_image(&self, image: &str) -> Result<String>;
 
-    /// `true` if `image` already exists in the local Docker image cache —
-    /// used by `image_pull_policy: IfNotPresent` (the default) to decide
-    /// whether a pull is needed at all, matching Batect's own semantics.
-    /// Mirrors `network_exists`'s own 404-as-false convention.
-    async fn image_exists_locally(&self, image: &str) -> Result<bool>;
+    /// The ID of `image` in the local Docker image cache, or `None` if it
+    /// isn't there — used by `image_pull_policy: IfNotPresent` (the default)
+    /// to decide whether a pull is needed at all, and then as the image to
+    /// run, matching Batect's own semantics. Mirrors `network_exists`'s own
+    /// 404-as-absent convention.
+    async fn local_image_id(&self, image: &str) -> Result<Option<String>>;
 
     /// Builds an image per `spec` — see [`crate::container_spec::BuildSpec`]'s
     /// own field docs for what each one means and where it comes from.
@@ -1942,6 +1947,20 @@ fn pull_request_reference(reference: &str) -> (&str, Option<&str>) {
     }
     let (repository, tag) = split_image_reference(reference);
     (repository, Some(tag.unwrap_or("latest")))
+}
+
+/// `reference`'s repository at `digest` — what `pull_image` looks the
+/// pulled image up by, as Batect's docker-client does with the pull
+/// stream's `Digest:` line (`images_pull.go`), so the ID it returns is the
+/// image this pull fetched even if the tag has moved since (ratect#301).
+/// Any tag or digest already in `reference` is dropped: the digest names
+/// the image on its own.
+fn digest_pinned_reference(reference: &str, digest: &str) -> String {
+    let name = reference
+        .split_once('@')
+        .map_or(reference, |(name, _)| name);
+    let (repository, _) = split_image_reference(name);
+    format!("{repository}@{digest}")
 }
 
 /// The `DOCKER_BUILDKIT` value `select_builder_version` actually sees:
@@ -2788,7 +2807,7 @@ impl DockerClient {
 
 #[async_trait::async_trait]
 impl ContainerRuntime for DockerClient {
-    async fn pull_image(&self, image: &str) -> Result<()> {
+    async fn pull_image(&self, image: &str) -> Result<String> {
         let (credentials, warning) =
             resolve_pull_credential(self.credential_resolver.as_ref(), image).await;
         if let Some(message) = warning {
@@ -2814,11 +2833,15 @@ impl ContainerRuntime for DockerClient {
         // — so `simple`/`quiet`/`NullEventSink` runs don't pay a `String`
         // allocation per pull status line for nothing.
         let wants_progress = self.event_sink.wants_progress_detail();
+        let mut pulled_digest = None;
         while let Some(result) = stream.next().await {
             match result {
                 Ok(output) => {
-                    if wants_progress {
-                        if let Some(status) = output.status {
+                    if let Some(status) = output.status {
+                        if let Some(digest) = status.strip_prefix("Digest: ") {
+                            pulled_digest = Some(digest.to_string());
+                        }
+                        if wants_progress {
                             self.event_sink.post(TaskEvent::ImagePullProgress {
                                 image: image.to_string(),
                                 message: status,
@@ -2832,15 +2855,29 @@ impl ContainerRuntime for DockerClient {
             }
         }
 
-        Ok(())
+        // No `Digest:` line (a daemon that didn't report one): the reference
+        // as pulled, as docker-client falls back to.
+        let lookup = match &pulled_digest {
+            Some(digest) => digest_pinned_reference(image, digest),
+            None => image.to_string(),
+        };
+        let pulled = self.docker.inspect_image(&lookup).await.with_context(|| {
+            format!("Failed to find image {image} after pulling it (looked up as {lookup})")
+        })?;
+        pulled
+            .id
+            .with_context(|| format!("Image {image} has no ID after pulling it"))
     }
 
-    async fn image_exists_locally(&self, image: &str) -> Result<bool> {
+    async fn local_image_id(&self, image: &str) -> Result<Option<String>> {
         match self.docker.inspect_image(image).await {
-            Ok(_) => Ok(true),
+            Ok(found) => found
+                .id
+                .map(Some)
+                .with_context(|| format!("Image {image} exists locally but has no ID")),
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
-            }) => Ok(false),
+            }) => Ok(None),
             Err(e) => Err(e).with_context(|| {
                 format!("Failed to check whether image '{}' exists locally", image)
             }),

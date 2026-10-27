@@ -817,10 +817,11 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// unchanged — method resolution derefs through the `Arc` for free.
     docker: Arc<D>,
     executed_tasks: Mutex<HashSet<String>>,
-    /// Image name -> the shared, memoized pull outcome for that name, so an
-    /// image referenced by multiple containers (across tasks, or by
-    /// concurrent branches of one task's own dependency graph — 0.15.0) is
-    /// only ever decided/pulled once per invocation. A `ReadyCell` rather
+    /// Image name -> the shared, memoized pull outcome for that name (the
+    /// image ID to run — see `resolve_pulled_image`), so an image
+    /// referenced by multiple containers (across tasks, or by concurrent
+    /// branches of one task's own dependency graph — 0.15.0) is only ever
+    /// decided/pulled once per invocation. A `ReadyCell` rather
     /// than a plain `HashSet`+check-then-act specifically so two containers
     /// racing to resolve the same image concurrently share one in-flight
     /// pull instead of double-pulling.
@@ -1748,10 +1749,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
 
     /// Pulls `image` under `policy` (deduped by image name across the whole
     /// invocation via `pulled_images` — see `resolve_image`), returning the
-    /// image reference to run. Shared by `resolve_image`'s two pull-shaped
-    /// callers: a container's own configured `image`, and an
-    /// `--override-image` replacement (always `IfNotPresent`, never the
-    /// container's own configured policy).
+    /// ID of the image to run: the one the pull fetched, or under
+    /// `IfNotPresent` the local one the lookup found — never `image` itself,
+    /// a tag that could be moved before the container is created, as Batect
+    /// runs a pulled image by ID too (ratect#301). Shared by
+    /// `resolve_image`'s two pull-shaped callers: a container's own
+    /// configured `image`, and an `--override-image` replacement (always
+    /// `IfNotPresent`, never the container's own configured policy).
     async fn resolve_pulled_image(
         &self,
         image: &str,
@@ -1761,27 +1765,24 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         let result = cell
             .get_or_init(|| async {
                 let outcome: Result<String> = async {
-                    let should_pull = match policy {
-                        crate::config::ImagePullPolicy::Always => true,
-                        crate::config::ImagePullPolicy::IfNotPresent => {
-                            !self.docker.image_exists_locally(image).await?
+                    if policy == crate::config::ImagePullPolicy::IfNotPresent {
+                        if let Some(id) = self.docker.local_image_id(image).await? {
+                            return Ok(id);
                         }
-                    };
-                    if should_pull {
-                        // Milestones post only when a pull actually happens —
-                        // a skip (image already local under `IfNotPresent`)
-                        // stays silent. Batect posts both even then; see
-                        // docs/differences-from-batect.md.
-                        self.event_sink.post(TaskEvent::ImagePullStarting {
-                            image: image.to_string(),
-                        });
-                        let _permit = self.acquire_parallelism_permit().await;
-                        self.docker.pull_image(image).await?;
-                        self.event_sink.post(TaskEvent::ImagePullCompleted {
-                            image: image.to_string(),
-                        });
                     }
-                    Ok(image.to_string())
+                    // Milestones post only when a pull actually happens —
+                    // a skip (image already local under `IfNotPresent`)
+                    // stays silent. Batect posts both even then; see
+                    // docs/differences-from-batect.md.
+                    self.event_sink.post(TaskEvent::ImagePullStarting {
+                        image: image.to_string(),
+                    });
+                    let _permit = self.acquire_parallelism_permit().await;
+                    let id = self.docker.pull_image(image).await?;
+                    self.event_sink.post(TaskEvent::ImagePullCompleted {
+                        image: image.to_string(),
+                    });
+                    Ok(id)
                 }
                 .await;
                 outcome.map_err(Arc::new)
@@ -1838,8 +1839,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// `image`'s `image_pull_policy` (`IfNotPresent` by default, matching
     /// Batect) decides whether a pull actually reaches the registry the
     /// first time an image name is seen this session: `IfNotPresent` skips
-    /// it entirely when `ContainerRuntime::image_exists_locally` already
-    /// says yes; `Always` never checks. Either way, once decided for a
+    /// it entirely when `ContainerRuntime::local_image_id` already
+    /// finds it; `Always` never checks. Either way, once decided for a
     /// given image name, later containers reusing that same name within
     /// this session reuse the decision rather than re-checking or
     /// re-pulling.
@@ -1856,7 +1857,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// retag the same name, and a Docker tag is a mutable pointer. Resolving
     /// by ID sidesteps that race entirely: whichever image this process just
     /// built is the one it runs, regardless of what the tag currently points
-    /// to by the time the container actually starts.
+    /// to by the time the container actually starts. A pulled image is run
+    /// by ID for the same reason (see `resolve_pulled_image`).
     async fn resolve_image(
         &self,
         container_name: &str,

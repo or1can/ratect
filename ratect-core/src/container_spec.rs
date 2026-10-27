@@ -249,7 +249,7 @@ pub struct SharedContainerSpec {
     /// This container's own network alias — Docker's `hostname`, and the
     /// name other containers on the same network reach it by.
     pub name: String,
-    /// The already-resolved image name/ID this container runs — never a
+    /// The already-resolved image ID this container runs — never a
     /// `build_directory`; `docker.rs` deliberately doesn't resolve or build
     /// images itself (see `TaskEngine::resolve_image`).
     pub image: String,
@@ -399,7 +399,7 @@ pub struct ContainerSpecInputs<'a> {
     pub name: &'a str,
     pub container_config: &'a Container,
     pub overlay: Overlay<'a>,
-    /// The already-resolved image name/ID (`TaskEngine::resolve_image`).
+    /// The already-resolved image ID (`TaskEngine::resolve_image`).
     pub image: &'a str,
     /// From [`resolve_network`].
     pub network: ContainerNetwork,
