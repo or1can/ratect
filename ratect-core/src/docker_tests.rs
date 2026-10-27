@@ -2365,3 +2365,101 @@ fn ensure_host_volume_directories_exist_skips_special_docker_desktop_paths() {
     // The bug was this returning an error; that it's `Ok` is the fix.
     ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
 }
+
+fn build_spec_with(
+    build_args: Option<HashMap<String, String>>,
+    config_file_proxies: bool,
+) -> crate::container_spec::BuildSpec {
+    crate::container_spec::BuildSpec {
+        build_directory: std::path::PathBuf::from("/project"),
+        dockerfile: "Dockerfile".to_string(),
+        build_args,
+        target: None,
+        buildkit: None,
+        tag: "tag".to_string(),
+        force_pull: false,
+        proxy_host_gateway: None,
+        config_file_proxies,
+    }
+}
+
+const PROXIES_JSON: &str = r#"{"proxies": {"default": {
+    "httpProxy": "http://config", "noProxy": "config.example"
+}}}"#;
+
+/// The `config.json` layer fills in beneath the build's own args: a
+/// host-environment proxy (already merged into `build_args`) and the
+/// container's explicit `build_args` both win over it (ratect#295).
+#[test]
+fn host_environment_proxies_and_build_args_beat_config_file_proxies() {
+    let host_proxy = crate::proxy::proxy_environment_variables(
+        |name| (name == "http_proxy").then(|| "http://host.example".to_string()),
+        &std::collections::BTreeSet::new(),
+    );
+    let container = crate::config::Container {
+        build_args: Some(HashMap::from([(
+            "NO_PROXY".to_string(),
+            "explicit.example".to_string(),
+        )])),
+        ..Default::default()
+    };
+    let mut spec =
+        crate::container_spec::derive_build_spec(&container, "/project", "tag", Some(&host_proxy))
+            .unwrap();
+    spec.config_file_proxies = true;
+
+    let build_args = build_args_with_config_file_proxies(
+        &spec,
+        Some(PROXIES_JSON),
+        "unix:///var/run/docker.sock",
+    )
+    .unwrap();
+
+    assert_eq!(build_args["http_proxy"], "http://host.example");
+    assert_eq!(build_args["HTTP_PROXY"], "http://host.example");
+    assert_eq!(build_args["NO_PROXY"], "explicit.example");
+    assert_eq!(build_args["no_proxy"], "config.example");
+}
+
+/// `--no-proxy-vars` sends a build's explicit `build_args` and nothing from
+/// `config.json`, even with a `default` entry there.
+#[test]
+fn config_file_proxies_are_skipped_when_turned_off() {
+    let explicit = HashMap::from([("VERSION".to_string(), "1".to_string())]);
+    let spec = build_spec_with(Some(explicit.clone()), false);
+    assert_eq!(
+        build_args_with_config_file_proxies(
+            &spec,
+            Some(PROXIES_JSON),
+            "unix:///var/run/docker.sock"
+        ),
+        Some(explicit)
+    );
+    let spec = build_spec_with(None, false);
+    assert_eq!(
+        build_args_with_config_file_proxies(
+            &spec,
+            Some(PROXIES_JSON),
+            "unix:///var/run/docker.sock"
+        ),
+        None
+    );
+}
+
+/// A build with no args of its own gets the `config.json` ones; with no
+/// file, it sends none, exactly as before.
+#[test]
+fn config_file_proxies_alone_make_a_builds_args() {
+    let spec = build_spec_with(None, true);
+    let build_args = build_args_with_config_file_proxies(
+        &spec,
+        Some(PROXIES_JSON),
+        "unix:///var/run/docker.sock",
+    )
+    .unwrap();
+    assert_eq!(build_args["http_proxy"], "http://config");
+    assert_eq!(
+        build_args_with_config_file_proxies(&spec, None, "unix:///var/run/docker.sock"),
+        None
+    );
+}

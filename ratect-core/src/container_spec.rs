@@ -345,7 +345,9 @@ pub struct BuildSpec {
     /// default case.
     pub dockerfile: String,
     /// Merged with proxy-derived build args, the container's own winning on
-    /// collision — see `merged_environment`.
+    /// collision — see `merged_environment`. Proxies from the Docker CLI's
+    /// `config.json` are not in it: `DockerClient::build_image` fills those
+    /// in beneath it, see `config_file_proxies`.
     pub build_args: Option<HashMap<String, String>>,
     /// The build stage to stop at, for a multi-stage Dockerfile.
     pub target: Option<String>,
@@ -363,6 +365,12 @@ pub struct BuildSpec {
     /// The same entry `NetworkOptions` carries, for the same reason: a `RUN`
     /// step behind a rewritten proxy URL has to resolve that name too.
     pub proxy_host_gateway: Option<crate::proxy::HostGateway>,
+    /// Whether the build's args are filled in from the `proxies` section of
+    /// the Docker CLI's `config.json`, as docker-client fills every Batect
+    /// build's — see `proxy::fill_config_file_proxies`. `true` unless
+    /// `--no-proxy-vars` was given, which keeps every proxy out of a build,
+    /// this source included.
+    pub config_file_proxies: bool,
 }
 
 /// The task-`run`/dependency-`customise` overlay a container's own config is
@@ -578,6 +586,7 @@ pub fn derive_build_spec(
         force_pull: container_config.image_pull_policy.unwrap_or_default()
             == crate::config::ImagePullPolicy::Always,
         proxy_host_gateway: proxy.and_then(|proxy| proxy.host_gateway()),
+        config_file_proxies: true,
     })
 }
 

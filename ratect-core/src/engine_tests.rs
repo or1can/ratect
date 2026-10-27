@@ -11350,6 +11350,61 @@ async fn no_proxy_vars_flag_suppresses_propagation() {
     );
 }
 
+/// `--no-proxy-vars` keeps the Docker CLI `config.json`'s proxies out of a
+/// build too (ratect#295), which only `DockerClient` reads — so what the
+/// engine decides is the spec's switch for that source, while the
+/// container's own `build_args` still go through.
+#[tokio::test]
+async fn no_proxy_vars_turns_off_config_file_proxies_for_a_build() {
+    let config_with_build_args = || {
+        let mut app = container_with_build_directory(
+            "./app",
+            Some(HashMap::from([("VERSION".to_string(), "1".to_string())])),
+        );
+        app.dependencies = None;
+        let mut containers = IndexMap::new();
+        containers.insert("app".to_string(), app);
+        let mut tasks = IndexMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        }
+    };
+
+    let docker = FakeContainerRuntime::default();
+    engine(config_with_build_args(), docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap();
+    assert!(
+        docker
+            .build_spec_for("demo-app")
+            .unwrap()
+            .config_file_proxies
+    );
+
+    let docker = FakeContainerRuntime::default();
+    engine(config_with_build_args(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            propagate_proxy_environment_variables: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .run_task("start", &[])
+        .await
+        .unwrap();
+    let spec = docker.build_spec_for("demo-app").unwrap();
+    assert!(!spec.config_file_proxies);
+    assert_eq!(
+        spec.build_args,
+        Some(HashMap::from([("VERSION".to_string(), "1".to_string())]))
+    );
+}
+
 /// The entry `proxy::ProxyEnvironment::host_gateway` produces, spelt out so
 /// these tests pin what reaches Docker rather than agreeing with whatever
 /// the code currently builds.

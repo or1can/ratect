@@ -1868,13 +1868,18 @@ pub struct DockerClient {
     /// `registry_auth::DockerCredentialHelperResolver` by default.
     credential_resolver: std::sync::Arc<dyn crate::registry_auth::RegistryCredentialResolver>,
     /// `<docker config directory>/config.json` — read fresh on every
-    /// `build_image` call (not cached) via `read_configured_registries`, to
-    /// enumerate every registry it declares under `auths`/`credHelpers` for
-    /// build's own credential resolution. Kept as a plain path rather than
-    /// through `credential_resolver` itself, since a fake resolver used in
-    /// tests has no file of its own — enumeration and per-registry
-    /// resolution are deliberately separate concerns.
+    /// `build_image` call (not cached), twice: via
+    /// `read_configured_registries`, to enumerate every registry it declares
+    /// under `auths`/`credHelpers` for build's own credential resolution,
+    /// and via `build_args_with_config_file_proxies`, for its `proxies`.
+    /// Kept as a plain path rather than through `credential_resolver`
+    /// itself, since a fake resolver used in tests has no file of its own —
+    /// enumeration and per-registry resolution are deliberately separate
+    /// concerns.
     docker_config_path: std::path::PathBuf,
+    /// The daemon host this client connected to, as the Docker CLI spells
+    /// it — what `config.json`'s `proxies` map is keyed by.
+    daemon_host: String,
 }
 
 /// Splits a full image reference (as given to `--tag-image`, e.g.
@@ -2058,6 +2063,24 @@ async fn read_configured_registries(config_path: &std::path::Path) -> Vec<String
     }
 }
 
+/// `spec`'s build args with the gaps filled from the `proxies` of the
+/// Docker CLI `config.json` whose contents are `config_json` (see
+/// `proxy::fill_config_file_proxies`) — unless `spec.config_file_proxies`
+/// is off (`--no-proxy-vars`), or there is no file, when they are `spec`'s
+/// own unchanged. `None` only when there is nothing to send at all.
+fn build_args_with_config_file_proxies(
+    spec: &crate::container_spec::BuildSpec,
+    config_json: Option<&str>,
+    daemon_host: &str,
+) -> Option<HashMap<String, String>> {
+    let Some(config_json) = config_json.filter(|_| spec.config_file_proxies) else {
+        return spec.build_args.clone();
+    };
+    let mut build_args = spec.build_args.clone().unwrap_or_default();
+    crate::proxy::fill_config_file_proxies(config_json, daemon_host, &mut build_args);
+    (spec.build_args.is_some() || !build_args.is_empty()).then_some(build_args)
+}
+
 /// Resolves credentials for every registry in `registries`, via `resolver` —
 /// build covers every registry Ratect's own Docker config knows about,
 /// since neither Batect nor Ratect parses Dockerfile `FROM` lines to scope
@@ -2160,6 +2183,7 @@ impl DockerClient {
                 crate::registry_auth::DockerCredentialHelperResolver::new(config_directory.clone()),
             ),
             docker_config_path: config_directory.join("config.json"),
+            daemon_host: connected.daemon_host.clone(),
         })
     }
 
@@ -2764,7 +2788,12 @@ impl ContainerRuntime for DockerClient {
     ) -> Result<String> {
         let build_directory = spec.build_directory.as_path();
         let dockerfile = spec.dockerfile.as_str();
-        let build_args = spec.build_args.as_ref();
+        let config_json = tokio::fs::read_to_string(&self.docker_config_path)
+            .await
+            .ok();
+        let build_args =
+            build_args_with_config_file_proxies(spec, config_json.as_deref(), &self.daemon_host);
+        let build_args = build_args.as_ref();
         let target = spec.target.as_deref();
         let buildkit = spec.buildkit.as_ref();
         let tag = spec.tag.as_str();

@@ -1921,12 +1921,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         // `no_proxy` for a build (nothing's running yet to be
                         // exempted from proxying).
                         let proxy = self.proxy_environment(&std::collections::BTreeSet::new());
-                        let spec = derive_build_spec(
+                        let mut spec = derive_build_spec(
                             container_config,
                             build_directory,
                             &tag,
                             proxy.as_ref(),
                         )?;
+                        spec.config_file_proxies = self.propagate_proxy_environment_variables;
                         self.event_sink.post(TaskEvent::ImageBuildStarting {
                             container: container_name.to_string(),
                         });

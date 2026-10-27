@@ -332,7 +332,7 @@ tables above:
   to be real terminals. Live terminal-resize tracking is also Unix-only — synced
   once at session start elsewhere, not tracked further. See [Interactive
   Mode](interactive-mode.md).
-- **Proxy support**: two deliberate differences — see [Proxies](proxies.md)
+- **Proxy support**: three deliberate differences — see [Proxies](proxies.md)
   for the full mechanics.
 
   - **A `localhost` proxy is rewritten on Linux too.** Batect rewrites on
@@ -341,6 +341,9 @@ tables above:
     issue](https://github.com/batect/batect/issues/10), eight years old.
   - **A proxy bound to loopback only is diagnosed, not left to fail** — Batect's own
     roadmap notes the same warning is needed and never shipped one.
+  - **`--no-proxy-vars` keeps the proxies in Docker's `config.json` out of a
+    build too.** Batect's flag only stops its own proxy build arguments; its
+    Docker client adds the `config.json` ones to every build regardless.
 
   Batect's Docker-version-gated hostname fallback chain, which reaches back
   to Docker 17.06, isn't ported: its first choice, `host.docker.internal`,

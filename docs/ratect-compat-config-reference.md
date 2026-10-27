@@ -887,7 +887,10 @@ overriding the one before it on a key collision:
    [TaskContainerCustomisation](#taskcontainercustomisation)).
 
 An image build layers the same way with what applies to a build: proxy
-variables, then the container's own `build_args`.
+variables, then the container's own `build_args`. Last, the proxies from
+[Docker's `config.json`](proxies.md#proxies-from-dockers-configjson) fill
+in any proxy argument still unset, overriding nothing — a layer
+`--no-proxy-vars` skips.
 
 ## Interactive mode
 

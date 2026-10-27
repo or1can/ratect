@@ -6547,6 +6547,71 @@ fn an_interrupted_buildkit_build_stops_running_in_the_daemon() {
     );
 }
 
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// See `tests/fixtures/proxy-config-file.yml`: a proxy from the Docker CLI
+/// config file reaches a build in both cases, and `--no-proxy-vars` keeps it
+/// out.
+#[test]
+#[ignore]
+fn config_file_proxies_reach_an_image_build_unless_no_proxy_vars() {
+    let config_directory = scratch_directory("proxy-config-file");
+    std::fs::write(
+        config_directory.join("config.json"),
+        r#"{"proxies": {"default": {"httpProxy": "http://config-proxy.example:3128"}}}"#,
+    )
+    .unwrap();
+    let run = |extra: &[&str]| {
+        let mut command = ratect_command();
+        for name in [
+            "http_proxy",
+            "HTTP_PROXY",
+            "https_proxy",
+            "HTTPS_PROXY",
+            "ftp_proxy",
+            "FTP_PROXY",
+            "no_proxy",
+            "NO_PROXY",
+        ] {
+            command.env_remove(name);
+        }
+        let output = command
+            .env("DOCKER_CONFIG", &config_directory)
+            .env(
+                "RATECT_PROXY_CONFIG_FILE_TEST_CACHE_BUST",
+                format!("{}-{}", config_directory.display(), extra.len()),
+            )
+            .arg("-f")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/proxy-config-file.yml"))
+            .args(extra)
+            .arg("print-build-proxies")
+            .output()
+            .expect("failed to run ratect");
+        assert!(
+            output.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let propagated = run(&[]);
+    let suppressed = run(&["--no-proxy-vars"]);
+    let _ = std::fs::remove_dir_all(&config_directory);
+
+    assert!(
+        propagated.contains(
+            "HTTP_PROXY=http://config-proxy.example:3128 http_proxy=http://config-proxy.example:3128"
+        ),
+        "{propagated}"
+    );
+    assert!(
+        suppressed.contains("HTTP_PROXY= http_proxy="),
+        "{suppressed}"
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///

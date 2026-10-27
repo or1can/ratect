@@ -16,7 +16,10 @@
 //! (`--no-proxy-vars` to disable) — ported from Batect's
 //! `ProxyEnvironmentVariablesProvider`/`ProxyEnvironmentVariablePreprocessor`.
 //! Rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to `host.docker.internal`
-//! on every platform.
+//! on every platform. Also the one other source of a build's proxies, the
+//! Docker CLI `config.json`'s `proxies` (`fill_config_file_proxies`),
+//! which docker-client folds into every Batect build and which gets none of
+//! that rewriting.
 //!
 //! # The rewrite is only half of reaching a proxy on the host
 //!
@@ -182,8 +185,10 @@ fn case_or_other_case(host_env: &impl Fn(&str) -> Option<String>, name: &str) ->
         .or_else(|| host_env(&name.to_lowercase()))
 }
 
-/// The proxy configuration one run propagates, and what else that
-/// propagation obliges the run to do.
+/// The proxy configuration one run propagates from the host environment,
+/// and what else that propagation obliges the run to do. A build's proxies
+/// from the Docker CLI's `config.json` are not part of it: they are filled
+/// in later, as written, by `fill_config_file_proxies`.
 ///
 /// Returned as one value rather than a bare map because the two extra
 /// obligations — adding a [`HostGateway`] and warning about a proxy nothing
@@ -409,6 +414,71 @@ fn parse_proc_address(hex: &str) -> Option<IpAddr> {
             })
         }
         _ => None,
+    }
+}
+
+/// One entry of the Docker CLI `config.json`'s `proxies` map, with the
+/// Docker CLI's own field names. Each optional, so a `null` reads as unset,
+/// as the Docker CLI reads it, rather than failing the whole map.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct ConfigFileProxies {
+    http_proxy: Option<String>,
+    https_proxy: Option<String>,
+    ftp_proxy: Option<String>,
+    no_proxy: Option<String>,
+    all_proxy: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ConfigFileWithProxies {
+    #[serde(default)]
+    proxies: HashMap<String, ConfigFileProxies>,
+}
+
+/// Fills `build_args` from the `proxies` section of the Docker CLI
+/// `config.json` whose contents are `config_json`, as docker-client does for
+/// every Batect build (the Docker CLI's `ParseProxyConfig`): the entry keyed
+/// by `daemon_host` — the host the run connects to, spelled as the Docker
+/// CLI spells it — or else the `default` one. Each of its non-empty
+/// `httpProxy`, `httpsProxy`, `ftpProxy`, `noProxy` and `allProxy` is set as
+/// both `HTTP_PROXY` and `http_proxy` (and so on), but only where that exact
+/// name isn't in `build_args` already, so a host-environment proxy and the
+/// container's own `build_args` both win.
+///
+/// The values are passed as written. None of what this module does to a
+/// host-environment proxy applies — no `localhost` rewrite, no host-gateway
+/// entry, no `no_proxy` extension — because docker-client applies none of
+/// it. A `config_json` that isn't JSON, or has no usable `proxies`, adds
+/// nothing, as a missing file does.
+pub(crate) fn fill_config_file_proxies(
+    config_json: &str,
+    daemon_host: &str,
+    build_args: &mut HashMap<String, String>,
+) {
+    let Ok(mut config) = serde_json::from_str::<ConfigFileWithProxies>(config_json) else {
+        return;
+    };
+    let Some(entry) = config
+        .proxies
+        .remove(daemon_host)
+        .or_else(|| config.proxies.remove("default"))
+    else {
+        return;
+    };
+    for (name, value) in [
+        ("HTTP_PROXY", entry.http_proxy),
+        ("HTTPS_PROXY", entry.https_proxy),
+        ("FTP_PROXY", entry.ftp_proxy),
+        ("NO_PROXY", entry.no_proxy),
+        ("ALL_PROXY", entry.all_proxy),
+    ] {
+        let Some(value) = value.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        for name in [name.to_string(), name.to_lowercase()] {
+            build_args.entry(name).or_insert_with(|| value.clone());
+        }
     }
 }
 
