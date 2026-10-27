@@ -304,6 +304,36 @@ fn tasks_list_refuses_a_malformed_expression_located_in_the_file() {
     );
 }
 
+/// A run that fails before any task starts — here, a config that doesn't
+/// load — reached no event sink, so `main` prints its `Error:` line, and
+/// exactly once (ratect#334).
+#[test]
+fn a_run_failing_before_its_task_starts_prints_its_error_once() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
+         image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
+         [tasks.build]\nrun = { container = \"app\" }\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["run", "build", "-o", "quiet"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("Error: ") && stderr.matches("Error:").count() == 1,
+        "{stderr}"
+    );
+}
+
 /// `tasks list` evaluates nothing, so its config-variable options are
 /// deprecated: still accepted, with a warning saying they do nothing — and
 /// the file one names, or an auto-discovered `ratect.local.toml`, is not
@@ -2526,6 +2556,12 @@ fn a_tasks_own_exit_code_prints_no_error_line_but_ratects_own_failure_does_via_d
     assert!(
         stderr.starts_with("Error: ") && stderr.contains("Failed to pull image"),
         "Ratect's own failure is printed whatever RUST_LOG says:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Error:").count(),
+        1,
+        "reported by the engine when it happened, and not again by main \
+         (ratect#334):\n{stderr}"
     );
 }
 

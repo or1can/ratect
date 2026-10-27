@@ -1060,6 +1060,27 @@ fn unsupported_config_key_reports_error() {
     );
 }
 
+/// A run that fails before any task starts — here, a config that doesn't
+/// load — reached no event sink, so `main` prints its `Error:` line, and
+/// exactly once (ratect#334).
+#[test]
+fn a_run_failing_before_its_task_starts_prints_its_error_once() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(unsupported_key_config_path())
+        .args(["-o", "quiet", "build"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("Error: ") && stderr.matches("Error:").count() == 1,
+        "{stderr}"
+    );
+}
+
 #[test]
 fn declaring_batect_project_directory_in_config_variables_reports_error() {
     let output = ratect_command()
@@ -3602,6 +3623,57 @@ fn unhealthy_dependency_fails_the_task_via_docker() {
     assert!(
         !stdout.contains("the task should never run"),
         "the task's own command must never have run:\n{stdout}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// An infrastructure failure is reported when it happens — before cleanup
+/// says anything — and exactly once, as Batect reports a failure the moment
+/// it's posted (ratect#334). Stdout and stderr share one file here, so the
+/// order between them is the order a terminal would show.
+#[test]
+#[ignore]
+fn an_infrastructure_failure_is_reported_once_before_cleanup_via_docker() {
+    let merged = std::env::temp_dir().join(format!(
+        "ratect-compat-failure-order-{}.log",
+        std::process::id()
+    ));
+    let file = std::fs::File::create(&merged).unwrap();
+    let status = ratect_command()
+        .arg("-f")
+        .arg(unhealthy_dependency_config_path())
+        .args(["-o", "simple", "check"])
+        .env("RUST_LOG", "off")
+        .stdout(file.try_clone().unwrap())
+        .stderr(file)
+        .status()
+        .expect("failed to run ratect");
+    let output = std::fs::read_to_string(&merged).unwrap();
+    std::fs::remove_file(&merged).unwrap();
+    assert_eq!(status.code(), Some(125), "{output}");
+    assert_eq!(output.matches("Error:").count(), 1, "{output}");
+    let error_at = output.find("Error:").unwrap();
+    let cleanup_at = output.find("Cleaning up").expect(&output);
+    assert!(
+        error_at < cleanup_at,
+        "the failure is reported before cleanup:\n{output}"
+    );
+
+    let quiet = ratect_command()
+        .arg("-f")
+        .arg(unhealthy_dependency_config_path())
+        .args(["-o", "quiet", "check"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&quiet.stderr);
+    assert_eq!(String::from_utf8_lossy(&quiet.stdout), "");
+    assert!(
+        stderr.starts_with("Error: ") && stderr.matches("Error:").count() == 1,
+        "quiet prints the one error and nothing else:\n{stderr}"
     );
 }
 

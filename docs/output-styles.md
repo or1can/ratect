@@ -48,7 +48,11 @@ A task's own non-zero exit is reported by the exit code and, outside `quiet`,
 by the summary line — never by an `Error:` line; a run ended by a signal is
 reported by the interrupt notice and its exit code, with no trailing
 `Error: Interrupted`. `Error:` is reserved for Ratect's own failures: it could
-not run the task, or could not clean up after it.
+not run the task, or could not clean up after it. A failure to run a task that
+has started — an image that won't pull, a dependency that never becomes
+healthy — is reported when it happens, before any cleanup line; a failure
+before any task starts, such as a config that doesn't load, is printed as the
+run exits.
 
 Each style is shown below from the *same* real run — `ratect run journey-test`
 against

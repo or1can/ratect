@@ -310,9 +310,10 @@ pub enum TaskEvent {
     /// The task failed for an infrastructure reason (image build failed, a
     /// dependency never became healthy, ...) — the counterpart of
     /// [`TaskEvent::TaskFinished`], which covers the task's own command
-    /// completing (with any exit code). The error itself still propagates
-    /// to stderr through the normal error chain; this event only lets a
-    /// live display stop repainting cleanly before that error prints.
+    /// completing (with any exit code). Posted after cleanup, like
+    /// `TaskFinished`. It carries no error: that was reported when it
+    /// happened, before cleanup, as a [`TaskEvent::Error`] (or, for a
+    /// signal, by the interrupt notice).
     TaskFailed {
         task: String,
     },
@@ -792,8 +793,8 @@ impl EventSink for NullEventSink {
 /// "nothing" (decisions/0017): the interrupt notice and the `--no-cleanup*`
 /// reminder are exactly the lines a scripted, quiet run can't do without.
 /// Batect's quiet logger renders only task-failure events; a run's failure
-/// reaches stderr through the error chain here regardless of style, so the
-/// three classes are all this one renders.
+/// is one of those three classes here (an `Error` event, posted when it
+/// happens), so the three classes are all this one renders.
 pub struct QuietEventLogger {
     stderr: Console,
 }

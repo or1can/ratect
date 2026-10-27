@@ -795,8 +795,9 @@ async fn async_main() {
             // reasoning, and the same `{:?}` full-context-chain formatting,
             // as `ratect-compat`'s own top-level handler. Except for a run's
             // failure that has already reached the user by another route —
-            // the task's own non-zero exit, a signal, a cleanup failure the
-            // engine reported as it happened — for which a second line
+            // the task's own non-zero exit, a signal, a failure to run the
+            // task or clean up after it, which the engine reported as it
+            // happened — for which a second line
             // would be the same event reported twice (decisions/0017; the
             // list is `already_reported`'s).
             if !ratect_core::exit_code::already_reported(&error) {

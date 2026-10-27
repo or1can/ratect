@@ -316,22 +316,22 @@ fn setup_command_output_gets_an_inner_numbered_prefix() {
 }
 
 #[test]
-fn task_failed_before_the_graph_resolves_still_flushes_the_preamble() {
+fn a_run_ending_before_the_graph_resolves_still_flushes_the_preamble() {
     // An infrastructure failure early enough that TaskGraphResolved
     // never posts (e.g. a `--use-network` validation failure) must not
-    // leave this task's line unprinted forever — TaskFailed flushes the
-    // deferred preamble itself in that case.
+    // leave this task's line unprinted forever — RunEnded flushes the
+    // deferred preamble itself in that case, before the `Error` event
+    // that reports the failure.
     let (logger, buffer) = logger();
     logger.post(TaskEvent::TaskStarting {
         task: "test".into(),
     });
-    logger.post(TaskEvent::TaskFailed {
+    logger.post(TaskEvent::RunEnded {
         task: "test".into(),
     });
     assert_eq!(buffer.contents(), "test | Running test...\n");
 
-    // A second TaskFailed (shouldn't happen in practice, but the guard
-    // must not double-print).
+    // TaskFailed after it must not print it again.
     logger.post(TaskEvent::TaskFailed {
         task: "test".into(),
     });

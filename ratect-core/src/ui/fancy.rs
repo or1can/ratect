@@ -916,7 +916,7 @@ impl EventSink for FancyEventLogger {
             }
             // Nothing left live by now: `RunEnded` froze the startup block
             // and `CleanupFinished` cleared the countdown. The error itself
-            // reaches stderr through the normal error chain.
+            // was an `Error` event, before cleanup.
             TaskEvent::TaskFailed { .. } => {}
             // Interleaved-mode events — never posted under this logger's
             // (default) TaskContainerOnly streaming policy, and setup

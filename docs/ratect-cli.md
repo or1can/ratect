@@ -548,7 +548,9 @@ Every failure of Ratect's own reaches stderr as `Error: <message>`, in every out
 including `quiet`, whatever `RUST_LOG` says. Two kinds of failed run print no `Error:`
 line, because something else already reported them: a task's own non-zero exit (rule 1 —
 the code itself and, outside `quiet`, the `finished with exit code N` summary line), and
-a run ended by a signal or a closed stdout (rule 2 — the notice saying so).
+a run ended by a signal or a closed stdout (rule 2 — the notice saying so). A failure to
+run a task that has started is reported when it happens, before cleanup; one before any
+task starts, as `ratect` exits.
 [`ratect-compat`'s
 section](ratect-compat-cli.md#exit-codes-and-error-reporting) has each rule in full.
 

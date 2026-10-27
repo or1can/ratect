@@ -3615,7 +3615,7 @@ async fn a_missing_network_still_posts_task_failed() {
     })
     .unwrap();
 
-    assert!(engine.run_task("build", &[]).await.is_err());
+    let error = engine.run_task("build", &[]).await.unwrap_err();
 
     assert_eq!(
         sink.events(),
@@ -3625,6 +3625,9 @@ async fn a_missing_network_still_posts_task_failed() {
             },
             TaskEvent::RunEnded {
                 task: "build".into()
+            },
+            TaskEvent::Error {
+                message: format!("{error:?}")
             },
             TaskEvent::TaskFailed {
                 task: "build".into()
@@ -6173,6 +6176,198 @@ async fn failing_setup_command_fails_the_task_and_still_cleans_up() {
         events.contains(&"sidecar-stop:sidecar-id-database".to_string()),
         "the dependency must still be cleaned up: {events:?}"
     );
+}
+
+/// An infrastructure failure is reported when it happens, before cleanup,
+/// as Batect reports every `TaskFailedEvent` on receipt (ratect#334) — as
+/// an `Error` event carrying the chain `main` would otherwise print, so
+/// `main` prints nothing further for it. `TaskFailed` keeps its place after
+/// cleanup: it ends the task, it doesn't report the error.
+#[tokio::test(start_paused = true)]
+async fn an_infrastructure_failure_is_reported_before_cleanup_and_only_once() {
+    let config = config_with_database_dependency(|database| {
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed-data.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    });
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh");
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = sink.events();
+    let errors: Vec<(usize, &String)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| match event {
+            TaskEvent::Error { message } => Some((index, message)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(errors.len(), 1, "reported exactly once: {events:?}");
+    let (error_at, message) = errors[0];
+    assert!(
+        message.starts_with(&format!("{error:?}")),
+        "the report is the chain main would have printed: {message}"
+    );
+    let cleanup_at = events
+        .iter()
+        .position(|event| *event == TaskEvent::CleanupStarting)
+        .expect("the dependency is cleaned up");
+    assert!(error_at < cleanup_at, "reported before cleanup: {events:?}");
+    let task_failed_at = events
+        .iter()
+        .position(|event| matches!(event, TaskEvent::TaskFailed { .. }))
+        .expect("the task still fails");
+    let last_cleanup_at = events
+        .iter()
+        .rposition(|event| {
+            matches!(
+                event,
+                TaskEvent::ContainerRemoved { .. }
+                    | TaskEvent::RemovingNetwork
+                    | TaskEvent::CleanupFinished
+            )
+        })
+        .unwrap();
+    assert!(
+        task_failed_at > last_cleanup_at,
+        "TaskFailed still ends the task, after cleanup: {events:?}"
+    );
+    assert!(
+        crate::exit_code::already_reported(&error),
+        "main must not print it a second time"
+    );
+    assert_eq!(
+        crate::exit_code::for_error(&error),
+        crate::exit_code::RATECT_FAILED
+    );
+}
+
+/// The failures already reported by another route get no `Error` event: a
+/// task's own non-zero exit (the summary line says it), and a failing
+/// prerequisite, whose own run reported it — the task depending on it never
+/// started, so it reports nothing of its own.
+#[tokio::test(start_paused = true)]
+async fn a_failure_reported_elsewhere_posts_no_second_error_event() {
+    let config = || {
+        let mut containers = IndexMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        containers.insert("broken".to_string(), container("alpine:3.18", None));
+        let mut tasks = IndexMap::new();
+        tasks.insert("exits".to_string(), task("app", "false"));
+        tasks.insert("broken".to_string(), task("broken", "echo never"));
+        let mut outer = task("app", "echo hi");
+        outer.prerequisites = Some(vec!["broken".to_string()]);
+        tasks.insert("outer".to_string(), outer);
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        }
+    };
+
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default().with_run_exit("app", 3);
+    let engine = TaskEngine::new(
+        project(config()),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+    let error = engine.run_task("exits", &[]).await.unwrap_err();
+    let events = sink.events();
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            TaskEvent::Error { .. } | TaskEvent::TaskFailed { .. }
+        )),
+        "a task's own exit is no infrastructure failure: {events:?}"
+    );
+    assert_eq!(crate::exit_code::for_error(&error), 3);
+
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default().failing_creation("broken");
+    let engine = TaskEngine::new(
+        project(config()),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+    let error = engine.run_task("outer", &[]).await.unwrap_err();
+    let events = sink.events();
+    let errors = events
+        .iter()
+        .filter(|event| matches!(event, TaskEvent::Error { .. }))
+        .count();
+    let failed: Vec<&TaskEvent> = events
+        .iter()
+        .filter(|event| matches!(event, TaskEvent::TaskFailed { .. }))
+        .collect();
+    assert_eq!(errors, 1, "the prerequisite's own report only: {events:?}");
+    assert_eq!(
+        failed,
+        vec![&TaskEvent::TaskFailed {
+            task: "broken".to_string()
+        }],
+        "the task depending on it never started: {events:?}"
+    );
+    assert!(crate::exit_code::already_reported(&error));
+}
+
+/// A run that passed and was signalled only during its cleanup failed
+/// nothing before cleanup, so nothing is reported early (ratect#334): a
+/// cleanup the signal merely hurried reports no error at all, and one it
+/// abandoned with something left reports that once, after cleanup — the
+/// cleanup failure's own line, which `main` doesn't repeat.
+#[tokio::test]
+async fn a_signal_during_a_passing_runs_cleanup_is_reported_once_after_it() {
+    use crate::interrupt::TerminationSignal::Interrupt;
+    for (signals, expect_error) in [(vec![Interrupt], false), (vec![Interrupt, Interrupt], true)] {
+        let interrupt = crate::interrupt::Interrupt::new();
+        let docker = FakeContainerRuntime::default().signalling_on_removal(&interrupt, &signals);
+        let sink = RecordingEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_database_dependency(|_| {})),
+            docker,
+            Arc::new(sink.clone()),
+            interrupt,
+        );
+
+        let result = engine.run_task("start", &[]).await;
+
+        let events = sink.events();
+        let errors: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| matches!(event, TaskEvent::Error { .. }))
+            .map(|(index, _)| index)
+            .collect();
+        if expect_error {
+            let error = result.unwrap_err();
+            assert!(error.is::<CleanupFailed>(), "{error:#}");
+            assert!(crate::exit_code::already_reported(&error));
+            assert_eq!(errors.len(), 1, "{events:?}");
+            let finished_at = events
+                .iter()
+                .position(|event| *event == TaskEvent::CleanupFinished)
+                .unwrap();
+            assert!(errors[0] > finished_at, "{events:?}");
+        } else {
+            result.unwrap();
+            assert!(errors.is_empty(), "{events:?}");
+        }
+    }
 }
 
 #[tokio::test(start_paused = true)]

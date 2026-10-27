@@ -608,6 +608,36 @@ impl std::fmt::Display for CleanupFailed {
 
 impl std::error::Error for CleanupFailed {}
 
+/// A run's infrastructure failure — any but the task's own non-zero exit, a
+/// signal, or stdout's reader going — that the engine has already reported
+/// as a [`crate::ui::TaskEvent::Error`] at the moment it happened, before
+/// cleanup (ratect#334). [`crate::exit_code::already_reported`] knows it, so
+/// `main` prints no second `Error:` line for it.
+///
+/// Transparent: it displays, and chains its causes, exactly as the error it
+/// wraps, so `{:?}` and `{:#}` render the same text as before. What it does
+/// hide is the wrapped error's type from `anyhow`'s downcasts, so
+/// [`crate::exit_code::for_error`] looks through it to find the exit code.
+pub struct FailureReported(pub(crate) anyhow::Error);
+
+impl std::fmt::Display for FailureReported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::fmt::Debug for FailureReported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for FailureReported {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
 /// What a cleanup left in place — a removal the daemon refused, one the
 /// abandon rung never reached, or everything a `--no-cleanup*` flag kept —
 /// and the one command that removes it, for the line that reports it
@@ -2591,6 +2621,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         } else {
             self.cleanup_after_failure
         };
+        // An infrastructure failure is reported now, before cleanup says a
+        // word, as Batect reports every failure the moment it's posted —
+        // cleanup can take a container's whole stop timeout, and the error
+        // used to arrive after all of it (ratect#334). The same chain `main`
+        // would have printed, and marked so it prints nothing more. A
+        // signal or stdout's reader going is reported by its own notice
+        // below instead, and a task's own exit by its summary line.
+        let result = match result {
+            Err(error) if exit_code.is_none() && !crate::exit_code::already_reported(&error) => {
+                self.event_sink.post(TaskEvent::Error {
+                    message: format!("{error:?}"),
+                });
+                Err(FailureReported(error).into())
+            }
+            result => result,
+        };
 
         // A further signal during cleanup climbs a ladder: the first one,
         // of any kind, *escalates* — the graceful stop in flight is dropped
@@ -3121,9 +3167,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 duration: task_started_at.elapsed(),
             });
         } else {
-            // Infrastructure failure — the error itself propagates to
-            // stderr via the returned `Err`; this only lets a live display
-            // stop repainting cleanly first.
+            // Infrastructure failure — the error itself was reported before
+            // cleanup, above; this ends the task, as `TaskFinished` would.
             self.event_sink.post(TaskEvent::TaskFailed {
                 task: task_name.to_string(),
             });
