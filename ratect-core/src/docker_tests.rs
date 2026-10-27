@@ -3402,3 +3402,71 @@ async fn local_image_id_is_none_only_for_a_daemon_not_found() {
         "{err:#}"
     );
 }
+
+/// Batect's `DockerClientNetworkManagementSpec`, getting a network by name
+/// or ID: the string given is what's inspected, so either works; a
+/// not-found — what a lookup after deleting one gets — is "doesn't exist",
+/// not an error; any other failure is an error naming the network.
+#[tokio::test]
+async fn network_exists_is_false_only_for_a_daemon_not_found() {
+    let id = "4f3c1b2a9d8e";
+    let (client, log) =
+        client_for_recording_daemon(one_route("GET", "/networks/4f3c1b2a9d8e", 200, "{}")).await;
+    assert!(client.network_exists(id).await.unwrap());
+    assert_eq!(
+        requests_sent(&log),
+        vec![("GET".to_string(), format!("/networks/{id}"))]
+    );
+
+    let (client, log) = client_for_recording_daemon(one_route(
+        "GET",
+        "/networks/gone",
+        404,
+        r#"{"message":"network gone not found"}"#,
+    ))
+    .await;
+    assert!(!client.network_exists("gone").await.unwrap());
+    assert_eq!(
+        requests_sent(&log),
+        vec![("GET".to_string(), "/networks/gone".to_string())]
+    );
+
+    let (client, _) = client_for_recording_daemon(one_route(
+        "GET",
+        "/networks/broken",
+        500,
+        r#"{"message":"stub daemon failed the inspect"}"#,
+    ))
+    .await;
+    let err = client.network_exists("broken").await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Failed to check whether network 'broken' exists"
+    );
+    assert!(
+        format!("{err:#}").contains("stub daemon failed the inspect"),
+        "{err:#}"
+    );
+}
+
+/// Batect's `DockerClientNetworkManagementSpec`, deleting a network that
+/// doesn't exist: unlike a lookup, that's a failure, naming the network,
+/// with the daemon's reason in the chain.
+#[tokio::test]
+async fn remove_network_fails_for_a_missing_network() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "DELETE",
+        "/networks/gone",
+        404,
+        r#"{"message":"network gone not found"}"#,
+    ))
+    .await;
+
+    let err = client.remove_network("gone").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to remove network 'gone'");
+    assert!(
+        format!("{err:#}").contains("network gone not found"),
+        "{err:#}"
+    );
+}
