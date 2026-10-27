@@ -203,16 +203,19 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   Three attach-and-start paths sit behind it — fully non-interactive,
   stdin-forwarding, and a real TTY with raw mode and live resize — chosen by
   whether the task is [interactive](interactive-mode.md#which-container-is-eligible)-eligible
-  and whether Ratect's own stdin *and* stdout are terminals; the two stdin paths
-  attach before Docker's start, so nothing typed early is lost. It does **not** remove
-  the container: the engine's cleanup stage removes everything a task created, its
-  own container included, so `--no-cleanup-*` is interpreted in exactly one place.
+  and whether Ratect's own stdin *and* stdout are terminals. All three attach to the
+  container before Docker's start and read its output from that attach, as Batect
+  does, so nothing typed or printed early is lost and any log driver works. It does
+  **not** remove the container: the engine's cleanup stage removes everything a task
+  created, its own container included, so `--no-cleanup-*` is interpreted in exactly
+  one place.
 - **`create_network` / `remove_network` / `network_exists`**: the per-task network,
   plus the up-front validation that makes `--use-network` fail with a clear error
   rather than an unrelated API failure later.
 - **`start_background_container` / `stop_and_remove_container`**: the same, for a
   dependency or sidecar — started and left running alongside the task rather than
-  waited on, so no logs are streamed and no task `command` applies.
+  waited on, so no task `command` applies; its output is shown only under
+  [`-o all`](output-styles.md#all), read from an attach made before it starts.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two steps of the
   [dependency readiness gate](dependency-readiness.md#the-readiness-gate). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict

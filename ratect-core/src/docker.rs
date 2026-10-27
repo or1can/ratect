@@ -20,17 +20,19 @@
 //! trait so the engine can be tested against a fake instead of a live daemon. Gotchas
 //! worth knowing before touching it: `run_container`'s three actual start/attach
 //! paths (`run_container_interactively`/`run_container_forwarding_stdin`/
-//! `start_and_stream_logs`) each call Docker's own `start` at a different point
-//! relative to attaching (the TTY path attaches *before* starting, deliberately, so
-//! no early output is missed) — `run_container`'s own `started` parameter (0.21.0)
-//! is threaded into all three so each can signal it right after its own `start`
-//! call succeeds, regardless of which path actually ran, letting `engine.rs`'s
-//! concurrent readiness gate begin at the right moment however the container ends
-//! up attached; **`run_container` never removes the container it creates** —
-//! `engine.rs`'s cleanup stage removes everything, the task's own container
-//! included, so `--no-cleanup-after-success`/`-failure` are read in exactly one
-//! place (0.25.0, see `engine.rs`'s own note and `run_container`'s doc comment for
-//! why the split was retired rather than corrected again); the interactive path's `RawModeGuard`
+//! `start_and_stream_output`) each make their own attach and Docker `start` call,
+//! all three attaching *before* starting, deliberately, so no early output is missed,
+//! and reading output from that attach rather than Docker's `logs` API, which answers
+//! 501 for a log driver it can't read back (ratect#517); `run_container`'s own
+//! `started` parameter (0.21.0) is threaded into all three so each can signal it
+//! right after its own `start` call succeeds, regardless of which path actually
+//! ran, letting `engine.rs`'s concurrent readiness gate begin at the right moment
+//! however the container ends up attached; **`run_container` never removes the
+//! container it creates** — `engine.rs`'s cleanup stage removes everything, the
+//! task's own container included, so `--no-cleanup-after-success`/`-failure` are
+//! read in exactly one place (0.25.0, see `engine.rs`'s own note and
+//! `run_container`'s doc comment for why the split was retired rather than
+//! corrected again); the interactive path's `RawModeGuard`
 //! restores the terminal on `Drop`, even on an error return; since Ratect has no `--output`
 //! streaming mode, a failed build's full log transcript (not just Docker's one-line
 //! summary) is folded into the returned error instead; `command`/`entrypoint`/
@@ -134,7 +136,6 @@ use bollard::query_parameters::CreateContainerOptionsBuilder;
 use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::EventsOptionsBuilder;
 use bollard::query_parameters::InspectContainerOptions;
-use bollard::query_parameters::LogsOptions;
 use bollard::query_parameters::ResizeContainerTTYOptionsBuilder;
 use bollard::query_parameters::UploadToContainerOptionsBuilder;
 use bollard::query_parameters::WaitContainerOptions;
@@ -1198,44 +1199,25 @@ impl Drop for RawModeGuard {
     }
 }
 
-/// Drives `container_id`'s Docker log stream to completion, line-buffering
-/// its output into [`TaskEvent::ContainerOutput`] events on `event_sink` —
-/// the [`ContainerIoStreaming::Interleaved`] policy's (the `all` output
-/// mode's) per-container streaming, shared by `start_and_stream_logs`'s
-/// interleaved branch (the task's own container, whose stream error should
-/// propagate and fail the task) and `start_background_container`'s spawned
-/// follower (a dependency's whole lifetime, fire-and-forget — that caller
-/// logs and swallows the error instead). Thin wrapper around
-/// [`drain_interleaved_log_stream`] that supplies the real Docker log
-/// stream; split out so the actual line-buffering/flush logic is
-/// unit-testable against a synthetic stream, with no live daemon needed.
-async fn stream_logs_as_interleaved_events(
-    docker: &Docker,
-    event_sink: &std::sync::Arc<dyn EventSink>,
-    container_name: &str,
-    container_id: &str,
-) -> Result<()> {
-    let logs = docker.logs(
-        container_id,
-        Some(LogsOptions {
-            stdout: true,
-            stderr: true,
-            follow: true,
-            ..Default::default()
-        }),
-    );
-    drain_interleaved_log_stream(logs, event_sink, container_name).await
-}
-
-/// The actual line-buffering loop — see [`stream_logs_as_interleaved_events`]
-/// for why it always flushes any buffered partial line before returning,
-/// whether `logs` ended cleanly or with an error.
-async fn drain_interleaved_log_stream(
-    logs: impl futures::Stream<Item = Result<bollard::container::LogOutput, bollard::errors::Error>>,
+/// Drives a container's attached output stream to completion,
+/// line-buffering it into [`TaskEvent::ContainerOutput`] events on
+/// `event_sink` — the [`ContainerIoStreaming::Interleaved`] policy's (the
+/// `all` output mode's) per-container streaming, shared by
+/// `start_and_stream_output`'s interleaved branch (the task's own container,
+/// whose stream error should propagate and fail the task) and
+/// `start_background_container`'s spawned follower (a dependency's whole
+/// lifetime, fire-and-forget — that caller logs and swallows the error
+/// instead). Takes the stream rather than attaching itself, so each caller
+/// can attach before its own `start` and the line-buffering is unit-testable
+/// against a synthetic stream, with no live daemon needed. Always flushes
+/// any buffered partial line before returning, whether `output` ended cleanly
+/// or with an error.
+async fn drain_interleaved_output(
+    output: impl futures::Stream<Item = Result<bollard::container::LogOutput, bollard::errors::Error>>,
     event_sink: &std::sync::Arc<dyn EventSink>,
     container_name: &str,
 ) -> Result<()> {
-    let mut logs = std::pin::pin!(logs);
+    let mut output = std::pin::pin!(output);
     let mut line_buffer = crate::ui::interleaved::LineBuffer::new();
     let emit = |line: &str| {
         event_sink.post(TaskEvent::ContainerOutput {
@@ -1244,9 +1226,9 @@ async fn drain_interleaved_log_stream(
         });
     };
     let result = loop {
-        match logs.next().await {
+        match output.next().await {
             Some(Ok(output)) => line_buffer.push(output.as_ref(), emit),
-            Some(Err(e)) => break Err(e).context("Failed to get container logs"),
+            Some(Err(e)) => break Err(e).context("Failed to read container output"),
             None => break Ok(()),
         }
         // The logger's `Console` ignores a failed write, so its reader having
@@ -1756,7 +1738,7 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
 
     /// Starts `container_id` — created by
     /// [`create_container`](Self::create_container) from `spec` — and runs
-    /// it to completion, streaming its logs to stdout: a task's own
+    /// it to completion, streaming its output to stdout: a task's own
     /// container. Unlike
     /// [`start_background_container`](Self::start_background_container),
     /// `spec.role` is always [`crate::labels::ContainerRole::Task`], and
@@ -1765,9 +1747,9 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// stdin-forwarding, and a real TTY — chosen from `spec.interactive`
     /// and whether this process's own stdin and stdout are terminals
     /// (`task_container_io`, the same decision creation baked into the
-    /// container's config); the two stdin paths attach *before* Docker's
-    /// `start`, so nothing typed early is lost, and the non-interactive one
-    /// starts and then follows the logs.
+    /// container's config); all three attach *before* Docker's `start`, so
+    /// nothing typed or printed early is lost, and read the container's
+    /// output from that attach.
     ///
     /// **This never removes the container.** Everything Ratect
     /// creates is removed by `engine.rs`'s own cleanup stage, under one
@@ -1840,7 +1822,7 @@ impl LogFollowers {
     /// Awaits (and removes) `container_id`'s background log-follower handle,
     /// if one was inserted for it. A no-op for any container with no
     /// follower — every non-interleaved run, and the task's own container
-    /// (which streams via `start_and_stream_logs` directly, never through a
+    /// (which streams via `start_and_stream_output` directly, never through a
     /// spawned follower).
     ///
     /// Cancelled mid-wait (a graceful removal dropped on the engine's
@@ -2468,9 +2450,9 @@ impl DockerClient {
 
     /// The shared primitive behind two different contracts: this method's
     /// own two callers only ever reach it once a container has already
-    /// stopped (e.g. after its log stream, followed with `follow: true`,
-    /// has ended), at which point Docker still has the exit status
-    /// available and this resolves immediately; [`wait_for_container_exit`]
+    /// stopped (e.g. after its attached output stream has ended), at which
+    /// point Docker still has the exit status available and this resolves
+    /// immediately; [`wait_for_container_exit`]
     /// reaches the exact same bollard call from the opposite position — a
     /// container that may still be running for a while yet — and genuinely
     /// waits. Nothing here depends on which is true; only what each caller
@@ -2656,20 +2638,12 @@ impl DockerClient {
         container_id: &str,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
-        let attach_options = AttachContainerOptionsBuilder::default()
-            .stdin(true)
-            .stdout(true)
-            .stderr(true)
-            .stream(true)
-            .build();
         let AttachContainerResults {
             output: mut attach_output,
             input: attach_input,
         } = self
-            .docker
-            .attach_container(container_id, Some(attach_options))
-            .await
-            .with_context(|| format!("Failed to attach to container '{container_name}'"))?;
+            .attach_output(container_name, container_id, true)
+            .await?;
 
         let raw_mode = RawModeGuard::enable()?;
 
@@ -2722,23 +2696,52 @@ impl DockerClient {
         self.exit_code(container_id).await
     }
 
-    /// Starts `container_id` (already created) and streams its stdout/stderr
+    /// Attaches to `container_id`'s stdout and stderr, and its stdin when
+    /// `stdin`, as one stream, framed by whether the container has a TTY.
+    /// Called before the container starts,
+    /// since an attach only sees output written after it is made. Attaching,
+    /// as Batect does, rather than following Docker's `logs` API: an attach
+    /// works whatever the container's log driver, where `logs` answers 501
+    /// for one Docker can't read back, such as `log_driver: none`
+    /// (ratect#517).
+    async fn attach_output(
+        &self,
+        container_name: &str,
+        container_id: &str,
+        stdin: bool,
+    ) -> Result<AttachContainerResults> {
+        let attach_options = AttachContainerOptionsBuilder::default()
+            .stdin(stdin)
+            .stdout(true)
+            .stderr(true)
+            .stream(true)
+            .build();
+        self.docker
+            .attach_container(container_id, Some(attach_options))
+            .await
+            .with_context(|| format!("Failed to attach to container '{container_name}'"))
+    }
+
+    /// Starts `container_id` (already created) and streams `output`, its
+    /// stdout/stderr from an `attach_output` made before this is called,
     /// until it exits, then returns its exit code — raw to the local stdout
     /// by default, or line-buffered into `ContainerOutput` events under the
     /// [`ContainerIoStreaming::Interleaved`] policy (the `all` output mode,
     /// where the logger owns stdout and every line needs a container
-    /// prefix). Uses Docker's plain (non-TTY) `logs` follow API. Shared by
-    /// the fully non-interactive path and `run_container_forwarding_stdin`
-    /// below — both need identical output handling, differing only in
-    /// whether stdin is piped in alongside it.
+    /// prefix). Shared by the fully non-interactive path and
+    /// `run_container_forwarding_stdin` below — both need identical output
+    /// handling, differing only in whether stdin is piped in alongside it.
     ///
     /// `started`, if given, is signaled with `container_id` right after
     /// Docker's own `start` call succeeds — see `run_container`'s own doc
     /// comment for why.
-    async fn start_and_stream_logs(
+    async fn start_and_stream_output(
         &self,
         container_name: &str,
         container_id: &str,
+        output: impl futures::Stream<
+            Item = Result<bollard::container::LogOutput, bollard::errors::Error>,
+        >,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
         self.docker
@@ -2751,26 +2754,12 @@ impl DockerClient {
         }
 
         if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
-            stream_logs_as_interleaved_events(
-                &self.docker,
-                &self.event_sink,
-                container_name,
-                container_id,
-            )
-            .await?;
+            drain_interleaved_output(output, &self.event_sink, container_name).await?;
         } else {
-            let mut logs = self.docker.logs(
-                container_id,
-                Some(LogsOptions {
-                    stdout: true,
-                    stderr: true,
-                    follow: true,
-                    ..Default::default()
-                }),
-            );
-            while let Some(log) = logs.next().await {
-                let output = log.context("Failed to get container logs")?;
-                write_container_output(&mut std::io::stdout().lock(), output.as_ref())?;
+            let mut output = std::pin::pin!(output);
+            while let Some(chunk) = output.next().await {
+                let chunk = chunk.context("Failed to read container output")?;
+                write_container_output(&mut std::io::stdout().lock(), chunk.as_ref())?;
             }
         }
 
@@ -2785,36 +2774,33 @@ impl DockerClient {
     /// stdin forwarding for each task's own container, prerequisites
     /// included, independent of its separate (and stricter, here) TTY gate.
     ///
-    /// Attaches stdin-only *before* starting the container — same
-    /// before-start ordering rationale as `run_container_interactively`, so
-    /// nothing written early is lost — then reuses `start_and_stream_logs`
-    /// for output, since this path's output handling is identical to the
-    /// plain non-interactive case.
+    /// Attaches stdin and output together *before* starting the container —
+    /// same before-start ordering rationale as `run_container_interactively`,
+    /// so nothing written early is lost — then reuses
+    /// `start_and_stream_output` for that output, since this path's output
+    /// handling is identical to the plain non-interactive case. Input comes
+    /// from `stdin_reader`: the process's own, `StdinReader::process`, except
+    /// in a test.
     async fn run_container_forwarding_stdin(
         &self,
         container_name: &str,
         container_id: &str,
+        stdin_reader: &'static stdin::StdinReader,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
-        let attach_options = AttachContainerOptionsBuilder::default()
-            .stdin(true)
-            .stream(true)
-            .build();
         let AttachContainerResults {
+            output,
             input: attach_input,
-            ..
         } = self
-            .docker
-            .attach_container(container_id, Some(attach_options))
-            .await
-            .with_context(|| format!("Failed to attach to container '{container_name}'"))?;
+            .attach_output(container_name, container_id, true)
+            .await?;
 
         // Same as the interactive path's stdin pump — stopped once
         // output-following ends, not awaited to completion.
-        let stdin_pump = spawn_stdin_pump(stdin::StdinReader::process(), attach_input);
+        let stdin_pump = spawn_stdin_pump(stdin_reader, attach_input);
 
         let result = self
-            .start_and_stream_logs(container_name, container_id, started)
+            .start_and_stream_output(container_name, container_id, output, started)
             .await;
         drop(stdin_pump);
         result
@@ -3187,6 +3173,21 @@ impl ContainerRuntime for DockerClient {
         spec: &ContainerSpec,
     ) -> Result<()> {
         let shared = &spec.shared;
+        // Under the interleaved policy (the `all` output mode — the only
+        // mode that shows dependency output at all), this container's output
+        // is followed for its whole lifetime, through an attach made before
+        // it starts so nothing it writes at once is lost. An attach that
+        // fails fails this start, as it would under Batect; only an error
+        // once the stream is being read is swallowed, below.
+        let attached =
+            if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
+                Some(
+                    self.attach_output(&shared.name, container_id, false)
+                        .await?,
+                )
+            } else {
+                None
+            };
         self.docker
             .start_container(container_id, None)
             .await
@@ -3197,27 +3198,18 @@ impl ContainerRuntime for DockerClient {
             "started container"
         );
 
-        // Under the interleaved policy (the `all` output mode — the only
-        // mode that shows dependency output at all), follow this
-        // container's logs in the background for its whole lifetime,
-        // posting each line as an event. Not fully fire-and-forget: the
-        // handle is kept in `log_followers`, and `stop_and_remove_container`
-        // awaits (and removes) it before returning, so this task's own
-        // exit can never race past the container's actual removal — see
-        // `LogFollowers`' own doc comment for why that ordering matters.
-        if self.event_sink.container_io_streaming() == ContainerIoStreaming::Interleaved {
-            let docker = self.docker.clone();
+        // The follower posts each line as an event. Not fully
+        // fire-and-forget: the handle is kept in `log_followers`, and
+        // `stop_and_remove_container` awaits (and removes) it before
+        // returning, so this task's own exit can never race past the
+        // container's actual removal — see `LogFollowers`' own doc comment
+        // for why that ordering matters.
+        if let Some(attached) = attached {
             let event_sink = std::sync::Arc::clone(&self.event_sink);
             let container_name = shared.name.clone();
-            let followed_id = container_id.to_string();
             let handle = tokio::spawn(async move {
-                if let Err(e) = stream_logs_as_interleaved_events(
-                    &docker,
-                    &event_sink,
-                    &container_name,
-                    &followed_id,
-                )
-                .await
+                if let Err(e) =
+                    drain_interleaved_output(attached.output, &event_sink, &container_name).await
                 {
                     // The stream ending with an error overwhelmingly means
                     // the container went away — normal during cleanup, not
@@ -3228,7 +3220,7 @@ impl ContainerRuntime for DockerClient {
                     tracing::debug!(
                         container = container_name.as_str(),
                         error = ?e,
-                        "dependency container log stream ended"
+                        "dependency container output stream ended"
                     );
                 }
             });
@@ -3401,10 +3393,18 @@ impl ContainerRuntime for DockerClient {
             self.run_container_interactively(&shared.name, container_id, started)
                 .await
         } else if interactive {
-            self.run_container_forwarding_stdin(&shared.name, container_id, started)
-                .await
+            self.run_container_forwarding_stdin(
+                &shared.name,
+                container_id,
+                stdin::StdinReader::process(),
+                started,
+            )
+            .await
         } else {
-            self.start_and_stream_logs(&shared.name, container_id, started)
+            let attached = self
+                .attach_output(&shared.name, container_id, false)
+                .await?;
+            self.start_and_stream_output(&shared.name, container_id, attached.output, started)
                 .await
         };
 

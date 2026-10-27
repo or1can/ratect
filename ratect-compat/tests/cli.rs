@@ -8724,3 +8724,103 @@ fn clean_with_a_container_both_tagged_and_overridden_removes_nothing() {
     );
     assert!(kept, "--clean removed a cache despite the conflict");
 }
+
+fn log_driver_none_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/log-driver-none.yml")
+}
+
+/// Whether `stdout`, under `-o all`, has a line `line` prefixed with
+/// `container`'s name — `<container><padding> | <line>`.
+fn has_interleaved_line(stdout: &str, container: &str, line: &str) -> bool {
+    stdout.lines().any(|candidate| {
+        candidate
+            .split_once(" | ")
+            .is_some_and(|(prefix, rest)| prefix.trim_end() == container && rest == line)
+    })
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A task container whose `log_driver` Docker can't read back still shows
+/// its output, in both the default and the `all` style, and the task
+/// succeeds (ratect#517): output is read by attaching to the container, as
+/// Batect does. The marker is the command's first and only write, so this
+/// also proves the attach is made before the container starts — `none`
+/// keeps nothing to replay.
+#[test]
+#[ignore]
+fn log_driver_none_task_output_is_shown_via_docker() {
+    let marker = "ratect-log-driver-none-marker";
+    for style in ["simple", "all"] {
+        let output = ratect_command()
+            .args(["-o", style, "-f"])
+            .arg(log_driver_none_config_path())
+            .arg("say")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "-o {style}: {output:?}");
+        if style == "simple" {
+            assert_eq!(task_output(&stdout, "box"), marker);
+        } else {
+            assert!(
+                has_interleaved_line(&stdout, "box", marker),
+                "-o all: missing box's marker line:\n{stdout}"
+            );
+        }
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// The stdin-forwarding path (stdin piped, so no TTY) reads a `log_driver:
+/// none` task container's output too (ratect#517), from the same attach that
+/// carries its stdin.
+#[test]
+#[ignore]
+fn log_driver_none_task_container_takes_piped_stdin_via_docker() {
+    let marker = "ratect-log-driver-none-stdin-marker";
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(log_driver_none_config_path())
+        .arg("shell")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+    let mut stdin = child.stdin.take().expect("child should have piped stdin");
+    writeln!(stdin, "echo {marker}").expect("failed to write to piped stdin");
+    drop(stdin);
+
+    let output = child.wait_with_output().expect("failed to wait for ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(task_output(&stdout, "box"), marker);
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Under `-o all`, a dependency whose `log_driver` Docker can't read back
+/// has its output shown as interleaved lines (ratect#517) — its follower
+/// attaches before that container starts, so the marker it echoes at once
+/// isn't lost — and the task succeeds.
+#[test]
+#[ignore]
+fn log_driver_none_dependency_output_is_shown_under_all_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "all", "-f"])
+        .arg(log_driver_none_config_path())
+        .arg("with-dependency")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        has_interleaved_line(&stdout, "noisy", "ratect-log-driver-none-dependency-marker"),
+        "missing noisy's marker line:\n{stdout}"
+    );
+}

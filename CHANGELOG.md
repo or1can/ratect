@@ -99,6 +99,7 @@ history, from when it was the only binary.
 - Every container a run creates — each prerequisite task's own, and every dependency and sidecar — gets the host's `TERM`, as in Batect, not only the invoked task's own container.
 - A task's containers are no longer also attached to Docker's default bridge network, only to the task network.
 - A container that doesn't set `enable_init_process` runs without an init process even when the daemon is configured with `"init": true`, as in Batect.
+- A container whose log driver Docker can't read back, such as `log_driver: none`, no longer fails the task with `Failed to get container logs`; its output is shown as for any other container.
 - `ratect-compat`: an unknown option's error no longer suggests passing it after `--`.
 - An unknown option's error from `ratect run` no longer suggests passing it after `--` (ratect only).
 - The `ratect-compat` CLI reference says its value placeholders describe a value's shape, not the ones `--help` prints.

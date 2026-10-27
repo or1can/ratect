@@ -1,0 +1,35 @@
+# Containers whose log driver Docker can't read back (ratect#517). Their
+# output is still shown, because it's read by attaching to the container, as
+# Batect does, not through Docker's logs API, which answers 501 for them.
+# Each command writes its marker the moment it starts, so output written
+# before an attach made after `start` would be lost: see the
+# `log_driver_none_*` tests in tests/cli.rs.
+project_name: ratect-log-driver-none-test
+containers:
+  box:
+    image: alpine:3.18.2
+    log_driver: none
+  noisy:
+    image: alpine:3.18.2
+    log_driver: none
+    # The init process forwards the stop's SIGTERM to `sleep`, which as
+    # PID 1 would ignore it and hold cleanup for the whole grace period.
+    enable_init_process: true
+    command: sh -c "echo ratect-log-driver-none-dependency-marker && exec sleep 300"
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - noisy
+tasks:
+  say:
+    run:
+      container: box
+      command: echo ratect-log-driver-none-marker
+  shell:
+    run:
+      container: box
+      command: sh
+  with-dependency:
+    run:
+      container: app
+      command: "true"

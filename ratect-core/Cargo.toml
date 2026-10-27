@@ -256,7 +256,7 @@ schema = ["dep:schemars", "dep:jsonschema"]
 [dev-dependencies]
 # **`bytes`** (`ratect-core` dev-dependency only): constructs
 # `bollard::container::LogOutput` values directly in `docker.rs`'s own unit
-# tests (`drain_interleaved_log_stream`'s tests, which feed it a synthetic
+# tests (`drain_interleaved_output`'s tests, which feed it a synthetic
 # log stream via `futures::stream::iter` instead of needing a live daemon) —
 # `LogOutput`'s variants wrap a `bytes::Bytes` message, which bollard itself
 # doesn't re-export. Already resolved in `Cargo.lock` transitively (via
