@@ -838,19 +838,16 @@ async fn async_main() {
     };
 
     // `std::process::exit` (not returning `ExitCode` from `main`) is
-    // deliberate: an interactive run leaves a `tokio::io::stdin()`-backed
-    // blocking read task abandoned once its session ends (the stdin pump in
-    // `DockerClient::run_container_interactively` is `.abort()`ed, but that
-    // only stops polling it — the underlying OS thread stays blocked in a
-    // real `read()` syscall until stdin next produces data or EOF, which a
-    // real terminal's stdin never does on its own). Returning `ExitCode`
-    // normally would drop the runtime `panic_hook::run_main` built, which
-    // waits for exactly that lingering task — hanging the whole process
-    // indefinitely after every interactive session. `process::exit` skips
-    // that wait entirely; everything that needed to run on a clean exit
-    // (the raw-mode guard restoring the terminal, container/network cleanup)
-    // has already completed via ordinary `Drop`/`?`-propagation well before
-    // `run().await` returns here.
+    // deliberate: returning normally would drop the runtime
+    // `panic_hook::run_main` built, which waits for every blocking task
+    // still running — and one can be, such as a credential helper an
+    // interrupted run stopped waiting for. (Stdin was once one, parked in a
+    // `read()` a terminal never ends on its own; it is now read on a plain
+    // thread, see `ratect-core`'s `docker::stdin`, which nothing waits for.)
+    // `process::exit` skips that wait entirely; everything that needed to
+    // run on a clean exit (the raw-mode guard restoring the terminal,
+    // container/network cleanup) has already completed via ordinary
+    // `Drop`/`?`-propagation well before `run().await` returns here.
     std::process::exit(exit_code.into());
 }
 

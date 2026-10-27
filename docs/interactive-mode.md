@@ -19,11 +19,16 @@ project on [Worked Examples](worked-examples.md) carries one too.
 
 ## Which container is eligible
 
-Only the invoked task's own container — the task actually named on the
-command line. A prerequisite's, a dependency's, or a sidecar's container is
-never interactive, however it is reached: a task that is interactive when you
-name it is not when it runs as another task's prerequisite, because stdin can
-only usefully attach to one container.
+Each task's own container — the task named on the command line, and every
+prerequisite it runs, however deeply nested. A dependency's or a sidecar's
+container is never interactive. Prerequisites run one after another, and
+each task container is attached to Ratect's stdin only while it runs.
+Whatever input is waiting meanwhile is forwarded to it, whether or not it
+reads it, so a prerequisite takes piped input ahead of the named task. If
+the pipe ends while it runs, the named task's stdin is closed from the
+start. What
+you type at a terminal goes to the task container running at the time; what
+you type between two of them waits for the next.
 
 ## What the eligible container gets
 
@@ -38,9 +43,12 @@ below.)
 Additionally, when *both* Ratect's own stdin *and* stdout are real
 terminals, **a real Docker TTY**: the local terminal goes into raw mode for
 the session, so a full-screen program (an editor, `top`, a REPL with line
-editing) renders as it would in a shell. Piped output, a redirected
-non-terminal, or a CI job gets plain stdin forwarding and streamed output
-instead — stdin still reaches the container either way.
+editing) renders as it would in a shell. A raw terminal sends Ctrl+C to the
+container as a keystroke, as `docker run -it` does, so it interrupts the
+program in the container rather than the run — and a command running as the
+container's main process with no handler of its own ignores it. Piped output,
+a redirected non-terminal, or a CI job gets plain stdin forwarding and
+streamed output instead — stdin still reaches the container either way.
 
 The one exception is [`--output all`](output-styles.md#all), whose
 line-prefixed output can't host an interactive session: under it no

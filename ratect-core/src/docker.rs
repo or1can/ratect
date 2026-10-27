@@ -144,8 +144,7 @@ use std::fmt;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 /// The task's own container ran to completion, but its command exited with a
 /// non-zero status. Distinct from other errors (Docker API failures, missing
@@ -1086,37 +1085,44 @@ fn build_output_suffix(output: &str) -> String {
 }
 
 /// Whether a container run should actually get a real Docker TTY.
-/// `interactive` is eligibility — this is the top-level requested task's own
-/// container, see `TaskEngine::run_task_internal` — not a guarantee: it's
-/// further gated on the local process's own stdin *and* stdout genuinely
-/// being connected to a terminal. Stdin forwarding is not gated on this —
+/// `interactive` is eligibility — this is a task's own container, the named
+/// task's or a prerequisite's, see `TaskEngine::run_task_internal` — not a
+/// guarantee: it's further gated on the local process's own stdin *and*
+/// stdout genuinely being connected to a terminal. Stdin forwarding is not gated on this —
 /// see [`StdinFlags`].
 fn should_use_tty(interactive: bool, stdin_is_tty: bool, stdout_is_tty: bool) -> bool {
     interactive && stdin_is_tty && stdout_is_tty
 }
 
-/// Copies the local process's stdin into a container's attach input, then
-/// shuts that input down at local EOF — the half-close (Batect's own
-/// `CloseWrite()`) that tells Docker the input has ended, so a `stdin_once`
-/// container (see [`StdinFlags`]) gets its own stdin closed in turn
-/// (ratect#220). Explicit rather than left to dropping `attach_input`: that
-/// is a write half split from the same connection as the output stream, and
-/// dropping it closes nothing while the output half is still being read.
-/// Errors are dropped — the pump is best-effort, and the container's exit is
-/// what ends the session either way.
-async fn forward_stdin(mut attach_input: Pin<Box<dyn AsyncWrite + Send>>) {
-    let mut stdin = tokio::io::stdin();
-    let _ = tokio::io::copy(&mut stdin, &mut attach_input).await;
-    let _ = attach_input.shutdown().await;
+/// A spawned task aborted when this is dropped, not only when a session
+/// reaches its own end: a session's future can be dropped mid-way — a
+/// cancelled run drops the task container's run — and a detached stdin pump
+/// would otherwise keep [`stdin::StdinReader`] to itself, taking what is
+/// typed during cleanup.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Starts a session's stdin pump, stopped when the returned guard is
+/// dropped — however the session ends.
+fn spawn_stdin_pump(
+    reader: &'static stdin::StdinReader,
+    attach_input: std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>,
+) -> AbortOnDrop {
+    AbortOnDrop(tokio::spawn(reader.forward(attach_input)))
 }
 
 /// The stdin half of a task container's creation config. `open_stdin`/
 /// `attach_stdin` follow `interactive` alone — wider than `use_tty` — so
 /// piping input into a task works even when no TTY is allocated (Ratect's
 /// own stdout redirected to a file, say), matching Batect's unconditional
-/// stdin forwarding for the task's own container. `stdin_once` follows them,
-/// not the TTY: it is what makes Docker close the container's stdin when the
-/// attach connection's input ends, and without it piped input reaching its
+/// stdin forwarding for each task's own container, prerequisites included.
+/// `stdin_once` follows them, not the TTY: it is what makes Docker close the
+/// container's stdin when the attach connection's input ends, and without it piped input reaching its
 /// end never reaches the container, so a process that runs until its input
 /// ends never exits (ratect#220). `docker run -i` and Batect's docker-client
 /// both set it whenever stdin is attached. Only `tty` itself — pty
@@ -1273,8 +1279,8 @@ async fn resize_tty(docker: &Docker, container_id: &str) {
 /// why that API is off-limits here (it would consume/interpret stdin bytes
 /// instead of passing them through raw); a plain OS signal doesn't have
 /// that problem. Unix-only — `SignalKind::window_change()` doesn't exist on
-/// other platforms; the caller's `#[cfg(not(unix))]` side just doesn't spawn
-/// this, falling back to the previous once-at-attach-only behavior rather
+/// other platforms, where the caller just doesn't spawn this, falling back
+/// to the previous once-at-attach-only behavior rather
 /// than erroring (interactive mode itself stays cross-platform — this is a
 /// narrower, non-fatal gap on non-Unix, unlike `user.rs`'s hard Unix-only
 /// functions).
@@ -2196,6 +2202,7 @@ async fn resolve_build_credentials(
 
 pub(crate) mod boolean_variable;
 mod connection;
+mod stdin;
 pub use connection::DockerConnectionOptions;
 
 impl DockerClient {
@@ -2656,7 +2663,7 @@ impl DockerClient {
             .await
             .with_context(|| format!("Failed to attach to container '{container_name}'"))?;
 
-        let _raw_mode = RawModeGuard::enable()?;
+        let raw_mode = RawModeGuard::enable()?;
 
         self.docker
             .start_container(container_id, None)
@@ -2672,17 +2679,15 @@ impl DockerClient {
         // for the rest of the session, on every subsequent local resize.
         resize_tty(&self.docker, container_id).await;
         #[cfg(unix)]
-        let resize_listener = Some(spawn_resize_listener(
+        let resize_listener = AbortOnDrop(spawn_resize_listener(
             self.docker.clone(),
             container_id.to_string(),
         ));
-        #[cfg(not(unix))]
-        let resize_listener: Option<tokio::task::JoinHandle<()>> = None;
 
         // The attach output stream ending (the container exiting) is what
-        // ends the session, so this pump is aborted once that happens rather
+        // ends the session, so this pump is stopped once that happens rather
         // than awaited to completion.
-        let stdin_pump = tokio::spawn(forward_stdin(attach_input));
+        let stdin_pump = spawn_stdin_pump(stdin::StdinReader::process(), attach_input);
 
         let mut stdout = tokio::io::stdout();
         let output_result: Result<()> = async {
@@ -2697,10 +2702,13 @@ impl DockerClient {
             Ok(())
         }
         .await;
-        stdin_pump.abort();
-        if let Some(handle) = resize_listener {
-            handle.abort();
-        }
+        // The terminal leaves raw mode with the pump, so a key pressed while
+        // the exit code is fetched — Ctrl+C above all — reaches the terminal
+        // as usual rather than waiting in the reader for the next container.
+        drop(stdin_pump);
+        drop(raw_mode);
+        #[cfg(unix)]
+        drop(resize_listener);
         output_result?;
 
         self.exit_code(container_id).await
@@ -2765,9 +2773,9 @@ impl DockerClient {
     /// allocating a real Docker TTY — the `interactive`-but-not-`use_tty`
     /// case (e.g. `should_use_tty`'s stdin-and-stdout-both-real-terminals
     /// gate failing because stdout was piped/redirected, even though this
-    /// is still the top-level requested task). Matches Batect's own
-    /// unconditional stdin forwarding for the task's own container,
-    /// independent of its separate (and stricter, here) TTY gate.
+    /// is still a task's own container). Matches Batect's own unconditional
+    /// stdin forwarding for each task's own container, prerequisites
+    /// included, independent of its separate (and stricter, here) TTY gate.
     ///
     /// Attaches stdin-only *before* starting the container — same
     /// before-start ordering rationale as `run_container_interactively`, so
@@ -2793,14 +2801,14 @@ impl DockerClient {
             .await
             .with_context(|| format!("Failed to attach to container '{container_name}'"))?;
 
-        // Same as the interactive path's stdin pump — aborted once
+        // Same as the interactive path's stdin pump — stopped once
         // output-following ends, not awaited to completion.
-        let stdin_pump = tokio::spawn(forward_stdin(attach_input));
+        let stdin_pump = spawn_stdin_pump(stdin::StdinReader::process(), attach_input);
 
         let result = self
             .start_and_stream_logs(container_name, container_id, started)
             .await;
-        stdin_pump.abort();
+        drop(stdin_pump);
         result
     }
 }

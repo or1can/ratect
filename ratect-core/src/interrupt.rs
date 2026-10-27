@@ -91,10 +91,11 @@
 //! terminal does not turn Ctrl+C into a signal at all — the `0x03` byte is
 //! forwarded to the container's stdin, for the container to interpret. That
 //! is correct, and matches `docker run -it`: the keystroke belongs to the
-//! program you are talking to. So this handler is what covers every
-//! *non*-interactive run, which is all of CI and most local task runs, and
-//! an interactive session is served by the container receiving the keystroke
-//! itself.
+//! program you are talking to. So this handler covers every moment no task
+//! container holds the terminal — all of CI, a run with output redirected,
+//! and on a terminal the time between task containers — and while one does,
+//! each task's own container, a prerequisite's included, receives the
+//! keystroke itself.
 //!
 //! # Two invariants to preserve
 //!

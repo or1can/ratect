@@ -807,9 +807,9 @@ async fn async_main() {
         }
     };
 
-    // `std::process::exit`, not returning `ExitCode`: an interactive run
-    // leaves a blocking stdin read abandoned, and dropping the runtime
-    // normally would wait for it forever. See `ratect-compat`'s own `async_main`
+    // `std::process::exit`, not returning `ExitCode`: dropping the runtime
+    // normally would wait for any blocking task still running. See
+    // `ratect-compat`'s own `async_main`
     // for the full explanation — everything needing to run on a clean exit
     // already has by the time `run` returns.
     std::process::exit(exit_code.into());

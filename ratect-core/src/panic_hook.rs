@@ -29,9 +29,8 @@
 //!
 //! [`run_main`] is the other half: it makes sure a panic *ends* the process.
 //! A panic that unwinds out of `#[tokio::main]` drops the runtime on its way,
-//! and dropping a runtime waits for its blocking threads — one of which, on
-//! any run that forwards stdin, is parked in a `read()` that only more input
-//! or EOF ends. That is why both `main`s already leave with
+//! and dropping a runtime waits for its blocking threads, however long any
+//! of them still has to run. That is why both `main`s already leave with
 //! `std::process::exit` rather than returning; a panic skipped that exit and
 //! left the process alive, its containers never cleaned up, until something
 //! killed it (ratect#670). Only a panic on the main thread unwinds that far:

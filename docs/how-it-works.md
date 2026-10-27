@@ -103,10 +103,12 @@ where that lives and stays current.
    forever.
 3. **Run prerequisites**, each through the same recursive function, before the
    task's own container step. They run with `top_level: false`, unlike the task
-   actually named on the command line, and that flag is the whole of
-   interactive-TTY eligibility: a prerequisite chain isn't the thing being run
-   interactively, so only the originally-requested task's own container is ever
-   eligible, however deeply nested its prerequisites are. The task is then
+   actually named on the command line, and with no `-- ARGS`. The flag keeps
+   `--skip-prerequisites` to the named task, and leaves a prerequisite's
+   resources out of `--no-cleanup-after-success`. It plays no part in
+   interactive eligibility: every task's own container is eligible, however
+   deeply nested, as in Batect — see [Interactive Mode](interactive-mode.md).
+   The task is then
    **evaluated**, before any Docker work of its own: every container in its graph,
    its `run.environment` and its `customise` environments go through
    `LoadedProject::evaluate`, and the rest of the task reads only those values. A

@@ -26,9 +26,9 @@
 //! expose the same ~10 knobs behind differently-named flags, so neither
 //! duplicates the builder chain; a new setting needs adding in both places or a
 //! binary can't reach it, and this module's own tests keep using the builders,
-//! where naming one setting reads better than a mostly-default struct); and only
-//! the task actually named on the command line (never a
-//! prerequisite) is ever eligible for interactive-TTY mode. `run_task_internal`
+//! where naming one setting reads better than a mostly-default struct); and
+//! every task's own container, the named task's and each prerequisite's, is
+//! eligible for interactive-TTY mode — never a dependency's. `run_task_internal`
 //! runs `prerequisites` first, then returns early (no error) if the task itself has
 //! no `run` (0.14.0) — everything after can assume `run` is present. `customise`
 //! threads through `start_dependency`'s own recursion unconditionally, so it
@@ -331,8 +331,8 @@ struct TaskRunContext<'a, 'p> {
     /// The task's own container: its name, its `run` (the overlay it is
     /// created with, where a dependency gets `customise`), the
     /// `-- ADDITIONAL_ARGS` only it receives, and whether it is
-    /// interactive-eligible (`run_task_internal` decides; only the top-level
-    /// task's is).
+    /// interactive-eligible (`run_task_internal` decides; every task's is,
+    /// prerequisites included, outside `-o all`).
     root: &'a str,
     run: &'a crate::config::TaskRun,
     additional_args: &'a [String],
@@ -2137,14 +2137,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     }
 
     /// `top_level` is `true` only for the task actually named on the command
-    /// line, `false` for every prerequisite (however deeply nested) — used to
-    /// decide interactive-TTY eligibility for that task's own container (see
-    /// `run_task_internal`). A prerequisite chain isn't the thing being "run"
-    /// interactively, and stdin can only usefully attach to one container at
-    /// a time, so only the top-level task's own container is ever eligible —
-    /// same principle Batect applies (only ever its single "task container"),
-    /// even though Ratect's prerequisites are structurally different (full
-    /// recursive task runs, not steps within one task).
+    /// line, `false` for every prerequisite (however deeply nested). It
+    /// scopes `--skip-prerequisites` to the named task and keeps a
+    /// prerequisite out of `--no-cleanup-after-success` — not interactive
+    /// eligibility, which every task's own container has, as in Batect,
+    /// whose task container is per task, not per run (see
+    /// `run_task_internal`).
     // `async_recursion` adds a bare `#[must_use]` to a function returning a
     // boxed future, which is already `#[must_use]` — Clippy 1.99's
     // `double_must_use` flags that macro output, not anything written here.
@@ -2241,9 +2239,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             )
         })?;
 
-        // Run prerequisites (never with additional args, and never eligible
-        // for interactive TTY attachment — both scoped to only the
-        // originally-requested task). A `*`-wildcard entry is expanded
+        // Run prerequisites (never with additional args, which are scoped to
+        // only the originally-requested task). A `*`-wildcard entry is expanded
         // against the full task list first — see
         // `expand_prerequisite_wildcards` — then run through the same
         // sequential loop as any other prerequisite; its own dedup/cycle
@@ -2398,11 +2395,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // method `docker.rs`'s own `task_container_io` independently
         // re-checks, so the two can't disagree about which containers a
         // policy allows to be interactive.
-        let interactive = top_level
-            && self
-                .event_sink
-                .container_io_streaming()
-                .allows_interactive();
+        //
+        // Every task's own container is eligible, prerequisites included,
+        // as in Batect. That relies on prerequisites running one after
+        // another: `docker::stdin`'s one stdin reader is lent to one container
+        // at a time, and only one can hold the terminal — revisit this if
+        // prerequisites ever run concurrently (ratect#102).
+        let interactive = self
+            .event_sink
+            .container_io_streaming()
+            .allows_interactive();
 
         let execution = async {
             // Always created, even with no dependencies, so the task's own

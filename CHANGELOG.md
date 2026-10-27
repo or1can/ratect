@@ -58,6 +58,7 @@ history, from when it was the only binary.
 - `ratect-compat` refuses a `batect.local.yml` in the current directory that exists but isn't a file, when `--config-vars-file` isn't given, on every command but `--help` and `--version`, instead of running with no overrides from it. It exits `2`, or `125` on a run.
 - `ratect-compat` refuses an `--override-image` or `--tag-image` with an empty container or value (`c=`, `=a`, `=`), and a container given twice to `--override-image` or a variable given twice to `--config-var`, while the arguments are parsed, instead of running with an empty value or the last one given. It exits `2`, or `125` on a run.
 - A `--tag-image` and an `--override-image` naming the same container are refused, with Batect's message, before the config is loaded or anything runs — by every `ratect-compat` command but `--help` and `--version`, and by `ratect run` — instead of failing a run once that container's image is resolved, after its prerequisites have run. It exits `2`, or `125` on a run.
+- A prerequisite task's own container gets stdin, and a TTY when stdin and stdout are both terminals, as in Batect (not under `-o all`). A prerequisite takes piped input ahead of the named task, whether or not it reads it, so a short input can leave the named task with none; on a terminal, one that reads stdin waits for input, and Ctrl+C reaches its container as a keystroke rather than interrupting the run.
 
 ### Added
 

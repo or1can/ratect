@@ -312,9 +312,9 @@ pub struct ContainerSpec {
     /// present (possibly containing nothing beyond Ratect's own keys),
     /// unlike `shared.options`' other fields, which are `None` when unset.
     pub labels: HashMap<String, String>,
-    /// Eligibility, not a guarantee — only ever `true` for the top-level
-    /// requested task's own container (never a prerequisite's, a
-    /// dependency's, or a sidecar's — see `TaskEngine::run_task_internal`).
+    /// Eligibility, not a guarantee — `true` for each task's own container,
+    /// the named task's and every prerequisite's (never a dependency's or a
+    /// sidecar's — see `TaskEngine::run_task_internal`).
     /// Whether a real Docker TTY actually gets allocated additionally
     /// depends on the local process's own stdin/stdout genuinely being
     /// terminals; when they're not, this container runs exactly as if this
@@ -327,8 +327,8 @@ pub struct ContainerSpec {
     /// non-empty `additional_args` replaces the image's default `CMD` (its
     /// `ENTRYPOINT` is kept, so receives them), where Batect refuses them
     /// with an error. Always empty for a
-    /// dependency — only the top-level requested task's own container can
-    /// receive `-- ADDITIONAL_ARGS`.
+    /// dependency or a prerequisite's container — only the named task's own
+    /// container can receive `-- ADDITIONAL_ARGS`.
     pub additional_args: Vec<String>,
 }
 

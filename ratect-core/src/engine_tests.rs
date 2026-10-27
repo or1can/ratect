@@ -2199,7 +2199,7 @@ async fn without_prerequisites_scopes_to_whichever_task_is_named_as_top_level() 
 }
 
 #[tokio::test]
-async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
+async fn the_named_tasks_own_container_is_interactive_eligible() {
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     let mut tasks = IndexMap::new();
@@ -2225,7 +2225,7 @@ async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
 }
 
 #[tokio::test]
-async fn prerequisite_tasks_own_container_is_never_interactive() {
+async fn prerequisite_tasks_own_container_is_interactive_eligible() {
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     containers.insert("setup".to_string(), container("alpine:3.18", None));
@@ -2262,16 +2262,61 @@ async fn prerequisite_tasks_own_container_is_never_interactive() {
 
     engine.run_task("run", &[]).await.unwrap();
 
-    assert_eq!(
-        docker.interactive_for("setup"),
-        Some(false),
-        "a prerequisite's own container should never be interactive-eligible"
+    // Batect runs each task in its own scope, whose task container is that
+    // task's own — so a prerequisite's is eligible as the named task's is.
+    assert_eq!(docker.interactive_for("setup"), Some(true));
+    assert_eq!(docker.interactive_for("app"), Some(true));
+}
+
+/// `outer` -> `inner` -> `deepest`, each running its own container, with
+/// `inner` also starting `inner-db` as a dependency.
+fn config_with_nested_prerequisites() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("outer".to_string(), container("alpine:3.18", None));
+    containers.insert(
+        "inner".to_string(),
+        container("alpine:3.18", Some(vec!["inner-db".to_string()])),
     );
-    assert_eq!(
-        docker.interactive_for("app"),
-        Some(true),
-        "the top-level requested task's own container should still be interactive-eligible"
-    );
+    containers.insert("inner-db".to_string(), container("postgres:16", None));
+    containers.insert("deepest".to_string(), container("alpine:3.18", None));
+    let deepest = task("deepest", "echo deepest");
+    let mut inner = task("inner", "echo inner");
+    inner.prerequisites = Some(vec!["deepest".to_string()]);
+    let mut outer = task("outer", "echo outer");
+    outer.prerequisites = Some(vec!["inner".to_string()]);
+    let mut tasks = IndexMap::new();
+    tasks.insert("deepest".to_string(), deepest);
+    tasks.insert("inner".to_string(), inner);
+    tasks.insert("outer".to_string(), outer);
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+#[tokio::test]
+async fn a_nested_prerequisites_own_container_is_interactive_eligible() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_nested_prerequisites(), docker.clone());
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    for name in ["outer", "inner", "deepest"] {
+        assert_eq!(docker.interactive_for(name), Some(true), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn a_prerequisites_dependency_is_never_interactive() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_nested_prerequisites(), docker.clone());
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    assert_eq!(docker.interactive_for("inner-db"), Some(false));
 }
 
 fn container_with_run_as_current_user(
@@ -13378,6 +13423,7 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
     // The top-level task would normally be interactive-eligible; under
     // the interleaved policy it must not be (no TTY, no stdin).
     assert_eq!(docker.interactive_for("build-env"), Some(false));
+    assert_eq!(docker.interactive_for("database"), Some(false));
     // Every container — the task's own and the dependency — gets
     // TERM=dumb, not the host's own terminal type.
     for name in ["build-env", "database"] {
@@ -13388,6 +13434,30 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
             environment.get("TERM").map(String::as_str),
             Some("dumb"),
             "container '{name}' should get TERM=dumb: {environment:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn interleaved_policy_keeps_a_prerequisites_container_non_interactive_with_dumb_term() {
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config_with_nested_prerequisites()),
+        docker.clone(),
+        Arc::new(InterleavedRecordingSink::default()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    for name in ["inner", "deepest"] {
+        assert_eq!(docker.interactive_for(name), Some(false), "{name}");
+        let environment = docker.environment_for(name).unwrap();
+        assert_eq!(
+            environment.get("TERM").map(String::as_str),
+            Some("dumb"),
+            "{name}"
         );
     }
 }
