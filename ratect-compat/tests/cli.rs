@@ -2965,6 +2965,11 @@ fn signalling_a_run_cleans_up_via_docker(
         !stderr.contains("Error:"),
         "a signalled run that cleaned up is no error of Ratect's:\n{stderr}"
     );
+    // And the sequence ends by saying cleanup is over (ratect#369).
+    assert!(
+        stderr.ends_with("Cleanup complete.\n"),
+        "the interrupt sequence's last line:\n{stderr}"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18`.

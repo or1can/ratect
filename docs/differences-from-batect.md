@@ -289,9 +289,10 @@ tables above:
   - **The notice names the signal and the next step**: a line on stderr such as
     `Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left,
     and Ctrl+C after that to stop cleaning up.`, printed in every style whatever
-    `RUST_LOG` says, and no `Error: Interrupted` once cleanup ends — the exit
-    code says the run was signalled, and a cleanup that left something behind
-    is reported as the error it is, naming what was left and the `docker`
+    `RUST_LOG` says. Once cleanup ends, `Cleanup complete.` follows, and no
+    `Error: Interrupted` — the exit code says the run was signalled, and a
+    cleanup that left something behind is reported, in place of `Cleanup
+    complete.`, as the error it is, naming what was left and the `docker`
     command that removes it. Batect prints `Task cancelled: Interrupt received
     during execution.` and that it is waiting for outstanding operations, then
     its manual-cleanup commands.

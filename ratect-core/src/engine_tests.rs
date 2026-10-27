@@ -12816,13 +12816,81 @@ async fn an_interrupted_run_posts_the_interrupt_notice() {
 
         assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
         let events = sink.events();
-        assert_eq!(messages(&events, notice), vec![expected.to_string()]);
+        assert_eq!(
+            messages(&events, notice),
+            vec![expected.to_string(), "Cleanup complete.".to_string()]
+        );
         assert!(messages(&events, warning).is_empty(), "{events:?}");
         assert!(
             messages(&events, error_line).is_empty(),
             "a clean cleanup after a signal is no error: {events:?}"
         );
+        // The sequence's terminator, so after everything cleanup said.
+        let finished_at = events
+            .iter()
+            .position(|event| *event == TaskEvent::CleanupFinished)
+            .unwrap();
+        let complete_at = events
+            .iter()
+            .position(|event| notice(event).is_some_and(|m| m == "Cleanup complete."))
+            .unwrap();
+        assert!(finished_at < complete_at, "{events:?}");
     }
+}
+
+/// An interrupted run's cleanup that a further signal hurried still ends
+/// `Cleanup complete.` once nothing is left (decisions/0017's interrupt
+/// sequence, ratect#369) — the escalation rung changes how cleanup removes
+/// things, not whether it finished.
+#[tokio::test]
+async fn an_escalated_cleanup_after_a_signal_ends_cleanup_complete() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record();
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(60))
+        .signalling_on_removal(
+            &interrupt,
+            &[crate::interrupt::TerminationSignal::Interrupt],
+        );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        interrupt,
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = sink.events();
+    let notices = messages(&events, notice);
+    assert_eq!(notices.len(), 3, "{notices:?}");
+    assert!(
+        notices[1].contains("force-removing what's left"),
+        "{notices:?}"
+    );
+    assert_eq!(notices[2], "Cleanup complete.");
+    assert!(messages(&events, error_line).is_empty(), "{events:?}");
+}
+
+/// `Cleanup complete.` ends only an interrupted run: one that ended on its
+/// own has its summary line for that (or its error), and says nothing more
+/// about a cleanup that went to plan.
+#[tokio::test]
+async fn an_uninterrupted_cleanup_posts_no_cleanup_complete() {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = sink.events();
+    assert!(events.contains(&TaskEvent::CleanupFinished), "{events:?}");
+    assert!(messages(&events, notice).is_empty(), "{events:?}");
 }
 
 /// A closed stdout says why the run stopped as a signal does — a notice on

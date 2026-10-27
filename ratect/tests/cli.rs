@@ -2565,6 +2565,73 @@ fn a_tasks_own_exit_code_prints_no_error_line_but_ratects_own_failure_does_via_d
     );
 }
 
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+/// Unix-only because it sends a signal.
+///
+/// `ratect run` ended by Ctrl+C under `-o quiet` and `RUST_LOG=off` prints
+/// the interrupt notice, then `Cleanup complete.`, and nothing else — no
+/// `Error: Interrupted` — and exits 130 (decisions/0017's interrupt
+/// sequence, ratect#369). That cleanup removed everything is
+/// `ratect-compat`'s signal tests' to prove; this proves `ratect`'s stderr.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn an_interrupted_run_ends_with_cleanup_complete_via_docker() {
+    use std::io::Read;
+    let _guard = serial_docker();
+    let filter = "label=eu.orican.ratect.project=ratect-exit-code-test";
+    let running = || {
+        let output = Command::new("docker")
+            .args(["ps", "-q", "--filter", filter])
+            .output()
+            .expect("failed to run docker ps");
+        !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+    };
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(exit_code_fixture_path())
+        .args(["run", "waits", "-o", "quiet"])
+        .env("RUST_LOG", "off")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !running() {
+        assert!(Instant::now() < deadline, "the task never started");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let signalled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success());
+    let status = child.wait().expect("failed to wait for ratect");
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left, and \
+         Ctrl+C after that to stop cleaning up.\nCleanup complete.\n"
+    );
+}
+
 /// The native config path, end to end against a real daemon: `ratect` runs a
 /// task from a `ratect.toml` whose container gets its image via `extends`.
 /// Requires a running Docker daemon with network access to pull

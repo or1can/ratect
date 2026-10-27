@@ -3106,6 +3106,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 self.event_sink.post(TaskEvent::Error {
                     message: left.failure_message(abandoned, &refusals.into_inner().unwrap()),
                 });
+            } else if interrupted_by.is_some() {
+                // The interrupt sequence's last line (decisions/0017): a
+                // signalled run has no summary line to end on, and its notice
+                // said cleanup was under way, so this says it is over — or
+                // the failure above does, in its place (ratect#369).
+                self.post_notice("Cleanup complete.".to_string());
             }
         } else {
             // The task's own container is reported here like any other:

@@ -153,6 +153,7 @@ history, from when it was the only binary.
 - A task that fails to run once started — an image that won't pull or build, a container that can't be created or started, a dependency that never becomes ready — has its `Error:` line printed when the failure happens, before cleanup, as in Batect.
 - A container that doesn't become healthy, or whose setup command can't run or exits non-zero, fails the task with an error that ends by suggesting `--no-cleanup-after-failure`, as in Batect — unless that flag or `--no-cleanup` was given.
 - A task with only `prerequisites` prints `The task <name> only defines prerequisite tasks, nothing more to do.` with its progress, as in Batect, in every style but `-o quiet`, whatever `RUST_LOG` says.
+- A run ended by a signal prints `Cleanup complete.` on stderr once its cleanup has removed everything, in every style. A cleanup that left something behind still ends with its `Error:` line instead.
 
 ### Security
 

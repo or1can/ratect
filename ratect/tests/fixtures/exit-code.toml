@@ -1,9 +1,10 @@
 # What `ratect`'s own stderr says for a run that fails — this binary's CLI
 # surface (decisions/0017), not engine behaviour, so its own fixture: a task
 # whose command exits `42` (reported by the exit code and the summary line,
-# never an `Error:` line) and one whose image can't be pulled (Ratect's own
-# failure, always an `Error:` line). Its own project name, so no other test's
-# containers match a filter on it.
+# never an `Error:` line), one whose image can't be pulled (Ratect's own
+# failure, always an `Error:` line), and one that waits to be signalled (the
+# interrupt notice, then `Cleanup complete.`). Its own project name, so no
+# other test's containers match a filter on it.
 ratect_version = "0.12.0"
 project_name = "ratect-exit-code-test"
 
@@ -18,3 +19,6 @@ run = { container = "build-env", command = "sh -c 'exit 42'" }
 
 [tasks.unpullable]
 run = { container = "unpullable", command = "echo unreachable" }
+
+[tasks.waits]
+run = { container = "build-env", command = "sleep 300" }
