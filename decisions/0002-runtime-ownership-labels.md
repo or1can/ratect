@@ -31,7 +31,7 @@ from OCI image annotations:
 | `eu.orican.ratect.project` | containers, networks | `project_name` |
 | `eu.orican.ratect.task` | containers, networks | the task being run |
 | `eu.orican.ratect.run` | containers, networks | the per-run id (the `Uuid` that already names the per-task network, reused) *(no longer names it — see the amendment below)* |
-| `eu.orican.ratect.container` | containers | the *config* container name (Docker's own name is random) *(now `<project>-<container>-<suffix>` — see the amendment below)* |
+| `eu.orican.ratect.container` | containers | the *config* container name (Docker's own name is random) *(Docker's own name, not this label, is now `<project>-<container>-<suffix>` — see the amendment below)* |
 | `eu.orican.ratect.role` | containers | `task` or `dependency` |
 | `eu.orican.ratect.version` | containers, networks | the Ratect version that created it |
 

@@ -261,7 +261,9 @@ make sense together. (Ctrl+C, `SIGTERM` and `SIGHUP` aren't those cases any more
 cleans up after itself. `SIGKILL` can't be trapped by anything, so it still is; see
 [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps).)
 A container is named as your configuration names it, not by the
-`<project>-<container>-<suffix>` name it has in Docker.
+`<project>-<container>-<suffix>` name it has in Docker — or, for the companion an
+[`external_health_check`](ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it) runs, by
+the `ratect-health-check-<container>` name Ratect gives it.
 
 | Option | Applies to | Description |
 | --- | --- | --- |

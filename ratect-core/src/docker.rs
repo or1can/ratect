@@ -628,7 +628,7 @@ pub struct LabelledResource {
     pub id: String,
     /// Docker's own name — `<project>-<container>-<suffix>` for a container
     /// and `<project>-network-<suffix>` for a network Ratect created (see
-    /// [`crate::resource_names`]); `--use-network`'s keeps its own. Never
+    /// [`crate::resource_names`]). Never
     /// parsed: which container this is is the `container` label's to say.
     pub name: String,
     pub labels: HashMap<String, String>,

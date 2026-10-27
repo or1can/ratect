@@ -1706,13 +1706,14 @@ async fn builder_version_is_classic_when_the_daemon_ping_advertises_it_or_nothin
 
 /// One request a [`recording_daemon`] received: its method, its path with
 /// the `/vX.Y` API-version prefix stripped (so `/containers/abc/stop`, not
-/// `/v1.41/containers/abc/stop`), and its raw query string, empty when it
-/// had none.
+/// `/v1.41/containers/abc/stop`), its raw query string, empty when it
+/// had none, and its body, empty when it had none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RecordedRequest {
     method: String,
     path: String,
     query: String,
+    body: String,
 }
 
 impl RecordedRequest {
@@ -1766,14 +1767,42 @@ async fn recording_daemon(
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut buf = [0u8; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let headers_end = loop {
+                    if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                        break end + 4;
+                    }
                     let read = stream.read(&mut buf).await.unwrap();
                     if read == 0 {
                         return;
                     }
                     request.extend_from_slice(&buf[..read]);
+                };
+                // A body is read to its `Content-Length`, which is how
+                // bollard sends one; a chunked body would be recorded
+                // truncated, so it fails here rather than at whatever
+                // asserts on it.
+                let headers = String::from_utf8_lossy(&request[..headers_end]).into_owned();
+                let header = |wanted: &str| {
+                    headers.lines().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case(wanted)
+                            .then(|| value.trim().to_string())
+                    })
+                };
+                assert!(
+                    header("transfer-encoding").is_none(),
+                    "the recording daemon can't read a chunked body:\n{headers}"
+                );
+                let content_length = header("content-length").map_or(0, |value| {
+                    value.parse::<usize>().expect("a numeric Content-Length")
+                });
+                while request.len() < headers_end + content_length {
+                    let read = stream.read(&mut buf).await.unwrap();
+                    assert!(read > 0, "the request body ended before its Content-Length");
+                    request.extend_from_slice(&buf[..read]);
                 }
-                let request = String::from_utf8_lossy(&request);
+                let body = String::from_utf8_lossy(&request[headers_end..]).into_owned();
+                let request = String::from_utf8_lossy(&request[..headers_end]);
                 let mut request_line = request.split_whitespace();
                 let method = request_line.next().unwrap_or_default().to_string();
                 let target = request_line.next().unwrap_or_default();
@@ -1789,6 +1818,7 @@ async fn recording_daemon(
                     method: method.clone(),
                     path: path.clone(),
                     query: query.to_string(),
+                    body,
                 });
                 let (status, body) = if path == "/version" {
                     (200, r#"{"ApiVersion":"1.41","Os":"linux"}"#.to_string())
@@ -1872,6 +1902,89 @@ fn stop_of(id: &str) -> (String, String) {
 
 fn delete_of(id: &str) -> (String, String) {
     ("DELETE".to_string(), format!("/containers/{id}"))
+}
+
+/// `create_container`'s one request for a `db` dependency on `network`,
+/// declaring `db.local` as an additional hostname: the `name` it was
+/// created under, and its body.
+async fn create_request(network: ContainerNetwork) -> (Option<String>, serde_json::Value) {
+    let (client, log) = client_for_recording_daemon(|method, path| match (method, path) {
+        ("POST", "/containers/create") => (201, r#"{"Id":"new-id","Warnings":[]}"#.to_string()),
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    })
+    .await;
+    let container = crate::config::Container {
+        additional_hostnames: Some(vec!["db.local".to_string()]),
+        ..Default::default()
+    };
+    let run_labels = crate::labels::RunLabels::new("demo", "task", "run-id", None);
+    let spec = crate::container_spec::derive_spec(crate::container_spec::ContainerSpecInputs {
+        name: "db",
+        docker_name: "demo-db-abc123",
+        container_config: &container,
+        overlay: crate::container_spec::Overlay::Customise(None),
+        image: "postgres:16",
+        network,
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: crate::labels::ContainerRole::Dependency,
+        run_labels: &run_labels,
+    });
+
+    assert_eq!(client.create_container(&spec).await.unwrap(), "new-id");
+
+    let requests = log.lock().unwrap().clone();
+    let [create] = &requests[..] else {
+        panic!("one request, the create: {requests:?}");
+    };
+    (
+        create.query_value("name"),
+        serde_json::from_str(&create.body).unwrap(),
+    )
+}
+
+/// What `create_container` asks the daemon for: Docker's own name for the
+/// container, and — on the task's network — that network as its mode with
+/// its aliases on the creation endpoint, so it is created there and never
+/// also on the default `bridge` (ratect#303). The builders each have their
+/// own tests; this proves the request carries what they build.
+#[tokio::test]
+async fn create_container_names_the_container_and_creates_it_on_the_task_network() {
+    let (name, body) =
+        create_request(ContainerNetwork::Task("demo-network-abc123".to_string())).await;
+
+    assert_eq!(name.as_deref(), Some("demo-db-abc123"));
+    assert_eq!(body["HostConfig"]["NetworkMode"], "demo-network-abc123");
+    assert_eq!(
+        body["NetworkingConfig"]["EndpointsConfig"],
+        serde_json::json!({"demo-network-abc123": {"Aliases": ["db", "db.local"]}}),
+    );
+}
+
+/// Off the task's network there is no endpoint to configure, so the request
+/// carries none — aliases there would attach the container to the task
+/// network as well, or be refused.
+#[tokio::test]
+async fn create_container_off_the_task_network_configures_no_endpoint() {
+    for (network, mode) in [
+        (ContainerNetwork::Host, "host"),
+        (ContainerNetwork::None, "none"),
+        (
+            ContainerNetwork::Container("peer-id".to_string()),
+            "container:peer-id",
+        ),
+    ] {
+        let (name, body) = create_request(network).await;
+
+        assert_eq!(name.as_deref(), Some("demo-db-abc123"), "{mode}");
+        assert_eq!(body["HostConfig"]["NetworkMode"], mode);
+        assert!(body["NetworkingConfig"].is_null(), "{mode}: {body}");
+    }
 }
 
 /// Batect's RMC-1/RMC-3 (ratect#310): a started container is stopped, and
