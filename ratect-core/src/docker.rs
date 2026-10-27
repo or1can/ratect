@@ -2591,7 +2591,7 @@ impl DockerClient {
             privileged: options.privileged,
             shm_size: options.shm_size,
             devices: build_devices(options.devices.as_ref()),
-            init: options.enable_init_process,
+            init: Some(options.enable_init_process),
             log_config: build_log_config(
                 options.log_driver.as_deref(),
                 options.log_options.as_ref(),

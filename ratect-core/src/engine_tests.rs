@@ -938,7 +938,7 @@ impl FakeContainerRuntime {
     /// was given.
     fn enable_init_process_for(&self, name: &str) -> Option<bool> {
         self.spec_for(name)
-            .and_then(|spec| spec.shared.options.enable_init_process)
+            .map(|spec| spec.shared.options.enable_init_process)
     }
 
     /// The `options.log_driver` a prior `run_container`/
@@ -10538,6 +10538,34 @@ async fn container_enable_init_process_reaches_the_container() {
     assert_eq!(docker.enable_init_process_for("build-env"), Some(true));
 }
 
+/// An omitted `enable_init_process` still reaches the runtime as an explicit
+/// `false`, as Batect's always-sent `Init` does — never as "unset", which
+/// would hand the choice to a daemon configured with `"init": true`
+/// (ratect#293).
+#[tokio::test]
+async fn an_omitted_enable_init_process_reaches_the_container_as_false() {
+    let mut containers = IndexMap::new();
+    containers.insert("build-env".to_string(), container("alpine:3.18", None));
+
+    let mut tasks = IndexMap::new();
+    tasks.insert("test".to_string(), task("build-env", "echo hi"));
+
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    assert_eq!(docker.enable_init_process_for("build-env"), Some(false));
+}
+
 #[tokio::test]
 async fn container_log_driver_and_log_options_reach_the_container() {
     let mut container_config = container("alpine:3.18", None);
@@ -13119,6 +13147,34 @@ async fn dependency_container_enable_init_process_reaches_the_sidecar() {
     engine.run_task("start", &[]).await.unwrap();
 
     assert_eq!(docker.enable_init_process_for("database"), Some(true));
+}
+
+/// The dependency half of
+/// `an_omitted_enable_init_process_reaches_the_container_as_false`.
+#[tokio::test]
+async fn an_omitted_enable_init_process_reaches_the_sidecar_as_false() {
+    let mut containers = IndexMap::new();
+    containers.insert("database".to_string(), container("postgres:16", None));
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["database".to_string()])),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert_eq!(docker.enable_init_process_for("database"), Some(false));
 }
 
 #[tokio::test]

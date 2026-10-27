@@ -187,9 +187,10 @@ pub struct ContainerOptions {
     /// already-expanded tuples).
     pub devices: Option<Vec<(String, String, Option<String>)>>,
     /// Runs Docker's own tini-based init process as PID 1 ahead of the
-    /// actual command — Docker's `--init`. `None`/`Some(false)` both
-    /// behave like Docker's own unset default.
-    pub enable_init_process: Option<bool>,
+    /// actual command — Docker's `--init`. Always sent: an omitted
+    /// `enable_init_process` arrives here as `false`, as Batect sends it, so
+    /// a daemon configured with `"init": true` never decides (ratect#293).
+    pub enable_init_process: bool,
     /// Docker's logging driver (`--log-driver`), e.g. `"json-file"`,
     /// `"syslog"`, `"none"`. `None` leaves the daemon's own configured
     /// default alone.
@@ -529,7 +530,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         privileged: container_config.privileged,
         shm_size: container_config.shm_size,
         devices: device_triples(container_config.devices.as_ref()),
-        enable_init_process: container_config.enable_init_process,
+        enable_init_process: container_config.enable_init_process.unwrap_or(false),
         log_driver: container_config.log_driver.clone(),
         log_options: container_config.log_options.clone(),
         tmpfs: tmpfs_mounts(container_config.volumes.as_ref()),

@@ -422,9 +422,9 @@ pub struct Container {
     /// Runs an init process (Docker's own tini-based one, e.g. reaping
     /// zombie processes and forwarding signals) as PID 1 inside the
     /// container, ahead of the actual command — Docker's `--init`.
-    /// `None`/absent behaves like `false`, matching both Docker's and
-    /// Batect's own default. Container level only, matching Batect (no
-    /// task-level `run` override in either).
+    /// `None`/absent means `false`, sent to Docker explicitly as Batect does,
+    /// so a daemon configured with `"init": true` doesn't apply. Container
+    /// level only, matching Batect (no task-level `run` override in either).
     pub enable_init_process: Option<bool>,
     /// Docker's logging driver (`--log-driver`), e.g. `"json-file"`,
     /// `"syslog"`, `"none"`. `None` leaves Docker's own daemon-configured

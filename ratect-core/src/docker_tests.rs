@@ -2882,3 +2882,47 @@ async fn without_a_credential_store_nothing_is_listed() {
     );
     assert_eq!(warning, None);
 }
+
+/// The create request's `HostConfig.init` for a dependency derived from
+/// `container`, as `container_config` builds it for `create_container`.
+async fn init_sent_for(container: &crate::config::Container) -> Option<bool> {
+    use crate::container_spec::{derive_spec, ContainerSpecInputs, Overlay};
+    use crate::labels::{ContainerRole, RunLabels};
+    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let spec = derive_spec(ContainerSpecInputs {
+        name: "app",
+        docker_name: "demo-app-abc123",
+        container_config: container,
+        overlay: Overlay::Customise(None),
+        image: "alpine:3.20",
+        network: ContainerNetwork::Task("demo-network-abc123".to_string()),
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Dependency,
+        run_labels: &run_labels,
+    });
+    let config = client.container_config(&spec).unwrap();
+    config.host_config.unwrap().init
+}
+
+/// Every create request carries an explicit `Init`, as docker-client's
+/// always-non-nil `&useInitProcess` does: an omitted `enable_init_process`
+/// is sent as `false`, so a daemon configured with `"init": true` can't
+/// put an init process in front of the command (ratect#293).
+#[tokio::test]
+async fn container_config_always_sends_init() {
+    let mut container = crate::config::Container::default();
+    assert_eq!(init_sent_for(&container).await, Some(false));
+
+    container.enable_init_process = Some(false);
+    assert_eq!(init_sent_for(&container).await, Some(false));
+
+    container.enable_init_process = Some(true);
+    assert_eq!(init_sent_for(&container).await, Some(true));
+}
