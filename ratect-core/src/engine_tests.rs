@@ -93,6 +93,9 @@ struct FakeContainerRuntime {
     // Command whose `exec_in_container` reports a non-zero exit (see
     // `with_failing_setup_command`).
     failing_setup_command: Arc<Mutex<Option<String>>>,
+    // Command whose `exec_in_container` call itself fails (see
+    // `with_unrunnable_setup_command`).
+    unrunnable_setup_command: Arc<Mutex<Option<String>>>,
     // Container names whose `create_container` fails before Docker would
     // have created anything — a spec the daemon refuses (see
     // `failing_creation`).
@@ -254,6 +257,7 @@ impl Default for FakeContainerRuntime {
             stop_options: Default::default(),
             unhealthy_container: Default::default(),
             failing_setup_command: Default::default(),
+            unrunnable_setup_command: Default::default(),
             failing_creations: Default::default(),
             failing_creations_after_docker_created: Default::default(),
             fail_image_build: Default::default(),
@@ -410,6 +414,14 @@ impl FakeContainerRuntime {
     /// for the given command — simulates a failing setup command.
     fn with_failing_setup_command(self, command: &str) -> Self {
         *self.failing_setup_command.lock().unwrap() = Some(command.to_string());
+        self
+    }
+
+    /// Makes `exec_in_container` itself fail for the given command, as the
+    /// daemon refusing the exec would — a setup command that couldn't be
+    /// run at all, rather than one that ran and failed.
+    fn with_unrunnable_setup_command(self, command: &str) -> Self {
+        *self.unrunnable_setup_command.lock().unwrap() = Some(command.to_string());
         self
     }
 
@@ -1172,6 +1184,9 @@ impl ContainerRuntime for FakeContainerRuntime {
             anyhow::bail!(
                 "Docker responded with status code 409: container {container_id} is not running"
             );
+        }
+        if self.unrunnable_setup_command.lock().unwrap().as_deref() == Some(command) {
+            anyhow::bail!("Docker responded with status code 500: exec failed");
         }
         let failing = self.failing_setup_command.lock().unwrap().as_deref() == Some(command);
         Ok(crate::docker::ExecResult {
@@ -6368,6 +6383,194 @@ async fn a_signal_during_a_passing_runs_cleanup_is_reported_once_after_it() {
             assert!(errors.is_empty(), "{events:?}");
         }
     }
+}
+
+/// What a failure Batect hints `--no-cleanup-after-failure` for ends with
+/// (ratect#368): a blank line, then the hint, after the headline, output and
+/// cause chain.
+const RERUN_HINT: &str = "\n\nYou can re-run the task with --no-cleanup-after-failure to leave \
+                          its containers in place and diagnose the failure.";
+
+/// The messages of every `Error` event a run of `task` posts.
+async fn reported_errors(
+    config: Config,
+    docker: FakeContainerRuntime,
+    task: &str,
+    cleanup_after_failure: bool,
+) -> Vec<String> {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure,
+        ..Default::default()
+    })
+    .unwrap();
+    let _ = engine.run_task(task, &[]).await;
+    sink.events()
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::Error { message } => Some(message),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A `database` dependency with one setup command, `./seed-data.sh`.
+fn config_with_a_setup_command() -> Config {
+    config_with_database_dependency(|database| {
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed-data.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    })
+}
+
+/// The three failures Batect's `FailureErrorMessageFormatter` hints for — a
+/// container that doesn't become healthy (a dependency, or the task's own
+/// under its gate), a setup command that can't be run, and one that exits
+/// non-zero — end with the hint while cleanup after failure is on, and
+/// without it once it's off: there is nothing to re-run with then.
+#[tokio::test(start_paused = true)]
+async fn a_readiness_failure_hints_no_cleanup_after_failure_only_while_cleanup_is_on() {
+    type Setup = fn() -> (Config, FakeContainerRuntime);
+    let cases: Vec<(&str, Setup)> = vec![
+        ("an unhealthy dependency", || {
+            (
+                config_with_database_dependency(|_| {}),
+                FakeContainerRuntime::default().with_unhealthy_container("database"),
+            )
+        }),
+        ("an unhealthy task container", || {
+            (
+                config_with_a_gated_task_container(),
+                FakeContainerRuntime::default()
+                    .with_run_delay("app", MAIN_COMMAND_THAT_OUTLASTS_ITS_GATE)
+                    .with_unhealthy_container("app"),
+            )
+        }),
+        ("a setup command exiting non-zero", || {
+            (
+                config_with_a_setup_command(),
+                FakeContainerRuntime::default().with_failing_setup_command("./seed-data.sh"),
+            )
+        }),
+        ("a setup command that couldn't run", || {
+            (
+                config_with_a_setup_command(),
+                FakeContainerRuntime::default().with_unrunnable_setup_command("./seed-data.sh"),
+            )
+        }),
+    ];
+    for (case, setup) in cases {
+        let (config, docker) = setup();
+        let errors = reported_errors(config, docker, "start", true).await;
+        assert_eq!(errors.len(), 1, "{case}: {errors:?}");
+        assert!(
+            errors[0].ends_with(RERUN_HINT),
+            "{case} hints the flag: {}",
+            errors[0]
+        );
+        assert_eq!(
+            errors[0].matches("--no-cleanup-after-failure").count(),
+            1,
+            "{case}: once"
+        );
+
+        let (config, docker) = setup();
+        let errors = reported_errors(config, docker, "start", false).await;
+        assert_eq!(errors.len(), 1, "{case}: {errors:?}");
+        assert!(
+            !errors[0].contains("--no-cleanup-after-failure"),
+            "{case} with cleanup after failure off: {}",
+            errors[0]
+        );
+    }
+}
+
+/// Every other failure gets no hint, cleanup after failure on or not —
+/// Batect's FEMF-12: a pull, a build, the task network, a container's create,
+/// the task's own exit and an interrupt.
+#[tokio::test(start_paused = true)]
+async fn no_other_failure_hints_no_cleanup_after_failure() {
+    let single = || {
+        let mut containers = IndexMap::new();
+        containers.insert("app".to_string(), container("alpine:3.18", None));
+        containers.insert(
+            "built".to_string(),
+            container_with_build_directory("./docker", None),
+        );
+        let mut tasks = IndexMap::new();
+        tasks.insert("start".to_string(), task("app", "echo hi"));
+        tasks.insert("build".to_string(), task("built", "echo hi"));
+        Config {
+            project_name: "demo".to_string(),
+            containers,
+            tasks,
+            config_variables: None,
+            forbid_telemetry: None,
+        }
+    };
+    let cases: Vec<(&str, &str, FakeContainerRuntime)> = vec![
+        (
+            "a pull",
+            "start",
+            FakeContainerRuntime::default().with_failing_pull("alpine:3.18"),
+        ),
+        (
+            "a build",
+            "build",
+            FakeContainerRuntime::default().failing_image_build(),
+        ),
+        (
+            "the task network",
+            "start",
+            FakeContainerRuntime::default().failing_network_creation(),
+        ),
+        (
+            "a create",
+            "start",
+            FakeContainerRuntime::default().failing_creation("app"),
+        ),
+        (
+            "the task's own exit",
+            "start",
+            FakeContainerRuntime::default().with_run_exit("app", 3),
+        ),
+    ];
+    for (case, task_name, docker) in cases {
+        let errors = reported_errors(single(), docker, task_name, true).await;
+        assert!(
+            errors
+                .iter()
+                .all(|message| !message.contains("--no-cleanup-after-failure")),
+            "{case}: {errors:?}"
+        );
+    }
+
+    let sink = RecordingEventSink::default();
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record();
+    let engine = TaskEngine::new(
+        project(config_with_a_setup_command()),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        interrupt,
+    );
+    let _ = engine.run_task("start", &[]).await;
+    assert!(
+        sink.events().iter().all(|event| !matches!(
+            event,
+            TaskEvent::Error { message } if message.contains("--no-cleanup-after-failure")
+        )),
+        "an interrupt: {:?}",
+        sink.events()
+    );
 }
 
 #[tokio::test(start_paused = true)]

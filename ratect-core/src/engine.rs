@@ -278,8 +278,18 @@ fn get_or_create_cell<T>(cells: &Mutex<HashMap<String, Cell<T>>>, key: &str) -> 
 /// context chain) rather than just its `Display` (the top message only),
 /// since this may be the only place a waiter *other than* the one that hit
 /// the real failure ever sees it.
+///
+/// Flattening drops the error's types, so a [`NotReady`] is rebuilt as one
+/// around the same text: whether its report gets the re-run hint is decided
+/// from its type, at the top of the run, long after this.
 fn unshare<T: Clone>(result: &SharedResult<T>) -> Result<T> {
-    result.clone().map_err(|e| anyhow::anyhow!("{:?}", e))
+    result.clone().map_err(|e| {
+        if e.is::<NotReady>() {
+            NotReady(format!("{e:?}")).into()
+        } else {
+            anyhow::anyhow!("{:?}", e)
+        }
+    })
 }
 
 /// Everything one task execution's container stages share — the graph, the
@@ -607,6 +617,30 @@ impl std::fmt::Display for CleanupFailed {
 }
 
 impl std::error::Error for CleanupFailed {}
+
+/// A container that didn't become ready: it never became healthy, or one of
+/// its setup commands couldn't be run or exited non-zero — a dependency's,
+/// or the task's own under its gate. The three failures Batect's
+/// `FailureErrorMessageFormatter` follows with a hint to re-run with
+/// `--no-cleanup-after-failure`, because the containers it would keep are
+/// where the cause is (ratect#368). A type of its own, used as the context
+/// or the error at exactly those sites, so the hint never depends on what a
+/// message happens to say; it displays as its message alone.
+#[derive(Debug)]
+struct NotReady(String);
+
+impl std::fmt::Display for NotReady {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotReady {}
+
+/// What a [`NotReady`] failure's report ends with while cleanup after
+/// failure is on.
+const RERUN_WITHOUT_CLEANUP_HINT: &str = "You can re-run the task with \
+     --no-cleanup-after-failure to leave its containers in place and diagnose the failure.";
 
 /// A run's infrastructure failure — any but the task's own non-zero exit, a
 /// signal, or stdout's reader going — that the engine has already reported
@@ -1329,10 +1363,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     )
                     .await
                     .with_context(|| {
-                        format!(
+                        NotReady(format!(
                             "Failed to run setup command '{}' in container {}",
                             setup_command.command, target.description
-                        )
+                        ))
                     })?
             };
             // The command's output, line by line — exec output arrives
@@ -1368,13 +1402,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 } else {
                     format!(", with output:\n{}", result.output.trim())
                 };
-                anyhow::bail!(
+                return Err(NotReady(format!(
                     "Setup command '{}' in container {} exited with code {}{}",
-                    setup_command.command,
-                    target.description,
-                    result.exit_code,
-                    output
-                );
+                    setup_command.command, target.description, result.exit_code, output
+                ))
+                .into());
             }
         }
         if !setup_commands.is_empty() {
@@ -1436,7 +1468,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         self.docker
             .wait_for_container_healthy(container_id)
             .await
-            .with_context(|| format!("Container '{}' did not become healthy", name))?;
+            .with_context(|| NotReady(format!("Container '{}' did not become healthy", name)))?;
         self.event_sink.post(TaskEvent::ContainerBecameHealthy {
             container: name.to_string(),
         });
@@ -2628,11 +2660,19 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // would have printed, and marked so it prints nothing more. A
         // signal or stdout's reader going is reported by its own notice
         // below instead, and a task's own exit by its summary line.
+        //
+        // A container that didn't become ready ends with how to keep it for
+        // a look, while cleanup is about to remove it (ratect#368); nothing
+        // else does, as under Batect, since no other failure leaves a
+        // container worth looking inside.
         let result = match result {
             Err(error) if exit_code.is_none() && !crate::exit_code::already_reported(&error) => {
-                self.event_sink.post(TaskEvent::Error {
-                    message: format!("{error:?}"),
-                });
+                let mut message = format!("{error:?}");
+                if self.cleanup_after_failure && error.is::<NotReady>() {
+                    message.push_str("\n\n");
+                    message.push_str(RERUN_WITHOUT_CLEANUP_HINT);
+                }
+                self.event_sink.post(TaskEvent::Error { message });
                 Err(FailureReported(error).into())
             }
             result => result,
@@ -3567,7 +3607,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             .wait_for_container_healthy(&container_id)
                             .await
                             .with_context(|| {
-                                format!("Container '{}' did not become healthy", name)
+                                NotReady(format!("Container '{}' did not become healthy", name))
                             })?;
                         self.event_sink.post(TaskEvent::ContainerBecameHealthy {
                             container: name.to_string(),

@@ -1,0 +1,23 @@
+# A dependency whose setup command always fails: the task fails before its
+# own command runs, and — while cleanup after failure is on — the error ends
+# with the hint to re-run with --no-cleanup-after-failure, as Batect's does
+# (ratect#368).
+#
+# redis is used purely because its default command stays running with no
+# configuration (same reasoning as sidecar.yml) — a setup command needs a
+# running container to exec in.
+project_name: ratect-failing-setup-command-test
+containers:
+  database:
+    image: redis:7-alpine
+    setup_commands:
+      - command: sh -c 'echo seeding failed; exit 3'
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+tasks:
+  check:
+    run:
+      container: app
+      command: echo the task should never run

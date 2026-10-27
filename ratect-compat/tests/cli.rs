@@ -103,6 +103,10 @@ fn unhealthy_dependency_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unhealthy-dependency.yml")
 }
 
+fn failing_setup_command_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/failing-setup-command.yml")
+}
+
 fn task_container_setup_commands_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-setup-commands.yml")
 }
@@ -3675,6 +3679,68 @@ fn an_infrastructure_failure_is_reported_once_before_cleanup_via_docker() {
         stderr.starts_with("Error: ") && stderr.matches("Error:").count() == 1,
         "quiet prints the one error and nothing else:\n{stderr}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// A container that doesn't become ready — a setup command that fails, a
+/// health check that never passes — ends its error with the hint to re-run
+/// with `--no-cleanup-after-failure`, as Batect's does, but only while that
+/// flag would change something (ratect#368).
+#[test]
+#[ignore]
+fn a_readiness_failure_hints_no_cleanup_after_failure_via_docker() {
+    const HINT: &str = "You can re-run the task with --no-cleanup-after-failure to leave its \
+                        containers in place and diagnose the failure.";
+    let run = |config: PathBuf, flags: &[&str]| {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(config)
+            .args(["-o", "quiet"])
+            .args(flags)
+            .arg("check")
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(125));
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    let stderr = run(failing_setup_command_config_path(), &[]);
+    assert!(
+        stderr.contains("seeding failed") && stderr.trim_end().ends_with(HINT),
+        "the setup command's output, then the hint:\n{stderr}"
+    );
+    let stderr = run(unhealthy_dependency_config_path(), &[]);
+    assert!(
+        stderr.trim_end().ends_with(HINT),
+        "an unhealthy dependency is hinted too:\n{stderr}"
+    );
+
+    let stderr = run(
+        failing_setup_command_config_path(),
+        &["--no-cleanup-after-failure"],
+    );
+    assert!(
+        !stderr.contains(HINT),
+        "nothing to suggest once the flag is given:\n{stderr}"
+    );
+    // That run kept its containers and network on purpose.
+    let filter = "label=eu.orican.ratect.project=ratect-failing-setup-command-test";
+    for id in docker_ids("container", filter, true) {
+        Command::new("docker")
+            .args(["rm", "-f", "-v", &id])
+            .output()
+            .expect("failed to run docker rm");
+    }
+    for id in docker_ids("network", filter, false) {
+        Command::new("docker")
+            .args(["network", "rm", &id])
+            .output()
+            .expect("failed to run docker network rm");
+    }
+    assert!(docker_ids("container", filter, true).is_empty());
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

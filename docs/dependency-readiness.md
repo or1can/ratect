@@ -80,7 +80,10 @@ restriction to that container's own dependencies is what makes it safe, and is
 explained in that field's own section.
 
 Whichever step fails, the task fails, and already-started containers are still
-cleaned up as usual.
+cleaned up as usual. The error ends by suggesting `--no-cleanup-after-failure`,
+which keeps those containers in place so you can look inside the one that
+wasn't ready; with that flag (or `--no-cleanup`) given, there is nothing to
+suggest, and the error ends without it.
 
 A `ratect.toml` dependency can opt into a different readiness gate entirely:
 [`run_to_completion`](ratect-config-reference.md#run_to_completion-init-containers)
