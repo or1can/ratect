@@ -63,10 +63,12 @@
 //! follow it too, as plain string lists passed straight onto bollard's
 //! `HostConfig` fields of the same names — no builder needed. `network_mode`
 //! (ratect#106) is the one that changes more than a `HostConfig` field: a
-//! container in a Docker network mode (`build_network_mode`) is never joined
-//! to the task's network afterwards, and under `container:` has no
-//! `hostname` either (`build_hostname`) — both read off the one
-//! [`ContainerNetwork`] value `container_spec::resolve_network` derived.
+//! container on the task's network is created on it, with its aliases
+//! (`build_networking_config`), so it is never also on the default `bridge`
+//! (ratect#303); one in a Docker network mode (`build_network_mode`) gets no
+//! endpoint at all, and under `container:` no `hostname` either
+//! (`build_hostname`) — all three read off the one [`ContainerNetwork`]
+//! value `container_spec::resolve_network` derived.
 //! `stop_signal`/`stop_grace_period` (ratect#112) are the one per-container pair that does *not* live in
 //! `ContainerOptions`: they take effect when a container is *stopped*, not
 //! created, so they are parameters of `stop_and_remove_container`
@@ -124,7 +126,7 @@ use bollard::container::AttachContainerResults;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::models::{
     ContainerCreateBody as Config, DeviceMapping, EndpointSettings, HealthConfig,
-    NetworkConnectRequest, NetworkCreateRequest, PortBinding, PortMap, ResourcesUlimits,
+    NetworkCreateRequest, NetworkingConfig, PortBinding, PortMap, ResourcesUlimits,
 };
 use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
@@ -468,17 +470,44 @@ fn build_devices(
 }
 
 /// Builds Docker's `HostConfig.network_mode` — pure, unit-testable without
-/// a daemon. `None` for a container on the task's own network, which is
-/// created on the daemon's default and joined to that network afterwards
-/// (`join_network`), exactly as before ratect#106; otherwise Docker's own
-/// `--network` spelling for the mode.
-fn build_network_mode(network: &ContainerNetwork) -> Option<String> {
+/// a daemon. Docker's own `--network` spelling for the mode, the task's
+/// network included: a container on it is created there, with its aliases
+/// (`build_networking_config`), so it is never also on the daemon's default
+/// `bridge` (ratect#303), as docker-client creates it.
+fn build_network_mode(network: &ContainerNetwork) -> String {
     match network {
-        ContainerNetwork::Task(_) => None,
-        ContainerNetwork::Host => Some("host".to_string()),
-        ContainerNetwork::None => Some("none".to_string()),
-        ContainerNetwork::Container(id) => Some(format!("container:{id}")),
+        ContainerNetwork::Task(name) => name.clone(),
+        ContainerNetwork::Host => "host".to_string(),
+        ContainerNetwork::None => "none".to_string(),
+        ContainerNetwork::Container(id) => format!("container:{id}"),
     }
+}
+
+/// Builds Docker's `Config.networking_config` — pure, unit-testable without
+/// a daemon. For a container on the task's network, that network's one
+/// endpoint, aliased by `name` then each `additional_hostnames` entry, which
+/// is how other containers reach it; `None` in any other mode, where there
+/// is no endpoint to configure and docker-client sends none.
+fn build_networking_config(
+    network: &ContainerNetwork,
+    name: &str,
+    additional_hostnames: Option<&Vec<String>>,
+) -> Option<NetworkingConfig> {
+    let ContainerNetwork::Task(network) = network else {
+        return None;
+    };
+    let aliases = std::iter::once(name.to_string())
+        .chain(additional_hostnames.into_iter().flatten().cloned())
+        .collect();
+    Some(NetworkingConfig {
+        endpoints_config: Some(HashMap::from([(
+            network.clone(),
+            EndpointSettings {
+                aliases: Some(aliases),
+                ..Default::default()
+            },
+        )])),
+    })
 }
 
 /// The container's `Config.hostname`: its own name, except when it shares
@@ -1599,12 +1628,10 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// (decisions/0019, Batect's `CreateContainerStepRule`).
     ///
     /// "Created" means everything that makes the container startable:
-    /// Docker's own `create`, then the user-mapping upload
-    /// (`spec.shared.user_mapping`), then the join to `spec.shared.network`
-    /// with a network alias of `spec.shared.name` so other containers on the
-    /// same network can reach it by that name — or, when that is a Docker
-    /// network mode instead ([`ContainerNetwork`]), created in that mode and
-    /// joined to nothing.
+    /// Docker's own `create`, on `spec.shared.network` — the task's network with a network alias of
+    /// `spec.shared.name` so other containers on it can reach it by that
+    /// name, or a Docker network mode ([`ContainerNetwork`]) — then the
+    /// user-mapping upload (`spec.shared.user_mapping`).
     /// [`start_background_container`](Self::start_background_container) and
     /// [`run_container`](Self::run_container) then only start it.
     ///
@@ -2328,34 +2355,6 @@ impl DockerClient {
             .copied()
     }
 
-    async fn join_network(
-        &self,
-        container_id: &str,
-        network: &str,
-        alias: &str,
-        additional_hostnames: Option<&Vec<String>>,
-    ) -> Result<()> {
-        let mut aliases = vec![alias.to_string()];
-        if let Some(additional_hostnames) = additional_hostnames {
-            aliases.extend(additional_hostnames.iter().cloned());
-        }
-        self.docker
-            .connect_network(
-                network,
-                NetworkConnectRequest {
-                    container: container_id.to_string(),
-                    endpoint_config: Some(EndpointSettings {
-                        aliases: Some(aliases),
-                        ..Default::default()
-                    }),
-                },
-            )
-            .await
-            .with_context(|| format!("Failed to connect '{}' to network '{}'", alias, network))?;
-        tracing::debug!(container_id, network, alias, "joined network");
-        Ok(())
-    }
-
     /// Uploads the synthetic `/etc/passwd`/`/etc/shadow`/`/etc/group`
     /// `mapping` needs into `container_id`, then takes ownership of its home
     /// directory and each of its cache mounts for the mapped user.
@@ -2598,7 +2597,7 @@ impl DockerClient {
             dns: options.dns.clone(),
             dns_search: options.dns_search.clone(),
             dns_options: options.dns_options.clone(),
-            network_mode: build_network_mode(&shared.network),
+            network_mode: Some(build_network_mode(&shared.network)),
             ..Default::default()
         };
 
@@ -2623,6 +2622,11 @@ impl DockerClient {
             working_dir: options.working_directory.clone(),
             labels: Some(spec.labels.clone()),
             host_config: Some(host_config),
+            networking_config: build_networking_config(
+                &shared.network,
+                &shared.name,
+                shared.network_options.additional_hostnames.as_ref(),
+            ),
             ..Default::default()
         })
     }
@@ -3154,15 +3158,6 @@ impl ContainerRuntime for DockerClient {
                             shared.name
                         )
                     })?;
-            }
-            if let ContainerNetwork::Task(network) = &shared.network {
-                self.join_network(
-                    &container.id,
-                    network,
-                    &shared.name,
-                    shared.network_options.additional_hostnames.as_ref(),
-                )
-                .await?;
             }
             Ok(())
         }

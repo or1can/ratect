@@ -2371,6 +2371,94 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
     );
 }
 
+/// Requires a running Docker daemon with network access to pull `redis:7-alpine`
+/// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A task's containers are created on the task network, with their aliases,
+/// and are never also on Docker's default `bridge` (ratect#303). Asserted on
+/// what the daemon reports, with `--no-cleanup-after-success` keeping
+/// everything to inspect; an exited container still lists its networks.
+#[test]
+#[ignore]
+fn task_containers_are_only_on_the_task_network_via_docker() {
+    fn docker_lines(arguments: &[&str]) -> Vec<String> {
+        let output = Command::new("docker")
+            .args(arguments)
+            .output()
+            .expect("failed to run docker");
+        assert!(output.status.success(), "docker {arguments:?} failed");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    let project = "ratect-task-network-only-test";
+    let project_filter = format!("label=eu.orican.ratect.project={project}");
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-network-only.yml"))
+        .arg("--no-cleanup-after-success")
+        .arg("check")
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+
+    let containers = docker_lines(&["container", "ls", "-aq", "--filter", &project_filter]);
+    let networks = docker_lines(&[
+        "network",
+        "ls",
+        "--filter",
+        &project_filter,
+        "--format",
+        "{{.Name}}",
+    ]);
+    // `(configured container, network keys)`.
+    let inspected: Vec<(String, String)> = containers
+        .iter()
+        .map(|id| {
+            let line = docker_lines(&[
+                "container",
+                "inspect",
+                id,
+                "--format",
+                "{{index .Config.Labels \"eu.orican.ratect.container\"}} \
+                 {{range $name, $_ := .NetworkSettings.Networks}}{{$name}},{{end}}",
+            ])
+            .concat();
+            let mut fields = line.split(' ');
+            let mut field = || fields.next().unwrap_or_default().to_string();
+            (field(), field())
+        })
+        .collect();
+    // Torn down before any assertion can fail.
+    for id in &containers {
+        let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+    }
+    for network in &networks {
+        let _ = Command::new("docker")
+            .args(["network", "rm", network])
+            .output();
+    }
+
+    assert!(
+        output.status.success(),
+        "the task reaches its dependency by alias:\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(networks.len(), 1, "one task network: {networks:?}");
+    let network = &networks[0];
+    assert_eq!(inspected.len(), 2, "app and database: {inspected:?}");
+    for (container, container_networks) in &inspected {
+        assert_eq!(
+            container_networks,
+            &format!("{network},"),
+            "'{container}' is on the task network alone, never also `bridge`"
+        );
+    }
+}
+
 /// Serializes the two signal tests below, which share one fixture and so one
 /// project label: their `docker ls --filter` queries and their force-cleanup
 /// cannot tell one run's containers from the other's, so running them

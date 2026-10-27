@@ -74,7 +74,7 @@ sequenceDiagram
     par every container in the task's graph, the task's own included
         Engine->>Docker: pull_image()/build_image() (per image_pull_policy, unless already decided this run)
         Engine->>Docker: create_container(spec) — once its own image is ready
-        Docker-->>Engine: created, joined to network, not started
+        Docker-->>Engine: created on its network, not started
     and independent branches of the dependency graph, each once every container it depends on is ready
         Engine->>Docker: start_background_container(id)
         Docker-->>Dep: started

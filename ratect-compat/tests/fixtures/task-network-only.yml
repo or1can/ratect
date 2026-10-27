@@ -1,0 +1,24 @@
+# Proves a task's containers are on the task network and nothing else —
+# never also Docker's default `bridge` (ratect#303). Its own project name, so
+# the test can find what this run kept by its project label while other
+# Docker tests run concurrently.
+#
+# `database` carries `additional_hostnames` so the aliases it is created with
+# are exercised alongside the network, and the task reaches it by one of
+# them: being on the task network alone is no use if the aliases didn't come
+# with it. redis stays running on its image's default command.
+project_name: ratect-task-network-only-test
+containers:
+  database:
+    image: redis:7-alpine
+    additional_hostnames:
+      - db-alias
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+tasks:
+  check:
+    run:
+      container: app
+      command: ping -c 1 db-alias

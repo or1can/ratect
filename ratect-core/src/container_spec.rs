@@ -72,8 +72,8 @@ use crate::proxy::ProxyEnvironment;
 /// both be true of one container.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContainerNetwork {
-    /// Joined, after creation, to this task execution's own network (or
-    /// `--use-network`'s), under its own name plus `additional_hostnames` —
+    /// Created on this task execution's own network (or `--use-network`'s),
+    /// and only that one, under its own name plus `additional_hostnames` —
     /// every container with no `network_mode`.
     Task(String),
     /// Docker's `host` network mode.

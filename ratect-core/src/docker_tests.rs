@@ -412,27 +412,84 @@ fn build_ulimits_is_none_when_ulimits_is_absent() {
     assert_eq!(build_ulimits(None), None);
 }
 
-/// `network_mode` (ratect#106): only a container off the task's network gets
-/// `HostConfig.network_mode`, spelled as Docker's own `--network` would be;
-/// one on it keeps the daemon's default and is joined afterwards instead.
+/// `network_mode` (ratect#106) is spelled as Docker's own `--network` would
+/// spell it — for the task's network too, its name, so the container is
+/// created on that network and never on the daemon's default `bridge`
+/// (ratect#303).
 #[test]
 fn build_network_mode_spells_each_mode_as_docker_does() {
     assert_eq!(
         build_network_mode(&ContainerNetwork::Task("ratect-run".to_string())),
-        None
+        "ratect-run"
     );
-    assert_eq!(
-        build_network_mode(&ContainerNetwork::Host),
-        Some("host".to_string())
-    );
-    assert_eq!(
-        build_network_mode(&ContainerNetwork::None),
-        Some("none".to_string())
-    );
+    assert_eq!(build_network_mode(&ContainerNetwork::Host), "host");
+    assert_eq!(build_network_mode(&ContainerNetwork::None), "none");
     assert_eq!(
         build_network_mode(&ContainerNetwork::Container("abc123".to_string())),
-        Some("container:abc123".to_string())
+        "container:abc123"
     );
+}
+
+/// The one endpoint a container on the task's network is created with, as
+/// docker-client creates it: keyed by that network, its aliases the
+/// container's own name then each `additional_hostnames` entry, in order
+/// (ratect#303).
+fn task_endpoint(network: &str, aliases: &[&str]) -> bollard::models::NetworkingConfig {
+    bollard::models::NetworkingConfig {
+        endpoints_config: Some(HashMap::from([(
+            network.to_string(),
+            EndpointSettings {
+                aliases: Some(aliases.iter().map(|alias| alias.to_string()).collect()),
+                ..Default::default()
+            },
+        )])),
+    }
+}
+
+#[test]
+fn build_networking_config_gives_the_task_network_its_aliases() {
+    let hostnames = vec!["db-alias".to_string(), "another".to_string()];
+    assert_eq!(
+        build_networking_config(
+            &ContainerNetwork::Task("ratect-run".to_string()),
+            "database",
+            Some(&hostnames),
+        ),
+        Some(task_endpoint(
+            "ratect-run",
+            &["database", "db-alias", "another"]
+        ))
+    );
+}
+
+#[test]
+fn build_networking_config_aliases_only_the_name_without_additional_hostnames() {
+    assert_eq!(
+        build_networking_config(
+            &ContainerNetwork::Task("ratect-run".to_string()),
+            "database",
+            None,
+        ),
+        Some(task_endpoint("ratect-run", &["database"]))
+    );
+}
+
+/// Off the task's network there is no endpoint to configure: docker-client
+/// sends no networking config at all, and the mode alone says where it goes.
+#[test]
+fn build_networking_config_is_none_off_the_task_network() {
+    let hostnames = vec!["db-alias".to_string()];
+    for network in [
+        ContainerNetwork::Host,
+        ContainerNetwork::None,
+        ContainerNetwork::Container("abc123".to_string()),
+    ] {
+        assert_eq!(
+            build_networking_config(&network, "database", Some(&hostnames)),
+            None,
+            "{network:?}"
+        );
+    }
 }
 
 /// Docker refuses a hostname alongside `container:` — the namespace owner's
