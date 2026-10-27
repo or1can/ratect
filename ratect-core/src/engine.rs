@@ -394,6 +394,19 @@ fn build_dependency_graph(
     Ok(graph)
 }
 
+/// Whether `name` gets lines of its own — progress, a removal, a hint — in
+/// what a run prints: every container but one whose readiness is reported
+/// as another's, an `external_health_check`'s companion, which is an
+/// implementation detail of the container it checks (ratect#202). A report
+/// of what was *left* names a companion anyway, since it is there to remove
+/// and nothing else says so. One answer for every site, so the next one
+/// added can't forget it.
+fn is_narrated(containers: &HashMap<String, Container>, name: &str) -> bool {
+    containers
+        .get(name)
+        .is_none_or(|container| container.reports_readiness_for.is_none())
+}
+
 /// For each container in `created`, the others in `created` that depend on
 /// it — directly, or through a container that was never created — and so
 /// must have their stop attempted before it: Batect's `StopContainerStepRule`
@@ -2275,11 +2288,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // nothing: `expand_external_health_checks` only ever adds a
             // companion beside the container it checks, which is therefore
             // still in that list and is what the display drains on.
-            let narrated = |name: &String| {
-                containers
-                    .get(name)
-                    .is_none_or(|container| container.reports_readiness_for.is_none())
-            };
+            let narrated = |name: &String| is_narrated(&containers, name);
             let container_infos = graph
                 .iter()
                 .filter(|(name, _)| narrated(name))
@@ -2831,10 +2840,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     Removal {
                         name,
                         container_id,
-                        narrate: is_task_container
-                            || containers
-                                .get(name)
-                                .is_none_or(|container| container.reports_readiness_for.is_none()),
+                        narrate: is_task_container || is_narrated(&containers, name),
                         is_task_container,
                     }
                 })
@@ -3059,11 +3065,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     .chain(
                         created_sidecars
                             .iter()
-                            .filter(|(name, _)| {
-                                containers.get(name.as_str()).is_none_or(|container| {
-                                    container.reports_readiness_for.is_none()
-                                })
-                            })
+                            .filter(|(name, _)| is_narrated(&containers, name))
                             .map(|(name, id)| (name.as_str(), id.as_str())),
                     )
                     .collect();
