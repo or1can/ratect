@@ -1,8 +1,7 @@
 # Exercises interactive mode end-to-end: run from a real (emulated) local
 # terminal — see `interactive_session_forwards_stdin_and_stdout` in
 # tests/cli.rs — this task's container should get a real Docker TTY and its
-# stdin forwarded, rather than the usual non-interactive `docker logs`
-# streaming.
+# stdin forwarded, rather than the usual non-TTY attach.
 project_name: ratect-interactive-test
 containers:
   shell:

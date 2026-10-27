@@ -44,7 +44,7 @@ fn unique_temp_dir() -> PathBuf {
 }
 
 /// Records every posted `ContainerOutput` event's line, in order — the
-/// only variant `drain_interleaved_log_stream`'s tests need — and reports
+/// only variant `drain_interleaved_output`'s tests need — and reports
 /// its result stream's reader gone once `reader_gone_after` lines have been
 /// posted, if set.
 #[derive(Default)]
@@ -93,7 +93,7 @@ fn a_container_output_write_reaches_the_writer_whole() {
 /// after each chunk, and stops the run the moment its reader has gone
 /// rather than following the container to its end (ratect#670).
 #[tokio::test]
-async fn drain_interleaved_log_stream_stops_once_the_result_reader_has_gone() {
+async fn drain_interleaved_output_stops_once_the_result_reader_has_gone() {
     let chunks = vec![
         Ok(bollard::container::LogOutput::StdOut {
             message: bytes::Bytes::from_static(b"one\n"),
@@ -108,7 +108,7 @@ async fn drain_interleaved_log_stream_stops_once_the_result_reader_has_gone() {
     });
     let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
 
-    let error = drain_interleaved_log_stream(futures::stream::iter(chunks), &dyn_sink, "app")
+    let error = drain_interleaved_output(futures::stream::iter(chunks), &dyn_sink, "app")
         .await
         .unwrap_err();
 
@@ -117,7 +117,7 @@ async fn drain_interleaved_log_stream_stops_once_the_result_reader_has_gone() {
 }
 
 #[tokio::test]
-async fn drain_interleaved_log_stream_flushes_a_buffered_partial_line_before_a_stream_error() {
+async fn drain_interleaved_output_flushes_a_buffered_partial_line_before_a_stream_error() {
     // The bug this proves fixed: an unterminated final line (no
     // trailing newline) followed by the log stream itself erroring
     // (e.g. the daemon restarting mid-stream) used to be silently
@@ -139,7 +139,7 @@ async fn drain_interleaved_log_stream_flushes_a_buffered_partial_line_before_a_s
     let sink = std::sync::Arc::new(RecordingEventSink::default());
     let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
 
-    let result = drain_interleaved_log_stream(stream, &dyn_sink, "app").await;
+    let result = drain_interleaved_output(stream, &dyn_sink, "app").await;
 
     assert!(result.is_err(), "the stream error should still propagate");
     assert_eq!(
@@ -2881,4 +2881,175 @@ async fn without_a_credential_store_nothing_is_listed() {
         crate::registry_auth::configured_registries(config)
     );
     assert_eq!(warning, None);
+}
+
+/// A non-interactive spec named `app`, in `role`, derived from `container`.
+fn spec_from(
+    container: &crate::config::Container,
+    role: crate::labels::ContainerRole,
+) -> ContainerSpec {
+    use crate::container_spec::{derive_spec, ContainerSpecInputs, Overlay};
+    let run_labels = crate::labels::RunLabels::new("demo", "task", "run-id", None);
+    derive_spec(ContainerSpecInputs {
+        name: "app",
+        docker_name: "demo-app-abc123",
+        container_config: container,
+        overlay: Overlay::Customise(None),
+        image: "alpine:3.20",
+        network: ContainerNetwork::Task("demo-network-abc123".to_string()),
+        interactive: false,
+        additional_args: &[],
+        user_mapping: None,
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role,
+        run_labels: &run_labels,
+    })
+}
+
+/// The create request's `HostConfig.init` for a dependency derived from
+/// `container`, as `container_config` builds it for `create_container`.
+async fn init_sent_for(container: &crate::config::Container) -> Option<bool> {
+    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let spec = spec_from(container, crate::labels::ContainerRole::Dependency);
+    let config = client.container_config(&spec).unwrap();
+    config.host_config.unwrap().init
+}
+
+/// Every create request carries an explicit `Init`, as docker-client's
+/// always-non-nil `&useInitProcess` does: an omitted `enable_init_process`
+/// is sent as `false`, so a daemon configured with `"init": true` can't
+/// put an init process in front of the command (ratect#293).
+#[tokio::test]
+async fn container_config_always_sends_init() {
+    let mut container = crate::config::Container::default();
+    assert_eq!(init_sent_for(&container).await, Some(false));
+
+    container.enable_init_process = Some(false);
+    assert_eq!(init_sent_for(&container).await, Some(false));
+
+    container.enable_init_process = Some(true);
+    assert_eq!(init_sent_for(&container).await, Some(true));
+}
+
+/// A [`recording_daemon`] route for running one container: its attach
+/// upgrades and ends at once, as a container that printed nothing would;
+/// its inspect (bollard's, to pick the attach stream's framing) reports no
+/// TTY; its start succeeds; its wait reports exit code 0.
+fn run_route(method: &str, path: &str) -> (u16, String) {
+    match (method, path) {
+        ("POST", "/containers/app-id/attach") => (101, String::new()),
+        ("GET", "/containers/app-id/json") => (200, r#"{"Config":{"Tty":false}}"#.to_string()),
+        ("POST", "/containers/app-id/start") => (204, String::new()),
+        ("POST", "/containers/app-id/wait") => (200, r#"{"StatusCode":0}"#.to_string()),
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    }
+}
+
+/// Asserts `log` holds an attach to `app-id` before its start, and no
+/// `logs` request at all.
+fn assert_attached_before_start(log: &std::sync::Mutex<Vec<RecordedRequest>>, context: &str) {
+    let paths: Vec<_> = requests_sent(log)
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect();
+    let position = |wanted: &str| paths.iter().position(|path| path == wanted);
+    let attach = position("/containers/app-id/attach");
+    let start = position("/containers/app-id/start");
+    assert!(
+        attach.is_some() && start.is_some() && attach < start,
+        "{context}: no attach before the start: {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.ends_with("/logs")),
+        "{context}: read through logs: {paths:?}"
+    );
+}
+
+/// A sink whose output style is `all`, so dependencies' output is followed.
+struct InterleavedSink;
+
+impl EventSink for InterleavedSink {
+    fn post(&self, _: TaskEvent) {}
+
+    fn container_io_streaming(&self) -> ContainerIoStreaming {
+        ContainerIoStreaming::Interleaved
+    }
+}
+
+/// The task's own container's output is read from an attach made before
+/// it starts, never through the `logs` API, which can't read a container
+/// whose log driver Docker can't read back (ratect#517).
+#[tokio::test]
+async fn a_task_container_is_attached_before_it_starts_and_never_read_through_logs() {
+    for interleaved in [false, true] {
+        let (client, log) = client_for_recording_daemon(run_route).await;
+        let client = if interleaved {
+            client.with_event_sink(std::sync::Arc::new(InterleavedSink))
+        } else {
+            client
+        };
+        let spec = spec_from(
+            &crate::config::Container::default(),
+            crate::labels::ContainerRole::Task,
+        );
+
+        client.run_container("app-id", &spec, None).await.unwrap();
+
+        assert_attached_before_start(&log, &format!("interleaved: {interleaved}"));
+    }
+}
+
+/// Under `-o all`, a dependency's output follower attaches before the
+/// container starts, not through the `logs` API afterwards (ratect#517).
+#[tokio::test]
+async fn a_followed_dependency_is_attached_before_it_starts() {
+    let (client, log) = client_for_recording_daemon(run_route).await;
+    let client = client.with_event_sink(std::sync::Arc::new(InterleavedSink));
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Dependency,
+    );
+
+    client
+        .start_background_container("app-id", &spec)
+        .await
+        .unwrap();
+
+    assert_attached_before_start(&log, "dependency");
+}
+
+/// The stdin-forwarding path reads its output from the same attach that
+/// carries its stdin, made before the container starts — not from a
+/// stdin-only attach plus the `logs` API (ratect#517).
+#[tokio::test]
+async fn a_stdin_forwarding_task_container_attaches_stdin_and_output_before_it_starts() {
+    let (client, log) = client_for_recording_daemon(run_route).await;
+    let reader: &'static stdin::StdinReader = Box::leak(Box::new(stdin::StdinReader::spawn(
+        std::io::Cursor::new(b"echo hi\n".to_vec()),
+        false,
+    )));
+
+    let exit_code = client
+        .run_container_forwarding_stdin("app", "app-id", reader, None)
+        .await
+        .unwrap();
+
+    assert_eq!(exit_code, 0);
+    assert_attached_before_start(&log, "stdin forwarding");
+    let attach_query = log
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|request| request.path == "/containers/app-id/attach")
+        .map(|request| request.query.clone())
+        .unwrap();
+    for stream in ["stdin", "stdout", "stderr"] {
+        assert!(
+            attach_query.contains(&format!("{stream}=true")),
+            "{stream} not attached: {attach_query}"
+        );
+    }
 }
