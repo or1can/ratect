@@ -140,6 +140,13 @@ struct FakeContainerRuntime {
     // Same idea as `pull_delays`, for `build_image` (keyed by the build's
     // tag — see `with_build_delay`).
     build_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // The build ID each `build_image` call was given, keyed by the build's
+    // tag (see `build_id_for`).
+    build_ids: Arc<Mutex<HashMap<String, String>>>,
+    // Makes `cancel_build` fail (see `failing_build_cancel`).
+    fail_build_cancel: Arc<Mutex<bool>>,
+    // Makes `cancel_build` never answer (see `with_hanging_build_cancel`).
+    build_cancel_hangs: Arc<Mutex<bool>>,
     // Makes `create_network` fail (see `failing_network_creation`).
     fail_network_creation: Arc<Mutex<bool>>,
     // Same idea, for `exec_in_container` (keyed by command) and
@@ -270,6 +277,9 @@ impl Default for FakeContainerRuntime {
             pull_delays: Default::default(),
             failing_pulls: Default::default(),
             build_delays: Default::default(),
+            build_ids: Default::default(),
+            fail_build_cancel: Default::default(),
+            build_cancel_hangs: Default::default(),
             fail_network_creation: Default::default(),
             exec_delays: Default::default(),
             health_check_delays: Default::default(),
@@ -452,6 +462,20 @@ impl FakeContainerRuntime {
     /// the build.
     fn failing_image_build(self) -> Self {
         *self.fail_image_build.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `cancel_build` fail, as a daemon that refuses or never answers
+    /// the cancel would.
+    fn failing_build_cancel(self) -> Self {
+        *self.fail_build_cancel.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `cancel_build` record the cancel and then never answer, as a
+    /// daemon that has stopped responding wouldn't.
+    fn with_hanging_build_cancel(self) -> Self {
+        *self.build_cancel_hangs.lock().unwrap() = true;
         self
     }
 
@@ -734,6 +758,12 @@ impl FakeContainerRuntime {
         self.build_specs.lock().unwrap().get(tag).cloned()
     }
 
+    /// The build ID the `build_image` call for `tag` was given, recorded
+    /// as soon as the call is made — before its `with_build_delay`.
+    fn build_id_for(&self, tag: &str) -> Option<String> {
+        self.build_ids.lock().unwrap().get(tag).cloned()
+    }
+
     /// The `build_args` a prior `build_image` call for `tag` was given
     /// (flattened, same convention as `environment_for`).
     fn build_args_for(&self, tag: &str) -> Option<HashMap<String, String>> {
@@ -957,7 +987,15 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(self.locally_present_images.lock().unwrap().contains(image))
     }
 
-    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String> {
+    async fn build_image(
+        &self,
+        spec: &crate::container_spec::BuildSpec,
+        build_id: &str,
+    ) -> Result<String> {
+        self.build_ids
+            .lock()
+            .unwrap()
+            .insert(spec.tag.clone(), build_id.to_string());
         let delay = self.build_delays.lock().unwrap().get(&spec.tag).copied();
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
@@ -978,6 +1016,17 @@ impl ContainerRuntime for FakeContainerRuntime {
         // has no such concept, so it just echoes the tag back — tests
         // that assert `image_for(name) == tag` still hold either way.
         Ok(spec.tag.clone())
+    }
+
+    async fn cancel_build(&self, build_id: &str) -> Result<()> {
+        self.push(format!("cancel-build:{build_id}"));
+        if *self.build_cancel_hangs.lock().unwrap() {
+            std::future::pending::<()>().await;
+        }
+        if *self.fail_build_cancel.lock().unwrap() {
+            anyhow::bail!("the daemon did not answer");
+        }
+        Ok(())
     }
 
     async fn tag_image(&self, image_id: &str, tag: &str) -> Result<()> {
@@ -5622,6 +5671,257 @@ async fn a_termination_signal_cleans_up_and_is_reported_as_itself() {
     assert!(
         events.iter().any(|e| e.starts_with("network-remove:")),
         "a terminated run must still remove its network: {events:?}"
+    );
+}
+
+/// `app` is built (tagged `demo-app`) and depends on `database`, which is
+/// pulled; with `app`'s build held for a minute, `database` is running
+/// while the build is still in flight.
+fn config_with_built_app_and_database() -> Config {
+    let mut config = config_with_database_dependency(|_| {});
+    let mut app = container_with_build_directory("./app", None);
+    app.dependencies = Some(vec!["database".to_string()]);
+    config.containers.insert("app".to_string(), app);
+    config
+}
+
+const BUILD_OUTLASTING_THE_RUN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A run over `config_with_built_app_and_database` whose build is still in
+/// flight when `SIGTERM` arrives, a second in.
+fn engine_signalled_mid_build(
+    docker: FakeContainerRuntime,
+    sink: RecordingEventSink,
+) -> TaskEngine<FakeContainerRuntime> {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let signal = Arc::clone(&interrupt);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        signal.record_signal(crate::interrupt::TerminationSignal::Terminate);
+    });
+    TaskEngine::new(
+        project(config_with_built_app_and_database()),
+        docker,
+        Arc::new(sink),
+        interrupt,
+    )
+}
+
+fn build_cancels(events: &[String]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| event.strip_prefix("cancel-build:"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A build the run stopped waiting for is still running in the daemon, so
+/// cleanup cancels it — by the ID that build was started with (ratect#537).
+#[tokio::test(start_paused = true)]
+async fn a_signal_mid_build_cancels_that_build() {
+    let docker =
+        FakeContainerRuntime::default().with_build_delay("demo-app", BUILD_OUTLASTING_THE_RUN);
+    let engine = engine_signalled_mid_build(docker.clone(), RecordingEventSink::default());
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
+    let build_id = docker
+        .build_id_for("demo-app")
+        .expect("the build was started");
+    assert_eq!(build_cancels(&docker.events()), vec![build_id]);
+}
+
+/// A sibling's failure drops an in-flight build just as a signal does.
+#[tokio::test(start_paused = true)]
+async fn a_sibling_failure_mid_build_cancels_the_build() {
+    let docker = FakeContainerRuntime::default()
+        .with_build_delay("demo-app", BUILD_OUTLASTING_THE_RUN)
+        .with_pull_delay("postgres:16", std::time::Duration::from_secs(1))
+        .with_failing_pull("postgres:16");
+    let engine = engine(config_with_built_app_and_database(), docker.clone());
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(format!("{error:#}").contains("postgres:16"), "{error:#}");
+    let build_id = docker
+        .build_id_for("demo-app")
+        .expect("the build was started");
+    assert_eq!(build_cancels(&docker.events()), vec![build_id]);
+}
+
+/// A build that answered, either way, is over in the daemon too: there is
+/// nothing to cancel.
+#[tokio::test(start_paused = true)]
+async fn a_build_that_finished_is_never_cancelled() {
+    let docker = FakeContainerRuntime::default();
+    engine(config_with_built_app_and_database(), docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap();
+    assert!(docker.build_id_for("demo-app").is_some());
+    assert_eq!(build_cancels(&docker.events()), Vec::<String>::new());
+
+    let docker = FakeContainerRuntime::default().failing_image_build();
+    engine(config_with_built_app_and_database(), docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap_err();
+    assert!(docker.build_id_for("demo-app").is_some());
+    assert_eq!(build_cancels(&docker.events()), Vec::<String>::new());
+}
+
+/// Cancelling comes first, so the build stops using the daemon while
+/// containers are removed, and it isn't cleanup: `--no-cleanup` keeps
+/// containers to look at, and an abandoned build is not one of those.
+#[tokio::test(start_paused = true)]
+async fn an_abandoned_build_is_cancelled_before_any_removal_and_under_no_cleanup() {
+    let docker =
+        FakeContainerRuntime::default().with_build_delay("demo-app", BUILD_OUTLASTING_THE_RUN);
+    engine_signalled_mid_build(docker.clone(), RecordingEventSink::default())
+        .run_task("start", &[])
+        .await
+        .unwrap_err();
+    let events = docker.events();
+    let cancel = events
+        .iter()
+        .position(|event| event.starts_with("cancel-build:"))
+        .expect("the build is cancelled");
+    let first_removal = events
+        .iter()
+        .position(|event| {
+            event.starts_with("sidecar-stop:") || event.starts_with("network-remove:")
+        })
+        .expect("cleanup removes what the run created");
+    assert!(cancel < first_removal, "{events:?}");
+
+    let docker =
+        FakeContainerRuntime::default().with_build_delay("demo-app", BUILD_OUTLASTING_THE_RUN);
+    engine_signalled_mid_build(docker.clone(), RecordingEventSink::default())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .run_task("start", &[])
+        .await
+        .unwrap_err();
+    let events = docker.events();
+    assert_eq!(build_cancels(&events).len(), 1, "{events:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.starts_with("sidecar-stop:")),
+        "{events:?}"
+    );
+}
+
+/// A cancel the daemon doesn't answer holds up nothing: cleanup has to
+/// beat a supervisor's `SIGKILL` (ratect#249), so the removals start at
+/// once, and only the warning waits for the cancel's timeout.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_build_cancel_doesnt_hold_up_cleanup() {
+    let docker = FakeContainerRuntime::default()
+        .with_build_delay("demo-app", BUILD_OUTLASTING_THE_RUN)
+        .with_hanging_build_cancel();
+    let sink = RecordingEventSink::default();
+    let started = tokio::time::Instant::now();
+
+    engine_signalled_mid_build(docker.clone(), sink.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap_err();
+
+    let (stop_begun, _) = docker.stop_window("database").expect("cleanup stops it");
+    assert!(
+        stop_begun - started < std::time::Duration::from_millis(1500),
+        "the removal waited on the cancel: {:?}",
+        stop_begun - started
+    );
+    let events = sink.events();
+    let cancel_warning = events
+        .iter()
+        .position(|event| {
+            warning(event).is_some_and(|message| {
+                message.contains("'app'") && message.contains("didn't answer")
+            })
+        })
+        .expect("the unanswered cancel is warned about");
+    let cleanup_finished = events
+        .iter()
+        .position(|event| *event == TaskEvent::CleanupFinished)
+        .expect("cleanup finishes");
+    assert!(
+        cancel_warning < cleanup_finished,
+        "the warning belongs to the cleanup it was part of: {events:?}"
+    );
+}
+
+/// A further signal ends the wait for a cancel's answer as it hurries the
+/// rest of cleanup: a supervisor's `SIGKILL` follows its second signal by
+/// less than the cancel's timeout (ratect#249), and the lines cleanup ends
+/// with matter more than the answer.
+#[tokio::test(start_paused = true)]
+async fn a_second_signal_stops_waiting_for_a_build_cancel() {
+    let docker = FakeContainerRuntime::default()
+        .with_build_delay("demo-app", BUILD_OUTLASTING_THE_RUN)
+        .with_hanging_build_cancel();
+    let sink = RecordingEventSink::default();
+    let interrupt = crate::interrupt::Interrupt::new();
+    let signal = Arc::clone(&interrupt);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        signal.record_signal(crate::interrupt::TerminationSignal::Interrupt);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        signal.record_signal(crate::interrupt::TerminationSignal::Terminate);
+    });
+    let engine = TaskEngine::new(
+        project(config_with_built_app_and_database()),
+        docker,
+        Arc::new(sink.clone()),
+        interrupt,
+    );
+    let started = tokio::time::Instant::now();
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(1500),
+        "cleanup waited out the cancel's timeout: {:?}",
+        started.elapsed()
+    );
+    let warnings = messages(&sink.events(), warning);
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains("'app'") && message.contains("stopped waiting")),
+        "{warnings:?}"
+    );
+}
+
+/// A cancel the daemon refuses or never answers leaves a build that may
+/// still be running, which is worth a warning naming whose build it is —
+/// but nothing the run created is left behind, so it is not a cleanup
+/// failure and doesn't change how the run ends.
+#[tokio::test(start_paused = true)]
+async fn a_failed_build_cancel_warns_and_is_not_a_cleanup_failure() {
+    let docker = FakeContainerRuntime::default()
+        .with_build_delay("demo-app", BUILD_OUTLASTING_THE_RUN)
+        .failing_build_cancel();
+    let sink = RecordingEventSink::default();
+
+    let error = engine_signalled_mid_build(docker, sink.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap_err();
+
+    assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
+    let warnings = messages(&sink.events(), warning);
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains("'app'") && message.contains("build")),
+        "{warnings:?}"
     );
 }
 

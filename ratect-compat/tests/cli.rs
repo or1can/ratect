@@ -6390,6 +6390,100 @@ fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
     );
 }
 
+/// Requires a running Docker daemon with BuildKit and network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// An interrupted BuildKit build stops running in the daemon (ratect#537):
+/// see `tests/fixtures/build-cancel.yml`. The build's `RUN` step ticks a
+/// listener here once a second, through a `localhost` proxy URL that ratect
+/// rewrites to name the host, so the listener binds every interface — a
+/// loopback-only one is unreachable from a Linux build. Ticks still arriving
+/// a few seconds after ratect has exited mean the build was only
+/// disconnected from, not cancelled.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn an_interrupted_buildkit_build_stops_running_in_the_daemon() {
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    let listener = TcpListener::bind("0.0.0.0:0").expect("failed to bind the tick listener");
+    let port = listener.local_addr().unwrap().port();
+    let ticks: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    {
+        let ticks = Arc::clone(&ticks);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                ticks.lock().unwrap().push(Instant::now());
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+    }
+
+    let cache_bust = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let mut child = ratect_command()
+        .env("http_proxy", format!("http://localhost:{port}"))
+        .env("RATECT_BUILD_CANCEL_TEST_CACHE_BUST", &cache_bust)
+        .arg("--enable-buildkit")
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-cancel.yml"))
+        .args(["-o", "simple", "build"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let ticking = poll_until(Duration::from_secs(120), || {
+        ticks.lock().unwrap().len() >= 2
+    });
+    if !ticking {
+        let _ = child.kill();
+        let output = child.wait_with_output().expect("failed to wait on ratect");
+        panic!(
+            "the build never reached its ticking RUN step; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let signalled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success(), "could not send SIGINT to ratect");
+    let output = child.wait_with_output().expect("failed to wait on ratect");
+    let exited = Instant::now();
+
+    std::thread::sleep(Duration::from_secs(10));
+    let late_ticks = ticks
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|tick| **tick > exited + Duration::from_secs(3))
+        .count();
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        late_ticks,
+        0,
+        "the build kept running in the daemon after ratect exited; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///

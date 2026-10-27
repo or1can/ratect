@@ -97,6 +97,7 @@ sequenceDiagram
         Note over Engine: a failure cancels a still-running main command;<br/>the main command's exit ends the gate (see Known limitations)
     end
 
+    Engine->>Docker: cancel_build() for each BuildKit build the run stopped waiting for, whatever --no-cleanup* says
     Note over Engine: cleanup — runs even if the task's container failed,<br/>unless --no-cleanup* says otherwise
     Engine->>Docker: stop_and_remove_container() for the task's own container
     Engine->>Docker: stop_and_remove_container() for each dependency, in reverse dependency order
@@ -108,6 +109,13 @@ after every container that depends on it, so a dependent shutting down can still
 what it depends on. A dependency whose dependent's stop failed is still stopped.
 Containers with nothing left depending on them are stopped at the same time, so
 independent dependencies take one grace period between them, not one each.
+
+An image build that hasn't finished when the run ends — because of a termination signal,
+or because another container failed — is cancelled before anything is removed, and
+under `--no-cleanup*` too: a BuildKit build would otherwise run on in the daemon to the
+end of its steps. A cancel that fails is a warning naming the container. The classic
+builder has no cancel; the daemon stops a classic build on its own some seconds after
+Ratect disconnects from it.
 
 If the container has no `dependencies`, the dependency steps (the `loop` above) are
 skipped — but the network is still created and the task's own container still joins

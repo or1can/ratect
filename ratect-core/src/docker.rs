@@ -884,6 +884,7 @@ async fn build_image_via_buildkit(
     force_pull: bool,
     proxy_host_gateway: Option<crate::proxy::HostGateway>,
     credentials: Option<HashMap<String, bollard::auth::DockerCredentials>>,
+    build_id: &str,
 ) -> Result<String> {
     let build_directory = build_directory.to_path_buf();
     let dockerfile_owned = dockerfile.to_string();
@@ -898,7 +899,8 @@ async fn build_image_via_buildkit(
         .t(tag)
         .rm(true)
         .version(bollard::query_parameters::BuilderVersion::BuilderBuildKit)
-        .session(&session_id);
+        .session(&session_id)
+        .buildid(build_id);
     if let Some(build_args) = build_args {
         options_builder = options_builder.buildargs(build_args);
     }
@@ -1533,7 +1535,27 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// but isn't guaranteed unique (see `TaskEngine::resolve_image`), so
     /// callers must use the returned ID, not the tag, to reliably reference
     /// the image this call just built.
-    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String>;
+    ///
+    /// `build_id` identifies this one attempt, so that [`cancel_build`]
+    /// can stop it in the daemon if the caller stops waiting for it. It
+    /// isn't part of `spec`: it says nothing about what is built. Only a
+    /// BuildKit build uses it; the classic builder has no cancel by ID.
+    ///
+    /// [`cancel_build`]: ContainerRuntime::cancel_build
+    async fn build_image(
+        &self,
+        spec: &crate::container_spec::BuildSpec,
+        build_id: &str,
+    ) -> Result<String>;
+
+    /// Asks the daemon to stop the BuildKit build started with `build_id`
+    /// — `POST /build/cancel`, as Batect sends for a build it abandons.
+    /// Dropping `build_image`'s future only closes the connection, which
+    /// leaves a BuildKit build running. Returns once the daemon accepts the
+    /// request, not once the build has stopped; an unknown or finished ID
+    /// is accepted too. When the classic builder was chosen there is nothing
+    /// to cancel by ID, and nothing is asked.
+    async fn cancel_build(&self, build_id: &str) -> Result<()>;
 
     /// Tags `image_id` (the ID `build_image` returned) with `tag`, in
     /// addition to `build_image`'s own `tag` — used by `--tag-image`. Both
@@ -2734,7 +2756,11 @@ impl ContainerRuntime for DockerClient {
         }
     }
 
-    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String> {
+    async fn build_image(
+        &self,
+        spec: &crate::container_spec::BuildSpec,
+        build_id: &str,
+    ) -> Result<String> {
         let build_directory = spec.build_directory.as_path();
         let dockerfile = spec.dockerfile.as_str();
         let build_args = spec.build_args.as_ref();
@@ -2770,6 +2796,7 @@ impl ContainerRuntime for DockerClient {
                     force_pull,
                     proxy_host_gateway,
                     credentials,
+                    build_id,
                 )
                 .await;
             }
@@ -2882,6 +2909,24 @@ impl ContainerRuntime for DockerClient {
         })?;
 
         Ok(image_id)
+    }
+
+    async fn cancel_build(&self, build_id: &str) -> Result<()> {
+        // Only a BuildKit build has an ID to cancel by. A classic one stops
+        // when its connection closes, and a daemon with no BuildKit may have
+        // no `/build/cancel` at all, so asking would only warn falsely.
+        if self.builder_version.get()
+            != Some(&bollard::query_parameters::BuilderVersion::BuilderBuildKit)
+        {
+            tracing::debug!(build_id, "no BuildKit build to cancel");
+            return Ok(());
+        }
+        self.docker
+            .cancel_build(build_id)
+            .await
+            .context("Failed to cancel the build")?;
+        tracing::debug!(build_id, "cancelled abandoned build");
+        Ok(())
     }
 
     async fn tag_image(&self, image_id: &str, tag: &str) -> Result<()> {

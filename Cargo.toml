@@ -2,32 +2,38 @@
 members = ["ratect", "ratect-compat", "ratect-core", "dockerignore"]
 resolver = "2"
 
-# Upstream `master`, unmodified. The native-certs fix this pin used to carry
-# (`connect_with_ssl` no longer discarding every certificate that loaded from
-# the OS trust store because *some* entry errored) landed upstream as
-# https://github.com/fussybeaver/bollard/pull/796, so the fork branch it lived
-# on is retired. Sshforward dispatch to *named* ssh agents (which `build_ssh`'s
-# multi-agent and `paths` support is built on, decisions/0005), session
-# providers on `build_image`, and `ping_info` landed upstream earlier (PRs #770,
-# #731, #732). The one thing keeping this patch in place at all: the latest
+# Upstream `master` plus two unlanded commits of ours, on the fork
+# (`or1can/bollard`) branch `feat/build-cancel`: a `buildid` option on
+# `BuildImageOptions` and `Docker::cancel_build` (`POST /build/cancel`), which
+# cleanup uses to stop a BuildKit build the run stopped waiting for
+# (ratect#537). Both are undocumented-but-stable Engine API the Docker CLI
+# uses. `bollard-stubs` is patched from the same branch, since `buildid` is a
+# generated option; bollard exact-pins the stubs version the fork's crate
+# carries, so that patch applies. The native-certs fix an earlier branch
+# carried (`connect_with_ssl` no longer discarding every certificate that
+# loaded from the OS trust store because *some* entry errored) landed upstream
+# as https://github.com/fussybeaver/bollard/pull/796. Sshforward dispatch to
+# *named* ssh agents (which `build_ssh`'s multi-agent and `paths` support is
+# built on, decisions/0005), session providers on `build_image`, and
+# `ping_info` landed upstream earlier (PRs #770, #731, #732). The latest
 # crates.io release is still 0.21.1 (checked via `cargo search bollard`), so
 # none of upstream's merges are reachable from a plain version dependency yet.
 #
-# When this pin needs commits of our own, it moves to a branch of the fork
-# (`or1can/bollard`) cut fresh from upstream `master`, not carried forward from
-# an old PR branch: upstream squash-merges on review, so an old branch and
-# master end up expressing the same landed feature as different commits
-# touching the same lines, which conflicts on comparison and makes the branch
-# unable to raise a PR or pick up later upstream fixes. Keep such a branch
-# `master` + our own unlanded commits, and rebase it rather than merging master
-# into it — worth catching up whenever this file is touched and the branch has
-# drifted, dropping any commit that has landed upstream since, rather than
-# folding that into an unrelated change.
+# The branch is cut fresh from upstream `master` on every rebase, not carried
+# forward from an old PR branch: upstream squash-merges on review, so an old
+# branch and master end up expressing the same landed feature as different
+# commits touching the same lines, which conflicts on comparison and makes the
+# branch unable to raise a PR or pick up later upstream fixes. Keep this pin on
+# a branch that is `master` + our own unlanded commits, and rebase it rather
+# than merging master into it — worth catching up whenever this file is
+# touched and the branch has drifted, dropping any commit that has landed
+# upstream since, rather than folding that into an unrelated change.
 #
 # Cargo.lock pins the exact commit, so builds stay reproducible. Dropping this
-# patch entirely still needs a new crates.io release with today's `master`.
+# patch entirely needs a crates.io release with both commits landed.
 [patch.crates-io]
-bollard = { git = "https://github.com/fussybeaver/bollard.git", branch = "master" }
+bollard = { git = "https://github.com/or1can/bollard.git", branch = "feat/build-cancel" }
+bollard-stubs = { git = "https://github.com/or1can/bollard.git", branch = "feat/build-cancel" }
 
 # The profile that 'dist' will build with
 [profile.dist]
