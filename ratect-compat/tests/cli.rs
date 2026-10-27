@@ -565,6 +565,10 @@ fn interactive_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/interactive.yml")
 }
 
+fn prerequisite_task_container_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/prerequisite-task-container.yml")
+}
+
 fn additional_hostnames_and_hosts_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/additional-hostnames-and-hosts.yml")
 }
@@ -5835,11 +5839,35 @@ fn interactive_session_forwards_live_terminal_resizes() {
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
+/// Proves a prerequisite task's own container gets the host's `TERM`, as
+/// Batect gives it to every container (ratect#474) — not only the invoked
+/// task's. `-o quiet` streams each task container's output to stdout.
+#[test]
+#[ignore]
+fn a_prerequisite_tasks_container_gets_the_host_term() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(prerequisite_task_container_config_path())
+        .arg("-o")
+        .arg("quiet")
+        .arg("main")
+        .env("TERM", "xterm-256color")
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("PRE TERM=[xterm-256color]"), "{stdout}");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
 /// Proves stdin forwarding is decoupled from TTY allocation: `ratect` is
 /// spawned with both stdin *and* stdout wired to plain OS pipes — neither
 /// end is a terminal at all, unlike the `portable-pty`-based test above, so
 /// `should_use_tty` is false and no real Docker TTY gets allocated — yet the
-/// invoked task is still the top-level one, so `interactive` (eligibility)
+/// container is still the task's own, so `interactive` (eligibility)
 /// is still `true` and stdin should still reach the container per
 /// `run_container_forwarding_stdin`. A scripted `echo <marker>` is written
 /// to the piped stdin, and the piped stdout is checked for the marker
@@ -5906,6 +5934,143 @@ fn piped_stdin_reaches_a_non_tty_task_container() {
         status.success(),
         "ratect should exit successfully once the shell session ends: {status:?}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a prerequisite task's own container gets stdin forwarded, as
+/// Batect forwards it to each task's own container (ratect#486), with both
+/// stdin and stdout piped so no TTY is involved. Only the prerequisite's
+/// read is asserted: what the named task would read afterwards depends on
+/// how much the stdin pump had already copied.
+#[test]
+#[ignore]
+fn piped_stdin_reaches_a_prerequisite_tasks_container() {
+    use std::process::Stdio;
+
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(prerequisite_task_container_config_path())
+        .arg("-o")
+        .arg("quiet")
+        .arg("main")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let mut stdin = child.stdin.take().expect("child should have piped stdin");
+    writeln!(stdin, "ratect-prerequisite-stdin-marker").expect("failed to write to piped stdin");
+    drop(stdin);
+
+    let output = child.wait_with_output().expect("failed to wait for ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        stdout.contains("PRE-READ=[ratect-prerequisite-stdin-marker]"),
+        "{stdout}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and the ability to allocate a local pseudo-terminal —
+/// see `interactive_session_forwards_stdin_and_stdout`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Proves a prerequisite task's own container gets a real TTY and the
+/// terminal's input when stdin and stdout are both terminals, as the named
+/// task's does (ratect#486) — and that what is typed once the prerequisite
+/// has exited reaches the named task, not a read the prerequisite's stdin
+/// forwarding left behind.
+#[test]
+#[ignore]
+fn a_prerequisite_tasks_container_gets_a_tty() {
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
+    cmd.arg("-f");
+    cmd.arg(prerequisite_task_container_config_path());
+    cmd.arg("-o");
+    cmd.arg("quiet");
+    cmd.arg("main");
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let mut writer = pair
+        .master
+        .take_writer()
+        .expect("failed to take pty writer");
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let mut output = Vec::new();
+    let mut read_until = |marker: &str| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !String::from_utf8_lossy(&output).contains(marker) && Instant::now() < deadline {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+                output.extend_from_slice(&chunk);
+            }
+        }
+        String::from_utf8_lossy(&output).into_owned()
+    };
+
+    // The prerequisite reads one line before it exits; the pty buffers it
+    // until then.
+    writeln!(writer, "pre-line").expect("failed to write to pty");
+    let output_str = read_until("PRE-READ=");
+    assert!(output_str.contains("PRE-OUT-TTY"), "{output_str:?}");
+    assert!(output_str.contains("PRE-READ=[pre-line]"), "{output_str:?}");
+
+    // Typed only once the named task's container is running, so it can
+    // only reach that container — unless something left over from the
+    // prerequisite's session reads it first.
+    read_until("MAIN-READY");
+    writeln!(writer, "main-line").expect("failed to write to pty");
+    let output_str = read_until("main-done");
+    assert!(
+        output_str.contains("MAIN-READ=[main-line]"),
+        "{output_str:?}"
+    );
+
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("ratect did not exit")
+        .expect("failed to wait for ratect");
+    assert!(status.success(), "{status:?}");
 }
 
 /// Requires a running Docker daemon with network access to pull

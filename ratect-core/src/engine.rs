@@ -26,9 +26,9 @@
 //! expose the same ~10 knobs behind differently-named flags, so neither
 //! duplicates the builder chain; a new setting needs adding in both places or a
 //! binary can't reach it, and this module's own tests keep using the builders,
-//! where naming one setting reads better than a mostly-default struct); and only
-//! the task actually named on the command line (never a
-//! prerequisite) is ever eligible for interactive-TTY mode. `run_task_internal`
+//! where naming one setting reads better than a mostly-default struct); and
+//! every task's own container, the named task's and each prerequisite's, is
+//! eligible for interactive-TTY mode — never a dependency's. `run_task_internal`
 //! runs `prerequisites` first, then returns early (no error) if the task itself has
 //! no `run` (0.14.0) — everything after can assume `run` is present. `customise`
 //! threads through `start_dependency`'s own recursion unconditionally, so it
@@ -331,8 +331,8 @@ struct TaskRunContext<'a, 'p> {
     /// The task's own container: its name, its `run` (the overlay it is
     /// created with, where a dependency gets `customise`), the
     /// `-- ADDITIONAL_ARGS` only it receives, and whether it is
-    /// interactive-eligible (`run_task_internal` decides; only the top-level
-    /// task's is).
+    /// interactive-eligible (`run_task_internal` decides; every task's is,
+    /// prerequisites included, outside `-o all`).
     root: &'a str,
     run: &'a crate::config::TaskRun,
     additional_args: &'a [String],
@@ -1691,35 +1691,25 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         }
     }
 
-    /// The `TERM` to inject into a container's environment — the host's own
-    /// value for the invoked task's own container (`interactive` is `true`),
-    /// `None` for anything else (a prerequisite's, a dependency's, or a
-    /// sidecar's container, or an image build), or `dumb` unconditionally
-    /// under the interleaved I/O policy (the `all` output mode), overriding
-    /// both of those — matching Batect's
-    /// `InterleavedContainerIOStreamingOptions`, which sets `TERM=dumb` on
-    /// every container regardless of whether it would otherwise have been
-    /// the task's own. The single call both `run_task_internal` (the task's
-    /// own container) and `ensure_container_ready` (a dependency, always
-    /// `interactive: false`) make, so the interleaved override lives in
-    /// exactly one place rather than being checked at each call site with
-    /// its own idiom.
+    /// The `TERM` to inject into a container's environment — `dumb` under
+    /// the interleaved I/O policy (the `all` output mode), matching Batect's
+    /// `InterleavedContainerIOStreamingOptions`, and otherwise the host's own
+    /// value, or `None` when the host has none. The same for every container
+    /// a task run creates — the task's own, a prerequisite's, a dependency's
+    /// — matching Batect's
+    /// `TaskContainerOnlyIOStreamingOptions.terminalTypeForContainer`, which
+    /// ignores the container it is given. Never applied to an image build,
+    /// which Batect gives no `TERM` either.
     ///
-    /// Non-interleaved `interactive: true` is gated on `interactive` alone
-    /// — deliberately *not* on whether a real TTY ends up being allocated
-    /// (that's decided later, inside `ContainerRuntime::run_container`, from
-    /// information not yet known here) — matching Batect's own
-    /// `ConsoleInfo.terminalType`/
-    /// `TaskContainerOnlyIOStreamingOptions.terminalTypeForContainer`, both
-    /// unconditional on any TTY check. So a full-screen terminal program
-    /// inside the container knows the terminal type even when piping output
-    /// elsewhere still lets it detect it isn't attached to a real TTY.
-    fn term_environment_variable(&self, interactive: bool) -> Option<HashMap<String, String>> {
+    /// Not gated on interactive eligibility, nor on whether a real TTY ends
+    /// up being allocated (decided later, inside
+    /// `ContainerRuntime::run_container`) — Batect's `ConsoleInfo.terminalType`
+    /// is unconditional on any TTY check too. So a full-screen terminal
+    /// program inside the container knows the terminal type even when piping
+    /// output elsewhere still lets it detect it isn't attached to a real TTY.
+    fn term_environment_variable(&self) -> Option<HashMap<String, String>> {
         if self.interleaved_output() {
             return Some(dumb_term_environment());
-        }
-        if !interactive {
-            return None;
         }
         let term = (self.host_env)("TERM")?;
         Some(HashMap::from([("TERM".to_string(), term)]))
@@ -2147,14 +2137,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     }
 
     /// `top_level` is `true` only for the task actually named on the command
-    /// line, `false` for every prerequisite (however deeply nested) — used to
-    /// decide interactive-TTY eligibility for that task's own container (see
-    /// `run_task_internal`). A prerequisite chain isn't the thing being "run"
-    /// interactively, and stdin can only usefully attach to one container at
-    /// a time, so only the top-level task's own container is ever eligible —
-    /// same principle Batect applies (only ever its single "task container"),
-    /// even though Ratect's prerequisites are structurally different (full
-    /// recursive task runs, not steps within one task).
+    /// line, `false` for every prerequisite (however deeply nested). It
+    /// scopes `--skip-prerequisites` to the named task and keeps a
+    /// prerequisite out of `--no-cleanup-after-success` — not interactive
+    /// eligibility, which every task's own container has, as in Batect,
+    /// whose task container is per task, not per run (see
+    /// `run_task_internal`).
     // `async_recursion` adds a bare `#[must_use]` to a function returning a
     // boxed future, which is already `#[must_use]` — Clippy 1.99's
     // `double_must_use` flags that macro output, not anything written here.
@@ -2251,9 +2239,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             )
         })?;
 
-        // Run prerequisites (never with additional args, and never eligible
-        // for interactive TTY attachment — both scoped to only the
-        // originally-requested task). A `*`-wildcard entry is expanded
+        // Run prerequisites (never with additional args, which are scoped to
+        // only the originally-requested task). A `*`-wildcard entry is expanded
         // against the full task list first — see
         // `expand_prerequisite_wildcards` — then run through the same
         // sequential loop as any other prerequisite; its own dedup/cycle
@@ -2408,11 +2395,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // method `docker.rs`'s own `task_container_io` independently
         // re-checks, so the two can't disagree about which containers a
         // policy allows to be interactive.
-        let interactive = top_level
-            && self
-                .event_sink
-                .container_io_streaming()
-                .allows_interactive();
+        //
+        // Every task's own container is eligible, prerequisites included,
+        // as in Batect. That relies on prerequisites running one after
+        // another: `docker::stdin`'s one stdin reader is lent to one container
+        // at a time, and only one can hold the terminal — revisit this if
+        // prerequisites ever run concurrently (ratect#102).
+        let interactive = self
+            .event_sink
+            .container_io_streaming()
+            .allows_interactive();
 
         let execution = async {
             // Always created, even with no dependencies, so the task's own
@@ -3436,9 +3428,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // — which runs after `extends` — for one outside this
                     // task's own graph), the `-- ADDITIONAL_ARGS` only it
                     // receives, its role, and its interactive eligibility —
-                    // a dependency is never interactive (see
-                    // `term_environment_variable`'s own docs for the
-                    // interleaved-policy override it still picks up).
+                    // a dependency is never interactive.
                     let (overlay, additional_args, role, interactive) = if is_root {
                         (
                             crate::container_spec::Overlay::Run(context.run),
@@ -3456,7 +3446,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             false,
                         )
                     };
-                    let term_var = self.term_environment_variable(interactive);
+                    let term_var = self.term_environment_variable();
                     let volumes = self
                         .resolve_volumes(container_config.volumes.as_ref())
                         .await?;

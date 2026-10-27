@@ -2242,7 +2242,7 @@ fn stdin_flags_allocate_a_tty_only_when_one_is_used() {
     );
 }
 
-/// A container that isn't the top-level task's own gets no stdin at all,
+/// A container that isn't a task's own (a dependency) gets no stdin at all,
 /// leaving every flag at Docker's own default.
 #[test]
 fn stdin_flags_are_all_unset_when_not_interactive() {

@@ -2199,7 +2199,7 @@ async fn without_prerequisites_scopes_to_whichever_task_is_named_as_top_level() 
 }
 
 #[tokio::test]
-async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
+async fn the_named_tasks_own_container_is_interactive_eligible() {
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     let mut tasks = IndexMap::new();
@@ -2225,7 +2225,7 @@ async fn only_the_top_level_tasks_own_container_run_is_interactive_eligible() {
 }
 
 #[tokio::test]
-async fn prerequisite_tasks_own_container_is_never_interactive() {
+async fn prerequisite_tasks_own_container_is_interactive_eligible() {
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     containers.insert("setup".to_string(), container("alpine:3.18", None));
@@ -2262,16 +2262,61 @@ async fn prerequisite_tasks_own_container_is_never_interactive() {
 
     engine.run_task("run", &[]).await.unwrap();
 
-    assert_eq!(
-        docker.interactive_for("setup"),
-        Some(false),
-        "a prerequisite's own container should never be interactive-eligible"
+    // Batect runs each task in its own scope, whose task container is that
+    // task's own — so a prerequisite's is eligible as the named task's is.
+    assert_eq!(docker.interactive_for("setup"), Some(true));
+    assert_eq!(docker.interactive_for("app"), Some(true));
+}
+
+/// `outer` -> `inner` -> `deepest`, each running its own container, with
+/// `inner` also starting `inner-db` as a dependency.
+fn config_with_nested_prerequisites() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("outer".to_string(), container("alpine:3.18", None));
+    containers.insert(
+        "inner".to_string(),
+        container("alpine:3.18", Some(vec!["inner-db".to_string()])),
     );
-    assert_eq!(
-        docker.interactive_for("app"),
-        Some(true),
-        "the top-level requested task's own container should still be interactive-eligible"
-    );
+    containers.insert("inner-db".to_string(), container("postgres:16", None));
+    containers.insert("deepest".to_string(), container("alpine:3.18", None));
+    let deepest = task("deepest", "echo deepest");
+    let mut inner = task("inner", "echo inner");
+    inner.prerequisites = Some(vec!["deepest".to_string()]);
+    let mut outer = task("outer", "echo outer");
+    outer.prerequisites = Some(vec!["inner".to_string()]);
+    let mut tasks = IndexMap::new();
+    tasks.insert("deepest".to_string(), deepest);
+    tasks.insert("inner".to_string(), inner);
+    tasks.insert("outer".to_string(), outer);
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+#[tokio::test]
+async fn a_nested_prerequisites_own_container_is_interactive_eligible() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_nested_prerequisites(), docker.clone());
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    for name in ["outer", "inner", "deepest"] {
+        assert_eq!(docker.interactive_for(name), Some(true), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn a_prerequisites_dependency_is_never_interactive() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_nested_prerequisites(), docker.clone());
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    assert_eq!(docker.interactive_for("inner-db"), Some(false));
 }
 
 fn container_with_run_as_current_user(
@@ -12317,7 +12362,7 @@ fn with_settings_rejects_an_override_for_an_undeclared_config_variable() {
 }
 
 #[tokio::test]
-async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
+async fn term_env_var_reaches_a_tasks_own_container() {
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     let mut tasks = IndexMap::new();
@@ -12343,7 +12388,11 @@ async fn term_env_var_reaches_a_tasks_own_container_when_interactive() {
 #[tokio::test]
 async fn term_env_var_is_absent_when_host_has_no_term_set() {
     let mut containers = IndexMap::new();
-    containers.insert("app".to_string(), container("alpine:3.18", None));
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["database".to_string()])),
+    );
+    containers.insert("database".to_string(), container("postgres:16", None));
     let mut tasks = IndexMap::new();
     tasks.insert("run".to_string(), task("app", "echo hi"));
     let config = Config {
@@ -12359,15 +12408,17 @@ async fn term_env_var_is_absent_when_host_has_no_term_set() {
 
     engine.run_task("run", &[]).await.unwrap();
 
-    assert_eq!(
-        docker.environment_for("app"),
-        None,
-        "an absent host TERM shouldn't inject an empty/placeholder value"
-    );
+    for name in ["app", "database"] {
+        assert_eq!(
+            docker.environment_for(name),
+            None,
+            "an absent host TERM shouldn't inject an empty/placeholder value into '{name}'"
+        );
+    }
 }
 
 #[tokio::test]
-async fn term_env_var_does_not_reach_a_dependency_container() {
+async fn term_env_var_reaches_a_dependency_container() {
     let mut containers = IndexMap::new();
     containers.insert(
         "app".to_string(),
@@ -12393,11 +12444,37 @@ async fn term_env_var_does_not_reach_a_dependency_container() {
     let app_env = docker.environment_for("app").unwrap();
     assert_eq!(app_env.get("TERM"), Some(&"xterm".to_string()));
 
-    let database_env = docker.environment_for("database");
-    assert!(
-        database_env.is_none_or(|env| !env.contains_key("TERM")),
-        "a dependency should never receive TERM"
-    );
+    // Batect's `terminalTypeForContainer` ignores which container it's
+    // given, so a dependency gets the host's TERM too.
+    let database_env = docker.environment_for("database").unwrap();
+    assert_eq!(database_env.get("TERM"), Some(&"xterm".to_string()));
+}
+
+#[tokio::test]
+async fn term_env_var_reaches_a_task_level_dependency_container() {
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    containers.insert("sidecar".to_string(), container("alpine:3.18", None));
+    let mut run = task("app", "echo hi");
+    run.dependencies = Some(vec!["sidecar".to_string()]);
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), run);
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_host_env(|name| (name == "TERM").then(|| "xterm".to_string()));
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    let sidecar_env = docker.environment_for("sidecar").unwrap();
+    assert_eq!(sidecar_env.get("TERM"), Some(&"xterm".to_string()));
 }
 
 #[tokio::test]
@@ -12431,7 +12508,7 @@ async fn explicit_environment_overrides_term_on_collision() {
 }
 
 #[tokio::test]
-async fn term_env_var_is_absent_for_a_prerequisite_tasks_own_container() {
+async fn term_env_var_reaches_a_prerequisite_tasks_own_container() {
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), container("alpine:3.18", None));
     containers.insert("setup".to_string(), container("alpine:3.18", None));
@@ -12473,14 +12550,15 @@ async fn term_env_var_is_absent_for_a_prerequisite_tasks_own_container() {
     assert_eq!(
         app_env.get("TERM"),
         Some(&"xterm".to_string()),
-        "the top-level task's own container is interactive-eligible"
+        "the top-level task's own container gets the host TERM"
     );
 
-    let setup_env = docker.environment_for("setup");
-    assert!(
-            setup_env.is_none_or(|env| !env.contains_key("TERM")),
-            "a prerequisite's own container is never interactive-eligible, so it shouldn't get TERM either"
-        );
+    let setup_env = docker.environment_for("setup").unwrap();
+    assert_eq!(
+        setup_env.get("TERM"),
+        Some(&"xterm".to_string()),
+        "a prerequisite's own container gets the host TERM too"
+    );
 }
 
 #[tokio::test]
@@ -13345,6 +13423,7 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
     // The top-level task would normally be interactive-eligible; under
     // the interleaved policy it must not be (no TTY, no stdin).
     assert_eq!(docker.interactive_for("build-env"), Some(false));
+    assert_eq!(docker.interactive_for("database"), Some(false));
     // Every container — the task's own and the dependency — gets
     // TERM=dumb, not the host's own terminal type.
     for name in ["build-env", "database"] {
@@ -13355,6 +13434,30 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
             environment.get("TERM").map(String::as_str),
             Some("dumb"),
             "container '{name}' should get TERM=dumb: {environment:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn interleaved_policy_keeps_a_prerequisites_container_non_interactive_with_dumb_term() {
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config_with_nested_prerequisites()),
+        docker.clone(),
+        Arc::new(InterleavedRecordingSink::default()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_host_env(|name| (name == "TERM").then(|| "xterm-256color".to_string()));
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    for name in ["inner", "deepest"] {
+        assert_eq!(docker.interactive_for(name), Some(false), "{name}");
+        let environment = docker.environment_for(name).unwrap();
+        assert_eq!(
+            environment.get("TERM").map(String::as_str),
+            Some("dumb"),
+            "{name}"
         );
     }
 }

@@ -882,8 +882,8 @@ the three different `$`-syntaxes that resemble each other, see the [FAQ](faq.md#
 A container's environment is assembled from up to four layers, each
 overriding the one before it on a key collision:
 
-1. `TERM` — Ratect's own, for the invoked task's own container only; or
-   `dumb`, for every container, under [`--output all`](output-styles.md#all).
+1. `TERM` — Ratect's own, for every container; or `dumb`, for every
+   container, under [`--output all`](output-styles.md#all).
    See [`TERM` propagation](interactive-mode.md#term-propagation).
 2. [Proxy variables](proxies.md), when any are set where Ratect runs.
 3. The container's own `environment`.

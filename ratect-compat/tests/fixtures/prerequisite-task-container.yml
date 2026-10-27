@@ -1,0 +1,28 @@
+# Exercises what a prerequisite task's own container gets — see
+# `a_prerequisite_tasks_container_gets_the_host_term`,
+# `piped_stdin_reaches_a_prerequisite_tasks_container` and
+# `a_prerequisite_tasks_container_gets_a_tty` in tests/cli.rs. Batect treats
+# each task's own container alike, prerequisites included, so `pre` reports
+# what its container got before `main` runs: its TERM, whether its stdout is
+# a TTY, and the first line of its stdin. `main` then says it has started and
+# reports the first line it reads.
+project_name: ratect-prerequisite-task-container-test
+containers:
+  shell:
+    image: alpine:3.18.2
+tasks:
+  pre:
+    run:
+      container: shell
+      command: >-
+        sh -c 'echo "PRE TERM=[$TERM]";
+        if [ -t 1 ]; then echo PRE-OUT-TTY; else echo PRE-OUT-NOTTY; fi;
+        if read -r line; then echo "PRE-READ=[$line]"; else echo PRE-READ-NONE; fi'
+  main:
+    prerequisites:
+      - pre
+    run:
+      container: shell
+      command: >-
+        sh -c 'echo MAIN-READY; if read -r line; then echo "MAIN-READ=[$line]"; else echo MAIN-READ-NONE; fi;
+        echo main-done'
