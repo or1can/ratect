@@ -8,7 +8,7 @@ which is written here.
 
 | Symptom | Where it lives |
 | --- | --- |
-| Will this run fail? Why did it? | [`ratect doctor`](ratect-cli.md#doctor) (`ratect` only) answers both without running a task: an unreachable daemon, a configuration that doesn't load, a missing `build_directory` or Dockerfile, and the warnings that bite later (a floating image tag, a dependency with no health check). |
+| Will this run fail? Why did it? | [`ratect doctor`](ratect-cli.md#doctor) (`ratect` only) answers both without running a task: an unreachable daemon, a configuration that doesn't load, a `build_directory` or Dockerfile a build can't use, and the warnings that bite later (a floating image tag, an absolute `dockerfile`, a dependency with no health check). |
 | A dependency never becomes ready | [How Docker reaches its verdict](dependency-readiness.md#how-docker-reaches-its-verdict): `docker ps` and `docker inspect` show the health state Ratect is waiting on, and Ratect imposes no timeout of its own, so a check configured to retry forever waits forever. |
 | The build failed | [Image building](ratect-compat-config-reference.md#image-building): a failing build's whole transcript is in the error Ratect reports, under every output style; for a *live* transcript, see [filtering `RUST_LOG`](#filtering-rust_log) below. |
 | I need to see what Ratect is doing | [Filtering `RUST_LOG`](#filtering-rust_log), below. |

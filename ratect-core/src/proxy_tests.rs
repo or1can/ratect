@@ -361,3 +361,132 @@ fn ports_are_checked_across_both_the_ipv4_and_ipv6_tables() {
         BTreeSet::from([3333, 8080])
     );
 }
+
+const DAEMON_HOST: &str = "unix:///var/run/docker.sock";
+
+fn filled(config_json: &str, existing: &[(&str, &str)]) -> HashMap<String, String> {
+    let mut build_args: HashMap<String, String> = existing
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    fill_config_file_proxies(config_json, DAEMON_HOST, &mut build_args);
+    build_args
+}
+
+fn args(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect()
+}
+
+#[test]
+fn a_default_config_file_proxy_entry_fills_every_name_in_both_cases() {
+    let config = r#"{"proxies": {"default": {
+        "httpProxy": "http://h", "httpsProxy": "http://s", "ftpProxy": "http://f",
+        "noProxy": "n", "allProxy": "socks://a"
+    }}}"#;
+    assert_eq!(
+        filled(config, &[]),
+        args(&[
+            ("HTTP_PROXY", "http://h"),
+            ("http_proxy", "http://h"),
+            ("HTTPS_PROXY", "http://s"),
+            ("https_proxy", "http://s"),
+            ("FTP_PROXY", "http://f"),
+            ("ftp_proxy", "http://f"),
+            ("NO_PROXY", "n"),
+            ("no_proxy", "n"),
+            ("ALL_PROXY", "socks://a"),
+            ("all_proxy", "socks://a"),
+        ])
+    );
+}
+
+#[test]
+fn a_config_file_proxy_entry_for_the_daemon_host_is_used_instead_of_default() {
+    let config = format!(
+        r#"{{"proxies": {{
+            "default": {{"httpProxy": "http://default"}},
+            "{DAEMON_HOST}": {{"httpProxy": "http://this-daemon"}},
+            "tcp://elsewhere:2376": {{"httpProxy": "http://elsewhere"}}
+        }}}}"#
+    );
+    assert_eq!(
+        filled(&config, &[]),
+        args(&[
+            ("HTTP_PROXY", "http://this-daemon"),
+            ("http_proxy", "http://this-daemon")
+        ])
+    );
+}
+
+#[test]
+fn no_config_file_proxy_entry_for_the_daemon_host_or_default_adds_nothing() {
+    let config = r#"{"proxies": {"tcp://elsewhere:2376": {"httpProxy": "http://elsewhere"}}}"#;
+    assert_eq!(filled(config, &[]), HashMap::new());
+}
+
+#[test]
+fn a_config_file_proxy_fills_only_the_case_not_already_set() {
+    let config = r#"{"proxies": {"default": {"httpProxy": "http://config"}}}"#;
+    assert_eq!(
+        filled(config, &[("http_proxy", "http://set")]),
+        args(&[
+            ("http_proxy", "http://set"),
+            ("HTTP_PROXY", "http://config")
+        ])
+    );
+    assert_eq!(
+        filled(config, &[("HTTP_PROXY", "http://set")]),
+        args(&[
+            ("HTTP_PROXY", "http://set"),
+            ("http_proxy", "http://config")
+        ])
+    );
+}
+
+#[test]
+fn an_empty_or_missing_config_file_proxy_field_adds_nothing() {
+    let config = r#"{"proxies": {"default": {"httpProxy": "", "noProxy": "n"}}}"#;
+    assert_eq!(
+        filled(config, &[]),
+        args(&[("NO_PROXY", "n"), ("no_proxy", "n")])
+    );
+}
+
+#[test]
+fn a_config_file_without_proxies_or_that_is_malformed_adds_nothing() {
+    for config in ["", "{}", "not json", r#"{"proxies": "nonsense"}"#] {
+        assert_eq!(filled(config, &[]), HashMap::new(), "{config:?}");
+    }
+}
+
+#[test]
+fn a_localhost_config_file_proxy_is_passed_through_unrewritten() {
+    let config = r#"{"proxies": {"default": {"httpProxy": "http://localhost:3128"}}}"#;
+    assert_eq!(
+        filled(config, &[]),
+        args(&[
+            ("HTTP_PROXY", "http://localhost:3128"),
+            ("http_proxy", "http://localhost:3128")
+        ])
+    );
+}
+
+/// A `null` field reads as unset, as the Docker CLI reads it, rather than
+/// costing every other proxy in the file.
+#[test]
+fn a_null_config_file_proxy_field_is_unset() {
+    let config = r#"{"proxies": {
+        "default": {"httpProxy": "http://p:3128", "noProxy": null},
+        "tcp://elsewhere:2376": {"httpsProxy": null}
+    }}"#;
+    assert_eq!(
+        filled(config, &[]),
+        args(&[
+            ("HTTP_PROXY", "http://p:3128"),
+            ("http_proxy", "http://p:3128")
+        ])
+    );
+}

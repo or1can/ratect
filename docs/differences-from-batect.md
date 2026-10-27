@@ -72,6 +72,7 @@ reference](ratect-compat-config-reference.md#container) for the full list. The e
 | `dependencies` | A name that isn't a declared container is rejected when the file loads — and so is one in a task's `dependencies` or `run.container`. Batect reports the same error in the same words, but only once a task that reaches the reference runs, so a stale reference in a container or task nothing runs never stops Batect and stops every `ratect-compat` command. A name given twice — here, in a task's `dependencies`, or in a task's `prerequisites` — is accepted, and that container starts, or that task runs, once; Batect rejects the duplicate when the file loads (`The dependency 'X' is given more than once`, and likewise for a prerequisite). `ratect doctor` and `ratect config validate` warn about it. See [config reference](ratect-compat-config-reference.md#container). |
 | `capabilities_to_add` / `capabilities_to_drop` | Also accepts `BPF`/`CHECKPOINT_RESTORE`/`PERFMON` — Docker capabilities added after Batect's last release, so its own `Capability` enum predates them. A superset: every config Batect itself accepts here still parses identically. |
 | `health_check` / `setup_commands` | A task's own container's readiness gate doesn't fail the task once its main command has exited 0, whatever the failure — typically the container stopped before reporting a health status, before a setup command could `exec` into it, or while one was running and was killed with it; Batect's does. A failure of that gate while the main command is still running fails the task as Batect's does, but cancels the main command up to two seconds later, and is forgiven if the main command exits 0 within that time. That, and the race it leaves open, are in [task lifecycle](task-lifecycle.md#known-limitations). Under `ratect` a task's own container has no readiness gate at all — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container). |
+| `dockerfile` | A Dockerfile that is a symbolic link, or is reached through a linked directory, is refused before the build, since Ratect's build context doesn't carry symbolic links and the daemon would report the Dockerfile missing. Batect builds one whose link stays inside the build directory. |
 | `log_driver` / `log_options` | An absent value leaves the daemon's own default alone; Batect's config model bakes in a literal `"json-file"` default explicitly. Immaterial in practice — that's Docker's own out-of-the-box default too. |
 | `shm_size` | A size whose count times its unit doesn't fit in a 64-bit number of bytes is an `Invalid size` error when the file loads, like any other malformed size. Batect's multiplication overflows silently, and it sends Docker the meaningless size that results. Whitespace around a size string is ignored (`' 128m '`), as is whitespace that isn't ASCII, and an unquoted YAML integer is read as the number it denotes, whatever its spelling (`+5`, `0x10`, `0o17`); Batect refuses each. Both accept whitespace between the count and its unit (`'128 m'`) or after a bare count (`'2 '`). |
 | `run_as_current_user` | Host-side uid/gid lookup only works on Unix — see [User mapping](ratect-compat-config-reference.md#user-mapping). A `home_directory` containing a `:` or a control character, or with no directory name to create (`/`, or a path ending in `..`), is rejected when the file loads. Batect checks neither: it writes the first into the generated `/etc/passwd` as it is, where a `:` shifts the entry's fields and a newline adds an entry of its own, and passes the second to Docker. A read-only `cache` mount (`options: ro`) isn't given to the mapped user, since nothing can write to it anyway; Batect tries to change its owner like any other cache's, which the read-only mount refuses, failing the run before the container starts. |
@@ -332,7 +333,7 @@ tables above:
   to be real terminals. Live terminal-resize tracking is also Unix-only — synced
   once at session start elsewhere, not tracked further. See [Interactive
   Mode](interactive-mode.md).
-- **Proxy support**: two deliberate differences — see [Proxies](proxies.md)
+- **Proxy support**: three deliberate differences — see [Proxies](proxies.md)
   for the full mechanics.
 
   - **A `localhost` proxy is rewritten on Linux too.** Batect rewrites on
@@ -341,6 +342,9 @@ tables above:
     issue](https://github.com/batect/batect/issues/10), eight years old.
   - **A proxy bound to loopback only is diagnosed, not left to fail** — Batect's own
     roadmap notes the same warning is needed and never shipped one.
+  - **`--no-proxy-vars` keeps the proxies in Docker's `config.json` out of a
+    build too.** Batect's flag only stops its own proxy build arguments; its
+    Docker client adds the `config.json` ones to every build regardless.
 
   Batect's Docker-version-gated hostname fallback chain, which reaches back
   to Docker 17.06, isn't ported: its first choice, `host.docker.internal`,
@@ -349,7 +353,8 @@ tables above:
   gaps](#runtime-behavior-gaps)).
 - **Private registry credentials**: Batect's own Go client swallows every
   credential-helper error unconditionally; Ratect warns instead, naming the
-  registry that failed to resolve. See [Private registry
+  registry that failed to resolve, or, for a build, the `credsStore` whose
+  helper couldn't list what it holds. See [Private registry
   credentials](ratect-compat-config-reference.md#private-registry-credentials).
 - **A dependency exiting unexpectedly is reported, not silent.** Batect has no
   equivalent: a dependency that dies after becoming ready — while the task's own

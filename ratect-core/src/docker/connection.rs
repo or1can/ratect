@@ -43,8 +43,7 @@
 //! wrong — could make a TLS connection impossible even with a correct
 //! `--docker-tls-ca-cert`, on a machine where Docker's own CLI connects
 //! fine. User-reachable, not just a test artifact — see `CHANGELOG.md` for
-//! the fix, patched into the `bollard` fork this crate's
-//! `[patch.crates-io]` pins; offered upstream as
+//! the fix, carried on a `bollard` fork branch until it landed upstream as
 //! [fussybeaver/bollard#796](https://github.com/fussybeaver/bollard/pull/796).
 //!
 //! Nothing here calls `connect_with_ssl` any more. Every TLS connection —
@@ -52,7 +51,7 @@
 //! `tls_client_config` and made by `connect_over_tls`, and the OS
 //! trust store is loaded in one place only, `system_trust_roots`, and only
 //! when no CA is configured; it tolerates a partial failure the same way
-//! the fork's fix does. Nothing reaches `bollard`'s own TLS code any more,
+//! that fix does. Nothing reaches `bollard`'s own TLS code any more,
 //! not even by way of `connect_with_host`: an `https://` host is a TLS
 //! connection here, and a plain `tcp://` one is made by `connect_plain`
 //! ([ratect#257](https://github.com/or1can/ratect/issues/257)).
@@ -993,7 +992,10 @@ fn daemon_target(
 }
 
 /// A connected client, the Docker config directory it was resolved from
-/// (see [`docker_config_directory`]), what's needed to explain its first
+/// (see [`docker_config_directory`]), the daemon host it was made to as the
+/// Docker CLI spells it (`unix:///var/run/docker.sock` when nothing chose
+/// one — the key docker-client looks a build's proxies up by in
+/// `config.json`), what's needed to explain its first
 /// failure — the daemon it was made to (see [`daemon_target`]) and any
 /// [`VerificationNote`] — and the warnings choosing it raised, for
 /// `DockerClient::new` to hand to its caller, which alone knows where a
@@ -1003,6 +1005,7 @@ pub(super) struct Connection {
     pub(super) docker: Docker,
     pub(super) config_directory: PathBuf,
     pub(super) warnings: Vec<String>,
+    pub(super) daemon_host: String,
     daemon_target: String,
     verification_note: Option<VerificationNote>,
 }
@@ -1012,12 +1015,14 @@ impl Connection {
         docker: Docker,
         config_directory: PathBuf,
         warnings: Vec<String>,
+        daemon_host: String,
         daemon_target: String,
     ) -> Self {
         Self {
             docker,
             config_directory,
             warnings,
+            daemon_host,
             daemon_target,
             verification_note: None,
         }
@@ -1196,7 +1201,13 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         let Some(tls) = tls else {
             return connect_plain(&host)
                 .map(|docker| {
-                    Connection::without_note(docker, config_directory, warnings, daemon_target)
+                    Connection::without_note(
+                        docker,
+                        config_directory,
+                        warnings,
+                        host.clone(),
+                        daemon_target,
+                    )
                 })
                 .with_context(|| {
                     format!("Failed to connect to Docker context '{context_name}' (host '{host}')")
@@ -1209,6 +1220,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
             docker,
             config_directory,
             warnings,
+            daemon_host: host,
             daemon_target,
             verification_note: tls
                 .skip_verify_requested
@@ -1221,8 +1233,8 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     let tls = tls_enabled(options, docker_tls_verify_env.as_deref())?
         || host.as_deref().is_some_and(is_https);
     if !tls {
-        let docker = match host {
-            Some(host) => connect_plain(&host)
+        let docker = match &host {
+            Some(host) => connect_plain(host)
                 .with_context(|| format!("Failed to connect to Docker host '{host}'"))?,
             None => Docker::connect_with_local_defaults().context("Failed to connect to Docker")?,
         };
@@ -1230,6 +1242,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
             docker,
             config_directory,
             warnings,
+            host.unwrap_or_else(|| DEFAULT_DOCKER_HOST.to_string()),
             daemon_target,
         ));
     }
@@ -1250,6 +1263,7 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         docker,
         config_directory,
         warnings,
+        daemon_host: host,
         daemon_target,
         verification_note: tls
             .ca

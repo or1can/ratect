@@ -28,10 +28,10 @@ serde_json = "1.0"
 noyalib = { version = "0.0.58", features = ["compat-serde-yaml"] }
 # **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
 # **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):
-# Asynchronous Docker API client. Which branch of the fork (`or1can/bollard`)
-# is pinned, what it still carries that upstream `master` doesn't, and the
-# rules for rebasing it are all in the root `Cargo.toml`'s own comment, beside
-# the pin itself.
+# Asynchronous Docker API client. Which branch is pinned (upstream `master` or a
+# branch of the fork, `or1can/bollard`), what it carries that upstream `master`
+# doesn't, and the rules for rebasing it are all in the root `Cargo.toml`'s own
+# comment, beside the pin itself.
 # `chrono` is required transitively once
 # `buildkit_providerless` is on (BuildKit OAuth token expiry needs a
 # date/time type) — bollard won't compile without it or the `time` feature.

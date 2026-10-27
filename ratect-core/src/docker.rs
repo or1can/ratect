@@ -884,6 +884,7 @@ async fn build_image_via_buildkit(
     force_pull: bool,
     proxy_host_gateway: Option<crate::proxy::HostGateway>,
     credentials: Option<HashMap<String, bollard::auth::DockerCredentials>>,
+    build_id: &str,
 ) -> Result<String> {
     let build_directory = build_directory.to_path_buf();
     let dockerfile_owned = dockerfile.to_string();
@@ -897,8 +898,10 @@ async fn build_image_via_buildkit(
         .dockerfile(dockerfile)
         .t(tag)
         .rm(true)
+        .forcerm(true)
         .version(bollard::query_parameters::BuilderVersion::BuilderBuildKit)
-        .session(&session_id);
+        .session(&session_id)
+        .buildid(build_id);
     if let Some(build_args) = build_args {
         options_builder = options_builder.buildargs(build_args);
     }
@@ -960,7 +963,7 @@ async fn build_image_via_buildkit(
                     bollard::grpc::SshAgentSource::Socket(socket)
                 }
             };
-            providers = providers.set_ssh_agent(id, &source);
+            providers = providers.set_ssh_agent(Some(id), &source);
         }
     }
     let options = options_builder.build();
@@ -1533,7 +1536,27 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// but isn't guaranteed unique (see `TaskEngine::resolve_image`), so
     /// callers must use the returned ID, not the tag, to reliably reference
     /// the image this call just built.
-    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String>;
+    ///
+    /// `build_id` identifies this one attempt, so that [`cancel_build`]
+    /// can stop it in the daemon if the caller stops waiting for it. It
+    /// isn't part of `spec`: it says nothing about what is built. Only a
+    /// BuildKit build uses it; the classic builder has no cancel by ID.
+    ///
+    /// [`cancel_build`]: ContainerRuntime::cancel_build
+    async fn build_image(
+        &self,
+        spec: &crate::container_spec::BuildSpec,
+        build_id: &str,
+    ) -> Result<String>;
+
+    /// Asks the daemon to stop the BuildKit build started with `build_id`
+    /// — `POST /build/cancel`, as Batect sends for a build it abandons.
+    /// Dropping `build_image`'s future only closes the connection, which
+    /// leaves a BuildKit build running. Returns once the daemon accepts the
+    /// request, not once the build has stopped; an unknown or finished ID
+    /// is accepted too. When the classic builder was chosen there is nothing
+    /// to cancel by ID, and nothing is asked.
+    async fn cancel_build(&self, build_id: &str) -> Result<()>;
 
     /// Tags `image_id` (the ID `build_image` returned) with `tag`, in
     /// addition to `build_image`'s own `tag` — used by `--tag-image`. Both
@@ -1845,13 +1868,46 @@ pub struct DockerClient {
     /// `registry_auth::DockerCredentialHelperResolver` by default.
     credential_resolver: std::sync::Arc<dyn crate::registry_auth::RegistryCredentialResolver>,
     /// `<docker config directory>/config.json` — read fresh on every
-    /// `build_image` call (not cached) via `read_configured_registries`, to
-    /// enumerate every registry it declares under `auths`/`credHelpers` for
-    /// build's own credential resolution. Kept as a plain path rather than
-    /// through `credential_resolver` itself, since a fake resolver used in
-    /// tests has no file of its own — enumeration and per-registry
-    /// resolution are deliberately separate concerns.
+    /// `build_image` call (not cached), for two things: `build_registries`,
+    /// to enumerate every registry it declares under `auths`/`credHelpers`
+    /// and every one its `credsStore` holds, for build's own credential
+    /// resolution; and `build_args_with_config_file_proxies`, for its
+    /// `proxies`.
+    /// Kept as a plain path rather than through `credential_resolver`
+    /// itself, since a fake resolver used in tests has no file of its own —
+    /// enumeration and per-registry resolution are deliberately separate
+    /// concerns.
     docker_config_path: std::path::PathBuf,
+    /// The daemon host this client connected to, as the Docker CLI spells
+    /// it — what `config.json`'s `proxies` map is keyed by.
+    daemon_host: String,
+}
+
+/// Refuses a build whose `buildkit` options (`build_secrets`/`build_ssh`)
+/// the selected `builder_version` can't serve: the classic builder has no
+/// session for the daemon to request secret bytes or ssh-agent proxying
+/// over, so these fields are impossible without BuildKit, and the build
+/// fails clearly rather than running without them. Called before any
+/// credential is resolved or the build context is made, and pure — a daemon
+/// advertising no builder, which selects the classic one, is otherwise
+/// untestable.
+fn refuse_buildkit_options_on_the_classic_builder(
+    builder_version: &bollard::query_parameters::BuilderVersion,
+    buildkit: Option<&BuildKitOptions>,
+    tag: &str,
+) -> Result<()> {
+    if *builder_version == bollard::query_parameters::BuilderVersion::BuilderV1
+        && buildkit.is_some()
+    {
+        anyhow::bail!(
+            "Building '{}' requires BuildKit ('build_secrets'/'build_ssh' cannot \
+             be served by the classic builder), but the classic builder is \
+             selected — the Docker daemon doesn't advertise BuildKit as its \
+             default builder, or DOCKER_BUILDKIT=0 forces it off.",
+            tag
+        );
+    }
+    Ok(())
 }
 
 /// Splits a full image reference (as given to `--tag-image`, e.g.
@@ -2019,20 +2075,55 @@ fn credential_resolution_warning(registry: &str, error: &anyhow::Error) -> Strin
     )
 }
 
-/// Reads and parses `config_path`'s registry keys via
-/// [`crate::registry_auth::configured_registries`] — silently empty if the
-/// file doesn't exist or can't be parsed, matching
-/// [`crate::registry_auth::RegistryCredentialResolver`]'s own missing-config
-/// behavior for pull, rather than turning a fresh machine's absent
-/// `config.json` into a warning. Read fresh on every call, not cached:
-/// `DockerClient` is long-lived across a whole invocation's builds, and
-/// nothing says `config.json` can't change between them (a `docker login`
-/// mid-run, however unlikely).
-async fn read_configured_registries(config_path: &std::path::Path) -> Vec<String> {
-    match tokio::fs::read_to_string(config_path).await {
-        Ok(text) => crate::registry_auth::configured_registries(&text),
-        Err(_) => Vec::new(),
+/// Every registry a build sends credentials for, from `config_json` (raw
+/// `config.json` contents): those it names under `auths`/`credHelpers`
+/// ([`crate::registry_auth::configured_registries`]), and, when it names a
+/// default `credsStore`, every one that store holds, as `resolver` lists
+/// them — the Docker CLI's `GetAllCredentials`, which Batect's builds send.
+/// Each once, sorted. A store that can't be listed costs only what it would
+/// have added, and is the one warning returned. Pulled out of `build_image`
+/// so the union and the warning are testable with a fake resolver.
+async fn build_registries(
+    resolver: &dyn crate::registry_auth::RegistryCredentialResolver,
+    config_json: &str,
+) -> (Vec<String>, Option<String>) {
+    let mut registries = crate::registry_auth::configured_registries(config_json);
+    let Some(store) = crate::registry_auth::configured_creds_store(config_json) else {
+        return (registries, None);
+    };
+    match resolver.list(&store).await {
+        Ok(listed) => {
+            registries.extend(listed);
+            registries.sort();
+            registries.dedup();
+            (registries, None)
+        }
+        Err(error) => (
+            registries,
+            Some(format!(
+                "Could not list the registries credential store '{store}' holds ({error:#}); \
+                 building with only those config.json names."
+            )),
+        ),
     }
+}
+
+/// `spec`'s build args with the gaps filled from the `proxies` of the
+/// Docker CLI `config.json` whose contents are `config_json` (see
+/// `proxy::fill_config_file_proxies`) — unless `spec.config_file_proxies`
+/// is off (`--no-proxy-vars`), or there is no file, when they are `spec`'s
+/// own unchanged. `None` only when there is nothing to send at all.
+fn build_args_with_config_file_proxies(
+    spec: &crate::container_spec::BuildSpec,
+    config_json: Option<&str>,
+    daemon_host: &str,
+) -> Option<HashMap<String, String>> {
+    let Some(config_json) = config_json.filter(|_| spec.config_file_proxies) else {
+        return spec.build_args.clone();
+    };
+    let mut build_args = spec.build_args.clone().unwrap_or_default();
+    crate::proxy::fill_config_file_proxies(config_json, daemon_host, &mut build_args);
+    (spec.build_args.is_some() || !build_args.is_empty()).then_some(build_args)
 }
 
 /// Resolves credentials for every registry in `registries`, via `resolver` —
@@ -2137,6 +2228,7 @@ impl DockerClient {
                 crate::registry_auth::DockerCredentialHelperResolver::new(config_directory.clone()),
             ),
             docker_config_path: config_directory.join("config.json"),
+            daemon_host: connected.daemon_host.clone(),
         })
     }
 
@@ -2734,20 +2826,47 @@ impl ContainerRuntime for DockerClient {
         }
     }
 
-    async fn build_image(&self, spec: &crate::container_spec::BuildSpec) -> Result<String> {
+    async fn build_image(
+        &self,
+        spec: &crate::container_spec::BuildSpec,
+        build_id: &str,
+    ) -> Result<String> {
         let build_directory = spec.build_directory.as_path();
         let dockerfile = spec.dockerfile.as_str();
-        let build_args = spec.build_args.as_ref();
+        // First, so a build that can't be served asks no credential helper
+        // anything before it is refused.
+        let builder_version = self.builder_version().await?;
+        refuse_buildkit_options_on_the_classic_builder(
+            &builder_version,
+            spec.buildkit.as_ref(),
+            &spec.tag,
+        )?;
+        // Read fresh on every build, not cached: `DockerClient` is
+        // long-lived across a whole invocation's builds, and nothing says
+        // `config.json` can't change between them (a `docker login` mid-run,
+        // however unlikely). A missing or unreadable file is nothing
+        // configured, silently, as a pull's resolver reads it.
+        let config_json = tokio::fs::read_to_string(&self.docker_config_path)
+            .await
+            .ok();
+        let build_args =
+            build_args_with_config_file_proxies(spec, config_json.as_deref(), &self.daemon_host);
+        let build_args = build_args.as_ref();
         let target = spec.target.as_deref();
         let buildkit = spec.buildkit.as_ref();
         let tag = spec.tag.as_str();
         let force_pull = spec.force_pull;
         let proxy_host_gateway = spec.proxy_host_gateway;
 
-        let registries = read_configured_registries(&self.docker_config_path).await;
+        let (registries, list_warning) = match &config_json {
+            Some(config_json) => {
+                build_registries(self.credential_resolver.as_ref(), config_json).await
+            }
+            None => (Vec::new(), None),
+        };
         let (credentials, warnings) =
             resolve_build_credentials(self.credential_resolver.as_ref(), &registries).await;
-        for message in warnings {
+        for message in list_warning.into_iter().chain(warnings) {
             self.event_sink.post(TaskEvent::Warning { message });
         }
         // `None` (not `Some(HashMap::new())`) when nothing resolved, so a
@@ -2756,7 +2875,7 @@ impl ContainerRuntime for DockerClient {
         // carrying an empty JSON object.
         let credentials = (!credentials.is_empty()).then_some(credentials);
 
-        match self.builder_version().await? {
+        match builder_version {
             bollard::query_parameters::BuilderVersion::BuilderBuildKit => {
                 return build_image_via_buildkit(
                     &self.docker,
@@ -2770,24 +2889,11 @@ impl ContainerRuntime for DockerClient {
                     force_pull,
                     proxy_host_gateway,
                     credentials,
+                    build_id,
                 )
                 .await;
             }
-            bollard::query_parameters::BuilderVersion::BuilderV1 => {
-                if buildkit.is_some() {
-                    // The classic builder has no session for the daemon to
-                    // request secret bytes / ssh-agent proxying over —
-                    // these fields are impossible without BuildKit, so fail
-                    // clearly rather than building without them.
-                    anyhow::bail!(
-                        "Building '{}' requires BuildKit ('build_secrets'/'build_ssh' cannot \
-                         be served by the classic builder), but the classic builder is \
-                         selected — the Docker daemon doesn't advertise BuildKit as its \
-                         default builder, or DOCKER_BUILDKIT=0 forces it off.",
-                        tag
-                    );
-                }
-            }
+            bollard::query_parameters::BuilderVersion::BuilderV1 => {}
         }
 
         let build_directory = build_directory.to_path_buf();
@@ -2801,7 +2907,11 @@ impl ContainerRuntime for DockerClient {
         let mut options_builder = BuildImageOptionsBuilder::default()
             .dockerfile(dockerfile)
             .t(tag)
-            .rm(true);
+            // `forcerm` as well as `rm`, as Batect sets both: `rm` alone
+            // removes a step's intermediate container only when the step
+            // succeeds, and leaves a failed `RUN`'s behind, unlabelled.
+            .rm(true)
+            .forcerm(true);
         if let Some(build_args) = build_args {
             options_builder = options_builder.buildargs(build_args);
         }
@@ -2882,6 +2992,24 @@ impl ContainerRuntime for DockerClient {
         })?;
 
         Ok(image_id)
+    }
+
+    async fn cancel_build(&self, build_id: &str) -> Result<()> {
+        // Only a BuildKit build has an ID to cancel by. A classic one stops
+        // when its connection closes, and a daemon with no BuildKit may have
+        // no `/build/cancel` at all, so asking would only warn falsely.
+        if self.builder_version.get()
+            != Some(&bollard::query_parameters::BuilderVersion::BuilderBuildKit)
+        {
+            tracing::debug!(build_id, "no BuildKit build to cancel");
+            return Ok(());
+        }
+        self.docker
+            .cancel_build(build_id)
+            .await
+            .context("Failed to cancel the build")?;
+        tracing::debug!(build_id, "cancelled abandoned build");
+        Ok(())
     }
 
     async fn tag_image(&self, image_id: &str, tag: &str) -> Result<()> {

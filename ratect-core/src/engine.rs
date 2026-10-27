@@ -239,6 +239,16 @@ struct CreatedContainer {
 /// each registers itself from its own task.
 type CreatedContainers = Mutex<HashMap<String, String>>;
 
+/// How long an abandoned build's cancel is given to be accepted — see
+/// `TaskEngine::start_cancelling_abandoned_builds`. Short: the cancel is
+/// one request the daemon answers at once, and only its warning waits on
+/// it.
+const BUILD_CANCEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// One abandoned build's cancel, sent and not yet answered: the daemon's
+/// acceptance or refusal, or the timeout.
+type BuildCancel = tokio::task::JoinHandle<Result<Result<()>, tokio::time::error::Elapsed>>;
+
 /// Every container create this task execution has sent, held so that one
 /// whose caller is dropped mid-request — a sibling's failure ending
 /// `try_join_all`, or a signal ending the run — still runs to the daemon's
@@ -827,6 +837,14 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// values. Stores the image ID (not the human-readable tag) — see
     /// `resolve_image` for why.
     built_images: Mutex<HashMap<String, ReadyCell>>,
+    /// Build ID -> the container whose image it builds, for every
+    /// `build_image` call that hasn't answered yet: registered before the
+    /// call is made, removed once it returns, Ok or Err. One still here at
+    /// cleanup is an abandoned build — its future was dropped, by a signal
+    /// or by a sibling's failure ending `try_join_all` — and dropping it
+    /// only closed the connection, which leaves a BuildKit build running in
+    /// the daemon. Cleanup cancels each by its ID (ratect#537).
+    in_flight_builds: Mutex<HashMap<String, String>>,
     in_progress_tasks: Mutex<HashSet<String>>,
     /// Set via `--use-network`: an existing Docker network to reuse for
     /// every task in this invocation instead of creating a fresh one per
@@ -1115,6 +1133,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             executed_tasks: Mutex::new(HashSet::new()),
             pulled_images: Mutex::new(HashMap::new()),
             built_images: Mutex::new(HashMap::new()),
+            in_flight_builds: Mutex::new(HashMap::new()),
             in_progress_tasks: Mutex::new(HashSet::new()),
             existing_network: None,
             publish_ports: true,
@@ -1415,6 +1434,83 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             });
         }
         Ok(())
+    }
+
+    /// Sends the cancel of every build still in `in_flight_builds` — each
+    /// one an abandoned build — and empties it. Each cancel runs as a task
+    /// of its own, bounded by `BUILD_CANCEL_TIMEOUT`, so cleanup goes on
+    /// removing things while the daemon answers: a run's cleanup has to beat
+    /// a supervisor's `SIGKILL` (ratect#249), and a daemon slow to answer a
+    /// cancel must not spend that time. Yields once, so each request has
+    /// started before the first removal — started, not necessarily on the
+    /// wire, which nothing depends on. The answers are for
+    /// `report_build_cancels`.
+    async fn start_cancelling_abandoned_builds(&self) -> Vec<(String, BuildCancel)> {
+        let mut abandoned: Vec<(String, String)> =
+            std::mem::take(&mut *self.in_flight_builds.lock().unwrap())
+                .into_iter()
+                .collect();
+        abandoned.sort_by(|(_, a), (_, b)| a.cmp(b));
+        let cancels = abandoned
+            .into_iter()
+            .map(|(build_id, container)| {
+                let docker = Arc::clone(&self.docker);
+                let cancel = tokio::spawn(async move {
+                    tokio::time::timeout(BUILD_CANCEL_TIMEOUT, docker.cancel_build(&build_id)).await
+                });
+                (container, cancel)
+            })
+            .collect::<Vec<_>>();
+        if !cancels.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        cancels
+    }
+
+    /// Waits for the answers `start_cancelling_abandoned_builds` sent for,
+    /// until `rung` — the cleanup ladder's escalation, a signal since the
+    /// one that ended the run: the lines cleanup ends with come after these,
+    /// and a supervisor's `SIGKILL` follows its second signal by less than
+    /// `BUILD_CANCEL_TIMEOUT` (ratect#249), so that signal stops the wait
+    /// rather than cost those lines. A cancel that failed, or that the
+    /// wait stopped for, leaves a build that may still be running, a warning
+    /// naming its container; nothing the run created is left behind by it,
+    /// so it is no cleanup failure.
+    async fn report_build_cancels(
+        &self,
+        rung: impl std::future::Future<Output = ()>,
+        mut cancels: Vec<(String, BuildCancel)>,
+    ) {
+        if cancels.is_empty() {
+            return;
+        }
+        let answers = futures::future::join_all(cancels.iter_mut().map(|(_, cancel)| cancel));
+        let answers = self.until_interrupted(rung, answers).await;
+        let answers: Vec<Option<_>> = match answers {
+            Some(answers) => answers.into_iter().map(Some).collect(),
+            None => cancels
+                .iter_mut()
+                .map(|(_, cancel)| futures::FutureExt::now_or_never(cancel))
+                .collect(),
+        };
+        for ((container, _), answer) in cancels.iter().zip(answers) {
+            let reason = match answer {
+                Some(Ok(Ok(Ok(())))) => continue,
+                Some(Ok(Ok(Err(error)))) => format!("{error:#}"),
+                Some(Ok(Err(_))) => format!(
+                    "the Docker daemon didn't answer within {} seconds",
+                    BUILD_CANCEL_TIMEOUT.as_secs()
+                ),
+                Some(Err(error)) => format!("{error}"),
+                None => "cleanup stopped waiting for the Docker daemon's answer".to_string(),
+            };
+            self.event_sink.post(TaskEvent::Warning {
+                message: format!(
+                    "Couldn't cancel the image build for '{container}', so it may still be \
+                     running in the Docker daemon: {reason}"
+                ),
+            });
+        }
     }
 
     /// Runs one cleanup step, giving up on it if `rung` resolves first.
@@ -1820,6 +1916,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             crate::image_reference::check_tag(extra_tag)
                                 .map_err(anyhow::Error::msg)?;
                         }
+                        // And so is everything the build reads on the host,
+                        // so a Dockerfile that can't work is refused naming
+                        // it, before the daemon is asked anything.
+                        let dockerfile = crate::container_spec::check_build_files(
+                            std::path::Path::new(build_directory),
+                            container_config.dockerfile.as_deref(),
+                        )
+                        .map_err(anyhow::Error::msg)?;
                         // No `extra_no_proxy_entries` at build time — matches
                         // Batect, which never adds container names to
                         // `no_proxy` for a build (nothing's running yet to be
@@ -1828,14 +1932,23 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         let spec = derive_build_spec(
                             container_config,
                             build_directory,
+                            dockerfile,
                             &tag,
                             proxy.as_ref(),
+                            self.propagate_proxy_environment_variables,
                         )?;
                         self.event_sink.post(TaskEvent::ImageBuildStarting {
                             container: container_name.to_string(),
                         });
                         let _permit = self.acquire_parallelism_permit().await;
-                        let image_id = self.docker.build_image(&spec).await?;
+                        let build_id = uuid::Uuid::new_v4().to_string();
+                        self.in_flight_builds
+                            .lock()
+                            .unwrap()
+                            .insert(build_id.clone(), container_name.to_string());
+                        let built = self.docker.build_image(&spec, &build_id).await;
+                        self.in_flight_builds.lock().unwrap().remove(&build_id);
+                        let image_id = built?;
                         self.event_sink.post(TaskEvent::ImageBuildCompleted {
                             container: container_name.to_string(),
                         });
@@ -2786,6 +2899,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .to_string(),
             );
         }
+        // A build whose caller the run dropped is still running in the
+        // daemon — see `in_flight_builds` — so its cancel is sent before
+        // anything else, with or without `--no-cleanup*`: it is no
+        // container anyone asked to keep, only daemon work nobody is
+        // waiting for. Sent whatever the ladder does, since nothing here
+        // waits on it, and without waiting for the build to stop, as
+        // Batect doesn't.
+        let build_cancels = self.start_cancelling_abandoned_builds().await;
         // A create whose caller the run dropped is still with the daemon —
         // see `PendingCreates` — so its answer is waited for before cleanup
         // reads what exists. Already finished, and so instant, for every
@@ -3086,6 +3207,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // `main` prints nothing further for a `CleanupFailed`
             // (`exit_code::already_reported`). Abandonment names itself;
             // a refusal quotes the daemon.
+            // Ahead of every line cleanup ends with, which are about a
+            // cleanup that is over.
+            self.report_build_cancels(self.interrupt.wait_for(escalate_at), build_cancels)
+                .await;
             // Before the failure report, if any: that line is about a
             // cleanup that is over, and a live countdown painted after it
             // would say otherwise.
@@ -3114,6 +3239,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 self.post_notice("Cleanup complete.".to_string());
             }
         } else {
+            self.report_build_cancels(self.interrupt.wait_for(escalate_at), build_cancels)
+                .await;
             // The task's own container is reported here like any other:
             // nothing else deals with it now, so a run kept for
             // investigation says so once, for everything it kept — by what

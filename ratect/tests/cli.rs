@@ -3328,8 +3328,8 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
         has_line(
             "problem ",
             &[
-                "container 'app' has build_directory",
-                "missing-dir', which doesn't exist"
+                "container 'app': build_directory",
+                "missing-dir' doesn't exist"
             ]
         ),
         "the missing build_directory should be a problem:\n{stdout}"

@@ -1,0 +1,25 @@
+# Proves an interrupted BuildKit build is cancelled in the daemon, not merely
+# disconnected from (ratect#537). Dropping the build's connection leaves its
+# `RUN` step running; only `POST /build/cancel` with the build's ID stops it,
+# and the daemon answers that the same whether or not it found anything to
+# stop, so only the build's own side effects can show it worked.
+#
+# The `RUN` step requests the test's host listener once a second through
+# `http_proxy`; see `build-cancel/Dockerfile`. CACHE_BUST keeps a previous
+# run's layer from being reused, which would finish the build at once.
+#
+# `project_name` is its own so the image this build would tag can't be
+# another test's.
+project_name: ratect-build-cancel-test
+
+containers:
+  ticker:
+    build_directory: build-cancel
+    build_args:
+      CACHE_BUST: $RATECT_BUILD_CANCEL_TEST_CACHE_BUST
+
+tasks:
+  build:
+    run:
+      container: ticker
+      command: "true"

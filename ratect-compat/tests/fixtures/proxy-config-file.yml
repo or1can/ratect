@@ -1,0 +1,20 @@
+# Proves a proxy set only in the Docker CLI config file's `proxies` section
+# reaches an image build as build args, as it does a Batect build through
+# docker-client (ratect#295), and that `--no-proxy-vars` keeps it out. The
+# test points DOCKER_CONFIG at a directory of its own whose `config.json`
+# has a `proxies.default` entry, and clears the host's proxy variables.
+#
+# CACHE_BUST: see `proxy-config-file/Dockerfile`.
+project_name: ratect-proxy-config-file-test
+
+containers:
+  build-env:
+    build_directory: proxy-config-file
+    build_args:
+      CACHE_BUST: $RATECT_PROXY_CONFIG_FILE_TEST_CACHE_BUST
+
+tasks:
+  print-build-proxies:
+    run:
+      container: build-env
+      command: cat /proxies.txt

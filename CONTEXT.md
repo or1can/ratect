@@ -117,6 +117,11 @@ reached with something still to remove. What a `--no-cleanup*` flag leaves
 in place on purpose is not one. An error, with
 [0016](decisions/0016-exit-codes.md)'s exit code.
 
+**Abandoned build** — a built image's build that a run stopped waiting for
+before it finished, whether from a termination signal or a sibling failing.
+Cleanup cancels it, first and whether or not a `--no-cleanup*` flag is given;
+a cancel that fails is a warning, not a cleanup failure.
+
 ## Output
 
 **Result** — what an invocation was asked to produce: for a run, the task

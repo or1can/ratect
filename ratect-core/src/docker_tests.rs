@@ -1110,6 +1110,65 @@ fn builder_selection_falls_back_to_classic_when_the_daemon_advertises_nothing() 
     );
 }
 
+fn secrets_only() -> BuildKitOptions {
+    BuildKitOptions {
+        secrets: HashMap::from([(
+            "token".to_string(),
+            BuildSecretSource::Environment("TOKEN".to_string()),
+        )]),
+        ssh_agents: HashMap::new(),
+    }
+}
+
+fn ssh_agents_only() -> BuildKitOptions {
+    BuildKitOptions {
+        secrets: HashMap::new(),
+        ssh_agents: HashMap::from([("default".to_string(), SshAgentSource::HostAgent)]),
+    }
+}
+
+/// Batect's rules U70 and U71 (ratect#521): a daemon that advertises no
+/// builder gets the classic one, which can serve neither `build_secrets`
+/// nor `build_ssh`, so the build is refused.
+#[test]
+fn a_daemon_advertising_no_builder_refuses_buildkit_only_build_fields() {
+    let builder = select_builder_version(None, None).unwrap();
+    for options in [secrets_only(), ssh_agents_only()] {
+        let refusal =
+            refuse_buildkit_options_on_the_classic_builder(&builder, Some(&options), "demo-app")
+                .unwrap_err()
+                .to_string();
+        assert!(
+            refusal.contains("requires BuildKit") && refusal.contains("'demo-app'"),
+            "{refusal}"
+        );
+    }
+}
+
+/// Batect's rule U72: `DOCKER_BUILDKIT=0` forces the classic builder even
+/// on a daemon advertising BuildKit, and `build_ssh` is refused there too.
+#[test]
+fn a_forced_classic_builder_refuses_build_ssh() {
+    let builder = select_builder_version(Some("0"), Some("2")).unwrap();
+    assert!(refuse_buildkit_options_on_the_classic_builder(
+        &builder,
+        Some(&ssh_agents_only()),
+        "t"
+    )
+    .is_err());
+}
+
+#[test]
+fn a_build_is_refused_only_for_buildkit_fields_on_the_classic_builder() {
+    let classic = select_builder_version(None, None).unwrap();
+    let buildkit = select_builder_version(None, Some("2")).unwrap();
+    assert!(refuse_buildkit_options_on_the_classic_builder(&classic, None, "t").is_ok());
+    assert!(
+        refuse_buildkit_options_on_the_classic_builder(&buildkit, Some(&secrets_only()), "t")
+            .is_ok()
+    );
+}
+
 #[test]
 fn builder_selection_treats_an_empty_header_as_classic() {
     use bollard::query_parameters::BuilderVersion;
@@ -1879,6 +1938,10 @@ impl crate::registry_auth::RegistryCredentialResolver for FakeCredentialResolver
             .take()
             .expect("resolve() called more than once on this fake")
     }
+
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>> {
+        panic!("list() called for credential store '{store}', which a pull never lists")
+    }
 }
 
 #[tokio::test]
@@ -1975,6 +2038,10 @@ impl crate::registry_auth::RegistryCredentialResolver for FakeMultiCredentialRes
                 panic!("resolve() called for unexpected or already-resolved registry '{registry}'")
             })
     }
+
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>> {
+        panic!("list() called for credential store '{store}' on a fake that has none")
+    }
 }
 
 #[tokio::test]
@@ -2064,33 +2131,6 @@ async fn resolve_build_credentials_skips_a_failed_registry_without_aborting_the_
         "the warning should name the registry that failed: {}",
         warnings[0]
     );
-}
-
-#[tokio::test]
-async fn read_configured_registries_is_empty_for_a_missing_config_file() {
-    let config_directory = unique_temp_dir();
-    let config_path = config_directory.join("config.json");
-
-    let registries = read_configured_registries(&config_path).await;
-    fs::remove_dir_all(&config_directory).ok();
-
-    assert_eq!(registries, Vec::<String>::new());
-}
-
-#[tokio::test]
-async fn read_configured_registries_parses_an_existing_config_file() {
-    let config_directory = unique_temp_dir();
-    let config_path = config_directory.join("config.json");
-    fs::write(
-        &config_path,
-        r#"{"auths": {"myregistry.example.com": {"auth": "dGVzdDp0ZXN0"}}}"#,
-    )
-    .unwrap();
-
-    let registries = read_configured_registries(&config_path).await;
-    fs::remove_dir_all(&config_directory).ok();
-
-    assert_eq!(registries, vec!["myregistry.example.com".to_string()]);
 }
 
 #[test]
@@ -2364,4 +2404,252 @@ fn ensure_host_volume_directories_exist_skips_special_docker_desktop_paths() {
 
     // The bug was this returning an error; that it's `Ok` is the fix.
     ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+}
+
+fn build_spec_with(
+    build_args: Option<HashMap<String, String>>,
+    config_file_proxies: bool,
+) -> crate::container_spec::BuildSpec {
+    crate::container_spec::BuildSpec {
+        build_directory: std::path::PathBuf::from("/project"),
+        dockerfile: "Dockerfile".to_string(),
+        build_args,
+        target: None,
+        buildkit: None,
+        tag: "tag".to_string(),
+        force_pull: false,
+        proxy_host_gateway: None,
+        config_file_proxies,
+    }
+}
+
+const PROXIES_JSON: &str = r#"{"proxies": {"default": {
+    "httpProxy": "http://config", "noProxy": "config.example"
+}}}"#;
+
+/// The `config.json` layer fills in beneath the build's own args: a
+/// host-environment proxy (already merged into `build_args`) and the
+/// container's explicit `build_args` both win over it (ratect#295).
+#[test]
+fn host_environment_proxies_and_build_args_beat_config_file_proxies() {
+    let host_proxy = crate::proxy::proxy_environment_variables(
+        |name| (name == "http_proxy").then(|| "http://host.example".to_string()),
+        &std::collections::BTreeSet::new(),
+    );
+    let container = crate::config::Container {
+        build_args: Some(HashMap::from([(
+            "NO_PROXY".to_string(),
+            "explicit.example".to_string(),
+        )])),
+        ..Default::default()
+    };
+    let spec = crate::container_spec::derive_build_spec(
+        &container,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        Some(&host_proxy),
+        true,
+    )
+    .unwrap();
+
+    let build_args = build_args_with_config_file_proxies(
+        &spec,
+        Some(PROXIES_JSON),
+        "unix:///var/run/docker.sock",
+    )
+    .unwrap();
+
+    assert_eq!(build_args["http_proxy"], "http://host.example");
+    assert_eq!(build_args["HTTP_PROXY"], "http://host.example");
+    assert_eq!(build_args["NO_PROXY"], "explicit.example");
+    assert_eq!(build_args["no_proxy"], "config.example");
+}
+
+/// `--no-proxy-vars` sends a build's explicit `build_args` and nothing from
+/// `config.json`, even with a `default` entry there.
+#[test]
+fn config_file_proxies_are_skipped_when_turned_off() {
+    let explicit = HashMap::from([("VERSION".to_string(), "1".to_string())]);
+    let spec = build_spec_with(Some(explicit.clone()), false);
+    assert_eq!(
+        build_args_with_config_file_proxies(
+            &spec,
+            Some(PROXIES_JSON),
+            "unix:///var/run/docker.sock"
+        ),
+        Some(explicit)
+    );
+    let spec = build_spec_with(None, false);
+    assert_eq!(
+        build_args_with_config_file_proxies(
+            &spec,
+            Some(PROXIES_JSON),
+            "unix:///var/run/docker.sock"
+        ),
+        None
+    );
+}
+
+/// A build with no args of its own gets the `config.json` ones; with no
+/// file, it sends none, exactly as before.
+#[test]
+fn config_file_proxies_alone_make_a_builds_args() {
+    let spec = build_spec_with(None, true);
+    let build_args = build_args_with_config_file_proxies(
+        &spec,
+        Some(PROXIES_JSON),
+        "unix:///var/run/docker.sock",
+    )
+    .unwrap();
+    assert_eq!(build_args["http_proxy"], "http://config");
+    assert_eq!(
+        build_args_with_config_file_proxies(&spec, None, "unix:///var/run/docker.sock"),
+        None
+    );
+}
+
+/// The `list` half of a fake resolver: what the store answers, and whether
+/// it was asked.
+struct FakeStoreResolver {
+    resolver: FakeMultiCredentialResolver,
+    listed: std::sync::Mutex<Option<anyhow::Result<Vec<String>>>>,
+    asked: std::sync::atomic::AtomicBool,
+}
+
+impl FakeStoreResolver {
+    fn new(
+        answers: HashMap<String, anyhow::Result<Option<bollard::auth::DockerCredentials>>>,
+        listed: anyhow::Result<Vec<String>>,
+    ) -> Self {
+        Self {
+            resolver: FakeMultiCredentialResolver::new(answers),
+            listed: std::sync::Mutex::new(Some(listed)),
+            asked: Default::default(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::registry_auth::RegistryCredentialResolver for FakeStoreResolver {
+    async fn resolve(
+        &self,
+        registry: &str,
+    ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>> {
+        self.resolver.resolve(registry).await
+    }
+
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>> {
+        assert_eq!(store, "desktop");
+        self.asked.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.listed
+            .lock()
+            .unwrap()
+            .take()
+            .expect("list() called more than once")
+    }
+}
+
+fn credential(username: &str) -> bollard::auth::DockerCredentials {
+    bollard::auth::DockerCredentials {
+        username: Some(username.to_string()),
+        password: Some("secret".to_string()),
+        ..Default::default()
+    }
+}
+
+/// ratect#306: a registry only the default `credsStore` holds is resolved
+/// and sent like one `config.json` names.
+#[tokio::test]
+async fn a_registry_only_the_credential_store_holds_is_sent() {
+    let resolver = FakeStoreResolver::new(
+        HashMap::from([(
+            "store-only.example.com".to_string(),
+            Ok(Some(credential("alice"))),
+        )]),
+        Ok(vec!["store-only.example.com".to_string()]),
+    );
+
+    let (registries, warning) = build_registries(&resolver, r#"{"credsStore": "desktop"}"#).await;
+    let (credentials, warnings) = resolve_build_credentials(&resolver, &registries).await;
+
+    assert_eq!(warning, None);
+    assert!(warnings.is_empty());
+    assert_eq!(
+        credentials,
+        HashMap::from([("store-only.example.com".to_string(), credential("alice"))])
+    );
+}
+
+/// What `auths`, `credHelpers` and the store hold together, once each, in a
+/// stable order.
+#[tokio::test]
+async fn build_registries_unions_config_and_store_registries_once_each() {
+    let resolver = FakeStoreResolver::new(
+        HashMap::new(),
+        Ok(vec![
+            "z-store.example.com".to_string(),
+            "auths.example.com".to_string(),
+        ]),
+    );
+    let config = r#"{
+        "credsStore": "desktop",
+        "auths": {"auths.example.com": {}},
+        "credHelpers": {"helper.example.com": "ecr-login"}
+    }"#;
+
+    let (registries, warning) = build_registries(&resolver, config).await;
+
+    assert_eq!(warning, None);
+    assert_eq!(
+        registries,
+        vec![
+            "auths.example.com".to_string(),
+            "helper.example.com".to_string(),
+            "z-store.example.com".to_string(),
+        ]
+    );
+}
+
+/// A store that can't be listed costs only what it would have added: the
+/// registries `config.json` names still go, and one warning names the
+/// store.
+#[tokio::test]
+async fn a_credential_store_that_cant_be_listed_warns_once_and_keeps_the_rest() {
+    let resolver = FakeStoreResolver::new(
+        HashMap::new(),
+        Err(anyhow::anyhow!(
+            "`docker-credential-desktop` failed: locked"
+        )),
+    );
+    let config = r#"{"credsStore": "desktop", "auths": {"auths.example.com": {}}}"#;
+
+    let (registries, warning) = build_registries(&resolver, config).await;
+
+    assert_eq!(registries, vec!["auths.example.com".to_string()]);
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            "Could not list the registries credential store 'desktop' holds \
+             (`docker-credential-desktop` failed: locked); building with only those \
+             config.json names."
+        )
+    );
+}
+
+/// Without a `credsStore` nothing is listed, and the registries are exactly
+/// `configured_registries`'.
+#[tokio::test]
+async fn without_a_credential_store_nothing_is_listed() {
+    let resolver = FakeStoreResolver::new(HashMap::new(), Ok(vec!["never".to_string()]));
+    let config = r#"{"auths": {"auths.example.com": {}}}"#;
+
+    let (registries, warning) = build_registries(&resolver, config).await;
+
+    assert!(!resolver.asked.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        registries,
+        crate::registry_auth::configured_registries(config)
+    );
+    assert_eq!(warning, None);
 }

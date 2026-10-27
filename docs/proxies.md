@@ -18,6 +18,37 @@ variables, and among a build's `build_args` — what overrides it on a key
 collision — is [Environment
 precedence](ratect-compat-config-reference.md#environment-precedence).
 
+## Proxies from Docker's `config.json`
+
+An image build also gets the proxies set in the `proxies` section of the
+Docker CLI's `config.json`, as `docker build` and Batect builds do. It is the
+same file Ratect reads registry credentials and contexts from: in the
+directory `--docker-config` names, else `DOCKER_CONFIG`, else `~/.docker`.
+
+```json
+{
+  "proxies": {
+    "default": {
+      "httpProxy": "http://proxy.example.com:3128",
+      "noProxy": "internal.example.com"
+    }
+  }
+}
+```
+
+The entry used is the one keyed by the Docker host the run connects to,
+spelled as the Docker CLI spells it (`unix:///var/run/docker.sock`,
+`tcp://build-host:2376`), else `default`. Each of its `httpProxy`,
+`httpsProxy`, `ftpProxy`, `noProxy` and `allProxy` becomes a build argument
+in both cases — `HTTP_PROXY` and `http_proxy`, and so on — but only where
+the build doesn't already have that argument, so a proxy from the
+environment and a container's own `build_args` both win over it. The values
+are passed as written: none of the adjustments below are made to them.
+
+This is for image builds only; a container's environment gets nothing from
+`config.json`. A missing `config.json`, or one with no `proxies`, adds
+nothing.
+
 ## `no_proxy` is extended
 
 Every container sharing a task's network — the task's own container and each
@@ -94,13 +125,16 @@ easier to get wrong.
 ## Turning it off
 
 `--no-proxy-vars` disables all of the above for one run: nothing is injected
-into any container or build, `no_proxy` is left alone, and no URL is
-rewritten. It is a [`ratect run`](ratect-cli.md#run-options) option, and a
+into any container or build — the proxies from Docker's `config.json`
+included — `no_proxy` is left alone, and no URL is rewritten. A container's
+own `build_args` are still passed. It is a [`ratect run`](ratect-cli.md#run-options) option, and a
 [`ratect-compat`](ratect-compat-cli.md#task-execution) flag.
 
 ## Coming from Batect?
 
-Two deliberate differences: a `localhost` proxy is rewritten on Linux too,
-where Batect propagates it verbatim, and a loopback-bound proxy is diagnosed
-rather than left to fail. Both are listed under [Differences from
+Three deliberate differences: a `localhost` proxy is rewritten on Linux too,
+where Batect propagates it verbatim; a loopback-bound proxy is diagnosed
+rather than left to fail; and `--no-proxy-vars` keeps the proxies from
+Docker's `config.json` out of a build, where Batect passes them whatever its
+flag says. All three are listed under [Differences from
 Batect](differences-from-batect.md#runtime-behavior-gaps).

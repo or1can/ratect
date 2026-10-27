@@ -86,6 +86,7 @@ history, from when it was the only binary.
 - A config-load error about a file inside a Git include names it by its path within the repository plus the remote and ref (`'1.yml' from the bundle '<repo>' at '<ref>'`) instead of its path in the `~/.ratect/incl` clone cache. A missing include also gives the path as written.
 - Cleaning directory caches (`ratect-compat --clean`/`--clean-cache` and `ratect caches clean` with `--cache-type directory`) warns when it skips a cache entry that is a symbolic link, naming the link,, and when the project has no `.batect/caches` directory.
 - Dependency containers with nothing left depending on them are stopped concurrently during cleanup, as in Batect, so independent dependencies wait out their grace periods together rather than one after another.
+- The pinned `bollard` tracks upstream `master`, picking up its changes since the previous pin, plus the build cancelling that Ratect's own fix needs.
 
 ### Removed
 
@@ -155,6 +156,11 @@ history, from when it was the only binary.
 - A task with only `prerequisites` prints `The task <name> only defines prerequisite tasks, nothing more to do.` with its progress, as in Batect, in every style but `-o quiet`, whatever `RUST_LOG` says.
 - A run ended by a signal prints `Cleanup complete.` on stderr once its cleanup has removed everything, in every style. A cleanup that left something behind still ends with its `Error:` line instead.
 - An error for a task's container that can't be started or attached to, or for any container whose `run_as_current_user` setup fails, names the container as configured, instead of nothing or its Docker id.
+- A BuildKit image build that a run stops waiting for — because of a termination signal, or because another container failed — is cancelled in the Docker daemon, as in Batect, instead of running on to the end of its steps. A cancel the daemon refuses or doesn't answer is a warning naming the container.
+- A classic-builder image build whose step fails no longer leaves that step's stopped intermediate container behind, as in Batect.
+- Proxies set in the `proxies` section of Docker's `config.json` — the entry for the Docker host the run connects to, else `default` — reach image builds as build arguments, as in Batect, without overriding a proxy from the environment or a container's own `build_args`. `--no-proxy-vars` keeps them out.
+- A `dockerfile` given as an absolute path inside `build_directory`, or with `.` or `..` in it (`./Dockerfile`), builds, as in Batect. A `build_directory` or Dockerfile a build can't use — missing, not a directory or regular file, a symbolic link or reached through one, or outside `build_directory` — fails the build naming the field before Docker is asked anything, and `ratect doctor` and `ratect config validate` report it.
+- An image build sends the credentials for every registry Docker's default `credsStore` holds, as in Batect, not only those `config.json` names under `auths` or `credHelpers`. A store whose helper can't list them is a warning naming the store.
 
 ### Security
 

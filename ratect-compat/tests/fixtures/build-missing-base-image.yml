@@ -1,0 +1,14 @@
+# Proves a build on a base image that exists nowhere fails as Batect's does
+# (ratect#519): with the daemon's own reason for the missing image, and the
+# build's transcript so far — BuildKit's `load metadata for` step, or the
+# classic builder's `Step 1/` — in the error. The base image is named so that
+# no registry has it.
+project_name: ratect-build-missing-base-image-test
+containers:
+  build-env:
+    build_directory: ./build-missing-base-image
+tasks:
+  build:
+    run:
+      container: build-env
+      command: echo unreachable

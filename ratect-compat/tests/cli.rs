@@ -540,6 +540,11 @@ fn build_failure_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure.yml")
 }
 
+/// Serializes the tests that build `tests/fixtures/build-failure.yml` with
+/// the classic builder: one counts the failed step's containers that weren't
+/// there before its own run, and the other's run would add to them.
+static CLASSIC_BUILD_FAILURE_PROJECT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn build_failure_buildkit_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure-buildkit.yml")
 }
@@ -4613,6 +4618,235 @@ fn build_secrets_reach_a_real_buildkit_session_build() {
     assert_eq!(task_output(&stdout, "build-env"), "hello-from-build-secret");
 }
 
+/// Same requirements as `build_secrets_reach_a_real_buildkit_session_build`.
+///
+/// A `build_secrets` entry with `path` reaches a real build (ratect#520):
+/// see `tests/fixtures/build-secrets-file.yml`.
+#[test]
+#[ignore]
+fn a_file_build_secret_reaches_a_real_buildkit_session_build() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let output = ratect_command()
+        .arg("-f")
+        .arg(fixtures.join("build-secrets-file.yml"))
+        .arg("print-secret")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let secret = std::fs::read_to_string(fixtures.join("build-secrets-file/token.txt")).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(task_output(&stdout, "build-env"), secret);
+}
+
+/// A throwaway `registry:2` on a loopback port that requires a username and
+/// password, holding one pushed image, plus a scratch directory for its
+/// password file and the Docker configs the test writes. Everything it
+/// made — the registry, every image naming it, the built image, the
+/// directory — is removed on `Drop`, even if the test panics.
+struct AuthenticatedRegistry {
+    container: String,
+    address: String,
+    directory: PathBuf,
+}
+
+impl AuthenticatedRegistry {
+    const USERNAME: &'static str = "ratect";
+    const PASSWORD: &'static str = "ratect-520";
+    const BUILT_IMAGE: &'static str = "ratect-build-authenticated-base-image-test-build-env";
+
+    /// Starts the registry and pushes `alpine:3.18.2` to it as
+    /// `<address>/ratect-520-base:1`, then removes that tag from the daemon,
+    /// so a build must pull it — through the registry's authentication.
+    fn start() -> Self {
+        let directory = scratch_directory("authenticated-registry");
+        let htpasswd = Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--entrypoint",
+                "htpasswd",
+                "httpd:2.4-alpine",
+            ])
+            .args(["-Bbn", Self::USERNAME, Self::PASSWORD])
+            .output()
+            .expect("failed to run htpasswd");
+        assert!(htpasswd.status.success(), "{htpasswd:?}");
+        std::fs::create_dir_all(directory.join("auth")).unwrap();
+        std::fs::write(directory.join("auth/htpasswd"), &htpasswd.stdout).unwrap();
+        let started = Command::new("docker")
+            .args(["run", "-d", "-p", "127.0.0.1:0:5000"])
+            .arg("-v")
+            .arg(format!("{}:/auth:ro", directory.join("auth").display()))
+            .args([
+                "-e",
+                "REGISTRY_AUTH=htpasswd",
+                "-e",
+                "REGISTRY_AUTH_HTPASSWD_REALM=ratect-520",
+                "-e",
+                "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
+                "registry:2",
+            ])
+            .output()
+            .expect("failed to start the registry");
+        assert!(started.status.success(), "{started:?}");
+        let container = String::from_utf8_lossy(&started.stdout).trim().to_string();
+        let port = Command::new("docker")
+            .args(["port", &container, "5000/tcp"])
+            .output()
+            .expect("failed to read the registry's port");
+        let port = String::from_utf8_lossy(&port.stdout);
+        let port = port.trim().rsplit(':').next().unwrap().to_string();
+        let registry = Self {
+            container,
+            address: format!("localhost:{port}"),
+            directory,
+        };
+
+        let pusher = registry.config_directory("pusher", true);
+        let docker = |args: &[&str]| {
+            let output = Command::new("docker")
+                .arg("--config")
+                .arg(&pusher)
+                .args(args)
+                .output()
+                .expect("failed to run docker");
+            assert!(output.status.success(), "docker {args:?}: {output:?}");
+        };
+        docker(&["pull", "alpine:3.18.2"]);
+        docker(&["tag", "alpine:3.18.2", &registry.base_image()]);
+        let pushed = poll_until(Duration::from_secs(30), || {
+            Command::new("docker")
+                .arg("--config")
+                .arg(&pusher)
+                .args(["push", &registry.base_image()])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        });
+        assert!(
+            pushed,
+            "could not push to the registry at {}",
+            registry.address
+        );
+        docker(&["rmi", &registry.base_image()]);
+        registry
+    }
+
+    fn base_image(&self) -> String {
+        format!("{}/ratect-520-base:1", self.address)
+    }
+
+    /// A Docker config directory named `name`, holding this registry's
+    /// credential inline under `auths` when `with_credential` — and no
+    /// `credsStore` or `credHelpers` either way, so nothing on the host is
+    /// asked. Inline `auths` also keep the Docker CLI from choosing a
+    /// default store of its own for the pusher's config.
+    fn config_directory(&self, name: &str, with_credential: bool) -> PathBuf {
+        let directory = self.directory.join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = if with_credential {
+            let auth = base64_encode(&format!("{}:{}", Self::USERNAME, Self::PASSWORD));
+            format!(
+                r#"{{"auths": {{"{}": {{"auth": "{auth}"}}}}}}"#,
+                self.address
+            )
+        } else {
+            "{}".to_string()
+        };
+        std::fs::write(directory.join("config.json"), config).unwrap();
+        directory
+    }
+}
+
+impl Drop for AuthenticatedRegistry {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["rmi", "-f", &self.base_image(), Self::BUILT_IMAGE])
+            .output();
+        let _ = Command::new("docker")
+            .args(["rm", "-fv", &self.container])
+            .output();
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// Standard base64, padded — all a Docker config's inline `auth` needs.
+fn base64_encode(text: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for chunk in text.as_bytes().chunks(3) {
+        let bytes = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let value = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]);
+        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if index <= chunk.len() {
+                encoded.push(ALPHABET[(value >> shift & 63) as usize] as char);
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    encoded
+}
+
+/// Requires a running Docker daemon with BuildKit, network access to pull
+/// `registry:2`, `httpd:2.4-alpine` and `alpine:3.18.2`, and a daemon that
+/// can reach a registry on the host's loopback. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Registry credentials in the Docker config reach a BuildKit build whose
+/// base image needs them (ratect#520), with a control: the same build with
+/// no credential is refused by the registry. See
+/// `tests/fixtures/build-authenticated-base-image.yml`.
+#[test]
+#[ignore]
+fn docker_config_credentials_reach_a_buildkit_build_of_an_authenticated_base_image() {
+    let registry = AuthenticatedRegistry::start();
+    let build = |config_directory: &Path| {
+        ratect_command()
+            .env("DOCKER_BUILDKIT", "1")
+            .env("RATECT_AUTHENTICATED_BASE_IMAGE", registry.base_image())
+            .arg("--docker-config")
+            .arg(config_directory)
+            .arg("-f")
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/build-authenticated-base-image.yml"),
+            )
+            .arg("build")
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let refused = build(&registry.config_directory("anonymous", false));
+    let refused_stderr = String::from_utf8_lossy(&refused.stderr).to_lowercase();
+    let authenticated = build(&registry.config_directory("authenticated", true));
+
+    assert!(
+        !refused.status.success()
+            && [
+                "unauthorized",
+                "authentication required",
+                "no basic auth credentials"
+            ]
+            .iter()
+            .any(|refusal| refused_stderr.contains(refusal)),
+        "without a credential the registry should refuse the pull:\n{refused_stderr}"
+    );
+    assert!(
+        authenticated.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&authenticated.stderr)
+    );
+}
+
 /// A dedicated throwaway `ssh-agent` process spawned for one test, plus a
 /// scratch keypair loaded into it — so the `build_ssh` test below never
 /// depends on (or leaks into) the developer's or CI runner's own agent.
@@ -4921,6 +5155,9 @@ fn build_context_files_are_root_owned_in_a_buildkit_build() {
 #[test]
 #[ignore]
 fn failing_build_output_reaches_the_error() {
+    let _shared_project = CLASSIC_BUILD_FAILURE_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let output = ratect_command()
         .arg("-f")
         .arg(build_failure_config_path())
@@ -4940,6 +5177,120 @@ fn failing_build_output_reaches_the_error() {
         stderr.contains("this line should reach the user"),
         "the Dockerfile's RUN output should be in the error: {stderr}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A classic build whose `RUN` step fails leaves no stopped intermediate
+/// container behind, as Batect's builds don't (ratect#292): the daemon only
+/// removes a failed step's container when asked to force it. That container
+/// carries none of Ratect's labels, so it is found by the failing step's own
+/// command text, among the containers that weren't there before the run.
+#[test]
+#[ignore]
+fn a_failed_classic_build_leaves_no_intermediate_container() {
+    let _shared_project = CLASSIC_BUILD_FAILURE_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let failed_step_containers = || -> Vec<String> {
+        let output = Command::new("docker")
+            .args(["ps", "-a", "--no-trunc", "--format", "{{.ID}} {{.Command}}"])
+            .output()
+            .expect("failed to run docker ps");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| line.contains("this line should reach the user"))
+            .filter_map(|line| line.split_whitespace().next())
+            .map(str::to_string)
+            .collect()
+    };
+    let before = failed_step_containers();
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_failure_config_path())
+        .arg("build")
+        .env("DOCKER_BUILDKIT", "0")
+        .output()
+        .expect("failed to run ratect");
+
+    let left: Vec<String> = failed_step_containers()
+        .into_iter()
+        .filter(|id| !before.contains(id))
+        .collect();
+    for id in &left {
+        let _ = Command::new("docker").args(["rm", "-f", id]).output();
+    }
+    assert!(
+        !output.status.success(),
+        "the build should have failed: stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        left,
+        Vec::<String>::new(),
+        "the failed step's container was left behind"
+    );
+}
+
+/// Runs `tests/fixtures/build-missing-base-image.yml`'s `build` task with
+/// `DOCKER_BUILDKIT` set to `buildkit`, and returns its stderr after
+/// checking what both builders say about a base image that exists nowhere:
+/// a failed run, the build's own tag, and the daemon's reason, whose
+/// wording depends on the daemon.
+fn missing_base_image_build_stderr(buildkit: &str) -> String {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/build-missing-base-image.yml"),
+        )
+        .arg("build")
+        .env("DOCKER_BUILDKIT", buildkit)
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        !output.status.success(),
+        "the build should have failed: {stderr}"
+    );
+    assert!(
+        stderr.contains("Failed to build image 'ratect-build-missing-base-image-test-build-env'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("not found") || stderr.contains("pull access denied"),
+        "the daemon's reason should reach the error: {stderr}"
+    );
+    stderr
+}
+
+/// Requires a running Docker daemon with BuildKit and network access to a
+/// registry that answers for the nonexistent base image. Run explicitly
+/// with `cargo test -- --ignored`.
+///
+/// Pins Batect's `DockerClientBuildKitImageBuildSpec` "non-existent base
+/// image" rule (ratect#519): see `tests/fixtures/build-missing-base-image.yml`.
+#[test]
+#[ignore]
+fn a_buildkit_build_on_a_missing_base_image_fails_naming_it() {
+    let stderr = missing_base_image_build_stderr("1");
+    assert!(stderr.contains("load metadata for"), "{stderr}");
+}
+
+/// Requires a running Docker daemon and network access to a registry that
+/// answers for the nonexistent base image. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Pins Batect's `DockerClientLegacyImageBuildSpec` "base image does not
+/// exist" rule (ratect#519) on the classic builder: see
+/// `tests/fixtures/build-missing-base-image.yml`.
+#[test]
+#[ignore]
+fn a_classic_build_on_a_missing_base_image_fails_naming_it() {
+    let stderr = missing_base_image_build_stderr("0");
+    assert!(stderr.contains("Step 1/"), "{stderr}");
 }
 
 /// Requires a running Docker daemon that supports BuildKit sessions and
@@ -5124,9 +5475,42 @@ fn build_secrets_error_clearly_when_the_classic_builder_is_forced() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Ratect's own refusal, not the classic builder's: a `RUN --mount` it
+    // was sent anyway fails saying it "requires BuildKit" too.
     assert!(
-        stderr.contains("requires BuildKit"),
-        "the error should name the BuildKit requirement: {stderr}"
+        stderr.contains("requires BuildKit ('build_secrets'/'build_ssh' cannot be served"),
+        "the error should be the refusal, before anything is built: {stderr}"
+    );
+}
+
+/// Same requirements as `build_secrets_error_clearly_when_the_classic_builder_is_forced`.
+///
+/// Batect's rule U72 (ratect#521): `build_ssh` is refused on a classic
+/// builder `DOCKER_BUILDKIT=0` forces, too. `SSH_AUTH_SOCK` is removed, so
+/// the refusal is the failure, not an agent that isn't there.
+#[test]
+#[ignore]
+fn build_ssh_errors_clearly_when_the_classic_builder_is_forced() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(build_ssh_config_path())
+        .arg("print-keys")
+        .env_remove("SSH_AUTH_SOCK")
+        .env("RATECT_BUILD_SSH_TEST_CACHE_BUST", "irrelevant")
+        .env("DOCKER_BUILDKIT", "0")
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "the build should have been refused: {stderr}"
+    );
+    // Ratect's own refusal, not the classic builder's: a `RUN --mount` it
+    // was sent anyway fails saying it "requires BuildKit" too.
+    assert!(
+        stderr.contains("requires BuildKit ('build_secrets'/'build_ssh' cannot be served"),
+        "the error should be the refusal, before anything is built: {stderr}"
     );
 }
 
@@ -6390,6 +6774,165 @@ fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
     );
 }
 
+/// Requires a running Docker daemon with BuildKit and network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// An interrupted BuildKit build stops running in the daemon (ratect#537):
+/// see `tests/fixtures/build-cancel.yml`. The build's `RUN` step ticks a
+/// listener here once a second, through a `localhost` proxy URL that ratect
+/// rewrites to name the host, so the listener binds every interface — a
+/// loopback-only one is unreachable from a Linux build. Ticks still arriving
+/// a few seconds after ratect has exited mean the build was only
+/// disconnected from, not cancelled.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn an_interrupted_buildkit_build_stops_running_in_the_daemon() {
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    let listener = TcpListener::bind("0.0.0.0:0").expect("failed to bind the tick listener");
+    let port = listener.local_addr().unwrap().port();
+    let ticks: Arc<Mutex<Vec<Instant>>> = Arc::default();
+    {
+        let ticks = Arc::clone(&ticks);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                ticks.lock().unwrap().push(Instant::now());
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+    }
+
+    let cache_bust = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let mut child = ratect_command()
+        .env("http_proxy", format!("http://localhost:{port}"))
+        .env("RATECT_BUILD_CANCEL_TEST_CACHE_BUST", &cache_bust)
+        .arg("--enable-buildkit")
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-cancel.yml"))
+        .args(["-o", "simple", "build"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let ticking = poll_until(Duration::from_secs(120), || {
+        ticks.lock().unwrap().len() >= 2
+    });
+    if !ticking {
+        let _ = child.kill();
+        let output = child.wait_with_output().expect("failed to wait on ratect");
+        panic!(
+            "the build never reached its ticking RUN step; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let signalled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success(), "could not send SIGINT to ratect");
+    let output = child.wait_with_output().expect("failed to wait on ratect");
+    let exited = Instant::now();
+
+    std::thread::sleep(Duration::from_secs(10));
+    let late_ticks = ticks
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|tick| **tick > exited + Duration::from_secs(3))
+        .count();
+
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        late_ticks,
+        0,
+        "the build kept running in the daemon after ratect exited; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// See `tests/fixtures/proxy-config-file.yml`: a proxy from the Docker CLI
+/// config file reaches a build in both cases, and `--no-proxy-vars` keeps it
+/// out.
+#[test]
+#[ignore]
+fn config_file_proxies_reach_an_image_build_unless_no_proxy_vars() {
+    let config_directory = scratch_directory("proxy-config-file");
+    std::fs::write(
+        config_directory.join("config.json"),
+        r#"{"proxies": {"default": {"httpProxy": "http://config-proxy.example:3128"}}}"#,
+    )
+    .unwrap();
+    let run = |extra: &[&str]| {
+        let mut command = ratect_command();
+        for name in [
+            "http_proxy",
+            "HTTP_PROXY",
+            "https_proxy",
+            "HTTPS_PROXY",
+            "ftp_proxy",
+            "FTP_PROXY",
+            "no_proxy",
+            "NO_PROXY",
+        ] {
+            command.env_remove(name);
+        }
+        let output = command
+            .env("DOCKER_CONFIG", &config_directory)
+            .env(
+                "RATECT_PROXY_CONFIG_FILE_TEST_CACHE_BUST",
+                format!("{}-{}", config_directory.display(), extra.len()),
+            )
+            .arg("-f")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/proxy-config-file.yml"))
+            .args(extra)
+            .arg("print-build-proxies")
+            .output()
+            .expect("failed to run ratect");
+        assert!(
+            output.status.success(),
+            "stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let propagated = run(&[]);
+    let suppressed = run(&["--no-proxy-vars"]);
+    let _ = std::fs::remove_dir_all(&config_directory);
+
+    assert!(
+        propagated.contains(
+            "HTTP_PROXY=http://config-proxy.example:3128 http_proxy=http://config-proxy.example:3128"
+        ),
+        "{propagated}"
+    );
+    assert!(
+        suppressed.contains("HTTP_PROXY= http_proxy="),
+        "{suppressed}"
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
 /// Run explicitly with `cargo test -- --ignored`.
 ///
@@ -6758,6 +7301,99 @@ fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
             "no SGR at all under {env:?}/{plain_args:?}: {plain:?}"
         );
     }
+}
+
+/// A project in a scratch directory whose `ctx` build directory holds a
+/// Dockerfile and a `.dockerignore` of `*`, built by two containers that
+/// spell the same Dockerfile differently: `absolute` by its absolute path,
+/// `dotted` as `./Dockerfile`. Each has a task of its own name.
+fn dockerfile_spellings_project() -> PathBuf {
+    let dir = scratch_directory("dockerfile-spellings");
+    let context = dir.join("ctx");
+    std::fs::create_dir_all(&context).unwrap();
+    std::fs::write(context.join("Dockerfile"), "FROM alpine:3.18.2\nRUN true\n").unwrap();
+    std::fs::write(context.join(".dockerignore"), "*\n").unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        format!(
+            "project_name: ratect-dockerfile-spellings-test\n\
+             containers:\n\
+             \x20 absolute:\n    build_directory: ctx\n    dockerfile: {}\n\
+             \x20 dotted:\n    build_directory: ctx\n    dockerfile: ./Dockerfile\n\
+             tasks:\n\
+             \x20 absolute:\n    run:\n      container: absolute\n      command: \"true\"\n\
+             \x20 dotted:\n    run:\n      container: dotted\n      command: \"true\"\n",
+            context.join("Dockerfile").display()
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+/// A config whose build container can't be built still loads: the build's
+/// files are checked when it is built, not when the config loads
+/// (ratect#296).
+#[test]
+fn a_build_container_that_cant_be_built_still_lists_its_tasks() {
+    let dir = scratch_directory("unbuildable-lists");
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\n\
+         containers:\n  app:\n    build_directory: missing\n    dockerfile: Nope\n\
+         tasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A Dockerfile written as an absolute path inside the build directory, or
+/// as `./Dockerfile`, builds on both builders, even with a `.dockerignore`
+/// of `*` (ratect#296): Docker is sent the Dockerfile's path inside the
+/// build context, and that is the path the context always includes.
+#[test]
+#[ignore]
+fn a_dockerfile_however_spelled_builds_on_both_builders() {
+    let project = dockerfile_spellings_project();
+    let mut failures = Vec::new();
+    for buildkit in ["0", "1"] {
+        for task in ["absolute", "dotted"] {
+            let output = ratect_command()
+                .env("DOCKER_BUILDKIT", buildkit)
+                .arg("-f")
+                .arg(project.join("batect.yml"))
+                .arg(task)
+                .output()
+                .expect("failed to run ratect");
+            if !output.status.success() {
+                failures.push(format!(
+                    "DOCKER_BUILDKIT={buildkit} {task}:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+    }
+    for tag in [
+        "ratect-dockerfile-spellings-test-absolute",
+        "ratect-dockerfile-spellings-test-dotted",
+    ] {
+        let _ = Command::new("docker").args(["rmi", tag]).output();
+    }
+    let _ = std::fs::remove_dir_all(&project);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// A fresh, empty scratch directory named for `purpose`. Caller cleans up.

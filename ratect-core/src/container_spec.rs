@@ -341,11 +341,13 @@ pub struct ContainerSpec {
 pub struct BuildSpec {
     /// Already resolved to an absolute path.
     pub build_directory: PathBuf,
-    /// Relative to `build_directory`'s own root — `"Dockerfile"` for the
-    /// default case.
+    /// The path inside the build context, as `check_build_files` gives it —
+    /// what Docker is sent, and what the build context always includes.
     pub dockerfile: String,
     /// Merged with proxy-derived build args, the container's own winning on
-    /// collision — see `merged_environment`.
+    /// collision — see `merged_environment`. Proxies from the Docker CLI's
+    /// `config.json` are not in it: `DockerClient::build_image` fills those
+    /// in beneath it, see `config_file_proxies`.
     pub build_args: Option<HashMap<String, String>>,
     /// The build stage to stop at, for a multi-stage Dockerfile.
     pub target: Option<String>,
@@ -363,6 +365,12 @@ pub struct BuildSpec {
     /// The same entry `NetworkOptions` carries, for the same reason: a `RUN`
     /// step behind a rewritten proxy URL has to resolve that name too.
     pub proxy_host_gateway: Option<crate::proxy::HostGateway>,
+    /// Whether the build's args are filled in from the `proxies` section of
+    /// the Docker CLI's `config.json`, as docker-client fills every Batect
+    /// build's — see `proxy::fill_config_file_proxies`. `true` unless
+    /// `--no-proxy-vars` was given, which keeps every proxy out of a build,
+    /// this source included.
+    pub config_file_proxies: bool,
 }
 
 /// The task-`run`/dependency-`customise` overlay a container's own config is
@@ -549,28 +557,29 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
 /// takes its inputs as plain parameters rather than an `Inputs`-wrapped
 /// struct: a build has one call site, not two independently-assembled ones
 /// to keep in step, so there's nothing here for a wrapper to earn its keep
-/// against.
+/// against. `dockerfile` is the one `check_build_files` gave, and
+/// `config_file_proxies` is `false` under `--no-proxy-vars` — both passed
+/// in, so a spec can't be built with an unchecked Dockerfile or with
+/// proxies the run turned off.
 ///
 /// Fallible only because `buildkit_options` is — see its own doc comment
 /// for what can fail.
 pub fn derive_build_spec(
     container_config: &Container,
     build_directory: &str,
+    dockerfile: String,
     tag: &str,
     proxy: Option<&crate::proxy::ProxyEnvironment>,
+    config_file_proxies: bool,
 ) -> Result<BuildSpec> {
     let proxy_vars = proxy.map(|proxy| &proxy.variables);
     // No `term_var`/`overlay_env` — matches today's call, which merges only
     // proxy vars with the container's own `build_args`.
     let build_args =
         merged_environment(None, proxy_vars, container_config.build_args.as_ref(), None);
-    let dockerfile = container_config
-        .dockerfile
-        .as_deref()
-        .unwrap_or("Dockerfile");
     Ok(BuildSpec {
         build_directory: PathBuf::from(build_directory),
-        dockerfile: dockerfile.to_string(),
+        dockerfile,
         build_args,
         target: container_config.build_target.clone(),
         buildkit: buildkit_options(container_config)?,
@@ -578,7 +587,90 @@ pub fn derive_build_spec(
         force_pull: container_config.image_pull_policy.unwrap_or_default()
             == crate::config::ImagePullPolicy::Always,
         proxy_host_gateway: proxy.and_then(|proxy| proxy.host_gateway()),
+        config_file_proxies,
     })
+}
+
+/// Whether `container`'s build can work at all, checked before anything is
+/// asked of Docker — and if it can, its `dockerfile` as Docker is to be sent
+/// it: the path inside the build context, `/`-separated, however it was
+/// written. Batect's Docker client sends the same form. `dockerfile` is
+/// resolved against `build_directory` (an absolute one is kept as it is, as
+/// Java's `Path.resolve` keeps it) and cleaned lexically, so `./Dockerfile`
+/// and an absolute path inside the build directory both work.
+///
+/// Refused, in this order, each in its own words: a `build_directory` that
+/// doesn't exist, or isn't a directory; a Dockerfile that doesn't exist, or
+/// isn't a regular file; one that is a symbolic link, which Ratect's build
+/// context doesn't carry, so the daemon would report it missing (Batect
+/// accepts one whose link is inside the build directory); one outside
+/// `build_directory`; and one reached through a linked directory inside it,
+/// which the context walk skips just the same, and which may lead outside.
+/// The order puts a missing Dockerfile outside it under "doesn't exist".
+/// No `dockerfile` is `Dockerfile` at `build_directory`'s root — the one
+/// place that default is written.
+///
+/// The run calls this when it is about to build, and `ratect doctor` and
+/// `config validate` call it for every build container, so the two can't
+/// disagree about what can't be built. The error names the fields but not
+/// the container, which each caller attributes in its own way.
+pub(crate) fn check_build_files(
+    build_directory: &Path,
+    dockerfile: Option<&str>,
+) -> std::result::Result<String, String> {
+    use path_clean::PathClean;
+    let dockerfile = dockerfile.unwrap_or("Dockerfile");
+    let directory = build_directory.display();
+    if !build_directory.exists() {
+        return Err(format!("build_directory '{directory}' doesn't exist"));
+    }
+    if !build_directory.is_dir() {
+        return Err(format!("build_directory '{directory}' isn't a directory"));
+    }
+    let root = build_directory.clean();
+    let path = root.join(dockerfile).clean();
+    if !path.exists() {
+        return Err(format!(
+            "dockerfile '{dockerfile}' doesn't exist in build_directory '{directory}'"
+        ));
+    }
+    if !path.is_file() {
+        return Err(format!("dockerfile '{dockerfile}' isn't a regular file"));
+    }
+    let is_link = |path: &Path| {
+        path.symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    };
+    if is_link(&path) {
+        return Err(format!(
+            "dockerfile '{dockerfile}' is a symbolic link, which Ratect's build context \
+             doesn't carry"
+        ));
+    }
+    let Ok(relative) = path.strip_prefix(&root) else {
+        return Err(format!(
+            "dockerfile '{dockerfile}' isn't inside build_directory '{directory}'"
+        ));
+    };
+    // The context walk skips a linked directory as it skips a linked file,
+    // and the link can lead out of `build_directory`, which lexical
+    // containment can't see.
+    let mut reached = root.clone();
+    for component in relative.components() {
+        reached.push(component);
+        if reached != path && is_link(&reached) {
+            let link = reached.strip_prefix(&root).unwrap_or(&reached).display();
+            return Err(format!(
+                "dockerfile '{dockerfile}' is reached through '{link}', a symbolic link, which \
+                 Ratect's build context doesn't carry"
+            ));
+        }
+    }
+    Ok(relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/"))
 }
 
 /// Merges the host's `TERM` (see `TaskEngine::term_environment_variable`),

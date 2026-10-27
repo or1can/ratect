@@ -133,30 +133,32 @@ pub fn config_findings(config: &Config, evaluation: &WholeProjectEvaluation) -> 
     findings.extend(repeated_entries(config).into_iter().map(Finding::Warning));
 
     // Already resolved to an absolute path by evaluation, so this is the
-    // path Ratect will actually hand to Docker.
-    let mut missing: Vec<String> = Vec::new();
+    // path Ratect will actually hand to Docker. The same check a run makes
+    // before it builds, so the two agree on what can't be built.
+    let mut unbuildable: Vec<String> = Vec::new();
+    let mut absolute: Vec<String> = Vec::new();
     for (name, container) in containers {
         let Some(directory) = &container.build_directory else {
             continue;
         };
-        let directory = Path::new(directory);
-        if !directory.is_dir() {
-            missing.push(format!(
-                "container '{name}' has build_directory '{}', which doesn't exist",
-                directory.display()
-            ));
-            continue;
-        }
-        let dockerfile = directory.join(container.dockerfile.as_deref().unwrap_or("Dockerfile"));
-        if !dockerfile.is_file() {
-            missing.push(format!(
-                "container '{name}' has no '{}' in its build_directory",
-                dockerfile.display()
-            ));
+        let dockerfile = container.dockerfile.as_deref();
+        match crate::container_spec::check_build_files(Path::new(directory), dockerfile) {
+            Err(reason) => unbuildable.push(format!("container '{name}': {reason}")),
+            // Batect builds it, so a run does too; but it only works where
+            // the project is checked out at that same path.
+            Ok(relative) if dockerfile.is_some_and(|written| Path::new(written).is_absolute()) => {
+                absolute.push(format!(
+                    "container '{name}' has an absolute dockerfile; written as '{relative}', \
+                 relative to build_directory, it would work from any checkout"
+                ))
+            }
+            Ok(_) => {}
         }
     }
-    missing.sort();
-    findings.extend(missing.into_iter().map(Finding::Problem));
+    unbuildable.sort();
+    absolute.sort();
+    findings.extend(absolute.into_iter().map(Finding::Warning));
+    findings.extend(unbuildable.into_iter().map(Finding::Problem));
 
     findings
 }

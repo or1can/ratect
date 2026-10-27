@@ -823,3 +823,56 @@ fn docker_environment_findings_reports_each_invalid_boolean_variable() {
 fn running_0_12() -> crate::written_for::Version {
     "0.12.0".parse().unwrap()
 }
+
+/// ratect#296: the problems a run would refuse a build for are the ones
+/// `check_build_files` gives, attributed to the container; an absolute
+/// dockerfile that works is a warning naming the relative form instead.
+#[tokio::test]
+async fn build_files_are_judged_as_a_run_would_judge_them() {
+    let directory =
+        std::env::temp_dir().join(format!("ratect-296-doctor-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(directory.join("docker")).unwrap();
+    std::fs::write(directory.join("docker/Dockerfile"), "FROM scratch").unwrap();
+    let project = project_from(
+        "ratect.toml",
+        &format!(
+            r#"
+project_name = "demo"
+
+[containers.absolute]
+build_directory = "{dir}"
+dockerfile = "{dir}/docker/Dockerfile"
+
+[containers.missing]
+build_directory = "{dir}"
+dockerfile = "Missing.Dockerfile"
+"#,
+            dir = directory.display()
+        ),
+    )
+    .await;
+
+    let findings = findings_for(&project, no_host_env);
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    assert!(
+        findings.iter().any(|finding| matches!(
+            finding,
+            Finding::Warning(message) if message == "container 'absolute' has an absolute \
+                dockerfile; written as 'docker/Dockerfile', relative to build_directory, it \
+                would work from any checkout"
+        )),
+        "{findings:?}"
+    );
+    assert!(
+        findings.iter().any(|finding| matches!(
+            finding,
+            Finding::Problem(message) if message == &format!(
+                "container 'missing': dockerfile 'Missing.Dockerfile' doesn't exist in \
+                 build_directory '{}'",
+                directory.display()
+            )
+        )),
+        "{findings:?}"
+    );
+}
