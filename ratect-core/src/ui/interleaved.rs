@@ -220,6 +220,16 @@ impl EventSink for InterleavedEventLogger {
                     ..State::default()
                 };
             }
+            // On this task's own prefix, never the last task's: it has no
+            // containers, so its own name is the whole column.
+            TaskEvent::PrerequisitesOnly { task } => {
+                *state = State {
+                    prefix_width: task.width(),
+                    task: Some(task.clone()),
+                    ..State::default()
+                };
+                self.print_for_task(&state, &super::nothing_more_to_do(&self.console, &task));
+            }
             TaskEvent::TaskGraphResolved { containers } => {
                 state.task_container = containers
                     .iter()

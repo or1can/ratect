@@ -152,6 +152,7 @@ history, from when it was the only binary.
 - With `--no-cleanup-after-success` or `--no-cleanup`, prerequisite tasks are cleaned up after success, as in Batect; only the named task's containers and network are left in place.
 - A task that fails to run once started — an image that won't pull or build, a container that can't be created or started, a dependency that never becomes ready — has its `Error:` line printed when the failure happens, before cleanup, as in Batect.
 - A container that doesn't become healthy, or whose setup command can't run or exits non-zero, fails the task with an error that ends by suggesting `--no-cleanup-after-failure`, as in Batect — unless that flag or `--no-cleanup` was given.
+- A task with only `prerequisites` prints `The task <name> only defines prerequisite tasks, nothing more to do.` with its progress, as in Batect, in every style but `-o quiet`, whatever `RUST_LOG` says.
 
 ### Security
 

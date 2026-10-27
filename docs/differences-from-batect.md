@@ -449,6 +449,11 @@ tables above:
   the manual cleanup commands it prints. While that container is still attached
   to the network, Docker refuses, and that refusal is reported in the same
   `Cleanup failed:` error as the container's, which lists both as left behind.
+- **A task with only `prerequisites` says so in every style but `quiet`.**
+  Once its prerequisites have run, `The task <name> only defines prerequisite
+  tasks, nothing more to do.` is printed as under Batect, but not under
+  `-o quiet`, which prints only errors, warnings and notices; Batect prints it
+  in every style.
 - **What cleanup leaves is reported in one line, in every style.** A
   `--no-cleanup*` run ends with `Left in place (--no-cleanup): …`, and a cleanup
   that failed with `Error: Cleanup failed: …; left behind: …`, each naming the

@@ -2181,14 +2181,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
 
         // A task with only `prerequisites` and no `run` of its own — those
         // have already executed above; there's no container of the task's
-        // own left to run. Matches Batect's `TaskRunner`, which prints the
-        // equivalent message and stops here rather than treating this as an
-        // error.
+        // own left to run. Stops here rather than treating this as an error,
+        // and says so as Batect's `TaskRunner` does: the same sentence, on
+        // the progress console, in every style but `quiet` — which prints no
+        // progress, where Batect prints it anyway (ratect#364).
         let Some(run) = &task.run else {
-            tracing::info!(
-                "Task '{}' only defines prerequisite tasks, nothing more to do",
-                task_name
-            );
+            tracing::debug!("Task '{}' has only prerequisites", task_name);
+            self.event_sink.post(TaskEvent::PrerequisitesOnly {
+                task: task_name.to_string(),
+            });
             return Ok(());
         };
 

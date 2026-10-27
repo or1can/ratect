@@ -2157,25 +2157,42 @@ fn fatal_error_reaches_stderr_even_with_logging_disabled() {
 ///
 /// Proves a task with only `prerequisites` and no `run` of its own still runs
 /// its prerequisites end to end, then stops cleanly (exit 0) — no container
-/// of the task's own to run.
+/// of the task's own to run — and says so on stdout, as Batect does, whatever
+/// `RUST_LOG` says; but not under `-o quiet`, which prints no progress
+/// (ratect#364).
 #[test]
 #[ignore]
 fn task_with_only_prerequisites_and_no_run_runs_its_prerequisites_via_docker() {
-    let output = ratect_command()
-        .arg("-f")
-        .arg(sample_config_path())
-        .arg("prerequisites-only-task")
-        .output()
-        .expect("failed to run ratect");
+    const NOTHING_MORE: &str =
+        "The task prerequisites-only-task only defines prerequisite tasks, nothing more to do.";
+    let run = |style: &str| {
+        ratect_command()
+            .arg("-f")
+            .arg(sample_config_path())
+            .args(["-o", style, "prerequisites-only-task"])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("failed to run ratect")
+    };
 
+    let output = run("simple");
     assert!(
         output.status.success(),
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("I should only run once"));
+    assert!(stdout.trim_end().ends_with(NOTHING_MORE), "{stdout}");
+
+    let output = run("quiet");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains(NOTHING_MORE) && !stderr.contains(NOTHING_MORE),
+        "quiet prints no progress:\n{stdout}{stderr}"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`

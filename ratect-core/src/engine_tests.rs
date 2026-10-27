@@ -1969,6 +1969,87 @@ async fn a_task_with_only_prerequisites_and_no_run_still_runs_its_prerequisites(
         .any(|r| r.starts_with("run:build-env:list-volume-task:")));
 }
 
+/// A task with no `run` says so once its prerequisites are done, as an
+/// event every non-quiet style prints — Batect's "only defines prerequisite
+/// tasks, nothing more to do" — never a `tracing` line (ratect#364). It never
+/// starts, so it posts no `TaskStarting` of its own.
+#[tokio::test]
+async fn a_prerequisites_only_task_posts_that_it_has_nothing_more_to_do() {
+    let mut config = config_with_shared_prerequisite();
+    config.tasks.get_mut("test-task").unwrap().run = None;
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("test-task", &[]).await.unwrap();
+
+    let events = sink.events();
+    let nothing_more = TaskEvent::PrerequisitesOnly {
+        task: "test-task".to_string(),
+    };
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| **event == nothing_more)
+            .count(),
+        1,
+        "{events:?}"
+    );
+    assert_eq!(
+        events.last(),
+        Some(&nothing_more),
+        "after every prerequisite's own events: {events:?}"
+    );
+    assert!(
+        !events.contains(&TaskEvent::TaskStarting {
+            task: "test-task".to_string()
+        }),
+        "{events:?}"
+    );
+}
+
+/// The same for a prerequisites-only task reached as another task's
+/// prerequisite: said before that task starts.
+#[tokio::test]
+async fn a_prerequisites_only_prerequisite_says_so_before_the_task_after_it_starts() {
+    let mut config = config_with_shared_prerequisite();
+    config.tasks.get_mut("prereq-task").unwrap().run = None;
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("test-task", &[]).await.unwrap();
+
+    let events = sink.events();
+    let nothing_more_at = events
+        .iter()
+        .position(|event| {
+            *event
+                == TaskEvent::PrerequisitesOnly {
+                    task: "prereq-task".to_string(),
+                }
+        })
+        .expect("posted for the prerequisite");
+    let outer_starts_at = events
+        .iter()
+        .position(|event| {
+            *event
+                == TaskEvent::TaskStarting {
+                    task: "test-task".to_string(),
+                }
+        })
+        .unwrap();
+    assert!(nothing_more_at < outer_starts_at, "{events:?}");
+}
+
 #[tokio::test]
 async fn additional_args_reach_only_the_requested_task_not_its_prerequisites() {
     let docker = FakeContainerRuntime::default();

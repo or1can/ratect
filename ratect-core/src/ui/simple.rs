@@ -85,6 +85,16 @@ impl EventSink for SimpleEventLogger {
                 state.task_container = None;
                 self.console.println(&format!("Running {task}..."));
             }
+            // In place of a task's `Running` line, so separated the same way.
+            TaskEvent::PrerequisitesOnly { task } => {
+                let mut state = self.state.lock().unwrap();
+                if state.printed_a_task {
+                    self.console.println("");
+                }
+                state.printed_a_task = true;
+                self.console
+                    .println(&super::nothing_more_to_do(&self.console, &task));
+            }
             TaskEvent::TaskFinished {
                 task,
                 exit_code,

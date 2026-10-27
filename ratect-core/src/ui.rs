@@ -118,6 +118,15 @@ pub enum TaskEvent {
     TaskStarting {
         task: String,
     },
+    /// A task with no `run` of its own has had its prerequisites run, and
+    /// there is nothing more to do — posted in place of
+    /// [`TaskEvent::TaskStarting`], which such a task never posts, each time
+    /// one is reached: requested, or itself a prerequisite. Progress, so
+    /// `quiet` prints nothing for it (a divergence from Batect, which prints
+    /// it in every style).
+    PrerequisitesOnly {
+        task: String,
+    },
     /// The task's own container dependency graph, resolved and proven
     /// acyclic — posted right after [`TaskEvent::TaskStarting`], before any
     /// container work begins. Carries what a per-container progress display
@@ -1052,6 +1061,15 @@ impl OnceFlag {
     pub(crate) fn reset(&mut self) {
         self.0 = false;
     }
+}
+
+/// What every non-quiet style prints for [`TaskEvent::PrerequisitesOnly`]:
+/// Batect's own sentence, the task's name in bold.
+pub(crate) fn nothing_more_to_do(console: &Console, task: &str) -> String {
+    format!(
+        "The task {} only defines prerequisite tasks, nothing more to do.",
+        console.bold(task)
+    )
 }
 
 /// The task summary line every output mode ends a task with —

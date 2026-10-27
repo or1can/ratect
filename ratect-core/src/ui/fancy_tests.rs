@@ -954,3 +954,34 @@ fn lines_are_clipped_to_the_terminal_width() {
     });
     assert_eq!(buffer.contents(), "\r\x1b[2Ka-container-with-...\n");
 }
+
+/// A prerequisites-only task's line, Batect's words with its name in bold,
+/// a blank line after the task before it (ratect#364).
+#[test]
+fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
+    let (logger, buffer) = logger_with_width(80);
+    logger.post(TaskEvent::TaskStarting {
+        task: "build".into(),
+    });
+    logger.post(TaskEvent::PrerequisitesOnly { task: "all".into() });
+    assert_eq!(
+        buffer.contents(),
+        "Running build...\n\
+         \n\
+         The task all only defines prerequisite tasks, nothing more to do.\n"
+    );
+
+    let buffer = SharedBuffer::default();
+    let logger = FancyEventLogger {
+        console: Console::new(Box::new(buffer.clone()), true),
+        stderr: Console::new(Box::new(SharedBuffer::default()), true),
+        stderr_on_screen: true,
+        fixed_width: AtomicU16::new(80),
+        state: Mutex::new(State::default()),
+    };
+    logger.post(TaskEvent::PrerequisitesOnly { task: "all".into() });
+    assert_eq!(
+        buffer.contents(),
+        "The task \x1b[1mall\x1b[0m only defines prerequisite tasks, nothing more to do.\n"
+    );
+}
