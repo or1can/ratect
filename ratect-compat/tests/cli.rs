@@ -5475,9 +5475,11 @@ fn build_secrets_error_clearly_when_the_classic_builder_is_forced() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Ratect's own refusal, not the classic builder's: a `RUN --mount` it
+    // was sent anyway fails saying it "requires BuildKit" too.
     assert!(
-        stderr.contains("requires BuildKit"),
-        "the error should name the BuildKit requirement: {stderr}"
+        stderr.contains("requires BuildKit ('build_secrets'/'build_ssh' cannot be served"),
+        "the error should be the refusal, before anything is built: {stderr}"
     );
 }
 
