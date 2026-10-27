@@ -3470,3 +3470,25 @@ async fn remove_network_fails_for_a_missing_network() {
         "{err:#}"
     );
 }
+
+/// Batect's `DockerClientVolumeManagementSpec`, deleting a volume that
+/// doesn't exist: a failure naming the volume, with the daemon's reason in
+/// the chain.
+#[tokio::test]
+async fn remove_volume_fails_for_a_missing_volume() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "DELETE",
+        "/volumes/gone",
+        404,
+        r#"{"message":"get gone: no such volume"}"#,
+    ))
+    .await;
+
+    let err = client.remove_volume("gone").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to remove volume 'gone'");
+    assert!(
+        format!("{err:#}").contains("get gone: no such volume"),
+        "{err:#}"
+    );
+}

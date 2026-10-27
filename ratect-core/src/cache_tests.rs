@@ -383,7 +383,11 @@ fn a_shared_cache_directory_lives_beside_the_git_include_cache() {
 #[derive(Default)]
 struct FakeRuntime {
     volumes: Vec<String>,
+    /// Every `remove_volume` call's name, in order, including a failed one.
     removed: std::sync::Mutex<Vec<String>>,
+    /// Names `remove_volume` fails for, as the daemon does for a volume
+    /// that's gone by the time it's removed.
+    failing: HashSet<String>,
 }
 
 #[async_trait::async_trait]
@@ -394,6 +398,9 @@ impl VolumeStore for FakeRuntime {
 
     async fn remove_volume(&self, name: &str) -> Result<()> {
         self.removed.lock().unwrap().push(name.to_string());
+        if self.failing.contains(name) {
+            anyhow::bail!("get {name}: no such volume");
+        }
         Ok(())
     }
 }
@@ -623,6 +630,47 @@ async fn a_removed_volume_cache_reports_its_full_volume_name_as_storage() {
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].name, "gradle-cache");
     assert_eq!(removed[0].storage, "batect-cache-abc123-gradle-cache");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Batect's `DockerClientVolumeManagementSpec`, deleting a volume that's
+/// gone: a removal that fails fails the clean with the daemon's reason, and
+/// stops it there, so no later cache is removed.
+#[tokio::test]
+async fn a_volume_removal_that_fails_fails_the_clean_and_stops_it() {
+    let project_dir = unique_temp_dir();
+    fs::create_dir_all(cache_directory(&project_dir)).unwrap();
+    fs::write(cache_directory(&project_dir).join("key"), "abc123\n").unwrap();
+    let runtime = FakeRuntime {
+        volumes: vec![
+            "batect-cache-abc123-a".to_string(),
+            "batect-cache-abc123-b".to_string(),
+            "batect-cache-abc123-c".to_string(),
+        ],
+        failing: HashSet::from(["batect-cache-abc123-b".to_string()]),
+        ..Default::default()
+    };
+    let store =
+        CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
+
+    let found = store.list(None).await.unwrap();
+    let err = store
+        .remove(&found, &HashSet::new(), |_| {})
+        .await
+        .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("get batect-cache-abc123-b: no such volume"),
+        "{err:#}"
+    );
+    assert_eq!(
+        *runtime.removed.lock().unwrap(),
+        vec![
+            "batect-cache-abc123-a".to_string(),
+            "batect-cache-abc123-b".to_string(),
+        ]
+    );
 
     fs::remove_dir_all(&project_dir).unwrap();
 }
