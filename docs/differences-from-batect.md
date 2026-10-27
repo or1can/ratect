@@ -353,7 +353,8 @@ tables above:
   gaps](#runtime-behavior-gaps)).
 - **Private registry credentials**: Batect's own Go client swallows every
   credential-helper error unconditionally; Ratect warns instead, naming the
-  registry that failed to resolve. See [Private registry
+  registry that failed to resolve, or, for a build, the `credsStore` whose
+  helper couldn't list what it holds. See [Private registry
   credentials](ratect-compat-config-reference.md#private-registry-credentials).
 - **A dependency exiting unexpectedly is reported, not silent.** Batect has no
   equivalent: a dependency that dies after becoming ready — while the task's own

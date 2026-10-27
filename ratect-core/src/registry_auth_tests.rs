@@ -232,3 +232,76 @@ async fn an_empty_config_file_resolves_as_nothing_configured() {
 
     assert_eq!(result.unwrap(), None);
 }
+
+/// ratect#306: a build also sends what the default `credsStore` holds, so
+/// which store is configured has to be read too.
+#[test]
+fn configured_creds_store_names_the_default_store() {
+    assert_eq!(
+        configured_creds_store(r#"{"credsStore": "desktop"}"#).as_deref(),
+        Some("desktop")
+    );
+    for config in ["{}", r#"{"credsStore": ""}"#, "not json", ""] {
+        assert_eq!(configured_creds_store(config), None, "{config:?}");
+    }
+}
+
+/// A unique scratch directory, removed by the caller.
+fn scratch_directory() -> std::path::PathBuf {
+    let directory = std::env::temp_dir().join(format!("ratect-306-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
+/// A stand-in credential helper at an absolute path, so no test has to
+/// change `PATH`: a shell script that answers `list` with `body` on stdout
+/// and exits `status`.
+#[cfg(unix)]
+fn stub_helper(directory: &std::path::Path, body: &str, status: i32) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let helper = directory.join("docker-credential-stub");
+    std::fs::write(
+        &helper,
+        format!("#!/bin/sh\n[ \"$1\" = list ] || exit 9\nprintf '%s' '{body}'\nexit {status}\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    helper
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn listing_a_store_gives_the_server_urls_its_helper_reports() {
+    let directory = scratch_directory();
+    let helper = stub_helper(
+        &directory,
+        r#"{"https://index.docker.io/v1/": "alice", "registry.example.com": "bob"}"#,
+        0,
+    );
+    let listed = list_store_with(helper.as_os_str()).await;
+    std::fs::remove_dir_all(&directory).unwrap();
+    assert_eq!(
+        listed.unwrap(),
+        vec![
+            "https://index.docker.io/v1/".to_string(),
+            "registry.example.com".to_string()
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn listing_a_store_fails_for_a_helper_that_fails_or_answers_nonsense() {
+    let directory = scratch_directory();
+    let failing = stub_helper(&directory, "the keychain is locked", 1);
+    let failed = list_store_with(failing.as_os_str()).await;
+    let nonsense = stub_helper(&directory, "not json", 0);
+    let unparsed = list_store_with(nonsense.as_os_str()).await;
+    let missing = list_store_with(directory.join("no-such-helper").as_os_str()).await;
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    let failed = format!("{:#}", failed.unwrap_err());
+    assert!(failed.contains("the keychain is locked"), "{failed}");
+    assert!(unparsed.is_err());
+    assert!(missing.is_err());
+}

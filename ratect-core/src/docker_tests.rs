@@ -1879,6 +1879,10 @@ impl crate::registry_auth::RegistryCredentialResolver for FakeCredentialResolver
             .take()
             .expect("resolve() called more than once on this fake")
     }
+
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>> {
+        panic!("list() called for credential store '{store}', which a pull never lists")
+    }
 }
 
 #[tokio::test]
@@ -1975,6 +1979,10 @@ impl crate::registry_auth::RegistryCredentialResolver for FakeMultiCredentialRes
                 panic!("resolve() called for unexpected or already-resolved registry '{registry}'")
             })
     }
+
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>> {
+        panic!("list() called for credential store '{store}' on a fake that has none")
+    }
 }
 
 #[tokio::test]
@@ -2064,33 +2072,6 @@ async fn resolve_build_credentials_skips_a_failed_registry_without_aborting_the_
         "the warning should name the registry that failed: {}",
         warnings[0]
     );
-}
-
-#[tokio::test]
-async fn read_configured_registries_is_empty_for_a_missing_config_file() {
-    let config_directory = unique_temp_dir();
-    let config_path = config_directory.join("config.json");
-
-    let registries = read_configured_registries(&config_path).await;
-    fs::remove_dir_all(&config_directory).ok();
-
-    assert_eq!(registries, Vec::<String>::new());
-}
-
-#[tokio::test]
-async fn read_configured_registries_parses_an_existing_config_file() {
-    let config_directory = unique_temp_dir();
-    let config_path = config_directory.join("config.json");
-    fs::write(
-        &config_path,
-        r#"{"auths": {"myregistry.example.com": {"auth": "dGVzdDp0ZXN0"}}}"#,
-    )
-    .unwrap();
-
-    let registries = read_configured_registries(&config_path).await;
-    fs::remove_dir_all(&config_directory).ok();
-
-    assert_eq!(registries, vec!["myregistry.example.com".to_string()]);
 }
 
 #[test]
@@ -2467,4 +2448,149 @@ fn config_file_proxies_alone_make_a_builds_args() {
         build_args_with_config_file_proxies(&spec, None, "unix:///var/run/docker.sock"),
         None
     );
+}
+
+/// The `list` half of a fake resolver: what the store answers, and whether
+/// it was asked.
+struct FakeStoreResolver {
+    resolver: FakeMultiCredentialResolver,
+    listed: std::sync::Mutex<Option<anyhow::Result<Vec<String>>>>,
+    asked: std::sync::atomic::AtomicBool,
+}
+
+impl FakeStoreResolver {
+    fn new(
+        answers: HashMap<String, anyhow::Result<Option<bollard::auth::DockerCredentials>>>,
+        listed: anyhow::Result<Vec<String>>,
+    ) -> Self {
+        Self {
+            resolver: FakeMultiCredentialResolver::new(answers),
+            listed: std::sync::Mutex::new(Some(listed)),
+            asked: Default::default(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::registry_auth::RegistryCredentialResolver for FakeStoreResolver {
+    async fn resolve(
+        &self,
+        registry: &str,
+    ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>> {
+        self.resolver.resolve(registry).await
+    }
+
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>> {
+        assert_eq!(store, "desktop");
+        self.asked.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.listed
+            .lock()
+            .unwrap()
+            .take()
+            .expect("list() called more than once")
+    }
+}
+
+fn credential(username: &str) -> bollard::auth::DockerCredentials {
+    bollard::auth::DockerCredentials {
+        username: Some(username.to_string()),
+        password: Some("secret".to_string()),
+        ..Default::default()
+    }
+}
+
+/// ratect#306: a registry only the default `credsStore` holds is resolved
+/// and sent like one `config.json` names.
+#[tokio::test]
+async fn a_registry_only_the_credential_store_holds_is_sent() {
+    let resolver = FakeStoreResolver::new(
+        HashMap::from([(
+            "store-only.example.com".to_string(),
+            Ok(Some(credential("alice"))),
+        )]),
+        Ok(vec!["store-only.example.com".to_string()]),
+    );
+
+    let (registries, warning) = build_registries(&resolver, r#"{"credsStore": "desktop"}"#).await;
+    let (credentials, warnings) = resolve_build_credentials(&resolver, &registries).await;
+
+    assert_eq!(warning, None);
+    assert!(warnings.is_empty());
+    assert_eq!(
+        credentials,
+        HashMap::from([("store-only.example.com".to_string(), credential("alice"))])
+    );
+}
+
+/// What `auths`, `credHelpers` and the store hold together, once each, in a
+/// stable order.
+#[tokio::test]
+async fn build_registries_unions_config_and_store_registries_once_each() {
+    let resolver = FakeStoreResolver::new(
+        HashMap::new(),
+        Ok(vec![
+            "z-store.example.com".to_string(),
+            "auths.example.com".to_string(),
+        ]),
+    );
+    let config = r#"{
+        "credsStore": "desktop",
+        "auths": {"auths.example.com": {}},
+        "credHelpers": {"helper.example.com": "ecr-login"}
+    }"#;
+
+    let (registries, warning) = build_registries(&resolver, config).await;
+
+    assert_eq!(warning, None);
+    assert_eq!(
+        registries,
+        vec![
+            "auths.example.com".to_string(),
+            "helper.example.com".to_string(),
+            "z-store.example.com".to_string(),
+        ]
+    );
+}
+
+/// A store that can't be listed costs only what it would have added: the
+/// registries `config.json` names still go, and one warning names the
+/// store.
+#[tokio::test]
+async fn a_credential_store_that_cant_be_listed_warns_once_and_keeps_the_rest() {
+    let resolver = FakeStoreResolver::new(
+        HashMap::new(),
+        Err(anyhow::anyhow!(
+            "`docker-credential-desktop` failed: locked"
+        )),
+    );
+    let config = r#"{"credsStore": "desktop", "auths": {"auths.example.com": {}}}"#;
+
+    let (registries, warning) = build_registries(&resolver, config).await;
+
+    assert_eq!(registries, vec!["auths.example.com".to_string()]);
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            "Could not list the registries credential store 'desktop' holds \
+             (`docker-credential-desktop` failed: locked); building with only those \
+             config.json names."
+        )
+    );
+}
+
+/// Without a `credsStore` nothing is listed, and the registries are exactly
+/// `configured_registries`'.
+#[tokio::test]
+async fn without_a_credential_store_nothing_is_listed() {
+    let resolver = FakeStoreResolver::new(HashMap::new(), Ok(vec!["never".to_string()]));
+    let config = r#"{"auths": {"auths.example.com": {}}}"#;
+
+    let (registries, warning) = build_registries(&resolver, config).await;
+
+    assert!(!resolver.asked.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        registries,
+        crate::registry_auth::configured_registries(config)
+    );
+    assert_eq!(warning, None);
 }

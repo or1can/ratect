@@ -160,6 +160,7 @@ history, from when it was the only binary.
 - A classic-builder image build whose step fails no longer leaves that step's stopped intermediate container behind, as in Batect.
 - Proxies set in the `proxies` section of Docker's `config.json` — the entry for the Docker host the run connects to, else `default` — reach image builds as build arguments, as in Batect, without overriding a proxy from the environment or a container's own `build_args`. `--no-proxy-vars` keeps them out.
 - A `dockerfile` given as an absolute path inside `build_directory`, or with `.` or `..` in it (`./Dockerfile`), builds, as in Batect. A `build_directory` or Dockerfile a build can't use — missing, not a directory or regular file, a symbolic link or reached through one, or outside `build_directory` — fails the build naming the field before Docker is asked anything, and `ratect doctor` and `ratect config validate` report it.
+- An image build sends the credentials for every registry Docker's default `credsStore` holds, as in Batect, not only those `config.json` names under `auths` or `credHelpers`. A store whose helper can't list them is a warning naming the store.
 
 ### Security
 

@@ -16,9 +16,10 @@
 //! helpers — [`RegistryCredentialResolver`] and its
 //! [`DockerCredentialHelperResolver`] production implementation, plus
 //! [`registry_hostname`] (pull's own registry) and
-//! [`configured_registries`] (build's — every registry `config.json`
-//! declares, since neither Batect nor Ratect parses Dockerfile `FROM`
-//! lines). A filesystem-and-subprocess concern of its own, kept out of
+//! [`configured_registries`] plus [`configured_creds_store`] (build's —
+//! every registry `config.json` declares, and every one its default
+//! `credsStore` holds, since neither Batect nor Ratect parses Dockerfile
+//! `FROM` lines). A filesystem-and-subprocess concern of its own, kept out of
 //! `docker.rs` (which stays focused on bollard/daemon interaction and wires
 //! this module into `pull_image`/`build_image`).
 
@@ -65,15 +66,18 @@ pub fn registry_hostname(image_reference: &str) -> String {
 }
 
 /// The union of registry keys `config_json` (raw `config.json` contents)
-/// declares under `auths` and `credHelpers` — every registry Ratect's own
-/// Docker config knows about. Parses just those two fields itself rather
+/// declares under `auths` and `credHelpers` — every registry it names
+/// itself. Parses just those two fields itself rather
 /// than replicating `docker_credential`'s own fuller config parsing, since
 /// that crate has no way to enumerate configured registries through its
 /// public API (only look up one already-known server name at a time — see
 /// [`RegistryCredentialResolver`]). Used for build, which — since neither
 /// Batect nor Ratect parses Dockerfile `FROM` lines to scope this more
 /// precisely — resolves every registry Ratect's config declares rather than
-/// just the one image field pull can single out.
+/// just the one image field pull can single out. The registries a default
+/// `credsStore` holds come on top, from its helper's own list (see
+/// [`configured_creds_store`] and [`RegistryCredentialResolver::list`]),
+/// as the Docker CLI's `GetAllCredentials` adds them.
 ///
 /// Empty for missing/malformed JSON or a config declaring neither field —
 /// silent, not an error, matching a fresh machine's absent `config.json`
@@ -99,6 +103,21 @@ pub fn configured_registries(config_json: &str) -> Vec<String> {
     registries
 }
 
+/// The default credential store `config_json` (raw `config.json` contents)
+/// names in `credsStore`, whose helper holds credentials for registries
+/// `config.json` itself may never mention. `None` for missing or malformed
+/// JSON, and for an empty name, which the Docker CLI reads as no store.
+pub fn configured_creds_store(config_json: &str) -> Option<String> {
+    #[derive(serde::Deserialize, Default)]
+    struct ConfigCredsStore {
+        #[serde(default, rename = "credsStore")]
+        creds_store: String,
+    }
+
+    let config: ConfigCredsStore = serde_json::from_str(config_json).unwrap_or_default();
+    (!config.creds_store.is_empty()).then_some(config.creds_store)
+}
+
 /// Resolves the credential configured for a registry — the seam pull (and,
 /// later, build) credential wiring depends on, so tests can inject a fake
 /// instead of invoking a real credential helper.
@@ -116,6 +135,12 @@ pub trait RegistryCredentialResolver: Send + Sync {
         &self,
         registry: &str,
     ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>>;
+
+    /// The server URLs the credential store `store` holds credentials for,
+    /// as its helper's `list` reports them — a build sends each of those
+    /// too. `Err` when the helper can't be run, fails, doesn't answer in
+    /// time or answers something other than its JSON object.
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>>;
 }
 
 /// How long a credential-helper subprocess gets before its resolution
@@ -197,6 +222,43 @@ impl RegistryCredentialResolver for DockerCredentialHelperResolver {
             )),
         }
     }
+
+    async fn list(&self, store: &str) -> anyhow::Result<Vec<String>> {
+        list_store_with(std::ffi::OsStr::new(&format!("docker-credential-{store}"))).await
+    }
+}
+
+/// Runs `program list` — a credential helper's own way of saying which
+/// server URLs it holds credentials for, as a JSON object keyed by them —
+/// with the same timeout a `get` has. `docker_credential` has no list, so
+/// the helper is run here. Takes the program rather than the store's name
+/// so a test can hand it a stub by path rather than change `PATH`.
+pub(crate) async fn list_store_with(program: &std::ffi::OsStr) -> anyhow::Result<Vec<String>> {
+    let helper = program.to_string_lossy().into_owned();
+    let output = tokio::process::Command::new(program)
+        .arg("list")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(CREDENTIAL_HELPER_TIMEOUT, output)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Timed out after {CREDENTIAL_HELPER_TIMEOUT:?} waiting for `{helper} list`"
+            )
+        })?
+        .with_context(|| format!("Failed to run `{helper}`"))?;
+    if !output.status.success() {
+        anyhow::bail!(helper_failure_summary(
+            &helper,
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        ));
+    }
+    let listed: std::collections::BTreeMap<String, serde::de::IgnoredAny> =
+        serde_json::from_slice(&output.stdout)
+            .with_context(|| format!("`{helper} list` didn't answer with a JSON object"))?;
+    Ok(listed.into_keys().collect())
 }
 
 /// Whether a credential helper's failure output is really just "nothing is

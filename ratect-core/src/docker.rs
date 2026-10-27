@@ -1868,10 +1868,11 @@ pub struct DockerClient {
     /// `registry_auth::DockerCredentialHelperResolver` by default.
     credential_resolver: std::sync::Arc<dyn crate::registry_auth::RegistryCredentialResolver>,
     /// `<docker config directory>/config.json` — read fresh on every
-    /// `build_image` call (not cached), twice: via
-    /// `read_configured_registries`, to enumerate every registry it declares
-    /// under `auths`/`credHelpers` for build's own credential resolution,
-    /// and via `build_args_with_config_file_proxies`, for its `proxies`.
+    /// `build_image` call (not cached), for two things: `build_registries`,
+    /// to enumerate every registry it declares under `auths`/`credHelpers`
+    /// and every one its `credsStore` holds, for build's own credential
+    /// resolution; and `build_args_with_config_file_proxies`, for its
+    /// `proxies`.
     /// Kept as a plain path rather than through `credential_resolver`
     /// itself, since a fake resolver used in tests has no file of its own —
     /// enumeration and per-registry resolution are deliberately separate
@@ -2047,19 +2048,36 @@ fn credential_resolution_warning(registry: &str, error: &anyhow::Error) -> Strin
     )
 }
 
-/// Reads and parses `config_path`'s registry keys via
-/// [`crate::registry_auth::configured_registries`] — silently empty if the
-/// file doesn't exist or can't be parsed, matching
-/// [`crate::registry_auth::RegistryCredentialResolver`]'s own missing-config
-/// behavior for pull, rather than turning a fresh machine's absent
-/// `config.json` into a warning. Read fresh on every call, not cached:
-/// `DockerClient` is long-lived across a whole invocation's builds, and
-/// nothing says `config.json` can't change between them (a `docker login`
-/// mid-run, however unlikely).
-async fn read_configured_registries(config_path: &std::path::Path) -> Vec<String> {
-    match tokio::fs::read_to_string(config_path).await {
-        Ok(text) => crate::registry_auth::configured_registries(&text),
-        Err(_) => Vec::new(),
+/// Every registry a build sends credentials for, from `config_json` (raw
+/// `config.json` contents): those it names under `auths`/`credHelpers`
+/// ([`crate::registry_auth::configured_registries`]), and, when it names a
+/// default `credsStore`, every one that store holds, as `resolver` lists
+/// them — the Docker CLI's `GetAllCredentials`, which Batect's builds send.
+/// Each once, sorted. A store that can't be listed costs only what it would
+/// have added, and is the one warning returned. Pulled out of `build_image`
+/// so the union and the warning are testable with a fake resolver.
+async fn build_registries(
+    resolver: &dyn crate::registry_auth::RegistryCredentialResolver,
+    config_json: &str,
+) -> (Vec<String>, Option<String>) {
+    let mut registries = crate::registry_auth::configured_registries(config_json);
+    let Some(store) = crate::registry_auth::configured_creds_store(config_json) else {
+        return (registries, None);
+    };
+    match resolver.list(&store).await {
+        Ok(listed) => {
+            registries.extend(listed);
+            registries.sort();
+            registries.dedup();
+            (registries, None)
+        }
+        Err(error) => (
+            registries,
+            Some(format!(
+                "Could not list the registries credential store '{store}' holds ({error:#}); \
+                 building with only those config.json names."
+            )),
+        ),
     }
 }
 
@@ -2788,6 +2806,11 @@ impl ContainerRuntime for DockerClient {
     ) -> Result<String> {
         let build_directory = spec.build_directory.as_path();
         let dockerfile = spec.dockerfile.as_str();
+        // Read fresh on every build, not cached: `DockerClient` is
+        // long-lived across a whole invocation's builds, and nothing says
+        // `config.json` can't change between them (a `docker login` mid-run,
+        // however unlikely). A missing or unreadable file is nothing
+        // configured, silently, as a pull's resolver reads it.
         let config_json = tokio::fs::read_to_string(&self.docker_config_path)
             .await
             .ok();
@@ -2800,10 +2823,15 @@ impl ContainerRuntime for DockerClient {
         let force_pull = spec.force_pull;
         let proxy_host_gateway = spec.proxy_host_gateway;
 
-        let registries = read_configured_registries(&self.docker_config_path).await;
+        let (registries, list_warning) = match &config_json {
+            Some(config_json) => {
+                build_registries(self.credential_resolver.as_ref(), config_json).await
+            }
+            None => (Vec::new(), None),
+        };
         let (credentials, warnings) =
             resolve_build_credentials(self.credential_resolver.as_ref(), &registries).await;
-        for message in warnings {
+        for message in list_warning.into_iter().chain(warnings) {
             self.event_sink.post(TaskEvent::Warning { message });
         }
         // `None` (not `Some(HashMap::new())`) when nothing resolved, so a

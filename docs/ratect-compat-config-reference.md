@@ -388,13 +388,17 @@ resolve credentials from your Docker configuration (`~/.docker/config.json` by
 default, or `DOCKER_CONFIG`, or `--docker-config`) — running `docker login` once
 beforehand is enough, including a keychain-backed store (Docker Desktop/OrbStack's
 default) or a cloud registry's credential helper (ECR/GCR). Building resolves every
-registry your Docker config declares (`auths` and `credHelpers`), since Ratect
-doesn't parse a Dockerfile's `FROM` lines to scope this more precisely.
+registry your Docker config declares (`auths` and `credHelpers`), and every
+registry its default `credsStore` holds, as that store's credential helper lists
+them, since Ratect doesn't parse a Dockerfile's `FROM` lines to scope this more
+precisely.
 
 A registry whose credential helper fails to resolve doesn't block the pull or
 build — a warning names the registry, so a problem with one registry's helper
 can't stop work that never needed it, but also doesn't stay invisible until the
-day that registry actually matters.
+day that registry actually matters. A `credsStore` whose helper can't list what it
+holds is a warning naming the store, and the build goes ahead with the registries
+the config declares.
 
 ### Volume path resolution
 
