@@ -1097,7 +1097,23 @@ async fn run_task(
     .with_enable_buildkit(args.enable_buildkit);
 
     let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
-    engine.run_task(&args.task, &args.args).await
+    engine
+        .run_task(&args.task, &args.args)
+        .await
+        .map_err(with_unknown_task_hint)
+}
+
+/// Ends an unknown task's error with how to list the tasks, as Batect's
+/// does, naming this binary's own commands: `ratect-core` can say the task
+/// doesn't exist, but not how this CLI lists them.
+fn with_unknown_task_hint(error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<ratect_core::engine::UnknownTask>() {
+        Some(unknown) => anyhow::anyhow!(
+            "{unknown} (Run 'ratect tasks list' for a list of all tasks in this project, or \
+             'ratect run --help' for help.)"
+        ),
+        None => error,
+    }
 }
 
 impl RunArgs {

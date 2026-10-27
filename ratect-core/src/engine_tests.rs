@@ -1945,6 +1945,252 @@ async fn nonexistent_literal_prerequisite_still_errors() {
     assert!(err.to_string().contains("Task 'does-not-exist' not found"));
 }
 
+/// Every task in `tasks` runs `build-env`, with the prerequisites given —
+/// the shape of a prerequisite-order test.
+fn config_with_prerequisites(tasks: &[(&str, &[&str])]) -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("build-env".to_string(), container("alpine:3.18", None));
+    let mut declared = IndexMap::new();
+    for (name, prerequisites) in tasks {
+        let mut declared_task = task("build-env", name);
+        if !prerequisites.is_empty() {
+            declared_task.prerequisites =
+                Some(prerequisites.iter().map(|p| p.to_string()).collect());
+        }
+        declared.insert(name.to_string(), declared_task);
+    }
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks: declared,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Runs `main` and returns its error, having asserted that nothing ran
+/// first — Batect resolves the whole execution order before running any
+/// of it, so a problem anywhere in it fails the run with nothing done.
+async fn assert_refused_with_nothing_run(config: Config) -> anyhow::Error {
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let err = engine.run_task("main", &[]).await.unwrap_err();
+
+    assert_eq!(
+        docker.events(),
+        Vec::<String>::new(),
+        "nothing touches Docker"
+    );
+    let started: Vec<_> = sink
+        .events()
+        .into_iter()
+        .filter(|e| matches!(e, TaskEvent::TaskStarting { .. }))
+        .collect();
+    assert!(started.is_empty(), "no task starts: {started:?}");
+    err
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_after_a_valid_one_fails_before_anything_runs() {
+    let config =
+        config_with_prerequisites(&[("first", &[]), ("main", &["first", "does-not-exist"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'does-not-exist' not found.");
+}
+
+#[tokio::test]
+async fn a_prerequisite_cycle_after_a_valid_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("first", &[]),
+        ("cycle-other", &["main"]),
+        ("main", &["first", "cycle-other"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'main'"
+    );
+}
+
+#[tokio::test]
+async fn a_transitive_prerequisite_cycle_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("first", &[]),
+        ("a", &["b"]),
+        ("b", &["a"]),
+        ("main", &["first", "a"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'a'"
+    );
+}
+
+/// Batect checks every entry of a task's prerequisite list before going
+/// deeper into any of them, so of two problems the one in the shallower
+/// list is reported, even when it comes later in that list.
+#[tokio::test]
+async fn a_missing_prerequisite_is_reported_before_a_cycle_deeper_in_an_earlier_one() {
+    let config =
+        config_with_prerequisites(&[("a", &["b"]), ("b", &["a"]), ("main", &["a", "missing"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'missing' not found.");
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_is_reported_before_one_deeper_in_an_earlier_one() {
+    let config = config_with_prerequisites(&[("a", &["x-missing"]), ("main", &["a", "b-missing"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'b-missing' not found.");
+}
+
+#[tokio::test]
+async fn a_task_that_is_its_own_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[("main", &["main"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'main'"
+    );
+}
+
+/// A task reached through a second parent is checked against that parent's
+/// path too, so a cycle only that path closes is still found.
+#[tokio::test]
+async fn a_cycle_closed_through_a_shared_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("c", &["b"]),
+        ("a", &["c"]),
+        ("b", &["c"]),
+        ("main", &["a", "b"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'c'"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_of_a_shared_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("s", &["does-not-exist"]),
+        ("a", &["s"]),
+        ("b", &["s"]),
+        ("main", &["a", "b"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'does-not-exist' not found.");
+}
+
+#[tokio::test]
+async fn a_prerequisite_listed_twice_runs_once() {
+    let config = config_with_prerequisites(&[("a", &[]), ("main", &["a", "a"])]);
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("main", &[]).await.unwrap();
+
+    let events = docker.events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.starts_with("run:build-env:a:"))
+            .count(),
+        1,
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_of_a_skipped_prerequisite_list_is_never_looked_up() {
+    let config = config_with_prerequisites(&[("main", &["does-not-exist"])]);
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_prerequisites: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("main", &[]).await.unwrap();
+
+    assert!(
+        docker
+            .events()
+            .iter()
+            .any(|e| e.starts_with("run:build-env:main:")),
+        "{:?}",
+        docker.events()
+    );
+}
+
+#[tokio::test]
+async fn skipping_prerequisites_still_reports_a_missing_requested_task() {
+    let config = config_with_prerequisites(&[("main", &["does-not-exist"])]);
+    let engine = engine(config, FakeContainerRuntime::default())
+        .with_settings(TaskEngineSettings {
+            run_prerequisites: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let err = engine.run_task("mian", &[]).await.unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<UnknownTask>().map(ToString::to_string),
+        Some("Task 'mian' not found. Did you mean 'main'?".to_string()),
+    );
+}
+
+#[tokio::test]
+async fn a_prerequisite_reached_twice_still_runs_once_in_order() {
+    let config = config_with_prerequisites(&[
+        ("shared", &[]),
+        ("a", &["shared"]),
+        ("b", &["shared", "a"]),
+        ("main", &["a", "b"]),
+    ]);
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("main", &[]).await.unwrap();
+
+    let runs: Vec<_> = docker
+        .events()
+        .into_iter()
+        .filter_map(|e| {
+            e.strip_prefix("run:build-env:")
+                .and_then(|rest| rest.split(':').next().map(str::to_string))
+        })
+        .collect();
+    assert_eq!(runs, names(&["shared", "a", "b", "main"]));
+}
+
 #[tokio::test]
 async fn wildcard_pattern_with_multiple_asterisks_matches() {
     let mut containers = IndexMap::new();
@@ -9718,6 +9964,319 @@ async fn detects_circular_container_dependency() {
         .contains("Circular container dependency detected"));
 }
 
+/// `config_with_containers`, with `task_dependencies` as the `start` task's
+/// own `dependencies`.
+fn config_with_task_dependencies(
+    app_dependencies: &[&str],
+    task_dependencies: &[&str],
+    containers: &[(&str, &[&str])],
+) -> Config {
+    let mut config = config_with_containers(app_dependencies, containers);
+    config.tasks.get_mut("start").unwrap().dependencies = Some(names(task_dependencies));
+    config
+}
+
+/// Runs `start` and returns the graph its `TaskGraphResolved` posted, sorted
+/// by name (the event's order falls out of a `HashMap`), as
+/// `(name, dependencies, is_task_container)`, with the fake's events.
+async fn resolved_graph(config: Config) -> (Vec<(String, Vec<String>, bool)>, Vec<String>) {
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+    engine.run_task("start", &[]).await.unwrap();
+
+    let mut graph: Vec<_> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("a task with a container posts its graph")
+        .into_iter()
+        .map(|info| (info.name, info.dependencies, info.is_task_container))
+        .collect();
+    graph.sort();
+    (graph, docker.events())
+}
+
+fn names(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| name.to_string()).collect()
+}
+
+/// How many times `container` was started as a dependency.
+fn sidecar_starts(events: &[String], container: &str) -> usize {
+    events
+        .iter()
+        .filter(|e| e.starts_with(&format!("sidecar-start:{container}:")))
+        .count()
+}
+
+/// Where in `events` `container` was started as a dependency.
+fn sidecar_start_index(events: &[String], container: &str) -> usize {
+    events
+        .iter()
+        .position(|e| e.starts_with(&format!("sidecar-start:{container}:")))
+        .unwrap_or_else(|| panic!("'{container}' must be started: {events:?}"))
+}
+
+#[tokio::test]
+async fn a_task_with_no_dependencies_has_a_graph_of_just_its_own_container() {
+    let (graph, events) = resolved_graph(config_with_containers(&[], &[])).await;
+
+    assert_eq!(graph, vec![("app".to_string(), vec![], true)]);
+    assert!(
+        !events.iter().any(|e| e.starts_with("sidecar-start:")),
+        "nothing but the task container runs: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn every_task_level_dependency_is_a_dependency_of_the_task_container() {
+    let config = config_with_task_dependencies(&[], &["b", "c"], &[("b", &[]), ("c", &[])]);
+
+    let (graph, events) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), names(&["b", "c"]), true),
+            ("b".to_string(), vec![], false),
+            ("c".to_string(), vec![], false),
+        ]
+    );
+    assert_eq!(sidecar_starts(&events, "b"), 1, "{events:?}");
+    assert_eq!(sidecar_starts(&events, "c"), 1, "{events:?}");
+}
+
+#[tokio::test]
+async fn a_dependency_shared_by_the_task_container_and_its_other_dependency_starts_once_first() {
+    let config = config_with_containers(&["a", "b"], &[("a", &[]), ("b", &["a"])]);
+
+    let (graph, events) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("a".to_string(), vec![], false),
+            ("app".to_string(), names(&["a", "b"]), true),
+            ("b".to_string(), names(&["a"]), false),
+        ]
+    );
+    assert_eq!(sidecar_starts(&events, "a"), 1, "{events:?}");
+    assert!(
+        sidecar_start_index(&events, "a") < sidecar_start_index(&events, "b"),
+        "'b' waits for 'a': {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_task_level_dependency_brings_its_own_dependencies() {
+    let config = config_with_task_dependencies(&[], &["b"], &[("b", &["c"]), ("c", &[])]);
+
+    let (graph, events) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), names(&["b"]), true),
+            ("b".to_string(), names(&["c"]), false),
+            ("c".to_string(), vec![], false),
+        ]
+    );
+    assert!(
+        sidecar_start_index(&events, "c") < sidecar_start_index(&events, "b"),
+        "'b' waits for 'c': {events:?}"
+    );
+}
+
+/// Refuses `config`'s `start` task, naming `offender`, with no container
+/// started. The wording is Ratect's own (docs/differences-from-batect.md,
+/// "Failure messages are Ratect's own"), so only the outcome is pinned.
+async fn assert_graph_refused(config: Config, offender: &str) {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    let err = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        err.to_string().contains(&format!("'{offender}'")),
+        "the error names '{offender}': {err}"
+    );
+    let events = docker.events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("sidecar-start:") || e.starts_with("run:")),
+        "no container starts: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_task_container_that_depends_on_itself_is_refused() {
+    assert_graph_refused(config_with_containers(&["app"], &[]), "app").await;
+}
+
+#[tokio::test]
+async fn a_dependency_that_depends_on_itself_is_refused() {
+    assert_graph_refused(config_with_containers(&["a"], &[("a", &["a"])]), "a").await;
+}
+
+#[tokio::test]
+async fn a_task_level_dependency_on_the_task_container_is_refused() {
+    let config = config_with_task_dependencies(&[], &["b"], &[("b", &["app"])]);
+    assert_graph_refused(config, "app").await;
+}
+
+#[tokio::test]
+async fn a_task_level_cycle_without_the_task_container_is_refused() {
+    let config = config_with_task_dependencies(&[], &["b"], &[("b", &["c"]), ("c", &["b"])]);
+    assert_graph_refused(config, "b").await;
+}
+
+/// Runs `config`'s `start` task under `settings`, expecting a container
+/// dependency cycle, and returns the posted events and the fake's.
+async fn run_cyclic_task(
+    config: Config,
+    docker: FakeContainerRuntime,
+    settings: TaskEngineSettings,
+) -> (Vec<TaskEvent>, Vec<String>) {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(settings)
+    .unwrap();
+
+    let err = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("Circular container dependency detected"),
+        "the cycle is what's reported: {err:#}"
+    );
+    (sink.events(), docker.events())
+}
+
+/// Batect builds a task's container graph before `onTaskStarting`, so a
+/// cycle in it prints only the error: no task start, no network, no cleanup.
+fn assert_refused_before_the_task_started(events: &[TaskEvent], docker_events: &[String]) {
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            TaskEvent::TaskStarting { task } | TaskEvent::TaskFailed { task } if task == "start"
+        )),
+        "the task never starts, so never fails either: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, TaskEvent::CleanupStarting)),
+        "nothing is cleaned up: {events:?}"
+    );
+    assert!(
+        !docker_events.iter().any(|e| e.starts_with("network-")),
+        "no network is checked, created or removed: {docker_events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_container_dependency_cycle_is_refused_before_the_task_starts() {
+    let config = config_with_containers(&["a"], &[("a", &["b"]), ("b", &["a"])]);
+
+    let (events, docker_events) = run_cyclic_task(
+        config,
+        FakeContainerRuntime::default(),
+        TaskEngineSettings::default(),
+    )
+    .await;
+
+    assert_refused_before_the_task_started(&events, &docker_events);
+}
+
+#[tokio::test]
+async fn a_self_dependency_is_refused_before_the_task_starts() {
+    for config in [
+        config_with_containers(&["a"], &[("a", &["a"])]),
+        config_with_task_dependencies(&[], &["b"], &[("b", &["b"])]),
+    ] {
+        let (events, docker_events) = run_cyclic_task(
+            config,
+            FakeContainerRuntime::default(),
+            TaskEngineSettings::default(),
+        )
+        .await;
+
+        assert_refused_before_the_task_started(&events, &docker_events);
+    }
+}
+
+#[tokio::test]
+async fn a_container_dependency_cycle_is_reported_over_a_missing_use_network() {
+    let config = config_with_containers(&["a"], &[("a", &["a"])]);
+
+    let (events, docker_events) = run_cyclic_task(
+        config,
+        FakeContainerRuntime::default().without_existing_network(),
+        TaskEngineSettings {
+            existing_network: Some("missing".to_string()),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    assert_refused_before_the_task_started(&events, &docker_events);
+}
+
+#[tokio::test]
+async fn a_valid_prerequisite_runs_before_its_task_refuses_a_container_cycle() {
+    let mut config = config_with_containers(&["a"], &[("a", &["a"]), ("tool", &[])]);
+    config
+        .tasks
+        .insert("prepare".to_string(), task("tool", "echo prepare"));
+    config.tasks.get_mut("start").unwrap().prerequisites = Some(names(&["prepare"]));
+
+    let (events, docker_events) = run_cyclic_task(
+        config,
+        FakeContainerRuntime::default(),
+        TaskEngineSettings::default(),
+    )
+    .await;
+
+    assert!(
+        docker_events
+            .iter()
+            .any(|e| e.starts_with("run:tool:echo prepare:")),
+        "the prerequisite runs: {docker_events:?}"
+    );
+    let prerequisite_networks = created_networks(&docker_events);
+    assert_eq!(prerequisite_networks.len(), 1, "{docker_events:?}");
+    assert!(
+        network_removed(&docker_events, &prerequisite_networks[0]),
+        "the prerequisite is cleaned up as normal: {docker_events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, TaskEvent::TaskStarting { task } if task == "prepare")),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, TaskEvent::TaskStarting { task } if task == "start")),
+        "{events:?}"
+    );
+}
+
 #[tokio::test]
 async fn detects_dependency_cycle() {
     let docker = FakeContainerRuntime::default();
@@ -9734,6 +10293,30 @@ async fn missing_task_returns_error() {
 
     let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
     assert!(err.to_string().contains("Task 'does-not-exist' not found"));
+}
+
+/// Only the task a run was asked for is an `UnknownTask` — the failure a
+/// binary attaches its own "how to list the tasks" hint to — so a missing
+/// prerequisite, which Batect gives no hint, can be told apart by type.
+#[tokio::test]
+async fn only_a_missing_requested_task_is_an_unknown_task() {
+    let config = config_with_prerequisites(&[("main", &["does-not-exist"])]);
+    let engine = engine(config, FakeContainerRuntime::default());
+
+    let requested = engine.run_task("tset", &[]).await.unwrap_err();
+    let prerequisite = engine.run_task("main", &[]).await.unwrap_err();
+
+    assert_eq!(
+        requested
+            .downcast_ref::<UnknownTask>()
+            .map(ToString::to_string),
+        Some("Task 'tset' not found.".to_string()),
+    );
+    assert!(
+        prerequisite.downcast_ref::<UnknownTask>().is_none(),
+        "{prerequisite:#}"
+    );
+    assert_eq!(prerequisite.to_string(), "Task 'does-not-exist' not found.");
 }
 
 #[tokio::test]

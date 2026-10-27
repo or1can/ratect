@@ -255,8 +255,10 @@ many dependents reach it or how deep in the graph they sit, including when they
 reach it genuinely concurrently: the second to arrive waits on the first's
 already-in-flight readiness rather than starting a second instance or
 double-pulling its image. A circular container dependency (`a` depends on `b`
-depends on `a`) is detected up front, before any container starts, and reported
-as an error rather than hanging.
+depends on `a`), or a container depending on itself, is detected up front and
+reported as an error rather than hanging: after the task's prerequisites have
+run, but before the task itself starts, so there's no `Running` line, no task
+network is created, and nothing is cleaned up.
 
 This concurrency is unbounded by default — every container's pull/build and
 create, every dependency's start, and every setup command can all be in

@@ -27,6 +27,10 @@ run = { container = "build-env", command = "./test.sh" }
 Running `ratect run test` here runs `compile` to completion first, fully cleaning up
 after it, then runs `test`.
 
+The whole order is worked out before any of it runs, as in Batect: a prerequisite
+that names no task, or a cycle among prerequisites, fails the run before the first
+task starts, so no earlier prerequisite has run by then.
+
 A task doesn't strictly need a `run` of its own — a task with only `prerequisites`
 is valid (see [config reference](ratect-compat-config-reference.md#task)), and exists purely to
 chain other tasks together:

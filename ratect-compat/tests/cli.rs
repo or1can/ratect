@@ -1420,6 +1420,85 @@ fn unknown_task_fails_with_nonzero_exit_and_logged_error() {
     );
 }
 
+/// What an unknown task's error ends with, as Batect's does — naming this
+/// binary's own commands, never `./batect`'s.
+const UNKNOWN_TASK_HINT: &str = "(Run 'ratect-compat --list-tasks' for a list of all tasks in \
+                                 this project, or 'ratect-compat --help' for help.)";
+
+/// Runs `args` against the smoke fixture, expecting failure, and returns
+/// stderr.
+fn failing_stderr(args: &[&str]) -> String {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(sample_config_path())
+        .args(args)
+        .output()
+        .expect("failed to run ratect");
+    assert_eq!(output.status.code(), Some(125));
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn an_unknown_task_error_ends_with_how_to_list_the_tasks() {
+    for args in [
+        &["does-not-exist-task"][..],
+        &["-o", "quiet", "does-not-exist-task"],
+    ] {
+        let stderr = failing_stderr(args);
+        assert!(
+            stderr.trim_end().ends_with(&format!(
+                "Task 'does-not-exist-task' not found. {UNKNOWN_TASK_HINT}"
+            )),
+            "{args:?} stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn a_misspelled_task_error_gives_the_hint_after_its_suggestion() {
+    let stderr = failing_stderr(&["tst-task"]);
+    assert!(
+        stderr.trim_end().ends_with(&format!(
+            "Task 'tst-task' not found. Did you mean 'test-task'? {UNKNOWN_TASK_HINT}"
+        )),
+        "stderr:\n{stderr}"
+    );
+}
+
+/// Batect gives a missing prerequisite no hint: the task asked for exists.
+#[test]
+fn a_missing_prerequisite_error_has_no_hint() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-missing-prerequisite-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18.2\n\
+         tasks:\n  build:\n    prerequisites: [does-not-exist]\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .arg("build")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Task 'does-not-exist' not found.") && !stderr.contains("--list-tasks"),
+        "stderr:\n{stderr}"
+    );
+}
+
 fn exit_code_of(args: &[&str]) -> Option<i32> {
     ratect_command()
         .args(args)

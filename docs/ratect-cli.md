@@ -536,7 +536,9 @@ container run to an exit code of its own?
 3. **It never ran, or never finished, for any other reason: `125`** — an unknown or
    misused flag (`ratect run --bogus`, `ratect -o bogus run test`), a config file that
    isn't there, a config that doesn't load, an unknown task, an unreachable daemon, a
-   failed pull or build, a dependency that never became ready.
+   failed pull or build, a dependency that never became ready. An unknown task's
+   error ends with how to list the tasks: `(Run 'ratect tasks list' for a list of all
+   tasks in this project, or 'ratect run --help' for help.)`.
 
 Every other verb runs nothing, so it exits `0` when it succeeds; `1` when it fails
 (`config validate` on a file that doesn't parse, `caches list` with the daemon down,

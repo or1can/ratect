@@ -362,11 +362,15 @@ fn undeclared_container_bug(name: &str) -> String {
 /// Detects a circular container dependency eagerly, via an explicit DFS
 /// ancestor path: a name already on the current path is a real cycle; a name
 /// already fully built into the returned graph is a *diamond* (shared, not
-/// circular) and is skipped without re-visiting — mirrors Batect's own
-/// `ContainerDependencyGraph`, run once, synchronously, before any concurrent
-/// execution begins. This static split is why `ensure_container_ready` no
-/// longer needs its own runtime cycle guard (pre-0.15.0's `resolving` set) —
-/// a graph returned from here is already proven acyclic.
+/// circular) and is skipped without re-visiting. That detection mirrors
+/// Batect's own `ContainerDependencyGraph` — a container listing itself is
+/// refused too — but the message doesn't: Batect's separate self-dependency
+/// and path-describing cycle wordings aren't reproduced, a divergence
+/// docs/differences-from-batect.md records ("Failure messages are Ratect's
+/// own"). Run once, synchronously, before any concurrent execution begins.
+/// This static split is why `ensure_container_ready` no longer needs its own
+/// runtime cycle guard (pre-0.15.0's `resolving` set) — a graph returned from
+/// here is already proven acyclic.
 fn build_dependency_graph(
     containers: &HashMap<String, Container>,
     root: &str,
@@ -482,8 +486,8 @@ fn wildcard_to_regex(pattern: &str) -> Result<regex::Regex> {
 /// full set of task names — a direct port of Batect's own
 /// `TaskExecutionOrderResolver.resolveWildcards`. An entry with no `*` passes
 /// through unchanged, so a nonexistent literal prerequisite name still
-/// surfaces its usual "Task not found" error later (from `run_task_scoped`),
-/// rather than being silently dropped here. A wildcard matching zero tasks
+/// surfaces its usual "Task not found" error (from `find_task`), rather than
+/// being silently dropped here. A wildcard matching zero tasks
 /// contributes nothing — not an error, matching Batect ("if a wildcard does
 /// not match any tasks, no error is raised"). Multiple matches for one
 /// wildcard are sorted alphabetically, matching Batect too.
@@ -591,6 +595,112 @@ fn format_task_suggestions(tasks: &IndexMap<String, Task>, name: &str) -> String
     }
     let quoted: Vec<String> = suggestions.iter().map(|s| format!("'{}'", s)).collect();
     format!(" Did you mean {}?", human_readable_list(&quoted, "or"))
+}
+
+/// The task a run was asked for doesn't exist — `Task 'X' not found.`,
+/// with any `Did you mean` suffix. A distinct type so each binary can append
+/// its own hint on listing the tasks, which `ratect-core` can't word: Batect
+/// ends this error with one. A missing *prerequisite* is never one of these,
+/// as Batect gives that no hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownTask {
+    task: String,
+    suggestions: String,
+}
+
+impl std::fmt::Display for UnknownTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Task '{}' not found.{}", self.task, self.suggestions)
+    }
+}
+
+impl std::error::Error for UnknownTask {}
+
+/// `name`'s task, or the error a run fails with when there is none — one
+/// lookup for `check_prerequisites` and `run_task_internal`, so their
+/// messages can't drift. `requested` says `name` is the task the run was
+/// asked for, whose absence is an [`UnknownTask`]; a prerequisite's is the
+/// same message, untyped.
+fn find_task<'t>(
+    tasks: &'t IndexMap<String, Task>,
+    name: &str,
+    requested: bool,
+) -> Result<&'t Task> {
+    tasks.get(name).ok_or_else(|| {
+        let unknown = UnknownTask {
+            task: name.to_string(),
+            suggestions: format_task_suggestions(tasks, name),
+        };
+        if requested {
+            unknown.into()
+        } else {
+            anyhow::anyhow!("{unknown}")
+        }
+    })
+}
+
+/// The error for a task reached again while it is still in progress.
+fn task_cycle(name: &str) -> anyhow::Error {
+    anyhow::anyhow!("Dependency cycle detected involving task '{name}'")
+}
+
+/// Checks `task_name`'s whole prerequisite order before any of it runs, and
+/// fails with the missing task or cycle Batect's `TaskExecutionOrderResolver`
+/// would report — it resolves the order before `SessionRunner` starts the
+/// first task. Without this, a problem in a later prerequisite surfaced only
+/// after the earlier ones had run, side effects and all.
+///
+/// Batect's order: every entry of a task's list (wildcards expanded) is
+/// looked up and checked against the current path before any of them is
+/// walked into, so a problem in a shallower list is the one reported. Each
+/// task is walked at most once. The run itself still walks prerequisites
+/// one at a time, depth first (`run_task_internal`), with the same lookup
+/// and expansion. `skip_prerequisites` skips `task_name`'s own list, as
+/// `--skip-prerequisites` does, so nothing in it is looked up.
+fn check_prerequisites(
+    tasks: &IndexMap<String, Task>,
+    task_name: &str,
+    skip_prerequisites: bool,
+) -> Result<()> {
+    fn visit(
+        tasks: &IndexMap<String, Task>,
+        task: &Task,
+        path: &mut Vec<String>,
+        checked: &mut HashSet<String>,
+    ) -> Result<()> {
+        let Some(prerequisites) = &task.prerequisites else {
+            return Ok(());
+        };
+        let mut resolved = Vec::new();
+        for name in expand_prerequisite_wildcards(tasks, prerequisites)? {
+            let prerequisite = find_task(tasks, &name, false)?;
+            if path.contains(&name) {
+                return Err(task_cycle(&name));
+            }
+            resolved.push((name, prerequisite));
+        }
+        for (name, prerequisite) in resolved {
+            if checked.contains(&name) {
+                continue;
+            }
+            path.push(name.clone());
+            visit(tasks, prerequisite, path, checked)?;
+            path.pop();
+            checked.insert(name);
+        }
+        Ok(())
+    }
+
+    let task = find_task(tasks, task_name, true)?;
+    if skip_prerequisites {
+        return Ok(());
+    }
+    visit(
+        tasks,
+        task,
+        &mut vec![task_name.to_string()],
+        &mut HashSet::new(),
+    )
 }
 
 /// The error a task fails with when its command exited `0` but cleanup then
@@ -2090,7 +2200,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// always run with no additional args, matching Batect's behavior of
     /// scoping `-- ARGS` to the task named on the command line.
     ///
-    /// Thin wrapper over `run_task_scoped` fixing `top_level` to `true` — the
+    /// Checks the whole prerequisite order up front (`check_prerequisites`),
+    /// then runs `run_task_scoped` with `top_level` fixed to `true` — the
     /// only externally-visible entry point (called once from `main.rs`), so
     /// it's always the task actually named on the command line.
     ///
@@ -2105,6 +2216,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // same for every container in the run, and repeating it for each
         // would bury the run's own output under it.
         self.warn_about_unreachable_proxies();
+        check_prerequisites(
+            &self.project.config.tasks,
+            task_name,
+            self.skip_prerequisites,
+        )?;
         self.run_task_scoped(task_name, additional_args, true)
             .await?;
 
@@ -2164,11 +2280,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
 
         {
             let mut in_progress = self.in_progress_tasks.lock().unwrap();
+            // A backstop: `check_prerequisites` has already refused every
+            // cycle before anything ran.
             if in_progress.contains(task_name) {
-                return Err(anyhow::anyhow!(
-                    "Dependency cycle detected involving task '{}'",
-                    task_name
-                ));
+                return Err(task_cycle(task_name));
             }
             in_progress.insert(task_name.to_string());
         }
@@ -2232,22 +2347,17 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         additional_args: &[String],
         top_level: bool,
     ) -> Result<()> {
-        let task = self.project.config.tasks.get(task_name).with_context(|| {
-            format!(
-                "Task '{}' not found.{}",
-                task_name,
-                format_task_suggestions(&self.project.config.tasks, task_name)
-            )
-        })?;
+        let task = find_task(&self.project.config.tasks, task_name, top_level)?;
 
         // Run prerequisites (never with additional args, which are scoped to
         // only the originally-requested task). A `*`-wildcard entry is expanded
         // against the full task list first — see
         // `expand_prerequisite_wildcards` — then run through the same
-        // sequential loop as any other prerequisite; its own dedup/cycle
-        // detection (see `run_task_scoped`) already collapses a name reached
-        // more than once (e.g. named explicitly *and* matched by a wildcard)
-        // to a single actual run.
+        // sequential loop as any other prerequisite; its dedup (see
+        // `run_task_scoped`) already collapses a name reached more than once
+        // (e.g. named explicitly *and* matched by a wildcard) to a single
+        // actual run. Every name here exists and no cycle is reachable:
+        // `check_prerequisites` proved both before the run began.
         //
         // Skipped entirely when `--skip-prerequisites` was given and this is
         // the top-level task — never for a prerequisite task itself, which
@@ -2313,6 +2423,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .get(&run.container)
             .with_context(|| undeclared_container_bug(&run.container))?;
 
+        // Up-front cycle check (see `build_dependency_graph`): before the
+        // task starts and before any Docker call — the network included — as
+        // Batect builds its graph before `onTaskStarting`, so a cycle prints
+        // only the error and creates nothing. Proving the graph acyclic before
+        // any concurrent execution starts is also why `ensure_container_ready`
+        // needs no runtime cycle guard of its own. Startup walks this graph,
+        // and cleanup stops containers in its reverse order.
+        let dependency_graph =
+            build_dependency_graph(&containers, &run.container, task.dependencies.as_deref())?;
+
         // The user-facing "Running <task>..." line is the event sink's job
         // now (see `crate::ui`) — this stays at `debug` so `RUST_LOG=info`
         // doesn't duplicate it on stderr.
@@ -2331,12 +2451,6 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // resolution failed) — the cleanup section below only ever removes
         // a network it can see was actually created.
         let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
-        // The task's dependency graph, set once it is built inside the
-        // block below — startup walks it, and cleanup stops containers in
-        // its reverse order. Unset exactly when building it failed, which
-        // is before anything is created.
-        let dependency_graph: std::sync::OnceLock<HashMap<String, Vec<String>>> =
-            std::sync::OnceLock::new();
 
         // Every container Docker creates for this run, registered the
         // moment `create_container` hands its id back — see
@@ -2443,17 +2557,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // `created_containers`.
             *network_name_cell.lock().unwrap() = Some(network_name.clone());
 
-            // Static, up-front cycle check (see `build_dependency_graph`) —
-            // proves the whole graph acyclic before any concurrent execution
-            // starts, so `ensure_container_ready` doesn't need its own
-            // runtime cycle guard.
-            let built =
-                build_dependency_graph(&containers, &run.container, task.dependencies.as_deref())?;
-            let graph = dependency_graph.get_or_init(|| built);
             // The resolved graph, for per-container progress displays (see
             // `TaskEvent::TaskGraphResolved`). A node missing from config
-            // can't happen for a graph that just built successfully, but
-            // degrade to bare info rather than panic if it somehow does.
+            // can't happen for a graph `build_dependency_graph` built from
+            // these same containers, but degrade to bare info rather than
+            // panic if it somehow does.
             // A container whose readiness is reported as another's gets no
             // line of its own, and is not something anything is shown
             // waiting for (ratect#202) — an `external_health_check`'s
@@ -2463,7 +2571,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // companion beside the container it checks, which is therefore
             // still in that list and is what the display drains on.
             let narrated = |name: &String| is_narrated(&containers, name);
-            let container_infos = graph
+            let container_infos = dependency_graph
                 .iter()
                 .filter(|(name, _)| narrated(name))
                 .map(|(name, dependencies)| {
@@ -2486,9 +2594,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             self.event_sink.post(TaskEvent::TaskGraphResolved {
                 containers: container_infos,
             });
-            let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
+            let root_dependencies = dependency_graph
+                .get(&run.container)
+                .cloned()
+                .unwrap_or_default();
             let context = TaskRunContext {
-                graph,
+                graph: &dependency_graph,
                 containers: &containers,
                 network: &network_name,
                 created_cells: &created_cells,
@@ -2522,7 +2633,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // container's work *starts* in is fixed, rather than a
             // `HashMap`'s; the work runs concurrently, so what finishes
             // first — and when its milestones post — is the daemon's.
-            let mut container_names: Vec<&String> = graph.keys().collect();
+            let mut container_names: Vec<&String> = dependency_graph.keys().collect();
             container_names.sort();
             let creations = futures::future::try_join_all(
                 container_names
@@ -2536,7 +2647,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // starting, and only starting (see docs/dependency-readiness.md).
             // Kept for the same reason as the fan-out inside
             // `ensure_container_ready`: the task container's own `run_in`
-            // setup commands (ratect#111) resolve through it. `graph`'s root
+            // setup commands (ratect#111) resolve through it. The graph's root
             // adjacency is the union of the container's own `dependencies`
             // and the task's, so it is a superset of what the config loader
             // allows as a target.
@@ -3070,10 +3181,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // signal cutting the stops in flight short or by one landing
             // between two batches, which the count check catches so no stop
             // is requested only to be dropped at once.
-            let mut waiting = dependents_to_stop_first(
-                dependency_graph.get().unwrap_or(&HashMap::new()),
-                &created_names,
-            );
+            let mut waiting = dependents_to_stop_first(&dependency_graph, &created_names);
             let mut queued = removals;
             let mut in_flight: Vec<Removal<'_>> = Vec::new();
             let mut stops = futures::stream::FuturesUnordered::new();
