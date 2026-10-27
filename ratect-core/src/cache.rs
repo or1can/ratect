@@ -39,9 +39,15 @@
 //!   `uuid::Uuid::new_v4()`, not Batect's 6-character `a-z0-9` id, whose
 //!   alphabet is meaningfully more collision-prone across many projects on
 //!   one machine. An existing Batect-written key file is still read and
-//!   reused byte-for-byte, tolerant of its `#`-comment header — nothing
+//!   its key reused, tolerant of its `#`-comment header — nothing
 //!   depends on matching the *generation* format, only on the file's path
 //!   and layout.
+//! - An indented `#` line in the key file is a comment, where Batect tests
+//!   for the `#` before trimming and so counts it as a key line: beside the
+//!   key it makes Batect fail, and alone it is Batect's key and a "no key
+//!   line" error here.
+//! - A key path that is a symbolic link to nothing is an error, where Batect
+//!   writes a new key file through it, wherever it points.
 //! - Cleaning directory caches when the project has no `.batect/caches`
 //!   directory removes nothing, with a warning saying so, where Batect fails.
 //! - A cache directory entry that is a symbolic link is skipped when
@@ -115,14 +121,22 @@ pub fn cache_directory(project_directory: &Path) -> PathBuf {
 /// on the exact same Docker volume, since Docker volumes live in one flat,
 /// global namespace, not scoped by project directory.
 ///
-/// Reads `<project_directory>/.batect/caches/key` if it already exists —
-/// tolerating Batect's own file format exactly (skip blank lines and any
-/// line starting with `#`, take the one remaining line as the key,
-/// mirroring `CacheManager.projectCacheKey`'s own read logic), so a project
-/// already run under real Batect has its existing key discovered and
-/// reused, preserving the exact volume names Batect itself would use.
+/// Reads `<project_directory>/.batect/caches/key` if it already exists, in
+/// Batect's own file format, so a project already run under real Batect has
+/// its existing key discovered and reused, preserving the exact volume names
+/// Batect itself would use. Blank lines and comments are skipped, and the
+/// one line left, trimmed, is the key. As in `CacheManager.projectCacheKey`,
+/// a file left with no such line or with more than one is an error, as is
+/// one that can't be read, and bytes that aren't UTF-8 are decoded with
+/// replacement characters rather than refused. Unlike it, a line is trimmed
+/// before testing for the `#` that starts a comment — see the module's
+/// deliberate divergences.
 ///
-/// When no file exists yet, generates and persists a new one: a full
+/// An existing file is never written over: its key names every cache volume
+/// the project already has, so replacing it would orphan them all where
+/// `--clean` could no longer find them (ratect#337).
+///
+/// Only when no file exists yet does this generate and persist a new one: a full
 /// `uuid::Uuid::new_v4()` rather than Batect's 6-char `a-z0-9` id. This
 /// doesn't affect compatibility — Batect's reader has no length/charset
 /// check, it just takes whatever's on that one line, so the value's shape
@@ -135,14 +149,25 @@ pub fn cache_directory(project_directory: &Path) -> PathBuf {
 pub fn project_cache_key(project_directory: &Path) -> Result<String> {
     let key_path = cache_directory(project_directory).join("key");
 
-    if let Ok(contents) = fs::read_to_string(&key_path) {
-        if let Some(key) = contents
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty() && !line.starts_with('#'))
-        {
-            return Ok(key.to_string());
+    match fs::read(&key_path) {
+        Ok(contents) => return read_project_cache_key(&key_path, &contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to read cache key file {key_path:?}"))
         }
+    }
+
+    // Not found, yet a link is there: a symbolic link to nothing, which
+    // writing would follow and create a file wherever it points.
+    if key_path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        anyhow::bail!(
+            "The cache key file {key_path:?} is a symbolic link to something that doesn't \
+             exist. Remove the link, or point it at the project's key file."
+        );
     }
 
     let key = uuid::Uuid::new_v4().to_string();
@@ -161,6 +186,30 @@ pub fn project_cache_key(project_directory: &Path) -> Result<String> {
     .with_context(|| format!("Failed to write cache key file {key_path:?}"))?;
 
     Ok(key)
+}
+
+/// The key in an existing key file's `contents` — see [`project_cache_key`].
+fn read_project_cache_key(key_path: &Path, contents: &[u8]) -> Result<String> {
+    let contents = String::from_utf8_lossy(contents);
+    let mut key_lines = contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'));
+    match (key_lines.next(), key_lines.next()) {
+        (Some(key), None) => Ok(key.to_string()),
+        (None, _) => anyhow::bail!(
+            "The cache key file {key_path:?} has no key line. It should hold exactly one line \
+             that isn't blank or a comment: the key every one of this project's cache volumes \
+             is named after, the `<key>` in their `batect-cache-<key>-<name>` names. Restore \
+             that line, or delete the file to start a new key, leaving the project's existing \
+             cache volumes behind."
+        ),
+        (Some(_), Some(_)) => anyhow::bail!(
+            "The cache key file {key_path:?} has more than one key line. It should hold exactly \
+             one line that isn't blank or a comment: the key every one of this project's cache \
+             volumes is named after. Keep only that line."
+        ),
+    }
 }
 
 /// The Docker volume name a `cache` mount named `name` resolves to under

@@ -53,6 +53,170 @@ fn project_cache_key_reads_an_existing_batect_style_key_file() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Writes `contents` as `dir`'s key file and returns its path.
+fn write_key_file(dir: &Path, contents: &[u8]) -> PathBuf {
+    let caches_dir = cache_directory(dir);
+    fs::create_dir_all(&caches_dir).unwrap();
+    let key_file = caches_dir.join("key");
+    fs::write(&key_file, contents).unwrap();
+    key_file
+}
+
+/// Batect's `.single {}` refuses a file it can't pick one key from rather
+/// than guessing, and ratect does too: rewriting it would orphan every
+/// volume named after the key it held (ratect#337).
+#[test]
+fn project_cache_key_refuses_a_key_file_with_more_than_one_key_line() {
+    let dir = unique_temp_dir();
+    let contents = b"# header\naaa111\nbbb222\n";
+    let key_file = write_key_file(&dir, contents);
+
+    let error = project_cache_key(&dir).unwrap_err();
+
+    let after = fs::read(&key_file).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&key_file.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("more than one key line"), "{message}");
+    assert_eq!(after, contents);
+}
+
+#[test]
+fn project_cache_key_refuses_a_key_file_with_no_key_line() {
+    for contents in [&b"# only a comment\n\n   \n"[..], &b""[..]] {
+        let dir = unique_temp_dir();
+        let key_file = write_key_file(&dir, contents);
+
+        let error = project_cache_key(&dir).unwrap_err();
+
+        let after = fs::read(&key_file).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(&key_file.display().to_string()),
+            "{message}"
+        );
+        assert!(message.contains("no key line"), "{message}");
+        assert_eq!(after, contents);
+    }
+}
+
+/// A key path that can't be read is an error naming it, not a key file to
+/// write over.
+#[test]
+fn project_cache_key_refuses_a_key_file_it_cannot_read() {
+    let dir = unique_temp_dir();
+    let key_path = cache_directory(&dir).join("key");
+    fs::create_dir_all(key_path.join("inside")).unwrap();
+
+    let error = project_cache_key(&dir).unwrap_err();
+
+    let still_a_directory = key_path.join("inside").is_dir();
+    fs::remove_dir_all(&dir).unwrap();
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("Failed to read cache key file"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&key_path.display().to_string()),
+        "{message}"
+    );
+    assert!(still_a_directory);
+}
+
+#[cfg(unix)]
+#[test]
+fn project_cache_key_does_not_write_over_a_write_only_key_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_temp_dir();
+    let key_file = write_key_file(&dir, b"abc123\n");
+    fs::set_permissions(&key_file, fs::Permissions::from_mode(0o200)).unwrap();
+    // Root reads it whatever its mode says, so the case doesn't exist there.
+    let unreadable = fs::read(&key_file).is_err();
+
+    let result = project_cache_key(&dir);
+
+    fs::set_permissions(&key_file, fs::Permissions::from_mode(0o644)).unwrap();
+    let after = fs::read(&key_file).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+    if unreadable {
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(after, b"abc123\n");
+    }
+}
+
+/// Batect decodes the file with replacement characters rather than failing,
+/// so bytes that aren't UTF-8 on a comment line don't change the key.
+#[test]
+fn project_cache_key_reads_past_invalid_utf8_on_a_comment_line() {
+    let dir = unique_temp_dir();
+    let key_file = write_key_file(&dir, b"# caf\xff\nabc123\n");
+
+    let key = project_cache_key(&dir).unwrap();
+
+    let after = fs::read(&key_file).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(key, "abc123");
+    assert_eq!(after, b"# caf\xff\nabc123\n");
+}
+
+#[test]
+fn project_cache_key_decodes_invalid_utf8_in_the_key_line_leniently() {
+    let dir = unique_temp_dir();
+    let key_file = write_key_file(&dir, b"ccc\xff333\n");
+
+    let key = project_cache_key(&dir).unwrap();
+
+    let after = fs::read(&key_file).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(key, "ccc\u{fffd}333");
+    assert_eq!(after, b"ccc\xff333\n");
+}
+
+/// A key path that is a symbolic link to nothing is refused, not written
+/// through as Batect's `Files.write` would: a project's files must not
+/// decide where on the host a new file is created.
+#[cfg(unix)]
+#[test]
+fn project_cache_key_refuses_a_dangling_symlink() {
+    let dir = unique_temp_dir();
+    let caches_dir = cache_directory(&dir);
+    fs::create_dir_all(&caches_dir).unwrap();
+    let target = dir.join("elsewhere");
+    let key_path = caches_dir.join("key");
+    std::os::unix::fs::symlink(&target, &key_path).unwrap();
+
+    let error = project_cache_key(&dir).unwrap_err();
+
+    let target_exists = target.exists();
+    fs::remove_dir_all(&dir).unwrap();
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&key_path.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("symbolic link"), "{message}");
+    assert!(!target_exists);
+}
+
+/// Unlike Batect, which tests for `#` before trimming, an indented comment
+/// is still a comment.
+#[test]
+fn project_cache_key_treats_an_indented_comment_as_a_comment() {
+    let dir = unique_temp_dir();
+    write_key_file(&dir, b"  # note\nggg777\n");
+
+    let key = project_cache_key(&dir).unwrap();
+
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(key, "ggg777");
+}
+
 #[test]
 fn cache_volume_name_uses_the_batect_cache_prefix() {
     assert_eq!(

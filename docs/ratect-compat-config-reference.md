@@ -513,10 +513,14 @@ containers:
   projects that happen to declare a same-named cache (e.g. `gradle-cache`) would
   collide on the exact same Docker volume, since Docker volumes live in one flat,
   global namespace, not scoped by directory. If that file already exists (e.g. from a
-  prior real-`batect` run), its existing key is read and reused as-is rather than
+  prior real-`batect` run), its existing key is read and reused as-is, never
   regenerated — even though Ratect's own generated keys look different (a full UUID,
   rather than Batect's own shorter id): nothing depends on matching that format, only
-  on reusing whatever key is already on record for this project.
+  on reusing whatever key is already on record for this project. The file must hold
+  exactly one line that isn't blank or a comment (`#`), the key; one with none or
+  more than one, or that can't be read, fails the run or `--clean`, as in Batect,
+  and is left as it is — replacing it would orphan every cache volume named after
+  the key it held.
 `--clean` removes every one of this project's own cache volumes/directories (per
 `--cache-type` or `BATECT_CACHE_TYPE`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
 restricts this to the named cache(s) instead of all of them — see
