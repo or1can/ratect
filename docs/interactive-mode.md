@@ -27,14 +27,13 @@ only usefully attach to one container.
 
 ## What the eligible container gets
 
-Always, independent of whether Ratect's own stdin and stdout are terminals:
-
-- **Its stdin forwarded** from Ratect's own, so piped input reaches the
-  container — including its end: when Ratect's own stdin closes, so does the
-  container's, and a process that reads until end of input (`cat`, a stdio
-  server) exits.
-- **The host's `TERM`** propagated into its environment — see [`TERM`
-  propagation](#term-propagation) below.
+Always, independent of whether Ratect's own stdin and stdout are terminals,
+**its stdin forwarded** from Ratect's own, so piped input reaches the
+container — including its end: when Ratect's own stdin closes, so does the
+container's, and a process that reads until end of input (`cat`, a stdio
+server) exits. (The host's `TERM` isn't the eligible container's alone:
+every container gets it — see [`TERM` propagation](#term-propagation)
+below.)
 
 Additionally, when *both* Ratect's own stdin *and* stdout are real
 terminals, **a real Docker TTY**: the local terminal goes into raw mode for
@@ -59,13 +58,14 @@ platform.
 
 ## `TERM` propagation
 
-Ratect's own `TERM` environment variable is copied into the eligible
-container's environment whenever that container is eligible — not gated on a
-real TTY actually being allocated, matching Batect. So a full-screen program
-inside the container knows the terminal type even when piped output lets it
-detect that it isn't attached to a real TTY. Never applied to a
-prerequisite's, a dependency's, or a sidecar's container, and never to an
-image build.
+Ratect's own `TERM` environment variable is copied into the environment of
+every container a run creates — the invoked task's own, each prerequisite's,
+and every dependency and sidecar — whether or not that container is
+eligible, matching Batect. Under [`--output all`](output-styles.md#all) every
+container gets `TERM=dumb` instead. It isn't gated on a real TTY actually
+being allocated either, so a full-screen program inside the container knows
+the terminal type even when piped output lets it detect that it isn't
+attached to a real TTY. Never applied to an image build.
 
 Where it sits among the container's other environment variables — what
 overrides it on a key collision — is [Environment

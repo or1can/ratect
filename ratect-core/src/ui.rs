@@ -707,8 +707,9 @@ pub fn create_event_sink(
 pub enum ContainerIoStreaming {
     /// The task's own container streams raw to the real stdout (with
     /// interactive TTY/stdin eligibility as usual); dependency output isn't
-    /// captured at all. Batect's `TaskContainerOnlyIOStreamingOptions` —
-    /// what `fancy`/`simple`/`quiet` all use.
+    /// captured at all, and every container gets the host's `TERM`. Batect's
+    /// `TaskContainerOnlyIOStreamingOptions` — what `fancy`/`simple`/`quiet`
+    /// all use.
     TaskContainerOnly,
     /// Every container's output (dependencies included) is line-buffered
     /// and posted as [`TaskEvent::ContainerOutput`] events instead of

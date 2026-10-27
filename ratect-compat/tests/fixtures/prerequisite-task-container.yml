@@ -1,0 +1,19 @@
+# Exercises what a prerequisite task's own container gets — see
+# `a_prerequisite_tasks_container_gets_the_host_term` in tests/cli.rs. Batect
+# treats each task's own container alike, prerequisites included, so `pre`
+# reports what its container got before `main` runs.
+project_name: ratect-prerequisite-task-container-test
+containers:
+  shell:
+    image: alpine:3.18.2
+tasks:
+  pre:
+    run:
+      container: shell
+      command: sh -c 'echo "PRE TERM=[$TERM]"'
+  main:
+    prerequisites:
+      - pre
+    run:
+      container: shell
+      command: echo main-done

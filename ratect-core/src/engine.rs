@@ -1691,35 +1691,25 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         }
     }
 
-    /// The `TERM` to inject into a container's environment — the host's own
-    /// value for the invoked task's own container (`interactive` is `true`),
-    /// `None` for anything else (a prerequisite's, a dependency's, or a
-    /// sidecar's container, or an image build), or `dumb` unconditionally
-    /// under the interleaved I/O policy (the `all` output mode), overriding
-    /// both of those — matching Batect's
-    /// `InterleavedContainerIOStreamingOptions`, which sets `TERM=dumb` on
-    /// every container regardless of whether it would otherwise have been
-    /// the task's own. The single call both `run_task_internal` (the task's
-    /// own container) and `ensure_container_ready` (a dependency, always
-    /// `interactive: false`) make, so the interleaved override lives in
-    /// exactly one place rather than being checked at each call site with
-    /// its own idiom.
+    /// The `TERM` to inject into a container's environment — `dumb` under
+    /// the interleaved I/O policy (the `all` output mode), matching Batect's
+    /// `InterleavedContainerIOStreamingOptions`, and otherwise the host's own
+    /// value, or `None` when the host has none. The same for every container
+    /// a task run creates — the task's own, a prerequisite's, a dependency's
+    /// — matching Batect's
+    /// `TaskContainerOnlyIOStreamingOptions.terminalTypeForContainer`, which
+    /// ignores the container it is given. Never applied to an image build,
+    /// which Batect gives no `TERM` either.
     ///
-    /// Non-interleaved `interactive: true` is gated on `interactive` alone
-    /// — deliberately *not* on whether a real TTY ends up being allocated
-    /// (that's decided later, inside `ContainerRuntime::run_container`, from
-    /// information not yet known here) — matching Batect's own
-    /// `ConsoleInfo.terminalType`/
-    /// `TaskContainerOnlyIOStreamingOptions.terminalTypeForContainer`, both
-    /// unconditional on any TTY check. So a full-screen terminal program
-    /// inside the container knows the terminal type even when piping output
-    /// elsewhere still lets it detect it isn't attached to a real TTY.
-    fn term_environment_variable(&self, interactive: bool) -> Option<HashMap<String, String>> {
+    /// Not gated on interactive eligibility, nor on whether a real TTY ends
+    /// up being allocated (decided later, inside
+    /// `ContainerRuntime::run_container`) — Batect's `ConsoleInfo.terminalType`
+    /// is unconditional on any TTY check too. So a full-screen terminal
+    /// program inside the container knows the terminal type even when piping
+    /// output elsewhere still lets it detect it isn't attached to a real TTY.
+    fn term_environment_variable(&self) -> Option<HashMap<String, String>> {
         if self.interleaved_output() {
             return Some(dumb_term_environment());
-        }
-        if !interactive {
-            return None;
         }
         let term = (self.host_env)("TERM")?;
         Some(HashMap::from([("TERM".to_string(), term)]))
@@ -3436,9 +3426,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // — which runs after `extends` — for one outside this
                     // task's own graph), the `-- ADDITIONAL_ARGS` only it
                     // receives, its role, and its interactive eligibility —
-                    // a dependency is never interactive (see
-                    // `term_environment_variable`'s own docs for the
-                    // interleaved-policy override it still picks up).
+                    // a dependency is never interactive.
                     let (overlay, additional_args, role, interactive) = if is_root {
                         (
                             crate::container_spec::Overlay::Run(context.run),
@@ -3456,7 +3444,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             false,
                         )
                     };
-                    let term_var = self.term_environment_variable(interactive);
+                    let term_var = self.term_environment_variable();
                     let volumes = self
                         .resolve_volumes(container_config.volumes.as_ref())
                         .await?;

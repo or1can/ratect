@@ -565,6 +565,10 @@ fn interactive_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/interactive.yml")
 }
 
+fn prerequisite_task_container_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/prerequisite-task-container.yml")
+}
+
 fn additional_hostnames_and_hosts_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/additional-hostnames-and-hosts.yml")
 }
@@ -5830,6 +5834,30 @@ fn interactive_session_forwards_live_terminal_resizes() {
         status.success(),
         "ratect should exit successfully once the shell session ends: {status:?}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Proves a prerequisite task's own container gets the host's `TERM`, as
+/// Batect gives it to every container (ratect#474) — not only the invoked
+/// task's. `-o quiet` streams each task container's output to stdout.
+#[test]
+#[ignore]
+fn a_prerequisite_tasks_container_gets_the_host_term() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(prerequisite_task_container_config_path())
+        .arg("-o")
+        .arg("quiet")
+        .arg("main")
+        .env("TERM", "xterm-256color")
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("PRE TERM=[xterm-256color]"), "{stdout}");
 }
 
 /// Requires a running Docker daemon with network access to pull

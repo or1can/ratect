@@ -409,8 +409,9 @@ pub struct ContainerSpecInputs<'a> {
     pub additional_args: &'a [String],
     pub user_mapping: Option<&'a UserMapping>,
     pub volumes: Option<&'a Vec<String>>,
-    /// The host's own `TERM`, when the interleaved output policy applies —
-    /// see `TaskEngine::term_environment_variable`.
+    /// The host's own `TERM` (when it has one), or `TERM=dumb` under the
+    /// interleaved output policy — the same for every container, see
+    /// `TaskEngine::term_environment_variable`.
     pub term_var: Option<&'a HashMap<String, String>>,
     /// This task execution's proxy environment, when
     /// `propagate_proxy_environment_variables` applies — see

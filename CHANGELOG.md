@@ -94,6 +94,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- Every container a run creates — each prerequisite task's own, and every dependency and sidecar — gets the host's `TERM`, as in Batect, not only the invoked task's own container.
 - `ratect-compat`: an unknown option's error no longer suggests passing it after `--`.
 - An unknown option's error from `ratect run` no longer suggests passing it after `--` (ratect only).
 - The `ratect-compat` CLI reference says its value placeholders describe a value's shape, not the ones `--help` prints.
