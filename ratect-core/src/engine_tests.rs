@@ -109,7 +109,7 @@ struct FakeContainerRuntime {
     // failure (see `failing_image_build`).
     fail_image_build: Arc<Mutex<bool>>,
     rejected_tags: Arc<Mutex<HashSet<String>>>,
-    // Images `image_exists_locally` reports as already present (see
+    // Images `local_image_id` reports as already present (see
     // `with_local_image`) — defaults to empty, so tests that don't care
     // about `image_pull_policy` see the "always needs a pull" behavior
     // that matches an `IfNotPresent` container whose image is missing.
@@ -492,7 +492,7 @@ impl FakeContainerRuntime {
         self
     }
 
-    /// Makes `image_exists_locally` report `true` for `image` — used to
+    /// Makes `local_image_id` report `image` as present — used to
     /// exercise `image_pull_policy: IfNotPresent` skipping a pull.
     fn with_local_image(self, image: &str) -> Self {
         self.locally_present_images
@@ -971,7 +971,7 @@ impl FakeContainerRuntime {
 
 #[async_trait::async_trait]
 impl ContainerRuntime for FakeContainerRuntime {
-    async fn pull_image(&self, image: &str) -> Result<()> {
+    async fn pull_image(&self, image: &str) -> Result<String> {
         let delay = self.pull_delays.lock().unwrap().get(image).copied();
         if let Some(delay) = delay {
             tokio::time::sleep(delay).await;
@@ -980,11 +980,18 @@ impl ContainerRuntime for FakeContainerRuntime {
             anyhow::bail!("manifest for {image} not found");
         }
         self.push(format!("pull:{image}"));
-        Ok(())
+        // Distinct from `image`, as a real image ID is, so a test can tell
+        // a container run from the pulled image from one run by its tag.
+        Ok(format!("sha256:pulled-{image}"))
     }
 
-    async fn image_exists_locally(&self, image: &str) -> Result<bool> {
-        Ok(self.locally_present_images.lock().unwrap().contains(image))
+    async fn local_image_id(&self, image: &str) -> Result<Option<String>> {
+        Ok(self
+            .locally_present_images
+            .lock()
+            .unwrap()
+            .contains(image)
+            .then(|| format!("sha256:local-{image}")))
     }
 
     async fn build_image(
@@ -10641,6 +10648,89 @@ async fn always_policy_pulls_even_when_the_image_already_exists_locally() {
     assert!(docker.events().contains(&"pull:alpine:3.18".to_string()));
 }
 
+/// The config every pinned-image test below runs: one `alpine:3.18`
+/// container under `policy`, and a second on the same image, so the pull
+/// both share is seen to hand each the same pinned ID.
+fn two_containers_on_one_image(policy: crate::config::ImagePullPolicy) -> Config {
+    let mut containers = IndexMap::new();
+    for name in ["build-env", "helper"] {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.image_pull_policy = Some(policy);
+        containers.insert(name.to_string(), container_config);
+    }
+    containers["build-env"].dependencies = Some(vec!["helper".to_string()]);
+    let mut tasks = IndexMap::new();
+    tasks.insert("test".to_string(), task("build-env", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// A pulled image runs by the ID the pull returned, not by its tag, which
+/// another pull could move before the container is created (ratect#301).
+#[tokio::test]
+async fn a_pulled_image_runs_by_the_id_its_pull_returned() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        two_containers_on_one_image(crate::config::ImagePullPolicy::IfNotPresent),
+        docker.clone(),
+    );
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    for name in ["build-env", "helper"] {
+        assert_eq!(
+            docker.image_for(name).as_deref(),
+            Some("sha256:pulled-alpine:3.18"),
+            "{name}"
+        );
+    }
+}
+
+/// An `IfNotPresent` image already local runs by the ID the local lookup
+/// found, as Batect runs the image its `getImage` returned.
+#[tokio::test]
+async fn a_local_image_runs_by_the_id_its_lookup_found() {
+    let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+    let engine = engine(
+        two_containers_on_one_image(crate::config::ImagePullPolicy::IfNotPresent),
+        docker.clone(),
+    );
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    for name in ["build-env", "helper"] {
+        assert_eq!(
+            docker.image_for(name).as_deref(),
+            Some("sha256:local-alpine:3.18"),
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_always_pulled_image_runs_by_the_pulled_id_even_when_one_is_local() {
+    let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+    let engine = engine(
+        two_containers_on_one_image(crate::config::ImagePullPolicy::Always),
+        docker.clone(),
+    );
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    for name in ["build-env", "helper"] {
+        assert_eq!(
+            docker.image_for(name).as_deref(),
+            Some("sha256:pulled-alpine:3.18"),
+            "{name}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn image_override_pulls_the_override_instead_of_the_configured_image() {
     let mut containers = IndexMap::new();
@@ -10800,9 +10890,18 @@ async fn several_image_overrides_each_replace_only_their_own_containers_image() 
             .any(|e| e.contains("alpine") || e.contains("postgres")),
         "an overridden container's configured image should never be touched: {events:?}"
     );
-    assert_eq!(docker.spec_for("app").unwrap().shared.image, "ubuntu:22.04");
-    assert_eq!(docker.spec_for("db").unwrap().shared.image, "mysql:8");
-    assert_eq!(docker.spec_for("cache").unwrap().shared.image, "redis:7");
+    assert_eq!(
+        docker.spec_for("app").unwrap().shared.image,
+        "sha256:pulled-ubuntu:22.04"
+    );
+    assert_eq!(
+        docker.spec_for("db").unwrap().shared.image,
+        "sha256:pulled-mysql:8"
+    );
+    assert_eq!(
+        docker.spec_for("cache").unwrap().shared.image,
+        "sha256:pulled-redis:7"
+    );
 }
 
 const UNKNOWN_OVERRIDE_ERROR: &str = "Cannot override image for container 'no-such-container' \

@@ -141,7 +141,10 @@ the image already exists locally first and skips the pull entirely if so; `Alway
 skips that check and pulls unconditionally. Either way, the *decision* (pull or don't)
 is made once per image name per `ratect` invocation, same as before this field
 existed — a dependency and the task's own container sharing an image name don't
-re-decide for each other.
+re-decide for each other. The container is then created from the image's
+ID — the one the pull fetched, found by the digest it reported, or the local one —
+not from its name, so a tag moved by another pull meanwhile doesn't change what
+runs, as in Batect.
 
 Passing `--use-network <name>` skips network creation and teardown entirely for every
 task in this invocation: the named network is checked to exist up front (a clear error
