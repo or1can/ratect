@@ -321,7 +321,7 @@ dependencies = [
 [[package]]
 name = "bollard"
 version = "0.22.0"
-source = "git+https://github.com/or1can/bollard.git?branch=fix%2Fnative-certs-partial-load#070ede957e533b52d6c13db25aebff76f477e839"
+source = "git+https://github.com/fussybeaver/bollard.git?branch=master#b52a8f85559648ef653a435e8007924a5f51b442"
 dependencies = [
  "async-stream",
  "base64 0.23.1",
@@ -346,7 +346,9 @@ dependencies = [
  "hyperlocal",
  "log",
  "num",
+ "percent-encoding",
  "pin-project-lite",
+ "prost",
  "rand 0.10.3",
  "regex",
  "rustls",

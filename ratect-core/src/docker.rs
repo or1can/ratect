@@ -960,7 +960,7 @@ async fn build_image_via_buildkit(
                     bollard::grpc::SshAgentSource::Socket(socket)
                 }
             };
-            providers = providers.set_ssh_agent(id, &source);
+            providers = providers.set_ssh_agent(Some(id), &source);
         }
     }
     let options = options_builder.build();

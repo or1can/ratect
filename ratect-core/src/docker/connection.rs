@@ -43,8 +43,7 @@
 //! wrong — could make a TLS connection impossible even with a correct
 //! `--docker-tls-ca-cert`, on a machine where Docker's own CLI connects
 //! fine. User-reachable, not just a test artifact — see `CHANGELOG.md` for
-//! the fix, patched into the `bollard` fork this crate's
-//! `[patch.crates-io]` pins; offered upstream as
+//! the fix, carried on a `bollard` fork branch until it landed upstream as
 //! [fussybeaver/bollard#796](https://github.com/fussybeaver/bollard/pull/796).
 //!
 //! Nothing here calls `connect_with_ssl` any more. Every TLS connection —
@@ -52,7 +51,7 @@
 //! `tls_client_config` and made by `connect_over_tls`, and the OS
 //! trust store is loaded in one place only, `system_trust_roots`, and only
 //! when no CA is configured; it tolerates a partial failure the same way
-//! the fork's fix does. Nothing reaches `bollard`'s own TLS code any more,
+//! that fix does. Nothing reaches `bollard`'s own TLS code any more,
 //! not even by way of `connect_with_host`: an `https://` host is a TLS
 //! connection here, and a plain `tcp://` one is made by `connect_plain`
 //! ([ratect#257](https://github.com/or1can/ratect/issues/257)).

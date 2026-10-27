@@ -86,6 +86,7 @@ history, from when it was the only binary.
 - A config-load error about a file inside a Git include names it by its path within the repository plus the remote and ref (`'1.yml' from the bundle '<repo>' at '<ref>'`) instead of its path in the `~/.ratect/incl` clone cache. A missing include also gives the path as written.
 - Cleaning directory caches (`ratect-compat --clean`/`--clean-cache` and `ratect caches clean` with `--cache-type directory`) warns when it skips a cache entry that is a symbolic link, naming the link,, and when the project has no `.batect/caches` directory.
 - Dependency containers with nothing left depending on them are stopped concurrently during cleanup, as in Batect, so independent dependencies wait out their grace periods together rather than one after another.
+- The pinned `bollard` tracks upstream `master` unmodified, picking up its changes since the previous pin.
 
 ### Removed
 
