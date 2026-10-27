@@ -2150,6 +2150,24 @@ async fn a_missing_prerequisite_of_a_skipped_prerequisite_list_is_never_looked_u
 }
 
 #[tokio::test]
+async fn skipping_prerequisites_still_reports_a_missing_requested_task() {
+    let config = config_with_prerequisites(&[("main", &["does-not-exist"])]);
+    let engine = engine(config, FakeContainerRuntime::default())
+        .with_settings(TaskEngineSettings {
+            run_prerequisites: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+    let err = engine.run_task("mian", &[]).await.unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<UnknownTask>().map(ToString::to_string),
+        Some("Task 'mian' not found. Did you mean 'main'?".to_string()),
+    );
+}
+
+#[tokio::test]
 async fn a_prerequisite_reached_twice_still_runs_once_in_order() {
     let config = config_with_prerequisites(&[
         ("shared", &[]),
@@ -10275,6 +10293,30 @@ async fn missing_task_returns_error() {
 
     let err = engine.run_task("does-not-exist", &[]).await.unwrap_err();
     assert!(err.to_string().contains("Task 'does-not-exist' not found"));
+}
+
+/// Only the task a run was asked for is an `UnknownTask` — the failure a
+/// binary attaches its own "how to list the tasks" hint to — so a missing
+/// prerequisite, which Batect gives no hint, can be told apart by type.
+#[tokio::test]
+async fn only_a_missing_requested_task_is_an_unknown_task() {
+    let config = config_with_prerequisites(&[("main", &["does-not-exist"])]);
+    let engine = engine(config, FakeContainerRuntime::default());
+
+    let requested = engine.run_task("tset", &[]).await.unwrap_err();
+    let prerequisite = engine.run_task("main", &[]).await.unwrap_err();
+
+    assert_eq!(
+        requested
+            .downcast_ref::<UnknownTask>()
+            .map(ToString::to_string),
+        Some("Task 'tset' not found.".to_string()),
+    );
+    assert!(
+        prerequisite.downcast_ref::<UnknownTask>().is_none(),
+        "{prerequisite:#}"
+    );
+    assert_eq!(prerequisite.to_string(), "Task 'does-not-exist' not found.");
 }
 
 #[tokio::test]

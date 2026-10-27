@@ -1894,6 +1894,28 @@ fn config_convert_succeeds_when_either_stream_is_closed() {
     );
 }
 
+/// An unknown task's hint names this binary's own commands — never
+/// `ratect-compat`'s `--list-tasks`, though the engine is shared.
+#[test]
+fn an_unknown_task_error_ends_with_how_to_list_the_tasks() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["run", "does-not-exist-task"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.trim_end().ends_with(
+            "Task 'does-not-exist-task' not found. (Run 'ratect tasks list' for a list of all \
+             tasks in this project, or 'ratect run --help' for help.)"
+        ) && !stderr.contains("--list-tasks"),
+        "stderr:\n{stderr}"
+    );
+}
+
 #[test]
 fn a_missing_config_file_fails_rather_than_listing_nothing() {
     let output = ratect_command()

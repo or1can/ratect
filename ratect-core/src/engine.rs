@@ -597,16 +597,45 @@ fn format_task_suggestions(tasks: &IndexMap<String, Task>, name: &str) -> String
     format!(" Did you mean {}?", human_readable_list(&quoted, "or"))
 }
 
+/// The task a run was asked for doesn't exist — `Task 'X' not found.`,
+/// with any `Did you mean` suffix. A distinct type so each binary can append
+/// its own hint on listing the tasks, which `ratect-core` can't word: Batect
+/// ends this error with one. A missing *prerequisite* is never one of these,
+/// as Batect gives that no hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownTask {
+    task: String,
+    suggestions: String,
+}
+
+impl std::fmt::Display for UnknownTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Task '{}' not found.{}", self.task, self.suggestions)
+    }
+}
+
+impl std::error::Error for UnknownTask {}
+
 /// `name`'s task, or the error a run fails with when there is none — one
 /// lookup for `check_prerequisites` and `run_task_internal`, so their
-/// messages can't drift.
-fn find_task<'t>(tasks: &'t IndexMap<String, Task>, name: &str) -> Result<&'t Task> {
-    tasks.get(name).with_context(|| {
-        format!(
-            "Task '{}' not found.{}",
-            name,
-            format_task_suggestions(tasks, name)
-        )
+/// messages can't drift. `requested` says `name` is the task the run was
+/// asked for, whose absence is an [`UnknownTask`]; a prerequisite's is the
+/// same message, untyped.
+fn find_task<'t>(
+    tasks: &'t IndexMap<String, Task>,
+    name: &str,
+    requested: bool,
+) -> Result<&'t Task> {
+    tasks.get(name).ok_or_else(|| {
+        let unknown = UnknownTask {
+            task: name.to_string(),
+            suggestions: format_task_suggestions(tasks, name),
+        };
+        if requested {
+            unknown.into()
+        } else {
+            anyhow::anyhow!("{unknown}")
+        }
     })
 }
 
@@ -644,7 +673,7 @@ fn check_prerequisites(
         };
         let mut resolved = Vec::new();
         for name in expand_prerequisite_wildcards(tasks, prerequisites)? {
-            let prerequisite = find_task(tasks, &name)?;
+            let prerequisite = find_task(tasks, &name, false)?;
             if path.contains(&name) {
                 return Err(task_cycle(&name));
             }
@@ -662,7 +691,7 @@ fn check_prerequisites(
         Ok(())
     }
 
-    let task = find_task(tasks, task_name)?;
+    let task = find_task(tasks, task_name, true)?;
     if skip_prerequisites {
         return Ok(());
     }
@@ -2318,7 +2347,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         additional_args: &[String],
         top_level: bool,
     ) -> Result<()> {
-        let task = find_task(&self.project.config.tasks, task_name)?;
+        let task = find_task(&self.project.config.tasks, task_name, top_level)?;
 
         // Run prerequisites (never with additional args, which are scoped to
         // only the originally-requested task). A `*`-wildcard entry is expanded

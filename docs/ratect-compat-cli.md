@@ -297,6 +297,11 @@ Batect; any failure before a task starts is printed as the process exits.
   suggested, e.g. `Did you mean 'build' or 'bulid'?` — Batect's own implementation
   can silently drop one of two equally-close suggestions (its sorting comparator
   doubles as its de-duplication key), which Ratect's deliberately doesn't replicate.
+- A task named on the command line that doesn't exist ends its error with how to list
+  the tasks, after any suggestion: `Task 'tst' not found. Did you mean 'test'? (Run
+  'ratect-compat --list-tasks' for a list of all tasks in this project, or 'ratect-compat
+  --help' for help.)`, in every output style. A missing `prerequisites` entry gets no
+  such hint, as in Batect.
 - **A crash (a genuine bug, not one of the above) exits `101`**, Rust's own default for
   an unhandled panic. `ratect-compat` prints where to report it
   (https://github.com/or1can/ratect/issues/new), the binary's version and platform, and

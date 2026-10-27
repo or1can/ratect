@@ -1024,9 +1024,25 @@ async fn run(
     .with_event_sink(Arc::clone(&event_sink))
     .with_enable_buildkit(args.enable_buildkit);
     let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
-    engine.run_task(task_name, &args.additional_args).await?;
+    engine
+        .run_task(task_name, &args.additional_args)
+        .await
+        .map_err(with_unknown_task_hint)?;
 
     Ok(())
+}
+
+/// Ends an unknown task's error the way Batect's does, naming this binary's
+/// own commands: `ratect-core` can say the task doesn't exist, but not how
+/// this CLI lists them.
+fn with_unknown_task_hint(error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<ratect_core::engine::UnknownTask>() {
+        Some(unknown) => anyhow::anyhow!(
+            "{unknown} (Run 'ratect-compat --list-tasks' for a list of all tasks in this \
+             project, or 'ratect-compat --help' for help.)"
+        ),
+        None => error,
+    }
 }
 
 /// The background work [`run`] starts on a task run and never awaits.
