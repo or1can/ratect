@@ -1578,10 +1578,13 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// caller's to remove: a success returns its id, and a failure after
     /// that point carries it in [`CreateContainerError::created`], so the
     /// caller can register it for cleanup either way and nothing this call
-    /// creates is ever stranded (ratect#224). The container's Docker
-    /// `hostname` is set to `spec.shared.name` (matching Batect),
-    /// independent of `spec.shared.network_options` — except under a
-    /// `container:` network mode, where Docker refuses one
+    /// creates is ever stranded (ratect#224). Dropping this call's future
+    /// mid-request doesn't stop the daemon creating the container, only the
+    /// caller hearing about it, so a caller must drive it to its answer —
+    /// the engine holds every one it starts until it has (ratect#318). The
+    /// container's Docker `hostname` is set to `spec.shared.name` (matching
+    /// Batect), independent of `spec.shared.network_options` — except under
+    /// a `container:` network mode, where Docker refuses one
     /// (`build_hostname`).
     async fn create_container(
         &self,

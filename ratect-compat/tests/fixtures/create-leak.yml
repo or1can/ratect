@@ -1,0 +1,36 @@
+# A create the daemon has already done is removed even when a sibling's
+# failure drops the request waiting for its answer (ratect#318). `bad`'s
+# health-check interval is below Docker's 1ms minimum, so the daemon refuses
+# its create in a few milliseconds — while the four `good` creates, a little
+# slower, are still in flight. Before the fix, all four were left in Created
+# state every run.
+project_name: ratect-create-leak-test
+
+containers:
+  good1:
+    image: alpine:3.18
+    command: sleep 300
+  good2:
+    image: alpine:3.18
+    command: sleep 300
+  good3:
+    image: alpine:3.18
+    command: sleep 300
+  good4:
+    image: alpine:3.18
+    command: sleep 300
+  bad:
+    image: alpine:3.18
+    command: sleep 300
+    health_check:
+      command: "true"
+      interval: 500us
+  app:
+    image: alpine:3.18
+    dependencies: [good1, good2, good3, good4, bad]
+
+tasks:
+  t:
+    run:
+      container: app
+      command: "true"

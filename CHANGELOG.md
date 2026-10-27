@@ -63,6 +63,7 @@ history, from when it was the only binary.
 
 - `ratect doctor` and `ratect config validate` (ratect only) warn when a container's `dependencies`, a task's `dependencies` or a task's `prerequisites` gives the same entry more than once, naming the container or task, the field and the entry. The project still loads, and the entry still starts or runs once.
 - `ratect doctor` (ratect only) reports a `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` that is neither true nor false as a problem, naming the variable and its value.
+- After a `--no-cleanup*` run, a line per kept container says how to see its output (`docker logs`) and run a command in it (`docker exec -it`, after `docker start` for a container that isn't running).
 
 ### Changed
 
@@ -84,6 +85,7 @@ history, from when it was the only binary.
 - A Docker daemon running Windows containers is refused on connecting, before any task, cache or resource work, naming the operating system it reports.
 - A config-load error about a file inside a Git include names it by its path within the repository plus the remote and ref (`'1.yml' from the bundle '<repo>' at '<ref>'`) instead of its path in the `~/.ratect/incl` clone cache. A missing include also gives the path as written.
 - Cleaning directory caches (`ratect-compat --clean`/`--clean-cache` and `ratect caches clean` with `--cache-type directory`) warns when it skips a cache entry that is a symbolic link, naming the link,, and when the project has no `.batect/caches` directory.
+- Dependency containers with nothing left depending on them are stopped concurrently during cleanup, as in Batect, so independent dependencies wait out their grace periods together rather than one after another.
 
 ### Removed
 
@@ -145,6 +147,9 @@ history, from when it was the only binary.
 - A crash exits `101` instead of hanging when the run was forwarding stdin.
 - `ratect-compat --list-tasks` and `ratect tasks list` print no `: ` after a task whose `description` is empty or only whitespace, as in Batect.
 - `ratect-compat --list-tasks` and `ratect tasks list` with `-o quiet` print nothing for a project with no tasks, as in Batect, instead of an empty line.
+- A run that fails or is interrupted while a container is being created no longer leaves that container behind in Created state: cleanup waits for the create to finish and removes it. A further signal ends that wait and force-removes everything else, and a warning names the container and the label that finds it.
+- Dependency containers are stopped in reverse dependency order during cleanup, as in Batect: a container only after every container that depends on it.
+- With `--no-cleanup-after-success` or `--no-cleanup`, prerequisite tasks are cleaned up after success, as in Batect; only the named task's containers and network are left in place.
 
 ### Security
 

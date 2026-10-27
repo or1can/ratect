@@ -229,13 +229,34 @@ struct CreatedContainer {
 /// Container name -> id, for every container Docker has created in this one
 /// task execution, the task's own included — registered the moment
 /// `create_container` hands the id back (whether as its result or inside its
-/// error), before anything else can fail or the run can be dropped. Read
-/// only at cleanup, which removes exactly this set: a container whose start
+/// error), before anything else can fail — by the create itself, which
+/// `PendingCreates` keeps running to that answer even when the run that
+/// asked for it is dropped. Read only at cleanup, once nothing is pending,
+/// which removes exactly this set: a container whose start
 /// was then abandoned (a sibling failed and `try_join_all` dropped it), or
 /// whose start failed, is still here (ratect#224). `Mutex`-guarded since
 /// independent branches of the dependency graph proceed concurrently and
 /// each registers itself from its own task.
 type CreatedContainers = Mutex<HashMap<String, String>>;
+
+/// Every container create this task execution has sent, held so that one
+/// whose caller is dropped mid-request — a sibling's failure ending
+/// `try_join_all`, or a signal ending the run — still runs to the daemon's
+/// answer and registers what it created (ratect#318). The future does the
+/// registering itself, so whoever drives it to completion, the caller or
+/// cleanup, records the container in `CreatedContainers`; cleanup drives
+/// whatever is still unfinished before it reads that set. Without this, a
+/// create the daemon had already done was dropped with its future, never
+/// recorded, and left behind.
+///
+/// Each create is held with the container's config name, which is all a
+/// report can say about one cut short before it answered.
+type PendingCreates<'a> = Mutex<
+    Vec<(
+        String,
+        futures::future::Shared<futures::future::BoxFuture<'a, ()>>,
+    )>,
+>;
 
 /// Gets (or lazily creates) the shared cell for `key` in `cells`, under a
 /// short synchronous lock — the lock is dropped before the returned cell is
@@ -267,7 +288,7 @@ fn unshare<T: Clone>(result: &SharedResult<T>) -> Result<T> {
 /// `ensure_container_ready` as one borrow instead of a dozen parameters each
 /// (the previous shape, which `#[allow(clippy::too_many_arguments)]` was
 /// excusing). Lives on `run_task_internal`'s stack for the run.
-struct TaskRunContext<'a> {
+struct TaskRunContext<'a, 'p> {
     /// Container name -> its direct dependencies, proven acyclic by
     /// `build_dependency_graph`; the root's entry is the union of its own
     /// `dependencies` and the task's.
@@ -279,7 +300,10 @@ struct TaskRunContext<'a> {
     created_cells: &'a Mutex<HashMap<String, CreatedCell>>,
     ready_cells: &'a Mutex<HashMap<String, ReadyCell>>,
     image_cells: &'a Mutex<HashMap<String, ReadyCell>>,
-    created_containers: &'a CreatedContainers,
+    /// `'p`, not `'a`: a create in `pending_creates` registers into this,
+    /// and may outlive the run's own borrows.
+    created_containers: &'p CreatedContainers,
+    pending_creates: &'a PendingCreates<'p>,
     no_proxy_entries: &'a std::collections::BTreeSet<String>,
     customisations: Option<&'a IndexMap<String, TaskContainerCustomisation>>,
     run_labels: &'a crate::labels::RunLabels,
@@ -368,6 +392,55 @@ fn build_dependency_graph(
     let mut path = Vec::new();
     visit(containers, root, task_dependencies, &mut path, &mut graph)?;
     Ok(graph)
+}
+
+/// Whether `name` gets lines of its own — progress, a removal, a hint — in
+/// what a run prints: every container but one whose readiness is reported
+/// as another's, an `external_health_check`'s companion, which is an
+/// implementation detail of the container it checks (ratect#202). A report
+/// of what was *left* names a companion anyway, since it is there to remove
+/// and nothing else says so. One answer for every site, so the next one
+/// added can't forget it.
+fn is_narrated(containers: &HashMap<String, Container>, name: &str) -> bool {
+    containers
+        .get(name)
+        .is_none_or(|container| container.reports_readiness_for.is_none())
+}
+
+/// For each container in `created`, the others in `created` that depend on
+/// it — directly, or through a container that was never created — and so
+/// must have their stop attempted before it: Batect's `StopContainerStepRule`
+/// waits on each container's dependents, which at any depth is the same
+/// order. A dependent only has to have been *created* to count: one that
+/// never started is stopped at once (Docker answers `304`), so it holds
+/// nothing back, which is what Batect gets by counting only started
+/// dependents. A container `graph` doesn't know waits on nothing.
+fn dependents_to_stop_first(
+    graph: &HashMap<String, Vec<String>>,
+    created: &[&str],
+) -> HashMap<String, HashSet<String>> {
+    fn reach<'g>(graph: &'g HashMap<String, Vec<String>>, name: &str, seen: &mut HashSet<&'g str>) {
+        for dependency in graph.get(name).into_iter().flatten() {
+            if seen.insert(dependency.as_str()) {
+                reach(graph, dependency, seen);
+            }
+        }
+    }
+
+    let mut dependents: HashMap<String, HashSet<String>> = created
+        .iter()
+        .map(|name| (name.to_string(), HashSet::new()))
+        .collect();
+    for dependent in created {
+        let mut dependencies = HashSet::new();
+        reach(graph, dependent, &mut dependencies);
+        for dependency in dependencies {
+            if let Some(waiting) = dependents.get_mut(dependency) {
+                waiting.insert(dependent.to_string());
+            }
+        }
+    }
+    dependents
 }
 
 /// Builds the anchored, case-sensitive regex a `*`-wildcard prerequisite
@@ -615,6 +688,22 @@ impl LeftBehind {
             .join(", ")
     }
 
+    /// `Investigate db with: docker logs a1b2c3d4e5f6, or docker exec -it
+    /// a1b2c3d4e5f6 <command>` — Batect's two hints for a kept container,
+    /// the `exec` preceded by a `docker start` when it isn't `running`, so
+    /// the line works when pasted either way.
+    fn investigation(name: &str, id: &str, running: bool) -> String {
+        let id = Self::short_id(id);
+        let start = if running {
+            String::new()
+        } else {
+            format!("docker start {id}; ")
+        };
+        format!(
+            "Investigate {name} with: docker logs {id}, or {start}docker exec -it {id} <command>"
+        )
+    }
+
     /// `docker rm -f -v a1b2c3d4e5f6 0f1e2d3c4b5a; docker network rm
     /// ratect-…` — the network last, since it can't go while a container
     /// is still attached. Joined with `;`, not `&&`: an abandoned removal
@@ -751,15 +840,20 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// `docker::ContainerRuntime::run_container`'s own doc comment for why
     /// a nonzero exit is still "success" here), its dependency containers,
     /// and the task's own network are all left in place instead of removed.
-    /// `true` (the default) always cleans up. See `run_task_internal`.
+    /// Applies to the top-level task — the one named — alone: a
+    /// prerequisite is always cleaned up after success, as Batect's
+    /// `RunOptions` does for every task but the main one. `true` (the
+    /// default) always cleans up. See `run_task_internal`.
     cleanup_after_success: bool,
     /// `false` when `--no-cleanup`/`--no-cleanup-after-failure` was given:
     /// same as `cleanup_after_success`, but for a genuine infrastructure
     /// failure (a build/pull/health-check/setup-command failure, or
-    /// anything else that never reaches the task's own container exiting)
-    /// — matching Batect's own success/failure split for cleanup-gating
-    /// purposes exactly (`TaskEvent::TaskFinished` vs `TaskEvent::TaskFailed`
-    /// already encode it). `true` (the default) always cleans up.
+    /// anything else that never reaches the task's own container exiting),
+    /// and for every task the run reaches, prerequisites included — Batect's
+    /// split between the two buckets (`TaskEvent::TaskFinished` vs
+    /// `TaskEvent::TaskFailed` already encode it), and its scope, where only
+    /// the success flag is limited to the main task. `true` (the default)
+    /// always cleans up.
     cleanup_after_failure: bool,
     /// Set via `--max-parallelism <N>`: caps how many resource-intensive
     /// operations run concurrently across the whole invocation — image
@@ -2071,11 +2165,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // resolution failed) — the cleanup section below only ever removes
         // a network it can see was actually created.
         let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
+        // The task's dependency graph, set once it is built inside the
+        // block below — startup walks it, and cleanup stops containers in
+        // its reverse order. Unset exactly when building it failed, which
+        // is before anything is created.
+        let dependency_graph: std::sync::OnceLock<HashMap<String, Vec<String>>> =
+            std::sync::OnceLock::new();
 
         // Every container Docker creates for this run, registered the
         // moment `create_container` hands its id back — see
         // `CreatedContainers`. Cleanup removes exactly this set.
         let created_containers: CreatedContainers = Mutex::new(HashMap::new());
+        let pending_creates: PendingCreates<'_> = Mutex::new(Vec::new());
         // Every dependency-exit watcher `ensure_container_ready` spawns
         // once a dependency reaches `Ready` (see
         // `TaskEvent::DependencyExitedUnexpectedly`), collected so they can
@@ -2172,8 +2273,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // proves the whole graph acyclic before any concurrent execution
             // starts, so `ensure_container_ready` doesn't need its own
             // runtime cycle guard.
-            let graph =
+            let built =
                 build_dependency_graph(&containers, &run.container, task.dependencies.as_deref())?;
+            let graph = dependency_graph.get_or_init(|| built);
             // The resolved graph, for per-container progress displays (see
             // `TaskEvent::TaskGraphResolved`). A node missing from config
             // can't happen for a graph that just built successfully, but
@@ -2186,11 +2288,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // nothing: `expand_external_health_checks` only ever adds a
             // companion beside the container it checks, which is therefore
             // still in that list and is what the display drains on.
-            let narrated = |name: &String| {
-                containers
-                    .get(name)
-                    .is_none_or(|container| container.reports_readiness_for.is_none())
-            };
+            let narrated = |name: &String| is_narrated(&containers, name);
             let container_infos = graph
                 .iter()
                 .filter(|(name, _)| narrated(name))
@@ -2216,13 +2314,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             });
             let root_dependencies = graph.get(&run.container).cloned().unwrap_or_default();
             let context = TaskRunContext {
-                graph: &graph,
+                graph,
                 containers: &containers,
                 network: &network_name,
                 created_cells: &created_cells,
                 ready_cells: &ready_cells,
                 image_cells: &image_cells,
                 created_containers: &created_containers,
+                pending_creates: &pending_creates,
                 no_proxy_entries: &no_proxy_entries,
                 customisations: task.customise.as_ref(),
                 run_labels: &run_labels,
@@ -2415,15 +2514,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // indistinguishable to the user, and completing is the more useful
         // reading of a tie.
         //
-        // The residual race is Ratect's own: a container whose create
-        // request is already with the daemon when the run is dropped is
-        // created and never recorded, so cleanup can't see it, and it
-        // survives — its id is registered the moment the create call
-        // returns (`created_containers`), and a drop before that loses it.
-        // Batect's `CreateContainerStepRunner` always posts the created
-        // event, so its cleanup sees every container. The ownership labels
-        // are the answer — `ratect resources` finds exactly this — rather
-        // than an ordering that could avoid it.
+        // Dropping `execution` drops a container create waiting on the
+        // daemon's answer too, but not the request: that is held in
+        // `pending_creates`, and cleanup waits for its answer before it reads
+        // what was created, so the container is removed like any other — as
+        // under Batect, whose `CreateContainerStepRunner` always posts the
+        // created event.
+        //
         // Captured in the same expression that ends the run, not further
         // down: every interrupt after this instant is one the *cleanup*
         // should react to, and reading the count later would fold anything
@@ -2453,13 +2550,6 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .err()
             .and_then(|error| error.downcast_ref::<crate::interrupt::TaskInterrupted>())
             .map(|interrupted| interrupted.signal);
-        // Everything Docker created, however far each got — see
-        // `CreatedContainers`. The task's own container is pulled out
-        // first: cleanup removes it before the dependencies it was using,
-        // matching Batect's own dependency-ordered cleanup.
-        let mut created = created_containers.into_inner().unwrap();
-        let task_container_id = created.remove(&run.container);
-        let created_sidecars = created;
         // Stop watching before cleanup below ever stops a container — see
         // `dependency_watchers`' own doc comment for why the ordering
         // matters, not just that it happens. `abort()` only takes effect at
@@ -2492,8 +2582,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .downcast_ref::<crate::docker::ContainerExitedNonZero>()
                 .map(|failure| failure.exit_code),
         };
+        // The success flag keeps the named task's resources alone: a
+        // prerequisite is always cleaned up after success, as Batect's
+        // `RunOptions` does for every task but the main one. The failure
+        // flag applies to every task, prerequisites included.
         let should_cleanup = if exit_code.is_some() {
-            self.cleanup_after_success
+            self.cleanup_after_success || !top_level
         } else {
             self.cleanup_after_failure
         };
@@ -2605,6 +2699,55 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .to_string(),
             );
         }
+        // A create whose caller the run dropped is still with the daemon —
+        // see `PendingCreates` — so its answer is waited for before cleanup
+        // reads what exists. Already finished, and so instant, for every
+        // create of a run that wasn't cut short. Part of cleanup, so it is
+        // the ladder's first rung that ends the wait, as it ends a graceful
+        // stop: everything already known is then force-removed below, and
+        // waiting longer for a create's answer can't be worth leaving all of
+        // that to a supervisor's `SIGKILL` (ratect#249).
+        let pending = pending_creates.into_inner().unwrap();
+        let _ = self
+            .until_interrupted(
+                self.interrupt.wait_for(escalate_at),
+                futures::future::join_all(pending.iter().map(|(_, create)| create.clone())),
+            )
+            .await;
+        // A create cut short there may still have made its container, and
+        // with no id to remove it by, nothing else can say so: a line of its
+        // own, since the cleanup report that follows ends on a command to
+        // paste. Said as the wait stopping, not cleanup failing: under
+        // `--no-cleanup*` there is no cleanup to fail.
+        let mut unanswered: Vec<String> = pending
+            .into_iter()
+            .filter(|(_, create)| create.peek().is_none())
+            .map(|(name, _)| name)
+            .collect();
+        unanswered.sort();
+        unanswered.dedup();
+        if !unanswered.is_empty() {
+            let (creates, they, them) = if unanswered.len() == 1 {
+                ("create", "it", "it")
+            } else {
+                ("creates", "they", "them")
+            };
+            self.event_sink.post(TaskEvent::Warning {
+                message: format!(
+                    "Stopped waiting for the {creates} of {} to answer, so {they} may exist; \
+                     find {them} with docker ps -a --filter label={}={run_id}",
+                    unanswered.join(", "),
+                    crate::labels::RUN,
+                ),
+            });
+        }
+        // Everything Docker created, however far each got — see
+        // `CreatedContainers`. The task's own container is pulled out: what
+        // was kept or left behind is reported with it first.
+        let mut created = created_containers.into_inner().unwrap();
+        let task_container_id = created.remove(&run.container);
+        let created_sidecars = created;
+
         if should_cleanup {
             let narrates_cleanup =
                 !created_sidecars.is_empty() || owns_network || task_container_id.is_some();
@@ -2626,6 +2769,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // possibly left behind, which is the honest reading.
             let mut abandoned = false;
 
+            #[derive(Clone, Copy)]
             struct Removal<'a> {
                 name: &'a str,
                 container_id: &'a str,
@@ -2669,33 +2813,38 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 }
             };
 
-            // First, and unconditionally: `run_container` never removes the
-            // container it creates, so this is the only place the task's own
-            // container is removed — however the run ended. `Some` exactly
-            // when Docker got as far as creating one, which is also the only
-            // case where there is anything to remove. Before the sidecars it
-            // depends on, matching Batect's own dependency-ordered cleanup.
-            let mut removals: std::collections::VecDeque<Removal<'_>> =
-                std::collections::VecDeque::new();
+            // `run_container` never removes the container it creates, so
+            // this is the only place the task's own container is removed —
+            // however the run ended. `Some` exactly when Docker got as far
+            // as creating one, which is also the only case where there is
+            // anything to remove.
+            //
+            // Listed with the task's own container first and the rest by
+            // name, so what cleanup reports comes in the same order every
+            // run. The order things are *stopped* in is the graceful loop's
+            // below.
+            let mut created_ids: HashMap<&str, &str> = created_sidecars
+                .iter()
+                .map(|(name, id)| (name.as_str(), id.as_str()))
+                .collect();
             if let Some(container_id) = task_container_id.as_deref() {
-                removals.push_back(Removal {
-                    name: run.container.as_str(),
-                    container_id,
-                    narrate: true,
-                    is_task_container: true,
-                });
+                created_ids.insert(run.container.as_str(), container_id);
             }
-            for (name, container_id) in &created_sidecars {
-                let narrate = containers
-                    .get(name)
-                    .is_none_or(|container| container.reports_readiness_for.is_none());
-                removals.push_back(Removal {
-                    name: name.as_str(),
-                    container_id: container_id.as_str(),
-                    narrate,
-                    is_task_container: false,
-                });
-            }
+            let mut created_names: Vec<&str> = created_ids.keys().copied().collect();
+            created_names.sort_by_key(|name| (*name != run.container, *name));
+            let removals: Vec<Removal<'_>> = created_names
+                .iter()
+                .filter_map(|name| created_ids.get_key_value(name))
+                .map(|(&name, &container_id)| {
+                    let is_task_container = name == run.container;
+                    Removal {
+                        name,
+                        container_id,
+                        narrate: is_task_container || is_narrated(&containers, name),
+                        is_task_container,
+                    }
+                })
+                .collect();
             // Everything cleanup set out to remove, for the report at the
             // end — `removals` itself is consumed by the rungs below.
             let to_remove: Vec<(&str, &str)> = removals
@@ -2703,34 +2852,86 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .map(|removal| (removal.name, removal.container_id))
                 .collect();
 
-            // Graceful, one at a time in dependency order, until the ladder's
-            // first rung — reached either by a signal cutting a stop short or
-            // by one landing between two stops, which the count check catches
-            // so no stop is requested only to be dropped at once.
-            while let Some(removal) = removals.pop_front() {
+            // Graceful, until the ladder's first rung, and concurrent as
+            // Batect's is: each container's stop begins the moment every
+            // container depending on it has had its own attempt — whatever
+            // the outcome, so a refused stop holds nothing back — and every
+            // container ready at once is stopped at once, so independent
+            // dependencies wait out their grace periods together rather
+            // than one after another. Not gated by `--max-parallelism`
+            // (see `max_parallelism`). The rung is reached either by a
+            // signal cutting the stops in flight short or by one landing
+            // between two batches, which the count check catches so no stop
+            // is requested only to be dropped at once.
+            let mut waiting = dependents_to_stop_first(
+                dependency_graph.get().unwrap_or(&HashMap::new()),
+                &created_names,
+            );
+            let mut queued = removals;
+            let mut in_flight: Vec<Removal<'_>> = Vec::new();
+            let mut stops = futures::stream::FuturesUnordered::new();
+            loop {
                 if self.interrupt.count() >= escalate_at {
-                    removals.push_front(removal);
                     break;
                 }
-                let container_config = containers.get(removal.name);
-                let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
-                let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
-                let graceful = self.docker.stop_and_remove_container(
-                    removal.container_id,
-                    stop_signal,
-                    stop_grace_period,
-                );
+                let (ready, still_waiting): (Vec<_>, Vec<_>) =
+                    queued.into_iter().partition(|removal| {
+                        waiting
+                            .get(removal.name)
+                            .is_none_or(|dependents| dependents.is_empty())
+                    });
+                queued = still_waiting;
+                for removal in ready {
+                    in_flight.push(removal);
+                    let container_config = containers.get(removal.name);
+                    let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
+                    let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
+                    stops.push(async move {
+                        let outcome = self
+                            .docker
+                            .stop_and_remove_container(
+                                removal.container_id,
+                                stop_signal,
+                                stop_grace_period,
+                            )
+                            .await;
+                        (removal, outcome)
+                    });
+                }
+                let next = futures::StreamExt::next(&mut stops);
                 match self
-                    .until_interrupted(self.interrupt.wait_for(escalate_at), graceful)
+                    .until_interrupted(self.interrupt.wait_for(escalate_at), next)
                     .await
                 {
-                    Some(outcome) => report(&removal, outcome),
-                    None => {
-                        removals.push_front(removal);
-                        break;
+                    Some(Some((removal, outcome))) => {
+                        report(&removal, outcome);
+                        in_flight.retain(|other| other.container_id != removal.container_id);
+                        for dependents in waiting.values_mut() {
+                            dependents.remove(removal.name);
+                        }
                     }
+                    // Nothing in flight, so nothing is left to start either:
+                    // the graph is acyclic, so whatever is still queued is
+                    // waiting on something in flight.
+                    Some(None) => break,
+                    None => break,
                 }
             }
+            // A stop that finished in the same instant as the one the signal
+            // landed on, but wasn't reported yet, is reported as it is —
+            // handing it to the forced rung would remove it twice and never
+            // say it was removed. Polled once, never awaited: the rest are
+            // still in flight.
+            while let Some(Some((removal, outcome))) =
+                futures::FutureExt::now_or_never(futures::StreamExt::next(&mut stops))
+            {
+                report(&removal, outcome);
+                in_flight.retain(|other| other.container_id != removal.container_id);
+            }
+            // Dropping the stops in flight cancels their requests; they go to
+            // the forced rung with everything not yet started.
+            drop(stops);
+            let removals: Vec<Removal<'_>> = in_flight.into_iter().chain(queued).collect();
             // Forced, all at once: dependency order only mattered for the
             // graceful stops, and a supervisor's `SIGKILL` is on a timer, so
             // what is left goes out in one round-trip rather than one each.
@@ -2846,6 +3047,42 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     left.list(),
                     left.command()
                 ));
+                // Then how to look inside each, as Batect says — but not a
+                // readiness companion, which nothing else names either
+                // (ratect#202). Whether one is running is the daemon's to
+                // say: the task's own container has usually exited, but not
+                // after a signal, and a dependency may never have started.
+                // Asked all at once, and raced against the next signal as
+                // cleanup's own daemon calls are, so a daemon that has
+                // stopped answering costs one request timeout at most, and
+                // a signal since the run ended — one that cut cleanup's own
+                // waits short included — ends this one rather than being
+                // swallowed by it.
+                // Unknown — no answer, or an error — counts as stopped,
+                // since starting a running container does nothing.
+                let mut investigable: Vec<(&str, &str)> = kept_task_container
+                    .into_iter()
+                    .chain(
+                        created_sidecars
+                            .iter()
+                            .filter(|(name, _)| is_narrated(&containers, name))
+                            .map(|(name, id)| (name.as_str(), id.as_str())),
+                    )
+                    .collect();
+                investigable.sort();
+                let answers = futures::future::join_all(
+                    investigable
+                        .iter()
+                        .map(|(_, id)| self.docker.container_is_running(id)),
+                );
+                let running = self
+                    .until_interrupted(self.interrupt.wait_for(escalate_at), answers)
+                    .await
+                    .unwrap_or_default();
+                for (index, (name, id)) in investigable.into_iter().enumerate() {
+                    let running = matches!(running.get(index), Some(Ok(true)));
+                    self.post_notice(LeftBehind::investigation(name, id, running));
+                }
             }
         }
 
@@ -2930,10 +3167,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     // `double_must_use`: see `run_task_scoped`.
     #[allow(clippy::double_must_use)]
     #[async_recursion]
-    async fn ensure_container_created(
-        &self,
+    async fn ensure_container_created<'p>(
+        &'p self,
         name: &str,
-        context: &TaskRunContext<'_>,
+        context: &TaskRunContext<'_, 'p>,
     ) -> Result<CreatedContainer> {
         let cell = get_or_create_cell(context.created_cells, name);
         let result = cell
@@ -3041,38 +3278,60 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                 container: name.to_string(),
                             });
                         }
-                        self.docker.create_container(&spec).await
+                        // Held in `pending_creates` as well as awaited here,
+                        // so dropping this call doesn't drop the request —
+                        // see `PendingCreates`. The answer comes back through
+                        // `answer` rather than the shared future's output,
+                        // which would have to be `Clone`.
+                        let answer: Arc<
+                            Mutex<Option<Result<String, crate::docker::CreateContainerError>>>,
+                        > = Arc::default();
+                        let create = {
+                            let answer = Arc::clone(&answer);
+                            let spec = spec.clone();
+                            let name = name.to_string();
+                            let created_containers = context.created_containers;
+                            futures::FutureExt::shared(futures::FutureExt::boxed(async move {
+                                let created = self.docker.create_container(&spec).await;
+                                // Registered before anything else can happen
+                                // to it, on both arms: a container Docker
+                                // created is removed however the rest of the
+                                // run goes — see `CreatedContainers`.
+                                let id = match &created {
+                                    Ok(id) => Some(id),
+                                    Err(error) => error.created.as_ref(),
+                                };
+                                if let Some(id) = id {
+                                    created_containers
+                                        .lock()
+                                        .unwrap()
+                                        .insert(name.clone(), id.clone());
+                                    // Posted from the same place the id is
+                                    // registered, so a display's idea of what
+                                    // is outstanding can never disagree with
+                                    // what cleanup will actually remove.
+                                    if narrated && created.is_ok() {
+                                        self.event_sink
+                                            .post(TaskEvent::ContainerCreated { container: name });
+                                    }
+                                }
+                                *answer.lock().unwrap() = Some(created);
+                            }))
+                        };
+                        context
+                            .pending_creates
+                            .lock()
+                            .unwrap()
+                            .push((name.to_string(), create.clone()));
+                        create.await;
+                        let outcome = answer
+                            .lock()
+                            .unwrap()
+                            .take()
+                            .expect("a finished create has left its answer");
+                        outcome
                     };
-                    // Registered before anything else can happen to it, on
-                    // both arms: a container Docker created is removed
-                    // however the rest of the run goes — see
-                    // `CreatedContainers`.
-                    let id = match created {
-                        Ok(id) => id,
-                        Err(crate::docker::CreateContainerError { created, error }) => {
-                            if let Some(id) = created {
-                                context
-                                    .created_containers
-                                    .lock()
-                                    .unwrap()
-                                    .insert(name.to_string(), id);
-                            }
-                            return Err(error);
-                        }
-                    };
-                    context
-                        .created_containers
-                        .lock()
-                        .unwrap()
-                        .insert(name.to_string(), id.clone());
-                    // Posted from the same place the id is registered, so a
-                    // display's idea of what is outstanding can never
-                    // disagree with what cleanup will actually remove.
-                    if narrated {
-                        self.event_sink.post(TaskEvent::ContainerCreated {
-                            container: name.to_string(),
-                        });
-                    }
+                    let id = created.map_err(|error| error.error)?;
                     Ok(CreatedContainer { id, spec })
                 }
                 .await;
@@ -3105,10 +3364,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     // `double_must_use`: see `run_task_scoped`.
     #[allow(clippy::double_must_use)]
     #[async_recursion]
-    async fn ensure_container_ready(
-        &self,
+    async fn ensure_container_ready<'p>(
+        &'p self,
         name: &str,
-        context: &TaskRunContext<'_>,
+        context: &TaskRunContext<'_, 'p>,
     ) -> Result<String> {
         let cell = get_or_create_cell(context.ready_cells, name);
         let result = cell

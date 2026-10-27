@@ -218,7 +218,7 @@ list. The exceptions:
 | `--enable-buildkit` | An invalid `DOCKER_BUILDKIT` (the flag's default) is rejected the first time a run builds an image — every run of a task with a `build_directory` container, since Ratect always builds and leaves Docker's layer cache to skip unchanged work — rather than on every command. A task that only pulls images, `--list-tasks` and `--clean` never read it. Batect, like the Docker CLI, rejects an invalid value on every command. A daemon whose `Builder-Version` ping header is none of empty, `1` and `2` is reported at the same point, and not at all when `DOCKER_BUILDKIT` or the flag chooses the builder; Batect fails every run that connects to it, with an unhandled exception. |
 | `--cache-type` | Unlike Batect, not forced to `directory` for Windows containers — Ratect has no Windows support to special-case. A `BATECT_CACHE_TYPE` that is no cache type is refused, as in Batect, in Ratect's own words, naming the variable, its value and the two cache types. |
 | `--clean`, `--clean-cache` | Under `--cache-type=directory`, the Docker daemon is never contacted, so cleaning works while it's unreachable; Batect checks it can reach the daemon first, under either cache type, and fails without it. A project with no `.batect/caches` directory has nothing to remove, and Ratect warns that the directory isn't there, where Batect fails with exit code `255`. An entry there that is a symbolic link is skipped rather than followed, with a warning naming it: Batect follows it and deletes the contents of whatever it points to, even outside the project. |
-| `--max-parallelism` | Batect's flag caps *every* setup/cleanup step via a step-scheduling model Ratect doesn't have. Ratect's caps a narrower set — image pulls/builds, every container's create and a dependency's start (two separate capped steps, as in Batect; the task's own container's create counts, its run never does), and setup commands — the resource-intensive operations; health-check waits and cleanup teardown are deliberately excluded, and the task's own container's run is never gated, matching Batect's own exemption for it. |
+| `--max-parallelism` | Batect's flag caps *every* setup/cleanup step via a step-scheduling model Ratect doesn't have. Ratect's caps a narrower set — image pulls/builds, every container's create and a dependency's start (two separate capped steps, as in Batect; the task's own container's create counts, its run never does), and setup commands — the resource-intensive operations; health-check waits and cleanup teardown are deliberately excluded (teardown is concurrent, gated only by dependency order), and the task's own container's run is never gated, matching Batect's own exemption for it. |
 | `--log-file` | Batect's own default (no `--log-file`) is a silent `NullLogSink`, nothing anywhere; Ratect always logs to stderr regardless, so `--log-file` here tees into a file *in addition to* stderr, not instead of it. The records are Ratect's own rather than Batect's: the Git include cache sweep, for example, logs only what goes wrong, in its own words, and none of Batect's `No repositories ready for clean up.`, `Deleting repository as it has not been used in over 30 days.` or `Repository deletion completed.` records. |
 | `--generate-completion-script`, `--generate-completion-task-info` | Not accepted — an unrecognized-argument error. Batect's are hidden flags for its own shell completion, which reaches them only through Batect's wrapper script. `ratect-compat` has no shell completion; the native binary prints its own script with [`ratect completions <shell>`](ratect-cli.md#shell-completion). |
 | `--no-update-notification`, `--upgrade`, `--no-wrapper-cache-cleanup` | Recognized, no effect — permanently inapplicable, since Ratect is a single native binary with no self-updating wrapper script to disable notifications for, clean caches for, or upgrade. Recognized rather than rejected so an existing Batect invocation carrying one doesn't hard-fail outright. Hidden from `--help`, where Batect lists all three — `--upgrade` under its help options, the other two under its execution options. See [CLI reference](ratect-compat-cli.md#recognized-no-effect). |
@@ -401,7 +401,11 @@ tables above:
   task's containers can't be started — its image won't pull or build, or it
   doesn't become ready — whatever else was starting alongside it is dropped
   there and then, and cleanup begins. Batect cancels that work and waits for it
-  to wind down first.
+  to wind down first. A container whose create the daemon already had is still
+  removed: cleanup waits for that create's answer before it removes anything,
+  as Batect waits for its creates to finish. A further signal ends that wait
+  as it would a graceful stop — everything else is force-removed — and a
+  warning names the container and the run label that finds it.
 - **Docker 20.10 or newer is required.** Ratect refuses a daemon whose API
   is older than 1.41 (Docker 20.10) when it connects — before any task runs,
   whether or not BuildKit is asked for — because its proxy support needs
@@ -443,8 +447,35 @@ tables above:
   on; Batect's cleanup stalls there and leaves them running. Ratect also still
   goes on to remove the task network, where Batect keeps it and lists it among
   the manual cleanup commands it prints. While that container is still attached
-  to the network, Docker refuses, and Ratect logs a second warning naming the
-  network.
+  to the network, Docker refuses, and that refusal is reported in the same
+  `Cleanup failed:` error as the container's, which lists both as left behind.
+- **What cleanup leaves is reported in one line, in every style.** A
+  `--no-cleanup*` run ends with `Left in place (--no-cleanup): …`, and a cleanup
+  that failed with `Error: Cleanup failed: …; left behind: …`, each naming the
+  containers by config name and short id and ending `Remove with:` one `docker
+  rm -f -v` for every container, then `docker network rm` for the network. After
+  a `--no-cleanup*` run, a line per kept container gives Batect's `docker logs`
+  and `docker exec -it` hints, with `docker start` first for one that isn't
+  running. Where they differ from Batect's:
+  - They are printed under `-o quiet` too; Batect's `quiet` prints none of them.
+  - After a failed cleanup only what was actually left behind is listed;
+    Batect lists a command for every container and network the run created,
+    removed or not, and says "some or all" of them may be needed.
+  - Containers are named by the twelve-character id `docker ps` shows, and the
+    network by its name; Batect gives each container's full id and the
+    network's id, one `docker rm --force --volumes` per container.
+  - Under `-o all` a failed cleanup is that one `Error:` line, with no
+    container prefix; Batect prints `Could not stop container <name>.` or
+    `Could not remove container <name>.` on each container's own prefix, and
+    `Could not delete the task network.` on the task's.
+- **A crash skips cleanup.** If Ratect itself crashes mid-run — a bug, which
+  exits `101` and asks for a report — the run's containers and network are left
+  behind. Batect catches an internal error in a step and still cleans up. What
+  a crash leaves carries Ratect's ownership labels: `ratect resources clean`
+  removes it (`ratect`-only), and from `ratect-compat`, which has no such
+  command, `docker` does, filtering on the project's label — `docker rm -f -v
+  $(docker ps -aq --filter label=eu.orican.ratect.project=<project>)`, then the
+  same filter on `docker network ls -q` for `docker network rm`.
 - **No pull lines for an image that's already local.** Under
   `image_pull_policy: IfNotPresent`, an image that's already present prints no
   `Pulling X...`/`Pulled X.` lines; Batect prints both even though nothing is

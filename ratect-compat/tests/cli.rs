@@ -2395,6 +2395,159 @@ fn docker_ids(kind: &str, filter: &str, all: bool) -> Vec<String> {
         .collect()
 }
 
+/// A create the daemon already had when a sibling's failure dropped it is
+/// removed by cleanup (ratect#318) — run twice, and judged by what Docker
+/// still has, since a run that leaks nothing and one that cleans up exit the
+/// same.
+#[test]
+#[ignore]
+fn a_create_dropped_by_a_siblings_failure_leaves_nothing_behind_via_docker() {
+    let filter = "label=eu.orican.ratect.project=ratect-create-leak-test";
+    for run in 1..=2 {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/create-leak.yml"))
+            .args(["-o", "simple", "t"])
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let containers = docker_ids("container", filter, true);
+        let networks = docker_ids("network", filter, false);
+        for id in &containers {
+            let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+        }
+        for id in &networks {
+            let _ = Command::new("docker").args(["network", "rm", id]).output();
+        }
+        assert!(
+            !output.status.success() && stderr.contains("bad"),
+            "run {run}: `bad`'s create should fail the run: {stderr}"
+        );
+        assert!(
+            containers.is_empty(),
+            "run {run} left containers behind: {containers:?}\n{stderr}"
+        );
+        assert!(
+            networks.is_empty(),
+            "run {run} left its network behind: {networks:?}\n{stderr}"
+        );
+    }
+}
+
+/// The commands a `--no-cleanup` notice prints remove everything the run
+/// kept when pasted as printed — run twice, the second time under `-o quiet`,
+/// which prints the notice too, and judged by what Docker still has —
+/// containers and the network by the project's label, and the anonymous
+/// volume `-v` exists to remove by name (ratect#308).
+#[test]
+#[ignore]
+fn the_no_cleanup_notices_commands_remove_what_it_kept_via_docker() {
+    let filter = "label=eu.orican.ratect.project=ratect-no-cleanup-commands-test";
+    for style in ["simple", "quiet"] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/no-cleanup-commands.yml"),
+            )
+            .args(["-o", style, "--no-cleanup", "check"])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let commands = stderr
+            .lines()
+            .find_map(|line| line.split_once(". Remove with: ").map(|(_, tail)| tail))
+            .map(|tail| tail.split("; ").map(str::to_string).collect::<Vec<_>>())
+            .unwrap_or_default();
+        // Anonymous volumes carry no Ratect label, so they're found through
+        // the containers that own them, before those are removed.
+        let volumes: Vec<String> = docker_ids("container", filter, true)
+            .iter()
+            .flat_map(|id| {
+                let output = Command::new("docker")
+                    .args([
+                        "inspect",
+                        "--format",
+                        "{{range .Mounts}}{{.Name}} {{end}}",
+                        id,
+                    ])
+                    .output()
+                    .expect("failed to run docker inspect");
+                String::from_utf8_lossy(&output.stdout)
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut pasted = Vec::new();
+        for command in &commands {
+            let mut words = command.split_whitespace();
+            let program = words.next().unwrap_or_default().to_string();
+            let status = Command::new(&program)
+                .args(words)
+                .output()
+                .expect("failed to run a printed command")
+                .status;
+            pasted.push((command.clone(), status.success()));
+        }
+        let containers = docker_ids("container", filter, true);
+        let networks = docker_ids("network", filter, false);
+        for id in &containers {
+            let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+        }
+        for id in &networks {
+            let _ = Command::new("docker").args(["network", "rm", id]).output();
+        }
+        let volumes_left: Vec<&String> = volumes
+            .iter()
+            .filter(|volume| {
+                Command::new("docker")
+                    .args(["volume", "inspect", volume.as_str()])
+                    .output()
+                    .is_ok_and(|output| output.status.success())
+            })
+            .collect();
+        for volume in &volumes_left {
+            let _ = Command::new("docker")
+                .args(["volume", "rm", volume])
+                .output();
+        }
+        assert!(output.status.success(), "-o {style}: {stderr}");
+        assert!(
+            !volumes.is_empty(),
+            "-o {style}: `database` had an anonymous volume to remove, so this proves `-v`"
+        );
+        assert!(
+            volumes_left.is_empty(),
+            "-o {style}: the printed commands left anonymous volumes: {volumes_left:?}"
+        );
+        assert!(
+            commands.len() == 2
+                && commands[0].starts_with("docker rm -f -v ")
+                && commands[1].starts_with("docker network rm "),
+            "-o {style}: a container removal, then the network's: {commands:?}\n{stderr}"
+        );
+        assert!(
+            pasted.iter().all(|(_, succeeded)| *succeeded),
+            "-o {style}: every printed command succeeds: {pasted:?}"
+        );
+        assert!(
+            stderr.contains("Investigate app with: docker logs ")
+                && stderr.contains("Investigate database with: docker logs "),
+            "-o {style}: a hint per kept container:\n{stderr}"
+        );
+        assert!(
+            containers.is_empty(),
+            "-o {style}: the printed commands left containers: {containers:?}"
+        );
+        assert!(
+            networks.is_empty(),
+            "-o {style}: the printed commands left the network: {networks:?}"
+        );
+    }
+}
+
 /// Polls `condition` every 200 ms until it holds or `timeout` passes.
 fn poll_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;

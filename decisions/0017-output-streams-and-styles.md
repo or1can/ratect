@@ -216,6 +216,15 @@ with the same tail and a reason in place of the marker: `Left in place
 "running", since a container created but never started is kept too. One
 tail shape, so the eye learns it once.
 
+Amended by ratect#308: the `docker rm` in either tail is `docker rm -f -v`,
+removing anonymous volumes as Ratect's own cleanup does, and the
+`--no-cleanup*` notice is followed by one line per kept container, in name
+order, with Batect's investigation hints — `Investigate <container> with:
+docker logs <id>, or docker exec -it <id> <command>`, the `exec` preceded by
+`docker start <id>; ` for a container that isn't running. Lines of their own
+after the notice rather than inside it, so the notice keeps the one tail
+shape the failure error has.
+
 ### Colour never carries information alone
 
 Every message reads the same with its colour stripped. Colour only ever

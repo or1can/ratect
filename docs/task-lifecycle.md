@@ -54,7 +54,8 @@ reference](ratect-compat-config-reference.md#task)), unioned in alongside the co
 — it is then not reachable by name — while every other container still joins it.)
 All of this — network, dependencies, and the task's own container — is scoped
 to **this one task execution** and torn down before moving on, regardless of whether
-the task succeeded — unless `--no-cleanup`/`--no-cleanup-after-failure`/
+the task succeeded (though not if Ratect itself crashes — see [Differences from
+Batect](differences-from-batect.md#runtime-behavior-gaps)) — unless `--no-cleanup`/`--no-cleanup-after-failure`/
 `--no-cleanup-after-success` says otherwise, in which case everything below is left
 genuinely running instead, for investigation (see [CLI
 reference](ratect-compat-cli.md)):
@@ -96,9 +97,15 @@ sequenceDiagram
 
     Note over Engine: cleanup — runs even if the task's container failed,<br/>unless --no-cleanup* says otherwise
     Engine->>Docker: stop_and_remove_container() for the task's own container
-    Engine->>Docker: stop_and_remove_container() for each dependency
+    Engine->>Docker: stop_and_remove_container() for each dependency, in reverse dependency order
     Engine->>Docker: remove_network()
 ```
+
+Dependencies are stopped and removed in reverse dependency order: a container only
+after every container that depends on it, so a dependent shutting down can still reach
+what it depends on. A dependency whose dependent's stop failed is still stopped.
+Containers with nothing left depending on them are stopped at the same time, so
+independent dependencies take one grace period between them, not one each.
 
 If the container has no `dependencies`, the dependency steps (the `loop` above) are
 skipped — but the network is still created and the task's own container still joins
@@ -113,7 +120,10 @@ task's own container ran to completion instead, regardless of its exit code (a
 non-zero exit is still "success" for this purpose — it's the task's own container
 actually running that matters, not what it returned); `--no-cleanup` is both at once.
 Either way, everything above is left genuinely running, not just present-but-stopped
-— see [CLI reference](ratect-compat-cli.md).
+— see [CLI reference](ratect-compat-cli.md). The success flag keeps the named task's
+resources alone: a prerequisite is always cleaned up after success, so only the task
+you asked for is left to investigate. The failure flag applies to whichever task
+failed, prerequisites included.
 
 `pull_image()` in the diagram above is conditional on `image_pull_policy` (see [config
 reference](ratect-compat-config-reference.md#container)): `IfNotPresent`, the default, checks whether

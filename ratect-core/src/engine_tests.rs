@@ -121,6 +121,11 @@ struct FakeContainerRuntime {
     // either state — created but not started is the window a sibling's
     // failure lands in (ratect#224), and the state decisions/0019 adds.
     create_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // How long `create_container` for a container name takes to answer
+    // *after* Docker has created it — the window in which the daemon has
+    // the container and the client hasn't heard yet (see
+    // `with_create_reply_delay`, ratect#318).
+    create_reply_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     start_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     // Container names whose `start_background_container` fails (see
     // `failing_start`).
@@ -156,10 +161,20 @@ struct FakeContainerRuntime {
     // Container ids whose main command has exited, as `container_is_running`
     // reports them.
     exited_containers: Arc<Mutex<HashSet<String>>>,
+    // Container ids that were ever started — by `start_background_container`
+    // or `run_container` — so `container_is_running` reports one that was
+    // only created as not running, as the daemon does.
+    started_containers: Arc<Mutex<HashSet<String>>>,
     // What `container_is_running` answers instead of the truth, when set —
     // `Ok(true)` for a daemon that hasn't yet recorded an exit, `Err` for an
     // inspect that fails (see `with_running_probe`).
     running_probe: Arc<Mutex<Option<std::result::Result<bool, String>>>>,
+    // When set, `container_is_running` never answers, as a daemon that has
+    // stopped responding (see `with_hanging_running_probe`).
+    running_probe_hangs: Arc<Mutex<bool>>,
+    // Container name -> how long `container_is_running` takes to answer for
+    // it (see `with_running_probe_delay`).
+    running_probe_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
     // When set, `wait_for_container_healthy` and `exec_in_container` fail
     // as Docker does on a container `exited_containers` holds by the time
     // they resolve — its own `die` event and its 409 "is not running" —
@@ -201,6 +216,27 @@ struct FakeContainerRuntime {
     // Makes `remove_network` fail, as a daemon refusing to remove a network
     // with an endpoint still attached does (see `refusing_network_removal`).
     refuse_network_removal: Arc<Mutex<bool>>,
+    // Container name -> how long its graceful `stop_and_remove_container`
+    // takes, as a container waiting out its grace period does (see
+    // `with_stop_delay`).
+    stop_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
+    // A signal to record the moment a container's graceful stop finishes,
+    // so it lands while sibling stops that finished at the same instant
+    // haven't been reported yet (see `signalling_as_stop_of`).
+    #[allow(clippy::type_complexity)]
+    signal_as_stop_of: Arc<
+        Mutex<
+            Option<(
+                String,
+                Arc<crate::interrupt::Interrupt>,
+                crate::interrupt::TerminationSignal,
+            )>,
+        >,
+    >,
+    // Container name -> when its graceful stop began and, once it returned,
+    // ended, in (virtual) time — see `stop_window`.
+    #[allow(clippy::type_complexity)]
+    stop_windows: Arc<Mutex<HashMap<String, (tokio::time::Instant, Option<tokio::time::Instant>)>>>,
 }
 
 impl Default for FakeContainerRuntime {
@@ -224,6 +260,7 @@ impl Default for FakeContainerRuntime {
             rejected_tags: Default::default(),
             locally_present_images: Default::default(),
             create_delays: Default::default(),
+            create_reply_delays: Default::default(),
             start_delays: Default::default(),
             failing_starts: Default::default(),
             pull_delays: Default::default(),
@@ -235,13 +272,19 @@ impl Default for FakeContainerRuntime {
             run_delays: Default::default(),
             run_drain_delays: Default::default(),
             exited_containers: Default::default(),
+            started_containers: Default::default(),
             running_probe: Default::default(),
+            running_probe_hangs: Default::default(),
+            running_probe_delays: Default::default(),
             gate_observes_exits: Default::default(),
             dependency_exits: Default::default(),
             container_outputs: Default::default(),
             signals_on_removal: Default::default(),
             refused_container_removals: Default::default(),
             refuse_network_removal: Default::default(),
+            stop_delays: Default::default(),
+            signal_as_stop_of: Default::default(),
+            stop_windows: Default::default(),
         }
     }
 }
@@ -300,6 +343,40 @@ impl FakeContainerRuntime {
     fn refusing_network_removal(self) -> Self {
         *self.refuse_network_removal.lock().unwrap() = true;
         self
+    }
+
+    /// Makes the graceful `stop_and_remove_container` of container `name`
+    /// take `delay` before it returns — used with
+    /// `#[tokio::test(start_paused = true)]` to prove two stops overlap in
+    /// (virtual) time, or that one waits for another.
+    fn with_stop_delay(self, name: &str, delay: std::time::Duration) -> Self {
+        self.stop_delays
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
+    }
+
+    /// Records `signal` on `interrupt` as container `name`'s graceful stop
+    /// finishes — see the `signal_as_stop_of` field.
+    fn signalling_as_stop_of(
+        self,
+        name: &str,
+        interrupt: &Arc<crate::interrupt::Interrupt>,
+        signal: crate::interrupt::TerminationSignal,
+    ) -> Self {
+        *self.signal_as_stop_of.lock().unwrap() =
+            Some((name.to_string(), Arc::clone(interrupt), signal));
+        self
+    }
+
+    /// When container `name`'s graceful stop began and ended — `None` if it
+    /// was never attempted; the end is `None` if it never returned.
+    fn stop_window(
+        &self,
+        name: &str,
+    ) -> Option<(tokio::time::Instant, Option<tokio::time::Instant>)> {
+        self.stop_windows.lock().unwrap().get(name).copied()
     }
 
     fn refuses_removal_of(&self, container_id: &str) -> Result<()> {
@@ -402,6 +479,18 @@ impl FakeContainerRuntime {
         self
     }
 
+    /// Makes `create_container` for container name `name` record the
+    /// container as created — Docker has it — and only then wait `delay`
+    /// before answering, so a sibling's failure or a signal landing in that
+    /// window drops a create the daemon has already done.
+    fn with_create_reply_delay(self, name: &str, delay: std::time::Duration) -> Self {
+        self.create_reply_delays
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
+    }
+
     /// Makes `start_background_container` for container name `name`
     /// artificially `tokio::time::sleep` for `delay` before starting it —
     /// used with `#[tokio::test(start_paused = true)]` to prove two
@@ -462,6 +551,23 @@ impl FakeContainerRuntime {
                 .lock()
                 .unwrap()
                 .contains(container_id)
+    }
+
+    /// See the `running_probe_hangs` field.
+    fn with_hanging_running_probe(self) -> Self {
+        *self.running_probe_hangs.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `container_is_running` for container `name` take `delay` to
+    /// answer — used with `#[tokio::test(start_paused = true)]` to prove two
+    /// lookups overlap.
+    fn with_running_probe_delay(self, name: &str, delay: std::time::Duration) -> Self {
+        self.running_probe_delays
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), delay);
+        self
     }
 
     /// See the `running_probe` field.
@@ -915,6 +1021,10 @@ impl ContainerRuntime for FakeContainerRuntime {
         // shows up as the same `sidecar-stop:sidecar-id-{name}` event,
         // which is what the cleanup-flag tests assert on.
         let container_id = format!("sidecar-id-{name}");
+        let reply_delay = self.create_reply_delays.lock().unwrap().get(name).copied();
+        if let Some(reply_delay) = reply_delay {
+            tokio::time::sleep(reply_delay).await;
+        }
         if self
             .failing_creations_after_docker_created
             .lock()
@@ -947,6 +1057,10 @@ impl ContainerRuntime for FakeContainerRuntime {
         if self.failing_starts.lock().unwrap().contains(alias) {
             anyhow::bail!("Failed to start container '{alias}'");
         }
+        self.started_containers
+            .lock()
+            .unwrap()
+            .insert(container_id.to_string());
         self.push(format!(
             "sidecar-start:{alias}:{}",
             network_label(&spec.shared.network)
@@ -988,14 +1102,29 @@ impl ContainerRuntime for FakeContainerRuntime {
     }
 
     async fn container_is_running(&self, container_id: &str) -> Result<bool> {
+        if *self.running_probe_hangs.lock().unwrap() {
+            std::future::pending::<()>().await;
+        }
+        let name = container_id
+            .strip_prefix("sidecar-id-")
+            .unwrap_or(container_id);
+        let delay = self.running_probe_delays.lock().unwrap().get(name).copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         if let Some(answer) = self.running_probe.lock().unwrap().clone() {
             return answer.map_err(|message| anyhow::anyhow!(message));
         }
-        Ok(!self
-            .exited_containers
+        Ok(self
+            .started_containers
             .lock()
             .unwrap()
-            .contains(container_id))
+            .contains(container_id)
+            && !self
+                .exited_containers
+                .lock()
+                .unwrap()
+                .contains(container_id))
     }
 
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64> {
@@ -1067,6 +1196,10 @@ impl ContainerRuntime for FakeContainerRuntime {
             format!("sidecar-id-{name}"),
             "the task container is run by the id its own creation returned"
         );
+        self.started_containers
+            .lock()
+            .unwrap()
+            .insert(container_id.to_string());
         self.push(format!(
             "run:{name}:{}:args=[{}]:{}",
             spec.shared.command.as_deref().unwrap_or_default(),
@@ -1156,7 +1289,31 @@ impl ResourceInventory for FakeContainerRuntime {
             container_id.to_string(),
             (stop_signal.map(str::to_string), stop_grace_period),
         );
+        let name = container_id
+            .strip_prefix("sidecar-id-")
+            .unwrap_or(container_id)
+            .to_string();
+        self.stop_windows
+            .lock()
+            .unwrap()
+            .insert(name.clone(), (tokio::time::Instant::now(), None));
         self.signal_from_removal().await;
+        let delay = self.stop_delays.lock().unwrap().get(&name).copied();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+        if let Some(window) = self.stop_windows.lock().unwrap().get_mut(&name) {
+            window.1 = Some(tokio::time::Instant::now());
+        }
+        if let Some((_, interrupt, signal)) = self
+            .signal_as_stop_of
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(stopping, _, _)| *stopping == name)
+        {
+            interrupt.record_signal(*signal);
+        }
         self.refuses_removal_of(container_id)?;
         self.push(format!("sidecar-stop:{container_id}"));
         Ok(())
@@ -4118,6 +4275,386 @@ fn assert_removed_before_network(events: &[String], container: &str) {
     );
 }
 
+/// `start` runs `app`, and each container in `containers` (name and its
+/// dependencies) is declared as given — the shape of a cleanup-order test.
+fn config_with_containers(app_dependencies: &[&str], containers: &[(&str, &[&str])]) -> Config {
+    let names = |names: &[&str]| -> Option<Vec<String>> {
+        (!names.is_empty()).then(|| names.iter().map(|name| name.to_string()).collect())
+    };
+    let mut declared = IndexMap::new();
+    for (name, dependencies) in containers {
+        declared.insert(
+            name.to_string(),
+            container("alpine:3.18", names(dependencies)),
+        );
+    }
+    declared.insert(
+        "app".to_string(),
+        container("alpine:3.18", names(app_dependencies)),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers: declared,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Where in `events` `container`'s graceful stop was recorded.
+fn stop_index(events: &[String], container: &str) -> usize {
+    events
+        .iter()
+        .position(|e| e == &format!("sidecar-stop:sidecar-id-{container}"))
+        .unwrap_or_else(|| panic!("'{container}' must be stopped: {events:?}"))
+}
+
+/// A chain is stopped from the task's end: a container only once the one
+/// depending on it has stopped, so its shutdown can still reach what it
+/// depends on (ratect#307). Eight links, so a hash order passing by luck is
+/// a one-in-40,000 event.
+#[tokio::test]
+async fn a_dependency_chain_is_stopped_in_reverse_dependency_order() {
+    let links = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"];
+    let declared: Vec<(&str, Vec<&str>)> = links
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (*name, links.get(i + 1).into_iter().copied().collect()))
+        .collect();
+    let declared: Vec<(&str, &[&str])> = declared
+        .iter()
+        .map(|(name, dependencies)| (*name, dependencies.as_slice()))
+        .collect();
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_containers(&["c1"], &declared), docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    let mut previous = stop_index(&events, "app");
+    for link in links {
+        let index = stop_index(&events, link);
+        assert!(
+            previous < index,
+            "'{link}' is stopped after the container depending on it: {events:?}"
+        );
+        previous = index;
+    }
+}
+
+/// A dependency shared by several dependents waits for all of them. Six
+/// dependents and five runs, so a hash order can't pass by luck.
+#[tokio::test]
+async fn a_shared_dependency_is_stopped_after_every_container_depending_on_it() {
+    let dependents = ["a1", "a2", "a3", "a4", "a5", "a6"];
+    let mut declared: Vec<(&str, &[&str])> = dependents
+        .iter()
+        .map(|name| (*name, &["shared"][..]))
+        .collect();
+    declared.push(("shared", &[]));
+    for _ in 0..5 {
+        let docker = FakeContainerRuntime::default();
+        let engine = engine(
+            config_with_containers(&dependents, &declared),
+            docker.clone(),
+        );
+
+        engine.run_task("start", &[]).await.unwrap();
+
+        let events = docker.events();
+        let shared = stop_index(&events, "shared");
+        for dependent in dependents {
+            assert!(
+                stop_index(&events, dependent) < shared,
+                "'shared' is stopped after '{dependent}': {events:?}"
+            );
+        }
+        assert!(
+            stop_index(&events, "app") < stop_index(&events, "a1"),
+            "the task's own container is still stopped first: {events:?}"
+        );
+    }
+}
+
+/// A dependent whose stop the daemon refuses doesn't hold up what it depends
+/// on: cleanup carries on past it, as differences-from-batect.md records.
+#[tokio::test]
+async fn a_dependency_is_still_stopped_after_its_dependents_stop_fails() {
+    let docker = FakeContainerRuntime::default().refusing_container_removal("sidecar-id-a");
+    let engine = engine(
+        config_with_containers(&["a"], &[("a", &["b"]), ("b", &[])]),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    assert!(
+        docker.stop_options_for("sidecar-id-a").is_some(),
+        "'a''s stop is attempted: {events:?}"
+    );
+    assert!(
+        !events.contains(&"sidecar-stop:sidecar-id-a".to_string()),
+        "'a''s stop is refused: {events:?}"
+    );
+    stop_index(&events, "b");
+    assert_removed_before_network(&events, "b");
+}
+
+/// A dependent that was created but never started doesn't keep its
+/// dependency from being stopped and removed (Batect's CSP-14).
+#[tokio::test]
+async fn a_dependency_is_still_stopped_when_its_dependent_never_started() {
+    let docker = FakeContainerRuntime::default().failing_start("a");
+    let engine = engine(
+        config_with_containers(&["a"], &[("a", &["b"]), ("b", &[])]),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    assert!(
+        stop_index(&events, "a") < stop_index(&events, "b"),
+        "the unstarted dependent comes first, and its dependency still goes: {events:?}"
+    );
+    assert_removed_before_network(&events, "b");
+}
+
+/// A container that was never created passes its dependents' order on to
+/// what it depends on: `c` still waits for `a`, through `b`.
+#[test]
+fn the_stop_order_runs_through_a_container_that_was_never_created() {
+    let graph: HashMap<String, Vec<String>> = [
+        ("app", vec!["a"]),
+        ("a", vec!["b"]),
+        ("b", vec!["c"]),
+        ("c", vec![]),
+    ]
+    .into_iter()
+    .map(|(name, dependencies)| {
+        (
+            name.to_string(),
+            dependencies.into_iter().map(str::to_string).collect(),
+        )
+    })
+    .collect();
+
+    assert_eq!(
+        dependents_to_stop_first(&graph, &["c", "a"])["c"],
+        HashSet::from(["a".to_string()])
+    );
+}
+
+const GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Independent dependencies are stopped together, as Batect runs every
+/// ready stop at once: three that each wait out a grace period take one,
+/// not three (ratect#317).
+#[tokio::test(start_paused = true)]
+async fn independent_dependencies_are_stopped_concurrently() {
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE)
+        .with_stop_delay("c", GRACE);
+    let engine = engine(
+        config_with_containers(&["a", "b", "c"], &[("a", &[]), ("b", &[]), ("c", &[])]),
+        docker.clone(),
+    );
+
+    let started = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert!(
+        started.elapsed() < GRACE * 2,
+        "cleanup took {:?}, not one grace period",
+        started.elapsed()
+    );
+    let windows: Vec<_> = ["a", "b", "c"]
+        .iter()
+        .map(|name| docker.stop_window(name).expect("stopped"))
+        .collect();
+    for (_, ended) in &windows {
+        for (other_begun, _) in &windows {
+            assert!(
+                other_begun < &ended.expect("returned"),
+                "every stop begins before any of the others ends: {windows:?}"
+            );
+        }
+    }
+    for name in ["a", "b", "c"] {
+        assert_removed_before_network(&docker.events(), name);
+    }
+}
+
+/// A chain still waits: `b` is stopped only once `a`, which depends on it,
+/// has finished stopping.
+#[tokio::test(start_paused = true)]
+async fn a_chain_is_stopped_one_link_at_a_time() {
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE);
+    let engine = engine(
+        config_with_containers(&["a"], &[("a", &["b"]), ("b", &[])]),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (_, a_ended) = docker.stop_window("a").unwrap();
+    let (b_begun, _) = docker.stop_window("b").unwrap();
+    assert!(
+        a_ended.unwrap() <= b_begun,
+        "'b' begins stopping only after 'a' has stopped"
+    );
+    let (app_begun, app_ended) = docker.stop_window("app").unwrap();
+    let (a_begun, _) = docker.stop_window("a").unwrap();
+    assert!(app_begun <= a_begun && app_ended.unwrap() <= a_begun);
+}
+
+/// A shared dependency waits for every dependent, however long each takes.
+#[tokio::test(start_paused = true)]
+async fn a_shared_dependency_waits_for_its_slowest_dependent() {
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE * 2);
+    let engine = engine(
+        config_with_containers(
+            &["a", "b"],
+            &[("a", &["shared"]), ("b", &["shared"]), ("shared", &[])],
+        ),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (shared_begun, _) = docker.stop_window("shared").unwrap();
+    for dependent in ["a", "b"] {
+        let (_, ended) = docker.stop_window(dependent).unwrap();
+        assert!(
+            ended.unwrap() <= shared_begun,
+            "'shared' begins stopping only after '{dependent}' has stopped"
+        );
+    }
+    let (a_begun, _) = docker.stop_window("a").unwrap();
+    let (b_begun, _) = docker.stop_window("b").unwrap();
+    assert_eq!(a_begun, b_begun, "the two dependents stop together");
+}
+
+/// A stop that finished alongside the one a signal landed on is reported
+/// as removed, not handed to the forced rung as though it were still in
+/// flight: what cleanup says it removed is what it removed.
+#[tokio::test(start_paused = true)]
+async fn a_stop_that_finished_when_a_signal_landed_is_not_force_removed() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", GRACE)
+        .with_stop_delay("b", GRACE)
+        .signalling_as_stop_of(
+            "a",
+            &interrupt,
+            crate::interrupt::TerminationSignal::Terminate,
+        );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["a", "b"],
+            &[("a", &[]), ("b", &[])],
+        )),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let events = docker.events();
+    for name in ["a", "b"] {
+        assert!(
+            events.contains(&format!("sidecar-stop:sidecar-id-{name}")),
+            "'{name}' finished its graceful stop: {events:?}"
+        );
+        assert!(
+            !events.contains(&format!("force-remove:sidecar-id-{name}")),
+            "'{name}' isn't force-removed after it: {events:?}"
+        );
+    }
+    let removed: Vec<String> = sink
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::ContainerRemoved { container } => Some(container),
+            _ => None,
+        })
+        .collect();
+    for name in ["a", "b"] {
+        assert!(
+            removed.contains(&name.to_string()),
+            "'{name}' is reported removed: {removed:?}"
+        );
+    }
+}
+
+/// A signal during concurrent stops hands every one of them — the two in
+/// flight and the one still waiting for them — to the forced rung.
+#[tokio::test(start_paused = true)]
+async fn a_signal_during_concurrent_stops_force_removes_every_one_left() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("a", std::time::Duration::from_secs(60))
+        .with_stop_delay("b", std::time::Duration::from_secs(60));
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["a", "b"],
+            &[("a", &["c"]), ("b", &[]), ("c", &[])],
+        )),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    );
+    let signaller = {
+        let interrupt = Arc::clone(&interrupt);
+        let docker = docker.clone();
+        tokio::spawn(async move {
+            while docker.stop_window("a").is_none() || docker.stop_window("b").is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            interrupt.record_signal(crate::interrupt::TerminationSignal::Terminate);
+        })
+    };
+
+    engine.run_task("start", &[]).await.unwrap();
+    signaller.await.unwrap();
+
+    let events = docker.events();
+    assert!(
+        events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+        "the task's own container was stopped before the signal: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-a".to_string()),
+        "'a', in flight, is force-removed: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-b".to_string()),
+        "'b', in flight, is force-removed: {events:?}"
+    );
+    assert!(
+        events.contains(&"force-remove:sidecar-id-c".to_string()),
+        "'c', still waiting, is force-removed: {events:?}"
+    );
+    assert!(
+        docker.stop_window("c").is_none(),
+        "'c' never begins a graceful stop: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("network-remove:")),
+        "and the network is still removed: {events:?}"
+    );
+}
+
 /// A sibling whose start is abandoned because another dependency failed is
 /// still removed, as long as Docker had created it: `peer` is created at
 /// once, `fails` is reported unhealthy a second later, and `peer`'s start
@@ -6812,14 +7349,26 @@ async fn without_cleanup_after_failure_leaves_everything_in_place_on_an_infrastr
 async fn without_cleanup_after_failure_has_no_effect_on_a_successful_run() {
     let config = config_with_database_dependency(|_| {});
     let docker = FakeContainerRuntime::default();
-    let engine = engine(config, docker.clone())
-        .with_settings(TaskEngineSettings {
-            cleanup_after_failure: false,
-            ..Default::default()
-        })
-        .unwrap();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
 
     engine.run_task("start", &[]).await.unwrap();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(
+        notices.is_empty(),
+        "nothing was kept, so no notice and no hints: {notices:?}"
+    );
 
     let events = docker.events();
     assert!(
@@ -6835,6 +7384,354 @@ async fn without_cleanup_after_failure_has_no_effect_on_a_successful_run() {
     assert!(
         events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
         "the task's own container should still be removed too: {events:?}"
+    );
+}
+
+/// `test` runs `app` (with dependency `app-db`) once its prerequisite
+/// `prepare` has run `prep` (with dependency `prep-db`): each task has a
+/// container, a dependency and a network of its own, so a test can tell
+/// which task's cleanup a flag applied to.
+fn config_with_a_prerequisite_that_has_a_dependency() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("prep-db".to_string(), container("postgres:16", None));
+    containers.insert(
+        "prep".to_string(),
+        container("alpine:3.18", Some(vec!["prep-db".to_string()])),
+    );
+    containers.insert("app-db".to_string(), container("postgres:16", None));
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["app-db".to_string()])),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("prepare".to_string(), task("prep", "echo prepare"));
+    let mut test = task("app", "echo test");
+    test.prerequisites = Some(vec!["prepare".to_string()]);
+    tasks.insert("test".to_string(), test);
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// The networks the fake was asked to create, in order — one per task run.
+fn created_networks(events: &[String]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|event| event.strip_prefix("network-create:"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn removed(events: &[String], container: &str) -> bool {
+    events.contains(&format!("sidecar-stop:sidecar-id-{container}"))
+}
+
+fn network_removed(events: &[String], network: &str) -> bool {
+    events.contains(&format!("network-remove:{network}"))
+}
+
+/// The prerequisite's container, its dependency and its network are removed
+/// and the named task's are kept — one assertion per resource, so a run that
+/// removes only some of them can't pass.
+fn assert_only_the_named_task_was_kept(docker: &FakeContainerRuntime) {
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 2, "one network per task: {events:?}");
+    assert!(
+        removed(&events, "prep"),
+        "the prerequisite's own container is removed: {events:?}"
+    );
+    assert!(
+        removed(&events, "prep-db"),
+        "the prerequisite's dependency is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
+    );
+    assert!(
+        !removed(&events, "app"),
+        "the named task's own container is kept: {events:?}"
+    );
+    assert!(
+        !removed(&events, "app-db"),
+        "the named task's dependency is kept: {events:?}"
+    );
+    assert!(
+        !network_removed(&events, &networks[1]),
+        "the named task's network is kept: {events:?}"
+    );
+}
+
+/// Batect's `RunOptions`: `--no-cleanup-after-success` applies to the main
+/// task alone, and every other task is cleaned up after success whatever it
+/// says (ratect#320).
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisite() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        config_with_a_prerequisite_that_has_a_dependency(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    assert_only_the_named_task_was_kept(&docker);
+}
+
+/// A prerequisite whose command exits non-zero is in the success bucket too,
+/// so it is cleaned up — and the run ends with its code before the named
+/// task's container is ever created.
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisite_that_exits_non_zero() {
+    let docker = FakeContainerRuntime::default().with_run_exit("prep", 3);
+    let engine = engine(
+        config_with_a_prerequisite_that_has_a_dependency(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let error = engine.run_task("test", &[]).await.unwrap_err();
+
+    assert_eq!(
+        error
+            .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+            .map(|exited| exited.exit_code),
+        Some(3),
+        "the prerequisite's own exit code: {error:#}"
+    );
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "the named task never ran: {events:?}");
+    assert!(
+        !events.iter().any(|event| event.starts_with("create:app:")),
+        "the named task's container is never created: {events:?}"
+    );
+    assert!(
+        removed(&events, "prep"),
+        "the prerequisite's own container is removed: {events:?}"
+    );
+    assert!(
+        removed(&events, "prep-db"),
+        "the prerequisite's dependency is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
+    );
+}
+
+/// A named task with only `prerequisites` has no container of its own, so
+/// with every task it runs being a prerequisite, nothing is kept.
+#[tokio::test]
+async fn without_cleanup_after_success_keeps_nothing_for_a_prerequisites_only_task() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config_with_a_prerequisites_only_task(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_success: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("outer", &[]).await.unwrap();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "only the prerequisite runs: {events:?}");
+    assert!(
+        removed(&events, "build-env"),
+        "the prerequisite's own container is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
+    );
+}
+
+/// The same scope in a native project, loaded through the native loader:
+/// `ratect` follows the fix too, and nothing the engine reads from a native
+/// project may restore the old behaviour.
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisite_in_a_native_project() {
+    let directory = std::env::temp_dir().join(format!("ratect-320-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("ratect.toml");
+    std::fs::write(
+        &file,
+        r#"project_name = "demo"
+
+[containers.prep-db]
+image = "postgres:16"
+
+[containers.prep]
+image = "alpine:3.18"
+dependencies = ["prep-db"]
+
+[containers.app-db]
+image = "postgres:16"
+
+[containers.app]
+image = "alpine:3.18"
+dependencies = ["app-db"]
+
+[tasks.prepare]
+run = { container = "prep", command = "echo prepare" }
+
+[tasks.test]
+prerequisites = ["prepare"]
+run = { container = "app", command = "echo test" }
+"#,
+    )
+    .unwrap();
+    let running: crate::written_for::Version = "0.12.0".parse().unwrap();
+    let project = crate::config::load_project_native(&file, running)
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    let dialect = project.dialect;
+    assert_eq!(dialect, Dialect::Native);
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project,
+        docker.clone(),
+        Arc::new(NullEventSink),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        dialect,
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    assert_only_the_named_task_was_kept(&docker);
+}
+
+/// With `--skip-prerequisites` the named task is still the top-level one,
+/// so the flag still keeps its resources — the scope is "the task named",
+/// not "a task with no prerequisites".
+#[tokio::test]
+async fn without_cleanup_after_success_keeps_the_named_task_when_prerequisites_are_skipped() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        config_with_a_prerequisite_that_has_a_dependency(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        run_prerequisites: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "only the named task runs: {events:?}");
+    assert!(
+        !removed(&events, "app"),
+        "the named task's own container is kept: {events:?}"
+    );
+    assert!(
+        !removed(&events, "app-db"),
+        "the named task's dependency is kept: {events:?}"
+    );
+    assert!(
+        !network_removed(&events, &networks[0]),
+        "the named task's network is kept: {events:?}"
+    );
+}
+
+/// `prepare`'s dependency `prep-db` has a setup command that fails — an
+/// infrastructure failure in a prerequisite.
+fn config_with_a_prerequisite_whose_dependency_fails_setup() -> Config {
+    let mut config = config_with_a_prerequisite_that_has_a_dependency();
+    config.containers.get_mut("prep-db").unwrap().setup_commands =
+        Some(vec![crate::config::SetupCommand {
+            command: "./migrate.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    config
+}
+
+/// Batect's `RunOptions` applies `--no-cleanup-after-failure` to every task,
+/// prerequisites included — unlike the success flag. Ratect already did;
+/// this pins it (Batect's XRO-3).
+#[tokio::test]
+async fn without_cleanup_after_failure_keeps_a_prerequisites_resources_after_its_failure() {
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let engine = engine(
+        config_with_a_prerequisite_whose_dependency_fails_setup(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "the named task never ran: {events:?}");
+    assert!(
+        !events.iter().any(|event| event.starts_with("create:app:")),
+        "the named task's container is never created: {events:?}"
+    );
+    assert!(
+        !removed(&events, "prep-db"),
+        "the prerequisite's failed dependency is kept: {events:?}"
+    );
+    assert!(
+        !network_removed(&events, &networks[0]),
+        "the prerequisite's network is kept: {events:?}"
+    );
+}
+
+/// The reverse: the success flag doesn't reach a prerequisite's failure.
+#[tokio::test]
+async fn without_cleanup_after_success_still_cleans_up_a_prerequisites_failure() {
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("./migrate.sh");
+    let engine = engine(
+        config_with_a_prerequisite_whose_dependency_fails_setup(),
+        docker.clone(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "the named task never ran: {events:?}");
+    assert!(
+        removed(&events, "prep-db"),
+        "the prerequisite's failed dependency is removed: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the prerequisite's network is removed: {events:?}"
     );
 }
 
@@ -11601,6 +12498,359 @@ async fn a_refused_removal_reports_the_daemons_reason_and_what_was_left() {
     );
 }
 
+/// A failure before any container exists still removes the network the
+/// engine created for the run — with nothing to wait for, it goes at once
+/// (Batect's DTN-1; ratect#309).
+#[tokio::test]
+async fn a_failure_before_any_container_is_created_still_removes_the_network() {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "build-env".to_string(),
+        container_with_build_directory("./docker", None),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("build".to_string(), task("build-env", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+    let docker = FakeContainerRuntime::default().failing_image_build();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("build", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "{events:?}");
+    assert!(
+        !events.iter().any(|e| e.starts_with("create:")),
+        "no container was created: {events:?}"
+    );
+    assert!(
+        network_removed(&events, &networks[0]),
+        "the network is still removed: {events:?}"
+    );
+}
+
+/// A container whose removal the daemon refuses doesn't stop cleanup: the
+/// task's other containers are still removed, the network is still removed
+/// after them, and the refused one is never reported removed (ratect#309,
+/// the divergence differences-from-batect.md records).
+#[tokio::test]
+async fn a_refused_removal_still_removes_the_other_containers_and_the_network() {
+    let docker = FakeContainerRuntime::default().refusing_container_removal("sidecar-id-b");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["a", "b", "c"],
+            &[("a", &[]), ("b", &[]), ("c", &[])],
+        )),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<CleanupFailed>(), "{error:#}");
+    let events = docker.events();
+    assert!(
+        docker.stop_options_for("sidecar-id-b").is_some(),
+        "the refused removal was attempted: {events:?}"
+    );
+    for removed in ["app", "a", "c"] {
+        assert_removed_before_network(&events, removed);
+    }
+    let removed: Vec<String> = sink
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::ContainerRemoved { container } => Some(container),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !removed.contains(&"b".to_string()),
+        "the refused container is never reported removed: {removed:?}"
+    );
+    for container in ["app", "a", "c"] {
+        assert!(
+            removed.contains(&container.to_string()),
+            "'{container}' is reported removed: {removed:?}"
+        );
+    }
+}
+
+/// When the network's removal is refused too — as it is while a refused
+/// container is still attached — both refusals are reported in the one
+/// cleanup-failure error, not as a line each.
+#[tokio::test]
+async fn a_refused_removal_and_a_refused_network_are_reported_together() {
+    let docker = FakeContainerRuntime::default()
+        .refusing_container_removal("sidecar-id-database")
+        .refusing_network_removal();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let errors = messages(&sink.events(), error_line);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].starts_with(
+            "Cleanup failed: No such container: sidecar-id-database; error while removing \
+             network: network ratect-"
+        ),
+        "{}",
+        errors[0]
+    );
+    assert!(
+        errors[0].contains("left behind: database (sidecar-id-d), network ratect-"),
+        "{}",
+        errors[0]
+    );
+}
+
+const REPLY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether `container`'s create reached the daemon — the fake records it
+/// before any reply delay.
+fn created_on_the_daemon(events: &[String], container: &str) -> bool {
+    events
+        .iter()
+        .any(|e| e.starts_with(&format!("create:{container}:")))
+}
+
+/// A create the daemon has already done is removed by cleanup even when a
+/// sibling's failure drops the future waiting for its answer (ratect#318).
+#[tokio::test(start_paused = true)]
+async fn a_create_dropped_by_a_siblings_failure_is_still_cleaned_up() {
+    let docker = FakeContainerRuntime::default()
+        .with_create_reply_delay("slow", REPLY)
+        .with_create_delay("bad", std::time::Duration::from_secs(1))
+        .failing_creation("bad");
+    let engine = engine(
+        config_with_containers(&["slow", "bad"], &[("slow", &[]), ("bad", &[])]),
+        docker.clone(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("Failed to create container 'bad'"),
+        "the sibling's failure is what's reported: {error:#}"
+    );
+    let events = docker.events();
+    assert!(created_on_the_daemon(&events, "slow"), "{events:?}");
+    assert_removed_before_network(&events, "slow");
+}
+
+/// The same for a dependency of a dependency.
+#[tokio::test(start_paused = true)]
+async fn a_nested_create_dropped_by_a_siblings_failure_is_still_cleaned_up() {
+    let docker = FakeContainerRuntime::default()
+        .with_create_reply_delay("slow", REPLY)
+        .with_create_delay("bad", std::time::Duration::from_secs(1))
+        .failing_creation("bad");
+    let engine = engine(
+        config_with_containers(
+            &["mid"],
+            &[("mid", &["slow", "bad"]), ("slow", &[]), ("bad", &[])],
+        ),
+        docker.clone(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = docker.events();
+    assert!(created_on_the_daemon(&events, "slow"), "{events:?}");
+    assert_removed_before_network(&events, "slow");
+}
+
+/// Sends `signals` on `interrupt`, one a second, starting a second from now.
+fn signal_later(
+    interrupt: &Arc<crate::interrupt::Interrupt>,
+    signals: &[crate::interrupt::TerminationSignal],
+) -> tokio::task::JoinHandle<()> {
+    let interrupt = Arc::clone(interrupt);
+    let signals = signals.to_vec();
+    tokio::spawn(async move {
+        for signal in signals {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            interrupt.record_signal(signal);
+        }
+    })
+}
+
+/// A signal ending the run while a create is waiting for its answer still
+/// leaves that container to cleanup — a dependency's, or the task's own.
+#[tokio::test(start_paused = true)]
+async fn a_create_dropped_by_a_signal_is_still_cleaned_up() {
+    for slow in ["dependency", "app"] {
+        let interrupt = crate::interrupt::Interrupt::new();
+        let docker = FakeContainerRuntime::default().with_create_reply_delay(slow, REPLY);
+        let engine = TaskEngine::new(
+            project(config_with_containers(
+                &["dependency"],
+                &[("dependency", &[])],
+            )),
+            docker.clone(),
+            Arc::new(NullEventSink),
+            Arc::clone(&interrupt),
+        );
+        let signaller = signal_later(
+            &interrupt,
+            &[crate::interrupt::TerminationSignal::Terminate],
+        );
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+        signaller.await.unwrap();
+
+        assert!(
+            error.is::<crate::interrupt::TaskInterrupted>(),
+            "the run ends as an interrupted one: {error:#}"
+        );
+        let events = docker.events();
+        assert!(created_on_the_daemon(&events, slow), "{events:?}");
+        assert_removed_before_network(&events, slow);
+    }
+}
+
+/// Waiting for a create's answer is part of cleanup, so the ladder applies
+/// to it: the first further signal stops the wait and force-removes
+/// everything known, as it would any graceful stop. A supervisor's
+/// `SIGINT`, `SIGTERM`, `SIGKILL` ladder only ever sends one more signal
+/// before the kill, so a wait only the abandon rung could end would leak
+/// every container already created (ratect#249).
+#[tokio::test(start_paused = true)]
+async fn a_signal_during_a_wait_for_creates_force_removes_what_is_known() {
+    for slow in [&["slow"][..], &["slow1", "slow2"][..]] {
+        let interrupt = crate::interrupt::Interrupt::new();
+        let mut docker = FakeContainerRuntime::default()
+            .with_create_delay("bad", std::time::Duration::from_millis(500))
+            .failing_creation("bad");
+        for name in slow {
+            docker =
+                docker.with_create_reply_delay(name, std::time::Duration::from_secs(1_000_000));
+        }
+        let mut dependencies: Vec<&str> = slow.to_vec();
+        dependencies.push("bad");
+        let declared: Vec<(&str, &[&str])> =
+            dependencies.iter().map(|name| (*name, &[][..])).collect();
+        let sink = RecordingEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_containers(&dependencies, &declared)),
+            docker.clone(),
+            Arc::new(sink.clone()),
+            Arc::clone(&interrupt),
+        );
+        let signaller = signal_later(
+            &interrupt,
+            &[crate::interrupt::TerminationSignal::Terminate],
+        );
+
+        let started = tokio::time::Instant::now();
+        engine.run_task("start", &[]).await.unwrap_err();
+        signaller.await.unwrap();
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "one signal ended the wait: {:?}",
+            started.elapsed()
+        );
+        let events = docker.events();
+        assert!(
+            events.contains(&"force-remove:sidecar-id-app".to_string()),
+            "the container already created is force-removed: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with("network-remove:")),
+            "and the network is still removed: {events:?}"
+        );
+        let errors = messages(&sink.events(), error_line);
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.starts_with("Cleanup abandoned")),
+            "hurried, not abandoned: {errors:?}"
+        );
+        assert_unanswered_creates_warned(&sink, slow);
+    }
+}
+
+/// The creates that never answered are named in a warning of their own,
+/// with the label that finds what they may have made — not appended to a
+/// line that ends on a command to paste.
+fn assert_unanswered_creates_warned(sink: &RecordingEventSink, containers: &[&str]) {
+    let expected = match containers {
+        [one] => format!(
+            "Stopped waiting for the create of {one} to answer, so it may exist; find it with \
+             docker ps -a --filter label=eu.orican.ratect.run="
+        ),
+        many => format!(
+            "Stopped waiting for the creates of {} to answer, so they may exist; find them \
+             with docker ps -a --filter label=eu.orican.ratect.run=",
+            many.join(", ")
+        ),
+    };
+    let warnings = messages(&sink.events(), warning);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.starts_with(&expected)),
+        "expected {expected:?} in {warnings:?}"
+    );
+}
+
+/// The same with cleanup disabled: one signal ends the wait there too, the
+/// notice lists what is known to be kept, and the create cut short while it
+/// was waited for is still named.
+#[tokio::test(start_paused = true)]
+async fn disabled_cleanup_names_a_create_that_never_answered() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_create_reply_delay("slow", std::time::Duration::from_secs(1_000_000))
+        .with_create_delay("bad", std::time::Duration::from_millis(500))
+        .failing_creation("bad");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["slow", "bad"],
+            &[("slow", &[]), ("bad", &[])],
+        )),
+        docker,
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let signaller = signal_later(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+    signaller.await.unwrap();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(
+        notices[0].starts_with("Left in place (--no-cleanup): app (sidecar-id-a), network "),
+        "{notices:?}"
+    );
+    assert_unanswered_creates_warned(&sink, &["slow"]);
+}
+
 /// What a `--no-cleanup*` flag keeps is a notice — not a failure, so no
 /// marker — with the same `left behind`/`Remove with` tail as the cleanup
 /// failure, whichever of the two flags did the keeping.
@@ -11623,7 +12873,11 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     engine.run_task("start", &[]).await.unwrap();
 
     let notices = messages(&sink.events(), notice);
-    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices.len(),
+        3,
+        "the notice, then a hint per container: {notices:?}"
+    );
     assert!(
         notices[0].starts_with(
             "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
@@ -11667,7 +12921,11 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     engine.run_task("start", &[]).await.unwrap_err();
 
     let notices = messages(&sink.events(), notice);
-    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(
+        notices.len(),
+        3,
+        "the notice, then a hint per container: {notices:?}"
+    );
     // The task's own container is created before `database`'s gate fails
     // (decisions/0019), so it was kept too — never started, but there.
     assert!(
@@ -11678,6 +12936,186 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
         "{}",
         notices[0]
     );
+}
+
+/// What a `--no-cleanup*` flag keeps comes with Batect's investigation
+/// hints, one line per container in name order after the notice: its
+/// output, and a command in it — started first where it isn't running, as
+/// the task's own container isn't once its command has exited (ratect#308).
+#[tokio::test]
+async fn disabled_cleanup_says_how_to_investigate_each_container_it_kept() {
+    let docker = FakeContainerRuntime::default();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices[1..],
+        [
+            "Investigate app with: docker logs sidecar-id-a, or docker start sidecar-id-a; \
+             docker exec -it sidecar-id-a <command>",
+            "Investigate database with: docker logs sidecar-id-d, or docker exec -it \
+             sidecar-id-d <command>",
+        ],
+        "{notices:?}"
+    );
+}
+
+/// Asking the daemon which kept containers are running can't hold the
+/// process: the questions go out together, and a further signal stops
+/// waiting for their answers — each hint then starts its container first,
+/// which is harmless if it was running (ratect#308).
+#[tokio::test(start_paused = true)]
+async fn a_daemon_that_never_says_what_is_running_cannot_hold_the_hints() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().with_hanging_running_probe();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let signaller = signal_later(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Interrupt],
+    );
+
+    let started = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+    signaller.await.unwrap();
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the signal ended the wait: {:?}",
+        started.elapsed()
+    );
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices[1..],
+        [
+            "Investigate app with: docker logs sidecar-id-a, or docker start sidecar-id-a; \
+             docker exec -it sidecar-id-a <command>",
+            "Investigate database with: docker logs sidecar-id-d, or docker start \
+             sidecar-id-d; docker exec -it sidecar-id-d <command>",
+        ],
+        "{notices:?}"
+    );
+}
+
+/// The lookups behind the hints go out together, so a slow daemon costs the
+/// slowest answer, not the sum of them — one request timeout at most when
+/// it has stopped answering altogether.
+#[tokio::test(start_paused = true)]
+async fn the_hints_ask_about_every_kept_container_at_once() {
+    const ANSWER: std::time::Duration = std::time::Duration::from_secs(10);
+    let docker = FakeContainerRuntime::default()
+        .with_running_probe_delay("app", ANSWER)
+        .with_running_probe_delay("database", ANSWER);
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_success: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    let started = tokio::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap();
+
+    assert!(
+        started.elapsed() < ANSWER * 2,
+        "the two lookups took {:?}, so they ran one after the other",
+        started.elapsed()
+    );
+    let notices = messages(&sink.events(), notice);
+    assert_eq!(
+        notices.len(),
+        3,
+        "both hints, from real answers: {notices:?}"
+    );
+    assert!(
+        notices[2]
+            .starts_with("Investigate database with: docker logs sidecar-id-d, or docker exec"),
+        "the running dependency's answer was waited for: {notices:?}"
+    );
+}
+
+/// A dependency that was created but never started isn't running either,
+/// so its hint starts it first.
+#[tokio::test]
+async fn a_kept_dependency_that_never_started_is_started_before_its_exec_hint() {
+    let docker = FakeContainerRuntime::default().failing_start("database");
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(
+        notices.contains(
+            &"Investigate database with: docker logs sidecar-id-d, or docker start \
+              sidecar-id-d; docker exec -it sidecar-id-d <command>"
+                .to_string()
+        ),
+        "{notices:?}"
+    );
+}
+
+/// With nothing kept there is nothing to say: no notice, no hints.
+#[tokio::test]
+async fn disabled_cleanup_says_nothing_when_nothing_was_created() {
+    let docker = FakeContainerRuntime::default().failing_network_creation();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        cleanup_after_failure: false,
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let notices = messages(&sink.events(), notice);
+    assert!(notices.is_empty(), "{notices:?}");
 }
 
 /// The loopback-proxy warning is a warning event — printed in every style —
