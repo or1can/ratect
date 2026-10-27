@@ -18,8 +18,8 @@ link here.
 
 With none of them given, Ratect connects to `DOCKER_HOST` if it is set,
 otherwise through a Docker context if one resolves (`DOCKER_CONTEXT`, then the
-active context), otherwise to Docker's own platform default (a Unix socket or
-Windows named pipe) — see [Which daemon is used](#which-daemon-is-used).
+active context), otherwise to Docker's own platform default, the Unix socket
+`unix:///var/run/docker.sock` — see [Which daemon is used](#which-daemon-is-used).
 
 ## Options
 

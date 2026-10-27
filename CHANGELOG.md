@@ -103,6 +103,7 @@ history, from when it was the only binary.
 - A task's containers are no longer also attached to Docker's default bridge network, only to the task network.
 - A container that doesn't set `enable_init_process` runs without an init process even when the daemon is configured with `"init": true`, as in Batect.
 - A container whose log driver Docker can't read back, such as `log_driver: none`, no longer fails the task with `Failed to get container logs`; its output is shown as for any other container.
+- With no Docker host and the `default` context, Ratect connects to `unix:///var/run/docker.sock`, as in Batect. `--docker-context default` no longer looks up the context `DOCKER_CONTEXT` names, and `--docker-config` no longer leaves the active context to be read from `DOCKER_CONFIG` or `~/.docker` instead.
 - `ratect-compat`: an unknown option's error no longer suggests passing it after `--`.
 - An unknown option's error from `ratect run` no longer suggests passing it after `--` (ratect only).
 - The `ratect-compat` CLI reference says its value placeholders describe a value's shape, not the ones `--help` prints.

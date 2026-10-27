@@ -672,7 +672,7 @@ fn resolve_host(
 }
 
 /// TLS has no platform-default host to fall back to the way the plain path
-/// does (`Docker::connect_with_local_defaults`) — an explicit host is
+/// does ([`DEFAULT_DOCKER_HOST`]) — an explicit host is
 /// required. Pure (takes the already-resolved host, not the environment)
 /// purely to keep this one error message unit-testable in isolation.
 fn require_host_for_tls(host: Option<String>) -> Result<String> {
@@ -964,7 +964,8 @@ enum VerificationNote {
 }
 
 /// The platform default `connect` falls back to with no host and no
-/// context: `bollard`'s own, which it doesn't export.
+/// context — `bollard`'s own default socket, connected to by name (see
+/// [`connect`]).
 const DEFAULT_DOCKER_HOST: &str = "unix:///var/run/docker.sock";
 
 /// What an unreachable-daemon error calls the daemon `connect` chose: its
@@ -1139,8 +1140,8 @@ fn chain_holds(
 /// 3. Otherwise, `DOCKER_CONTEXT` (if set) is looked up the same way as 1.
 /// 4. Otherwise, the Docker CLI's own "active" context
 ///    (`~/.docker/config.json`'s `currentContext`) is looked up the same
-///    way, falling back to bollard's own platform default (unix
-///    socket/named pipe) when that's unset or names the `default` context.
+///    way, falling back to the platform default ([`DEFAULT_DOCKER_HOST`])
+///    when that's unset or names the `default` context.
 ///
 /// TLS (`--docker-tls`/`-verify`, `DOCKER_TLS_VERIFY`) only applies once a
 /// context is ruled out — Batect rejects combining it with
@@ -1233,10 +1234,15 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     let tls = tls_enabled(options, docker_tls_verify_env.as_deref())?
         || host.as_deref().is_some_and(is_https);
     if !tls {
+        // The default is connected to by name, never through `bollard`'s
+        // own defaults, which resolve `DOCKER_HOST`, `DOCKER_CONTEXT` and
+        // `config.json`'s current context a second time — so
+        // `--docker-context default` with `DOCKER_CONTEXT` set would still
+        // look that context up, from `DOCKER_CONFIG` not `--docker-config`.
         let docker = match &host {
             Some(host) => connect_plain(host)
                 .with_context(|| format!("Failed to connect to Docker host '{host}'"))?,
-            None => Docker::connect_with_local_defaults().context("Failed to connect to Docker")?,
+            None => connect_plain(DEFAULT_DOCKER_HOST).context("Failed to connect to Docker")?,
         };
         return Ok(Connection::without_note(
             docker,
