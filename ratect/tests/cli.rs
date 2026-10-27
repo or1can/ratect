@@ -3103,7 +3103,7 @@ fn resources_finds_and_removes_what_a_previous_run_left_behind() {
         "the container should be named as the config names it:\n{listing}"
     );
     assert!(
-        listing.contains("network ratect-"),
+        listing.contains("network ratect-cli-resources-test-network-"),
         "its network should be listed too:\n{listing}"
     );
     assert!(

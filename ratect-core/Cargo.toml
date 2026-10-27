@@ -66,8 +66,11 @@ async-recursion = "1.1"
 # `ratect-core/src/docker.rs`, so it can have async methods and be
 # implemented by both the real `DockerClient` and test fakes.
 async-trait = "0.1"
-# **`uuid`**: Generates collision-resistant per-task Docker network names
-# (`ratect-<uuid>`) in `ratect-core/src/engine.rs`. Deliberately not
+# **`uuid`**: Generates the collision-resistant per-task run id (the
+# `eu.orican.ratect.run` label) in `ratect-core/src/engine.rs`, and the
+# randomness behind each run's six-character Docker name suffix
+# (`ratect-core/src/resource_names.rs`), rather than adding an RNG crate for
+# six characters. The run id is deliberately not
 # `std::process::id()` — that's frequently `1` when `ratect` itself runs
 # inside a container (e.g. CI), which would collide across concurrent runs.
 # Built images are tagged `<project_name>-<container_name>` instead

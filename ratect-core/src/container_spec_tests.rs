@@ -93,6 +93,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
 
     let task_spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&run),
         image: "alpine:3.18",
@@ -110,6 +111,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
 
     let dependency_spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Customise(None),
         image: "alpine:3.18",
@@ -161,6 +163,7 @@ fn a_run_overlay_overrides_the_containers_own_fields() {
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&run),
         image: "alpine:3.18",
@@ -213,6 +216,7 @@ fn a_customise_overlay_has_no_command_or_entrypoint_override() {
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "database",
+        docker_name: "demo-database-abc123",
         container_config: &container_config,
         overlay: Overlay::Customise(Some(&customisation)),
         image: "alpine:3.18",
@@ -535,6 +539,7 @@ fn derive_spec_carries_ulimits_as_plain_triples() {
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
@@ -568,6 +573,7 @@ fn derive_spec_leaves_ulimits_unset_when_the_container_declares_none() {
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
@@ -602,6 +608,7 @@ fn derive_spec_carries_the_containers_own_dns_settings() {
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
@@ -641,6 +648,7 @@ fn derive_spec_leaves_dns_unset_when_the_container_declares_none() {
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
@@ -717,6 +725,7 @@ fn spec_on_network(network: ContainerNetwork) -> ContainerSpec {
     let run_labels = RunLabels::new("demo", "task", "run-id", None);
     derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
@@ -783,6 +792,7 @@ fn derive_spec_passes_an_unquoted_yaml_environment_value_on_as_written() {
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &config.containers["app"],
         overlay: Overlay::Run(&empty_run()),
         image: "alpine:3.18",
@@ -854,6 +864,7 @@ fn an_empty_customisation_derives_the_same_spec_as_none() {
     let spec = |overlay| {
         derive_spec(ContainerSpecInputs {
             name: "db",
+            docker_name: "demo-db-abc123",
             container_config: &container_config,
             overlay,
             image: "alpine:3.18",
@@ -897,6 +908,7 @@ fn published_ports(container_ports: &[&str], run_ports: &[&str]) -> Vec<(u16, u1
     let run_labels = RunLabels::new("demo", "task", "run-id", Some("0.6.0"));
     derive_spec(ContainerSpecInputs {
         name: "app",
+        docker_name: "demo-app-abc123",
         container_config: &container_config,
         overlay: Overlay::Run(&run),
         image: "alpine:3.18",

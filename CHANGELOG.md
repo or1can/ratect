@@ -68,6 +68,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- Containers and the task network are created under Batect's Docker names, `<project>-<container>-<suffix>` and `<project>-network-<suffix>`, with one random six-character suffix per task run.
 - With `RUST_LOG=debug`, a run whose `-- ADDITIONAL_ARGS` replace the image's default `CMD`, because neither the task nor its container sets a `command`, logs the `CMD` replaced.
 - `ratect config convert` (ratect only) escapes each `\` in an `image`, string-form `volumes` host path or `run_as_current_user.home_directory` (`foo\bar` becomes `foo\\bar`), and each `$` and `<` too in an `image`, or when the value would otherwise be no valid expression (`img$` becomes `img\$`). A `batect.yml` uses these as written, so the converted file loads and keeps the value; a reference in a volume host path or `home_directory` is still carried across and listed.
 - The interrupt notice, the `--no-cleanup*` reminder, a cleanup that left something behind, the loopback-proxy warning, a failed credential helper's warning, `tasks list`'s deprecated-option warning and `caches clean`'s unknown-cache warning (ratect only), and the no-task-name warning (ratect-compat only) are printed on stderr in every output style, `quiet` included, instead of logged through `RUST_LOG`. A failed credential helper's warning is one line, naming the helper and what it printed. The reminder (`Left in place (--no-cleanup): …`) names what was kept, by config name and container id, and the `docker` command that removes it; a cleanup that left something behind is reported as an `Error:` of the same shape, quoting the daemon's refusal.
@@ -96,6 +97,7 @@ history, from when it was the only binary.
 ### Fixed
 
 - Every container a run creates — each prerequisite task's own, and every dependency and sidecar — gets the host's `TERM`, as in Batect, not only the invoked task's own container.
+- A task's containers are no longer also attached to Docker's default bridge network, only to the task network.
 - `ratect-compat`: an unknown option's error no longer suggests passing it after `--`.
 - An unknown option's error from `ratect run` no longer suggests passing it after `--` (ratect only).
 - The `ratect-compat` CLI reference says its value placeholders describe a value's shape, not the ones `--help` prints.

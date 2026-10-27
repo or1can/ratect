@@ -95,10 +95,11 @@ impl ContainerRole {
 pub struct RunLabels {
     project: String,
     task: String,
-    /// Unique per task execution — the same value the per-task network is
-    /// named after, reused rather than minting a second id, so a network
-    /// and the containers that joined it agree about which run they belong
-    /// to even when `--use-network` means no network was created at all.
+    /// Unique per task execution, so a network and the containers on it
+    /// agree about which run they belong to even when `--use-network` means
+    /// no network was created at all. Not what names them: their Docker
+    /// names carry a six-character suffix of their own
+    /// ([`crate::resource_names`]).
     run_id: String,
     /// The creating binary's own version. `None` only in tests, which have
     /// no binary version to speak of.

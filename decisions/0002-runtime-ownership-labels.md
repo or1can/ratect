@@ -1,7 +1,9 @@
 # 0002 — Runtime-ownership labels (`eu.orican.ratect.*`)
 
 **Status:** Accepted — shipped (ratect-compat 0.21.1 · ratect 0.2.0). Implemented
-in [`ratect-core/src/labels.rs`](../ratect-core/src/labels.rs).
+in [`ratect-core/src/labels.rs`](../ratect-core/src/labels.rs). Amended by
+ratect#299: Docker names now follow Batect's (see the amendment under the label
+table); the labels themselves are unchanged.
 
 ## Context
 
@@ -28,10 +30,19 @@ from OCI image annotations:
 | --- | --- | --- |
 | `eu.orican.ratect.project` | containers, networks | `project_name` |
 | `eu.orican.ratect.task` | containers, networks | the task being run |
-| `eu.orican.ratect.run` | containers, networks | the per-run id (the `Uuid` that already names the per-task network, reused) |
-| `eu.orican.ratect.container` | containers | the *config* container name (Docker's own name is random) |
+| `eu.orican.ratect.run` | containers, networks | the per-run id (the `Uuid` that already names the per-task network, reused) *(no longer names it — see the amendment below)* |
+| `eu.orican.ratect.container` | containers | the *config* container name (Docker's own name is random) *(now `<project>-<container>-<suffix>` — see the amendment below)* |
 | `eu.orican.ratect.role` | containers | `task` or `dependency` |
 | `eu.orican.ratect.version` | containers, networks | the Ratect version that created it |
+
+Amended by ratect#299: Docker names now follow Batect's
+`DockerResourceNameGenerator` — the network `<project>-network-<suffix>`, each
+container `<project>-<container>-<suffix>`, one random six-character `a-z0-9`
+suffix per task execution. The `run` label still carries the full per-run
+`Uuid`, which no longer names the network; the `container` label is still the
+config name, now that Docker's own name carries the suffix rather than being
+random. The labels remain the source of truth for ownership: nothing parses a
+name to recover a project, task, run or container.
 
 Sub-decisions baked in:
 
