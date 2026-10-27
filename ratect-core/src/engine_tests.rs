@@ -6172,6 +6172,39 @@ async fn a_signal_mid_build_cancels_that_build() {
     assert_eq!(build_cancels(&docker.events()), vec![build_id]);
 }
 
+/// Batect's `DockerClientImagePullSpec`, a pull whose coroutine is
+/// cancelled: an interrupt a second into a minute-long pull abandons it
+/// there, failing the run as interrupted rather than with whatever the
+/// pull would have said, and nothing waits for the pull to finish.
+#[tokio::test(start_paused = true)]
+async fn an_interrupt_mid_pull_abandons_the_pull_promptly() {
+    let docker = FakeContainerRuntime::default()
+        .with_pull_delay("postgres:16", std::time::Duration::from_secs(60))
+        .with_failing_pull("postgres:16");
+    let interrupt = crate::interrupt::Interrupt::new();
+    let signal = Arc::clone(&interrupt);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        signal.record();
+    });
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        interrupt,
+    );
+    let started = tokio::time::Instant::now();
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the run waited {:?}, out to the pull's end",
+        started.elapsed()
+    );
+}
+
 /// A sibling's failure drops an in-flight build just as a signal does.
 #[tokio::test(start_paused = true)]
 async fn a_sibling_failure_mid_build_cancels_the_build() {
@@ -11219,12 +11252,14 @@ async fn container_tmpfs_mounts_reach_the_container() {
     engine.run_task("test", &[]).await.unwrap();
 
     // Only the `tmpfs` entry reaches `ContainerOptions.tmpfs` — the
-    // `local` entry is resolved separately, into the bind-mount string
-    // `run_container`'s own `volumes` parameter carries instead (not
-    // captured by `ContainerOptionsValue`, so nothing to assert here).
+    // `local` entry is resolved separately, into a bind string.
     assert_eq!(
         docker.tmpfs_for("build-env"),
         Some(vec![("/code/tmp".to_string(), "size=64m".to_string())])
+    );
+    assert_eq!(
+        docker.volumes_for("build-env"),
+        Some(vec!["/host/code:/code".to_string()])
     );
 }
 
@@ -12301,6 +12336,35 @@ async fn task_run_entrypoint_overrides_container_entrypoint() {
     );
 }
 
+/// Batect's `DockerContainerCreationSpecFactorySpec`, "no entrypoint", and
+/// docker-client's no-shm-size default: a container setting neither, with a
+/// `run` that sets neither, reaches the runtime with neither, so the image's
+/// `ENTRYPOINT` and the daemon's `/dev/shm` size apply.
+#[tokio::test]
+async fn a_container_with_no_entrypoint_or_shm_size_reaches_the_container_with_neither() {
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), container("alpine:3.18", None));
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    engine(config, docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+
+    assert!(docker.spec_for("app").is_some(), "app was never created");
+    assert_eq!(docker.entrypoint_for("app"), None);
+    assert_eq!(docker.shm_size_for("app"), None);
+}
+
 #[tokio::test]
 async fn proxy_environment_variables_reach_a_tasks_own_container() {
     let mut containers = IndexMap::new();
@@ -12404,6 +12468,81 @@ async fn no_proxy_vars_flag_suppresses_propagation() {
         None,
         "--no-proxy-vars should suppress the host-gateway entry with them"
     );
+}
+
+/// A one-container `run` task whose `app` container declares
+/// `environment`, run with the host's proxy variables set (`http_proxy`
+/// and `no_proxy`) and proxy propagation `propagate`; returns the
+/// environment `app` was created with.
+async fn environment_with_host_proxies(
+    environment: &[(&str, &str)],
+    propagate: bool,
+) -> HashMap<String, String> {
+    let mut container_config = container("alpine:3.18", None);
+    container_config.environment = Some(
+        environment
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect(),
+    );
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), container_config);
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_host_env(|name| match name {
+            "http_proxy" => Some("http://proxy.example.com".to_string()),
+            "no_proxy" => Some("internal.example.com".to_string()),
+            _ => None,
+        })
+        .with_settings(TaskEngineSettings {
+            propagate_proxy_environment_variables: propagate,
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    docker.environment_for("app").unwrap_or_default()
+}
+
+/// Batect's `DockerContainerEnvironmentVariableProviderSpec`, proxy
+/// propagation off: the container gets exactly what it declares, and none
+/// of the host's proxy variables.
+#[tokio::test]
+async fn with_propagation_off_a_container_gets_exactly_its_declared_environment() {
+    let environment = environment_with_host_proxies(&[("SOME_VAR", "SOME_VALUE")], false).await;
+
+    assert_eq!(
+        environment,
+        HashMap::from([("SOME_VAR".to_string(), "SOME_VALUE".to_string())])
+    );
+}
+
+/// Batect's `DockerContainerEnvironmentVariableProviderSpec`, a container
+/// variable named like a proxy variable: the container's value wins for
+/// that one name, and every other proxy variable — `http_proxy`'s other
+/// spelling, and both of `no_proxy`'s, with the task's container names
+/// added as ever — still reaches it.
+#[tokio::test]
+async fn a_declared_proxy_variable_overrides_only_its_own_name() {
+    let environment =
+        environment_with_host_proxies(&[("HTTP_PROXY", "http://explicit.example.com")], true).await;
+
+    let get = |name: &str| environment.get(name).map(String::as_str);
+    assert_eq!(get("HTTP_PROXY"), Some("http://explicit.example.com"));
+    assert_eq!(get("http_proxy"), Some("http://proxy.example.com"));
+    assert_eq!(get("no_proxy"), Some("internal.example.com,app"));
+    assert_eq!(get("NO_PROXY"), Some("internal.example.com,app"));
 }
 
 /// `--no-proxy-vars` keeps the Docker CLI `config.json`'s proxies out of a

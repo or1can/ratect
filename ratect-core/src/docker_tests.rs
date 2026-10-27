@@ -1623,6 +1623,26 @@ async fn stub_daemon_for(
     }
 }
 
+/// Batect's `DockerClientConfigurationFactorySpec`: the Docker config
+/// directory connecting chose is the one the client reads `config.json`
+/// from, for a build's proxies and the registries it authenticates to.
+#[tokio::test]
+async fn docker_client_new_reads_config_json_from_the_chosen_config_directory() {
+    let config_directory = unique_temp_dir();
+    let options = DockerConnectionOptions {
+        config_directory: Some(config_directory.clone()),
+        ..stub_daemon(stub_version_body(Some("27.3.1")), None).await
+    };
+
+    let client = DockerClient::new(&options, |_| {}).await.unwrap();
+
+    assert_eq!(
+        client.docker_config_path,
+        config_directory.join("config.json")
+    );
+    std::fs::remove_dir_all(&config_directory).unwrap();
+}
+
 /// `stub_daemon`'s `/version` body, reporting `version` as the daemon's
 /// own version (none when `None`) and an API version at Ratect's floor.
 fn stub_version_body(version: Option<&str>) -> serde_json::Value {
@@ -3052,4 +3072,423 @@ async fn a_stdin_forwarding_task_container_attaches_stdin_and_output_before_it_s
             "{stream} not attached: {attach_query}"
         );
     }
+}
+
+/// A [`recording_daemon`] route answering `method` on `path` with `status`
+/// and `body`, and anything else with a 404.
+fn one_route(
+    method: &'static str,
+    path: &'static str,
+    status: u16,
+    body: &'static str,
+) -> impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static {
+    move |m, p| {
+        if (m, p) == (method, path) {
+            (status, body.to_string())
+        } else {
+            (404, r#"{"message":"not found"}"#.to_string())
+        }
+    }
+}
+
+/// Batect's `DockerClientContainerManagementSpec`, run with no working
+/// directory, user, shm size or entrypoint set, and
+/// `DockerContainerCreationSpecFactorySpec`'s "no entrypoint": the create
+/// request carries none of the four, so the image's own working directory,
+/// user and `ENTRYPOINT`, and the daemon's 64 MiB `/dev/shm`, apply.
+#[tokio::test]
+async fn container_config_leaves_unset_defaults_to_the_image_and_daemon() {
+    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+
+    let config = client.container_config(&spec).unwrap();
+
+    assert_eq!(config.entrypoint, None);
+    assert_eq!(config.working_dir, None);
+    assert_eq!(config.user, None);
+    assert_eq!(config.host_config.unwrap().shm_size, None);
+}
+
+/// Batect's `DockerClientContainerManagementSpec`, creating a container
+/// from an image the daemon doesn't have: the create fails naming the
+/// container as configured, with the daemon's reason in the chain, and
+/// nothing to clean up.
+#[tokio::test]
+async fn create_container_reports_a_missing_image_naming_the_container() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "POST",
+        "/containers/create",
+        404,
+        r#"{"message":"No such image: alpine:3.20"}"#,
+    ))
+    .await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+
+    let err = client.create_container(&spec).await.unwrap_err();
+
+    assert_eq!(err.created, None);
+    assert_eq!(err.to_string(), "Failed to create container 'app'");
+    let chain = format!("{:#}", err.error);
+    assert!(chain.contains("No such image: alpine:3.20"), "{chain}");
+}
+
+/// `create_container` for `app` under `run_as_current_user`, against a
+/// daemon that creates it as `new-id` and answers its uploads with `upload`,
+/// given each upload's position (0 for `/etc`'s, then one per directory).
+async fn create_with_user_mapping(
+    upload: impl Fn(usize) -> (u16, String) + Send + Sync + 'static,
+) -> CreateContainerError {
+    let uploads = std::sync::atomic::AtomicUsize::new(0);
+    let (client, _) = client_for_recording_daemon(move |method, path| match (method, path) {
+        ("POST", "/containers/create") => (201, r#"{"Id":"new-id","Warnings":[]}"#.to_string()),
+        ("PUT", "/containers/new-id/archive") => {
+            upload(uploads.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+        }
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    })
+    .await;
+    let mut spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+    spec.shared.user_mapping = Some(user_mapping_fixture());
+
+    client.create_container(&spec).await.unwrap_err()
+}
+
+/// Batect's `DockerClientContainerManagementSpec`, uploading a file to a
+/// directory the container doesn't have: `run_as_current_user`'s `/etc`
+/// upload fails naming the container and the field, with the daemon's
+/// reason in the chain — and the container, which exists by then, is handed
+/// back for cleanup.
+#[tokio::test]
+async fn a_user_mapping_upload_the_daemon_refuses_fails_the_create_naming_the_container() {
+    let err = create_with_user_mapping(|_| {
+        (
+            404,
+            r#"{"message":"Could not find the file /etc in container new-id"}"#.to_string(),
+        )
+    })
+    .await;
+
+    assert_eq!(err.created.as_deref(), Some("new-id"));
+    assert_eq!(
+        err.to_string(),
+        "Failed to apply run_as_current_user to container 'app'"
+    );
+    let chain = format!("{:#}", err.error);
+    assert!(
+        chain.contains("Failed to upload user mapping files to container 'new-id'"),
+        "{chain}"
+    );
+    assert!(
+        chain.contains("Could not find the file /etc in container new-id"),
+        "{chain}"
+    );
+}
+
+/// The same rule for a directory upload: the home directory's ownership
+/// archive, refused after `/etc`'s succeeded, fails the create the same way.
+#[tokio::test]
+async fn a_directory_ownership_upload_the_daemon_refuses_fails_the_create_naming_the_container() {
+    let err = create_with_user_mapping(|position| match position {
+        0 => (200, String::new()),
+        _ => (
+            404,
+            r#"{"message":"Could not find the file /home in container new-id"}"#.to_string(),
+        ),
+    })
+    .await;
+
+    assert_eq!(err.created.as_deref(), Some("new-id"));
+    assert_eq!(
+        err.to_string(),
+        "Failed to apply run_as_current_user to container 'app'"
+    );
+    let chain = format!("{:#}", err.error);
+    assert!(
+        chain.contains("Failed to take ownership of '/home/ratect' in container 'new-id'"),
+        "{chain}"
+    );
+    assert!(
+        chain.contains("Could not find the file /home in container new-id"),
+        "{chain}"
+    );
+}
+
+/// Batect's `DockerClientContainerManagementSpec`, starting a container
+/// that doesn't exist: a dependency's start fails naming it as configured,
+/// with the daemon's reason in the chain.
+#[tokio::test]
+async fn start_background_container_reports_a_missing_container_naming_it() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "POST",
+        "/containers/app-id/start",
+        404,
+        r#"{"message":"No such container: app-id"}"#,
+    ))
+    .await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Dependency,
+    );
+
+    let err = client
+        .start_background_container("app-id", &spec)
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to start container 'app'");
+    assert!(
+        format!("{err:#}").contains("No such container: app-id"),
+        "{err:#}"
+    );
+}
+
+/// The same rule for the task's own container, started after its output is
+/// attached.
+#[tokio::test]
+async fn run_container_reports_a_missing_container_naming_it() {
+    let (client, _) = client_for_recording_daemon(|method, path| match (method, path) {
+        ("POST", "/containers/app-id/start") => (
+            404,
+            r#"{"message":"No such container: app-id"}"#.to_string(),
+        ),
+        _ => run_route(method, path),
+    })
+    .await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+
+    let err = client
+        .run_container("app-id", &spec, None)
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to start container 'app'");
+    assert!(
+        format!("{err:#}").contains("No such container: app-id"),
+        "{err:#}"
+    );
+}
+
+/// A [`recording_daemon`] route for pulling `alpine:3.20`: the pull answers
+/// with `stream` as its body, newline-delimited JSON as the daemon streams
+/// it, and the image's inspect finds it.
+fn pull_route(stream: String) -> impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static {
+    move |method, path| match (method, path) {
+        ("POST", "/images/create") => (200, stream.clone()),
+        ("GET", "/images/alpine:3.20/json") => (200, r#"{"Id":"sha256:abc"}"#.to_string()),
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    }
+}
+
+/// Whether `log` holds an inspect of the pulled image.
+fn inspected_after_pulling(log: &std::sync::Mutex<Vec<RecordedRequest>>) -> bool {
+    requests_sent(log)
+        .iter()
+        .any(|(method, path)| method == "GET" && path.starts_with("/images/"))
+}
+
+/// Batect's `DockerClientImagePullSpec`: a pull stream that ends (EOF)
+/// after its progress lines is a successful pull.
+#[tokio::test]
+async fn pull_image_succeeds_when_the_stream_ends_without_an_error() {
+    let (client, log) = client_for_recording_daemon(pull_route(
+        "{\"status\":\"Pulling from library/alpine\"}\n{\"status\":\"Download complete\"}\n"
+            .to_string(),
+    ))
+    .await;
+
+    assert_eq!(
+        client.pull_image("alpine:3.20").await.unwrap(),
+        "sha256:abc"
+    );
+    assert!(inspected_after_pulling(&log));
+}
+
+/// Batect's `DockerClientImagePullSpec`, an image that doesn't exist or is
+/// for another platform: the pull fails at the stream's error, naming the
+/// image, with the daemon's message in the chain — and goes no further.
+/// The headline is Ratect's (see `docs/differences-from-batect.md`'s
+/// "Failure messages are Ratect's own").
+#[tokio::test]
+async fn pull_image_fails_at_the_daemons_stream_error_with_its_message() {
+    for message in [
+        "manifest for alpine:3.20 not found: manifest unknown: manifest unknown",
+        "pull access denied for alpine, repository does not exist or may require 'docker login'",
+        "no matching manifest for linux/arm64/v8 in the manifest list entries",
+        "image operating system \"windows\" cannot be used on this platform",
+    ] {
+        let stream = format!(
+            "{{\"status\":\"Pulling from library/alpine\"}}\n{}\n{{\"status\":\"never read\"}}\n",
+            serde_json::json!({ "errorDetail": { "message": message }, "error": message })
+        );
+        let (client, log) = client_for_recording_daemon(pull_route(stream)).await;
+
+        let err = client.pull_image("alpine:3.20").await.unwrap_err();
+
+        assert_eq!(err.to_string(), "Failed to pull image alpine:3.20");
+        assert!(format!("{err:#}").contains(message), "{err:#}");
+        assert!(!inspected_after_pulling(&log), "{message}");
+    }
+}
+
+/// Batect's `DockerClientImagePullSpec`: a stream that isn't JSON fails the
+/// pull too, rather than being skipped.
+#[tokio::test]
+async fn pull_image_fails_on_a_malformed_stream() {
+    let (client, log) =
+        client_for_recording_daemon(pull_route("this is not json\n".to_string())).await;
+
+    let err = client.pull_image("alpine:3.20").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to pull image alpine:3.20");
+    assert!(!inspected_after_pulling(&log));
+}
+
+/// Batect's `DockerClientImagePullSpec`, getting an image that isn't there:
+/// only the daemon's not-found means "not present locally"; any other
+/// inspect failure is an error naming the image.
+#[tokio::test]
+async fn local_image_id_is_none_only_for_a_daemon_not_found() {
+    let inspect = "/images/alpine:3.20/json";
+    let (client, _) =
+        client_for_recording_daemon(one_route("GET", inspect, 200, r#"{"Id":"sha256:abc"}"#)).await;
+    assert_eq!(
+        client
+            .local_image_id("alpine:3.20")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("sha256:abc")
+    );
+
+    let (client, log) = client_for_recording_daemon(one_route(
+        "GET",
+        inspect,
+        404,
+        r#"{"message":"No such image: alpine:3.20"}"#,
+    ))
+    .await;
+    assert_eq!(client.local_image_id("alpine:3.20").await.unwrap(), None);
+    assert_eq!(
+        requests_sent(&log),
+        vec![("GET".to_string(), inspect.to_string())]
+    );
+
+    let (client, _) = client_for_recording_daemon(one_route(
+        "GET",
+        inspect,
+        500,
+        r#"{"message":"stub daemon failed the inspect"}"#,
+    ))
+    .await;
+    let err = client.local_image_id("alpine:3.20").await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Failed to check whether image 'alpine:3.20' exists locally"
+    );
+    assert!(
+        format!("{err:#}").contains("stub daemon failed the inspect"),
+        "{err:#}"
+    );
+}
+
+/// Batect's `DockerClientNetworkManagementSpec`, getting a network by name
+/// or ID: the string given is what's inspected, so either works; a
+/// not-found — what a lookup after deleting one gets — is "doesn't exist",
+/// not an error; any other failure is an error naming the network.
+#[tokio::test]
+async fn network_exists_is_false_only_for_a_daemon_not_found() {
+    let id = "4f3c1b2a9d8e";
+    let (client, log) =
+        client_for_recording_daemon(one_route("GET", "/networks/4f3c1b2a9d8e", 200, "{}")).await;
+    assert!(client.network_exists(id).await.unwrap());
+    assert_eq!(
+        requests_sent(&log),
+        vec![("GET".to_string(), format!("/networks/{id}"))]
+    );
+
+    let (client, log) = client_for_recording_daemon(one_route(
+        "GET",
+        "/networks/gone",
+        404,
+        r#"{"message":"network gone not found"}"#,
+    ))
+    .await;
+    assert!(!client.network_exists("gone").await.unwrap());
+    assert_eq!(
+        requests_sent(&log),
+        vec![("GET".to_string(), "/networks/gone".to_string())]
+    );
+
+    let (client, _) = client_for_recording_daemon(one_route(
+        "GET",
+        "/networks/broken",
+        500,
+        r#"{"message":"stub daemon failed the inspect"}"#,
+    ))
+    .await;
+    let err = client.network_exists("broken").await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Failed to check whether network 'broken' exists"
+    );
+    assert!(
+        format!("{err:#}").contains("stub daemon failed the inspect"),
+        "{err:#}"
+    );
+}
+
+/// Batect's `DockerClientNetworkManagementSpec`, deleting a network that
+/// doesn't exist: unlike a lookup, that's a failure, naming the network,
+/// with the daemon's reason in the chain.
+#[tokio::test]
+async fn remove_network_fails_for_a_missing_network() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "DELETE",
+        "/networks/gone",
+        404,
+        r#"{"message":"network gone not found"}"#,
+    ))
+    .await;
+
+    let err = client.remove_network("gone").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to remove network 'gone'");
+    assert!(
+        format!("{err:#}").contains("network gone not found"),
+        "{err:#}"
+    );
+}
+
+/// Batect's `DockerClientVolumeManagementSpec`, deleting a volume that
+/// doesn't exist: a failure naming the volume, with the daemon's reason in
+/// the chain.
+#[tokio::test]
+async fn remove_volume_fails_for_a_missing_volume() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "DELETE",
+        "/volumes/gone",
+        404,
+        r#"{"message":"get gone: no such volume"}"#,
+    ))
+    .await;
+
+    let err = client.remove_volume("gone").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to remove volume 'gone'");
+    assert!(
+        format!("{err:#}").contains("get gone: no such volume"),
+        "{err:#}"
+    );
 }

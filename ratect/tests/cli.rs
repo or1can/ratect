@@ -3701,6 +3701,42 @@ fn a_tcp_host_stays_plain_when_docker_tls_verify_is_off() {
     }
 }
 
+/// Batect's `DockerClientConfigurationSpec`/`DockerHttpConfigDefaultsSpec`:
+/// with no host and the default context, the daemon is the platform
+/// default, `unix:///var/run/docker.sock`. Ratect decides that itself, so
+/// nothing chosen after it — `DOCKER_CONTEXT`, here naming a context that
+/// doesn't exist — may override `--docker-context default`. Driven through
+/// the binary because an in-process test can't set the variables safely;
+/// `DOCKER_CONFIG` is an empty directory so no machine's own
+/// `currentContext` takes part. Needs no daemon: with one at the default
+/// socket the listing succeeds, and without one the failure names that
+/// socket.
+#[test]
+fn the_default_context_connects_to_the_default_socket_whatever_docker_context_says() {
+    let config_directory =
+        std::env::temp_dir().join(format!("ratect-default-context-{}", std::process::id()));
+    std::fs::create_dir_all(&config_directory).unwrap();
+
+    let output = ratect_command()
+        .args(["resources", "list", "--all-projects"])
+        .args(["--docker-context", "default"])
+        .env("DOCKER_CONTEXT", "no-such-context")
+        .env("DOCKER_CONFIG", &config_directory)
+        .env_remove("DOCKER_HOST")
+        .env_remove("DOCKER_TLS_VERIFY")
+        .env_remove("DOCKER_CERT_PATH")
+        .output()
+        .expect("failed to run ratect");
+    let _ = std::fs::remove_dir_all(&config_directory);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("no-such-context"), "{stderr}");
+    assert!(
+        output.status.success() || stderr.contains("unix:///var/run/docker.sock"),
+        "{stderr}"
+    );
+}
+
 /// Only a run's failure exits `125`; every other verb's exits `1` — the same
 /// unloadable config, two verbs (decisions/0016). Needs no daemon: the config
 /// fails before anything connects.

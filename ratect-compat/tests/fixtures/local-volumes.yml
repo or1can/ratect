@@ -1,0 +1,38 @@
+# Exercises `local` volume mounts of a single file, a read-only file and a
+# read-only directory, and the Docker socket itself. Each task's command
+# either reads a mount or tries to write to a read-only one.
+project_name: ratect-local-volumes-test
+containers:
+  mounts:
+    image: alpine:3.18.2
+    volumes:
+      - local: local-volumes/file.txt
+        container: /mnt/file.txt
+      - local: local-volumes/file.txt
+        container: /mnt/ro-file.txt
+        options: ro
+      - local: local-volumes
+        container: /mnt/ro-dir
+        options: ro
+  docker-cli:
+    image: docker:27.3.1-cli
+    volumes:
+      - local: /var/run/docker.sock
+        container: /var/run/docker.sock
+tasks:
+  read-file:
+    run:
+      container: mounts
+      command: cat /mnt/file.txt
+  write-ro-file:
+    run:
+      container: mounts
+      command: sh -c "echo more >> /mnt/ro-file.txt"
+  write-ro-dir:
+    run:
+      container: mounts
+      command: touch /mnt/ro-dir/new-file
+  docker-through-socket:
+    run:
+      container: docker-cli
+      command: docker version --format "server-os={{.Server.Os}}"
