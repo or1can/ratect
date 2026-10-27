@@ -384,7 +384,9 @@ tables above:
   a failing setup command, a dependency cycle — but Batect's headline and
   wording aren't reproduced: `Failed to pull image X` and its `Caused by:`
   list, for example, rather than `Could not pull image X.` and the daemon's
-  message, a failed build's output under `Build output:` rather than `Output
+  message — which, where the daemon refused a request, follows `Docker
+  responded with status code N:` rather than `Error response from daemon:` —
+  a failed build's output under `Build output:` rather than `Output
   from Docker was:`, and `Failed to start container 'X'` rather than `Could
   not run container X.`. A `run_as_current_user` or network failure is
   reported as itself, not, as Batect frames it, as a failure to create the

@@ -3074,6 +3074,23 @@ async fn a_stdin_forwarding_task_container_attaches_stdin_and_output_before_it_s
     }
 }
 
+/// A [`recording_daemon`] route answering `method` on `path` with `status`
+/// and `body`, and anything else with a 404.
+fn one_route(
+    method: &'static str,
+    path: &'static str,
+    status: u16,
+    body: &'static str,
+) -> impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static {
+    move |m, p| {
+        if (m, p) == (method, path) {
+            (status, body.to_string())
+        } else {
+            (404, r#"{"message":"not found"}"#.to_string())
+        }
+    }
+}
+
 /// Batect's `DockerClientContainerManagementSpec`, run with no working
 /// directory, user, shm size or entrypoint set, and
 /// `DockerContainerCreationSpecFactorySpec`'s "no entrypoint": the create
@@ -3093,4 +3110,172 @@ async fn container_config_leaves_unset_defaults_to_the_image_and_daemon() {
     assert_eq!(config.working_dir, None);
     assert_eq!(config.user, None);
     assert_eq!(config.host_config.unwrap().shm_size, None);
+}
+
+/// Batect's `DockerClientContainerManagementSpec`, creating a container
+/// from an image the daemon doesn't have: the create fails naming the
+/// container as configured, with the daemon's reason in the chain, and
+/// nothing to clean up.
+#[tokio::test]
+async fn create_container_reports_a_missing_image_naming_the_container() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "POST",
+        "/containers/create",
+        404,
+        r#"{"message":"No such image: alpine:3.20"}"#,
+    ))
+    .await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+
+    let err = client.create_container(&spec).await.unwrap_err();
+
+    assert_eq!(err.created, None);
+    assert_eq!(err.to_string(), "Failed to create container 'app'");
+    let chain = format!("{:#}", err.error);
+    assert!(chain.contains("No such image: alpine:3.20"), "{chain}");
+}
+
+/// `create_container` for `app` under `run_as_current_user`, against a
+/// daemon that creates it as `new-id` and answers its uploads with `upload`,
+/// given each upload's position (0 for `/etc`'s, then one per directory).
+async fn create_with_user_mapping(
+    upload: impl Fn(usize) -> (u16, String) + Send + Sync + 'static,
+) -> CreateContainerError {
+    let uploads = std::sync::atomic::AtomicUsize::new(0);
+    let (client, _) = client_for_recording_daemon(move |method, path| match (method, path) {
+        ("POST", "/containers/create") => (201, r#"{"Id":"new-id","Warnings":[]}"#.to_string()),
+        ("PUT", "/containers/new-id/archive") => {
+            upload(uploads.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+        }
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    })
+    .await;
+    let mut spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+    spec.shared.user_mapping = Some(user_mapping_fixture());
+
+    client.create_container(&spec).await.unwrap_err()
+}
+
+/// Batect's `DockerClientContainerManagementSpec`, uploading a file to a
+/// directory the container doesn't have: `run_as_current_user`'s `/etc`
+/// upload fails naming the container and the field, with the daemon's
+/// reason in the chain — and the container, which exists by then, is handed
+/// back for cleanup.
+#[tokio::test]
+async fn a_user_mapping_upload_the_daemon_refuses_fails_the_create_naming_the_container() {
+    let err = create_with_user_mapping(|_| {
+        (
+            404,
+            r#"{"message":"Could not find the file /etc in container new-id"}"#.to_string(),
+        )
+    })
+    .await;
+
+    assert_eq!(err.created.as_deref(), Some("new-id"));
+    assert_eq!(
+        err.to_string(),
+        "Failed to apply run_as_current_user to container 'app'"
+    );
+    let chain = format!("{:#}", err.error);
+    assert!(
+        chain.contains("Failed to upload user mapping files to container 'new-id'"),
+        "{chain}"
+    );
+    assert!(
+        chain.contains("Could not find the file /etc in container new-id"),
+        "{chain}"
+    );
+}
+
+/// The same rule for a directory upload: the home directory's ownership
+/// archive, refused after `/etc`'s succeeded, fails the create the same way.
+#[tokio::test]
+async fn a_directory_ownership_upload_the_daemon_refuses_fails_the_create_naming_the_container() {
+    let err = create_with_user_mapping(|position| match position {
+        0 => (200, String::new()),
+        _ => (
+            404,
+            r#"{"message":"Could not find the file /home in container new-id"}"#.to_string(),
+        ),
+    })
+    .await;
+
+    assert_eq!(err.created.as_deref(), Some("new-id"));
+    assert_eq!(
+        err.to_string(),
+        "Failed to apply run_as_current_user to container 'app'"
+    );
+    let chain = format!("{:#}", err.error);
+    assert!(
+        chain.contains("Failed to take ownership of '/home/ratect' in container 'new-id'"),
+        "{chain}"
+    );
+    assert!(
+        chain.contains("Could not find the file /home in container new-id"),
+        "{chain}"
+    );
+}
+
+/// Batect's `DockerClientContainerManagementSpec`, starting a container
+/// that doesn't exist: a dependency's start fails naming it as configured,
+/// with the daemon's reason in the chain.
+#[tokio::test]
+async fn start_background_container_reports_a_missing_container_naming_it() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "POST",
+        "/containers/app-id/start",
+        404,
+        r#"{"message":"No such container: app-id"}"#,
+    ))
+    .await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Dependency,
+    );
+
+    let err = client
+        .start_background_container("app-id", &spec)
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to start container 'app'");
+    assert!(
+        format!("{err:#}").contains("No such container: app-id"),
+        "{err:#}"
+    );
+}
+
+/// The same rule for the task's own container, started after its output is
+/// attached.
+#[tokio::test]
+async fn run_container_reports_a_missing_container_naming_it() {
+    let (client, _) = client_for_recording_daemon(|method, path| match (method, path) {
+        ("POST", "/containers/app-id/start") => (
+            404,
+            r#"{"message":"No such container: app-id"}"#.to_string(),
+        ),
+        _ => run_route(method, path),
+    })
+    .await;
+    let spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+
+    let err = client
+        .run_container("app-id", &spec, None)
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to start container 'app'");
+    assert!(
+        format!("{err:#}").contains("No such container: app-id"),
+        "{err:#}"
+    );
 }
