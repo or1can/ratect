@@ -9718,6 +9718,181 @@ async fn detects_circular_container_dependency() {
         .contains("Circular container dependency detected"));
 }
 
+/// `config_with_containers`, with `task_dependencies` as the `start` task's
+/// own `dependencies`.
+fn config_with_task_dependencies(
+    app_dependencies: &[&str],
+    task_dependencies: &[&str],
+    containers: &[(&str, &[&str])],
+) -> Config {
+    let mut config = config_with_containers(app_dependencies, containers);
+    config.tasks.get_mut("start").unwrap().dependencies = Some(names(task_dependencies));
+    config
+}
+
+/// Runs `start` and returns the graph its `TaskGraphResolved` posted, sorted
+/// by name (the event's order falls out of a `HashMap`), as
+/// `(name, dependencies, is_task_container)`, with the fake's events.
+async fn resolved_graph(config: Config) -> (Vec<(String, Vec<String>, bool)>, Vec<String>) {
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+    engine.run_task("start", &[]).await.unwrap();
+
+    let mut graph: Vec<_> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("a task with a container posts its graph")
+        .into_iter()
+        .map(|info| (info.name, info.dependencies, info.is_task_container))
+        .collect();
+    graph.sort();
+    (graph, docker.events())
+}
+
+fn names(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| name.to_string()).collect()
+}
+
+/// How many times `container` was started as a dependency.
+fn sidecar_starts(events: &[String], container: &str) -> usize {
+    events
+        .iter()
+        .filter(|e| e.starts_with(&format!("sidecar-start:{container}:")))
+        .count()
+}
+
+/// Where in `events` `container` was started as a dependency.
+fn sidecar_start_index(events: &[String], container: &str) -> usize {
+    events
+        .iter()
+        .position(|e| e.starts_with(&format!("sidecar-start:{container}:")))
+        .unwrap_or_else(|| panic!("'{container}' must be started: {events:?}"))
+}
+
+#[tokio::test]
+async fn a_task_with_no_dependencies_has_a_graph_of_just_its_own_container() {
+    let (graph, events) = resolved_graph(config_with_containers(&[], &[])).await;
+
+    assert_eq!(graph, vec![("app".to_string(), vec![], true)]);
+    assert!(
+        !events.iter().any(|e| e.starts_with("sidecar-start:")),
+        "nothing but the task container runs: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn every_task_level_dependency_is_a_dependency_of_the_task_container() {
+    let config = config_with_task_dependencies(&[], &["b", "c"], &[("b", &[]), ("c", &[])]);
+
+    let (graph, events) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), names(&["b", "c"]), true),
+            ("b".to_string(), vec![], false),
+            ("c".to_string(), vec![], false),
+        ]
+    );
+    assert_eq!(sidecar_starts(&events, "b"), 1, "{events:?}");
+    assert_eq!(sidecar_starts(&events, "c"), 1, "{events:?}");
+}
+
+#[tokio::test]
+async fn a_dependency_shared_by_the_task_container_and_its_other_dependency_starts_once_first() {
+    let config = config_with_containers(&["a", "b"], &[("a", &[]), ("b", &["a"])]);
+
+    let (graph, events) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("a".to_string(), vec![], false),
+            ("app".to_string(), names(&["a", "b"]), true),
+            ("b".to_string(), names(&["a"]), false),
+        ]
+    );
+    assert_eq!(sidecar_starts(&events, "a"), 1, "{events:?}");
+    assert!(
+        sidecar_start_index(&events, "a") < sidecar_start_index(&events, "b"),
+        "'b' waits for 'a': {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_task_level_dependency_brings_its_own_dependencies() {
+    let config = config_with_task_dependencies(&[], &["b"], &[("b", &["c"]), ("c", &[])]);
+
+    let (graph, events) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), names(&["b"]), true),
+            ("b".to_string(), names(&["c"]), false),
+            ("c".to_string(), vec![], false),
+        ]
+    );
+    assert!(
+        sidecar_start_index(&events, "c") < sidecar_start_index(&events, "b"),
+        "'b' waits for 'c': {events:?}"
+    );
+}
+
+/// Refuses `config`'s `start` task, naming `offender`, with no container
+/// started. The wording is Ratect's own (docs/differences-from-batect.md,
+/// "Failure messages are Ratect's own"), so only the outcome is pinned.
+async fn assert_graph_refused(config: Config, offender: &str) {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    let err = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        err.to_string().contains(&format!("'{offender}'")),
+        "the error names '{offender}': {err}"
+    );
+    let events = docker.events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("sidecar-start:") || e.starts_with("run:")),
+        "no container starts: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_task_container_that_depends_on_itself_is_refused() {
+    assert_graph_refused(config_with_containers(&["app"], &[]), "app").await;
+}
+
+#[tokio::test]
+async fn a_dependency_that_depends_on_itself_is_refused() {
+    assert_graph_refused(config_with_containers(&["a"], &[("a", &["a"])]), "a").await;
+}
+
+#[tokio::test]
+async fn a_task_level_dependency_on_the_task_container_is_refused() {
+    let config = config_with_task_dependencies(&[], &["b"], &[("b", &["app"])]);
+    assert_graph_refused(config, "app").await;
+}
+
+#[tokio::test]
+async fn a_task_level_cycle_without_the_task_container_is_refused() {
+    let config = config_with_task_dependencies(&[], &["b"], &[("b", &["c"]), ("c", &["b"])]);
+    assert_graph_refused(config, "b").await;
+}
+
 #[tokio::test]
 async fn detects_dependency_cycle() {
     let docker = FakeContainerRuntime::default();

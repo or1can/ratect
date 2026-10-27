@@ -362,11 +362,15 @@ fn undeclared_container_bug(name: &str) -> String {
 /// Detects a circular container dependency eagerly, via an explicit DFS
 /// ancestor path: a name already on the current path is a real cycle; a name
 /// already fully built into the returned graph is a *diamond* (shared, not
-/// circular) and is skipped without re-visiting — mirrors Batect's own
-/// `ContainerDependencyGraph`, run once, synchronously, before any concurrent
-/// execution begins. This static split is why `ensure_container_ready` no
-/// longer needs its own runtime cycle guard (pre-0.15.0's `resolving` set) —
-/// a graph returned from here is already proven acyclic.
+/// circular) and is skipped without re-visiting. That detection mirrors
+/// Batect's own `ContainerDependencyGraph` — a container listing itself is
+/// refused too — but the message doesn't: Batect's separate self-dependency
+/// and path-describing cycle wordings aren't reproduced, a divergence
+/// docs/differences-from-batect.md records ("Failure messages are Ratect's
+/// own"). Run once, synchronously, before any concurrent execution begins.
+/// This static split is why `ensure_container_ready` no longer needs its own
+/// runtime cycle guard (pre-0.15.0's `resolving` set) — a graph returned from
+/// here is already proven acyclic.
 fn build_dependency_graph(
     containers: &HashMap<String, Container>,
     root: &str,
