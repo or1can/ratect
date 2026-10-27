@@ -133,7 +133,8 @@ impl Leftover {
     }
 
     /// What this is, in the terms the configuration uses — a container's own
-    /// Docker name is random words, which is no use for recognizing it.
+    /// Docker name carries its project and run suffix as well, which is
+    /// noise when recognizing it.
     pub fn describe(&self) -> String {
         if self.is_network {
             return format!("network {}", self.resource.name);

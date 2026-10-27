@@ -130,6 +130,7 @@ use bollard::models::{
 };
 use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
+use bollard::query_parameters::CreateContainerOptionsBuilder;
 use bollard::query_parameters::CreateImageOptions;
 use bollard::query_parameters::EventsOptionsBuilder;
 use bollard::query_parameters::InspectContainerOptions;
@@ -625,8 +626,10 @@ fn build_log_config(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelledResource {
     pub id: String,
-    /// Docker's own name — random words for a container (which is why the
-    /// `container` label exists), `ratect-<run id>` for a network.
+    /// Docker's own name — `<project>-<container>-<suffix>` for a container
+    /// and `<project>-network-<suffix>` for a network Ratect created (see
+    /// [`crate::resource_names`]); `--use-network`'s keeps its own. Never
+    /// parsed: which container this is is the `container` label's to say.
     pub name: String,
     pub labels: HashMap<String, String>,
     /// When Docker created it, in seconds since the Unix epoch. Docker
@@ -1628,7 +1631,8 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// (decisions/0019, Batect's `CreateContainerStepRule`).
     ///
     /// "Created" means everything that makes the container startable:
-    /// Docker's own `create`, on `spec.shared.network` — the task's network with a network alias of
+    /// Docker's own `create`, under `spec.shared.docker_name` and on
+    /// `spec.shared.network` — the task's network with a network alias of
     /// `spec.shared.name` so other containers on it can reach it by that
     /// name, or a Docker network mode ([`ContainerNetwork`]) — then the
     /// user-mapping upload (`spec.shared.user_mapping`).
@@ -3129,9 +3133,15 @@ impl ContainerRuntime for DockerClient {
         let config = self
             .container_config(spec)
             .map_err(CreateContainerError::before_creation)?;
+        let options = CreateContainerOptionsBuilder::new()
+            .name(&shared.docker_name)
+            .build();
+        // Named for the container the user configured, not `docker_name`:
+        // a daemon refusing the name (a conflict, or a character Docker
+        // won't take) still has to say which container that was.
         let container = self
             .docker
-            .create_container(None, config)
+            .create_container(Some(options), config)
             .await
             .with_context(|| format!("Failed to create container '{}'", shared.name))
             .map_err(CreateContainerError::before_creation)?;

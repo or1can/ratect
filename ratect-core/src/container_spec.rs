@@ -249,6 +249,11 @@ pub struct SharedContainerSpec {
     /// This container's own network alias — Docker's `hostname`, and the
     /// name other containers on the same network reach it by.
     pub name: String,
+    /// The name Docker creates this container under —
+    /// `<project>-<container>-<suffix>`, from this task execution's
+    /// [`crate::resource_names::ResourceNames`]. Not
+    /// [`name`](Self::name), which is the configured container's own key.
+    pub docker_name: String,
     /// The already-resolved image ID this container runs — never a
     /// `build_directory`; `docker.rs` deliberately doesn't resolve or build
     /// images itself (see `TaskEngine::resolve_image`).
@@ -397,6 +402,8 @@ pub struct ContainerSpecInputs<'a> {
     /// This container's own network alias — see
     /// [`SharedContainerSpec::name`].
     pub name: &'a str,
+    /// See [`SharedContainerSpec::docker_name`].
+    pub docker_name: &'a str,
     pub container_config: &'a Container,
     pub overlay: Overlay<'a>,
     /// The already-resolved image ID (`TaskEngine::resolve_image`).
@@ -433,6 +440,7 @@ pub struct ContainerSpecInputs<'a> {
 pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
     let ContainerSpecInputs {
         name,
+        docker_name,
         container_config,
         overlay,
         image,
@@ -535,6 +543,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
     ContainerSpec {
         shared: SharedContainerSpec {
             name: name.to_string(),
+            docker_name: docker_name.to_string(),
             image: image.to_string(),
             command: command.map(str::to_string),
             volumes: volumes.cloned(),

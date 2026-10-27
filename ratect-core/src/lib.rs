@@ -53,6 +53,7 @@ pub mod labels;
 pub mod panic_hook;
 pub mod proxy;
 pub mod registry_auth;
+pub mod resource_names;
 pub mod resources;
 #[cfg(feature = "schema")]
 pub mod schema;

@@ -327,6 +327,7 @@ struct TaskRunContext<'a, 'p> {
     no_proxy_entries: &'a std::collections::BTreeSet<String>,
     customisations: Option<&'a IndexMap<String, TaskContainerCustomisation>>,
     run_labels: &'a crate::labels::RunLabels,
+    resource_names: &'a crate::resource_names::ResourceNames,
     dependency_watchers: &'a Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// The task's own container: its name, its `run` (the overlay it is
     /// created with, where a dependency gets `customise`), the
@@ -690,13 +691,13 @@ impl std::error::Error for FailureReported {
 ///
 /// The command is `docker`'s, not `ratect resources clean`: this is shared
 /// core, and `resources` is a `ratect` verb `ratect-compat` doesn't have,
-/// while `docker` works from either. It names containers by id — Ratect
-/// creates them without a name, so Docker's is random words the engine
-/// never learns; the id, shortened to the twelve characters `docker ps`
-/// shows, is what Docker resolves — and removes them with `-f -v`, since
-/// that is what Ratect's own removal does (force, and the anonymous volumes
-/// with them); a plain `docker rm -f` would leave those volumes. The list
-/// names each by its config name too, since that is the one the user knows.
+/// while `docker` works from either. It names containers by id — the handle
+/// the engine registers each one under at creation, shortened to the twelve
+/// characters `docker ps` shows, which Docker resolves — and removes them
+/// with `-f -v`, since that is what Ratect's own removal does (force, and
+/// the anonymous volumes with them); a plain `docker rm -f` would leave
+/// those volumes. The list names each by its config name too, since that is
+/// the one the user knows.
 struct LeftBehind {
     /// `(config name, container id)`.
     containers: Vec<(String, String)>,
@@ -2386,6 +2387,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             &run_id,
             self.ratect_version.as_deref(),
         );
+        // The Docker names this run creates its network and containers
+        // under — one suffix for the lot, as Batect draws one per task
+        // (ratect#299). Names only: ownership is `run_labels`' job.
+        let resource_names =
+            crate::resource_names::ResourceNames::new(&self.project.config.project_name);
         // Eligibility only — `ContainerRuntime::run_container` further
         // gates this on the local process's own stdin/stdout genuinely
         // being terminals before actually attaching a TTY, and stdin
@@ -2424,9 +2430,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     name.clone()
                 }
                 None => {
-                    // Named after this run's own id, so the network's name
-                    // and its `run` label always agree.
-                    let name = format!("ratect-{run_id}");
+                    let name = resource_names.network();
                     self.docker
                         .create_network(&name, &run_labels.for_network())
                         .await?;
@@ -2495,6 +2499,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 no_proxy_entries: &no_proxy_entries,
                 customisations: task.customise.as_ref(),
                 run_labels: &run_labels,
+                resource_names: &resource_names,
                 dependency_watchers: &dependency_watchers,
                 root: &run.container,
                 run,
@@ -3453,6 +3458,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     let spec = crate::container_spec::derive_spec(
                         crate::container_spec::ContainerSpecInputs {
                             name,
+                            docker_name: &context.resource_names.container(name),
                             container_config,
                             overlay,
                             image: &image,

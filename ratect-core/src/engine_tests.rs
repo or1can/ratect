@@ -10195,6 +10195,159 @@ async fn every_resource_a_run_creates_is_labelled_with_that_run() {
     assert_eq!(dependency[crate::labels::ROLE], "dependency");
 }
 
+/// The Docker name the fake was asked to create container `name` under.
+fn docker_name_of(docker: &FakeContainerRuntime, name: &str) -> String {
+    docker
+        .spec_for(name)
+        .unwrap_or_else(|| panic!("'{name}' was created"))
+        .shared
+        .docker_name
+}
+
+/// The suffix of `actual`, once it has been checked to be `prefix` followed
+/// by Batect's six `a-z0-9` characters (ratect#299).
+fn batect_suffix<'a>(actual: &'a str, prefix: &str) -> &'a str {
+    let suffix = actual
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .unwrap_or_else(|| panic!("{actual:?} should start with '{prefix}-'"));
+    assert!(
+        suffix.len() == 6
+            && suffix
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+        "{actual:?} should end in six a-z0-9 characters"
+    );
+    suffix
+}
+
+/// Batect's `DockerResourceNameGenerator` (ratect#299): the task network is
+/// `<project>-network-<suffix>` and every container
+/// `<project>-<container>-<suffix>`, one suffix for the whole run — while
+/// the `run` label keeps the full run id the suffix is not.
+#[tokio::test]
+async fn a_run_names_its_network_and_containers_the_batect_way() {
+    let mut containers = IndexMap::new();
+    containers.insert("database".to_string(), container("postgres:16", None));
+    containers.insert("cache".to_string(), container("redis:7", None));
+    let mut app = container("alpine:3.18", None);
+    app.dependencies = Some(vec!["database".to_string(), "cache".to_string()]);
+    containers.insert("app".to_string(), app);
+    let mut tasks = IndexMap::new();
+    tasks.insert("check".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    engine(config, docker.clone())
+        .run_task("check", &[])
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 1, "{events:?}");
+    let suffix = batect_suffix(&networks[0], "demo-network");
+    for name in ["app", "database", "cache"] {
+        let docker_name = docker_name_of(&docker, name);
+        assert_eq!(
+            batect_suffix(&docker_name, &format!("demo-{name}")),
+            suffix,
+            "'{name}' shares the network's suffix"
+        );
+    }
+    // The task's own container really is on the network so named.
+    assert!(
+        events.contains(&format!("run:app:echo hi:args=[]:{}", networks[0])),
+        "{events:?}"
+    );
+
+    let run = &docker.labels_for("app").unwrap()[crate::labels::RUN];
+    assert!(
+        uuid::Uuid::parse_str(run).is_ok(),
+        "the run label is still the full run id, not the suffix: {run}"
+    );
+}
+
+/// Each task execution draws its own suffix, and its network and containers
+/// share that one — a prerequisite and the task it runs before included.
+#[tokio::test]
+async fn each_task_execution_names_its_resources_with_its_own_suffix() {
+    let docker = FakeContainerRuntime::default();
+    engine(
+        config_with_a_prerequisite_that_has_a_dependency(),
+        docker.clone(),
+    )
+    .run_task("test", &[])
+    .await
+    .unwrap();
+
+    let events = docker.events();
+    let networks = created_networks(&events);
+    assert_eq!(networks.len(), 2, "one network per task: {events:?}");
+    let prerequisite = batect_suffix(&networks[0], "demo-network");
+    let task = batect_suffix(&networks[1], "demo-network");
+    assert_ne!(prerequisite, task, "each execution has its own suffix");
+    for (name, suffix) in [
+        ("prep", prerequisite),
+        ("prep-db", prerequisite),
+        ("app", task),
+        ("app-db", task),
+    ] {
+        let docker_name = docker_name_of(&docker, name);
+        assert_eq!(
+            batect_suffix(&docker_name, &format!("demo-{name}")),
+            suffix,
+            "'{name}' shares its own execution's suffix"
+        );
+    }
+}
+
+/// `--use-network` creates no network to name, but the containers are named
+/// the Batect way regardless, still sharing one suffix.
+#[tokio::test]
+async fn containers_are_named_the_batect_way_under_use_network() {
+    let mut containers = IndexMap::new();
+    containers.insert("database".to_string(), container("postgres:16", None));
+    let mut app = container("alpine:3.18", None);
+    app.dependencies = Some(vec!["database".to_string()]);
+    containers.insert("app".to_string(), app);
+    let mut tasks = IndexMap::new();
+    tasks.insert("check".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            existing_network: Some("my-network".to_string()),
+            ..Default::default()
+        })
+        .unwrap()
+        .run_task("check", &[])
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    assert!(created_networks(&events).is_empty(), "{events:?}");
+    let app = docker_name_of(&docker, "app");
+    let database = docker_name_of(&docker, "database");
+    assert_eq!(
+        batect_suffix(&app, "demo-app"),
+        batect_suffix(&database, "demo-database")
+    );
+}
+
 /// `--use-network` creates no network, so the run id can't come from
 /// one — the containers still have to agree on which run they're from.
 #[tokio::test]
@@ -13682,13 +13835,13 @@ async fn an_abandoned_cleanup_posts_the_escalation_notice_and_reports_what_it_le
     assert!(
         error.starts_with(
             "Cleanup abandoned; left behind: app (sidecar-id-a), database (sidecar-id-d), \
-             network ratect-"
+             network demo-network-"
         ),
         "{error}"
     );
     assert!(
         error.contains(
-            ". Remove with: docker rm -f -v sidecar-id-a sidecar-id-d; docker network rm ratect-"
+            ". Remove with: docker rm -f -v sidecar-id-a sidecar-id-d; docker network rm demo-network-"
         ),
         "{error}"
     );
@@ -13737,17 +13890,18 @@ async fn a_refused_removal_reports_the_daemons_reason_and_what_was_left() {
     let errors = messages(&sink.events(), error_line);
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
-        errors[0].starts_with("Cleanup failed: error while removing network: network ratect-"),
+        errors[0]
+            .starts_with("Cleanup failed: error while removing network: network demo-network-"),
         "{}",
         errors[0]
     );
     assert!(
-        errors[0].contains("has active endpoints; left behind: network ratect-"),
+        errors[0].contains("has active endpoints; left behind: network demo-network-"),
         "{}",
         errors[0]
     );
     assert!(
-        errors[0].contains(". Remove with: docker network rm ratect-"),
+        errors[0].contains(". Remove with: docker network rm demo-network-"),
         "{}",
         errors[0]
     );
@@ -13862,13 +14016,13 @@ async fn a_refused_removal_and_a_refused_network_are_reported_together() {
     assert!(
         errors[0].starts_with(
             "Cleanup failed: No such container: sidecar-id-database; error while removing \
-             network: network ratect-"
+             network: network demo-network-"
         ),
         "{}",
         errors[0]
     );
     assert!(
-        errors[0].contains("left behind: database (sidecar-id-d), network ratect-"),
+        errors[0].contains("left behind: database (sidecar-id-d), network demo-network-"),
         "{}",
         errors[0]
     );
@@ -14136,14 +14290,14 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     assert!(
         notices[0].starts_with(
             "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
-             network ratect-"
+             network demo-network-"
         ),
         "{}",
         notices[0]
     );
     assert!(
         notices[0].contains(
-            ". Remove with: docker rm -f -v sidecar-id-a sidecar-id-d; docker network rm ratect-"
+            ". Remove with: docker rm -f -v sidecar-id-a sidecar-id-d; docker network rm demo-network-"
         ),
         "{}",
         notices[0]
@@ -14186,7 +14340,7 @@ async fn disabled_cleanup_posts_a_notice_naming_what_it_kept() {
     assert!(
         notices[0].starts_with(
             "Left in place (--no-cleanup): app (sidecar-id-a), database (sidecar-id-d), \
-             network ratect-"
+             network demo-network-"
         ),
         "{}",
         notices[0]

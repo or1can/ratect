@@ -2313,9 +2313,9 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
     assert!(
         stderr.contains("Left in place (--no-cleanup): app (")
             && stderr.contains(", database (")
-            && stderr.contains(", network ratect-")
+            && stderr.contains(", network ratect-labels-test-network-")
             && stderr.contains(". Remove with: docker rm -f -v ")
-            && stderr.contains("; docker network rm ratect-"),
+            && stderr.contains("; docker network rm ratect-labels-test-network-"),
         "the reminder names what was kept and how to remove it:\n{stderr}"
     );
     assert!(
@@ -2375,12 +2375,15 @@ fn ownership_labels_reach_real_containers_and_networks_via_docker() {
 /// and `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
 /// A task's containers are created on the task network, with their aliases,
-/// and are never also on Docker's default `bridge` (ratect#303). Asserted on
-/// what the daemon reports, with `--no-cleanup-after-success` keeping
+/// and are never also on Docker's default `bridge` (ratect#303) — and Docker
+/// stores them, and the network, under Batect's names (ratect#299): the
+/// network `<project>-network-<suffix>`, each container
+/// `<project>-<container>-<suffix>`, one suffix shared by all three. Asserted
+/// on what the daemon reports, with `--no-cleanup-after-success` keeping
 /// everything to inspect; an exited container still lists its networks.
 #[test]
 #[ignore]
-fn task_containers_are_only_on_the_task_network_via_docker() {
+fn task_containers_are_only_on_the_batect_named_task_network_via_docker() {
     fn docker_lines(arguments: &[&str]) -> Vec<String> {
         let output = Command::new("docker")
             .args(arguments)
@@ -2391,6 +2394,22 @@ fn task_containers_are_only_on_the_task_network_via_docker() {
             .lines()
             .map(str::to_string)
             .collect()
+    }
+
+    /// `prefix-` then six `a-z0-9` characters, returning those six.
+    fn suffix_after(name: &str, prefix: &str) -> String {
+        let suffix = name
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .unwrap_or_else(|| panic!("{name:?} should start with '{prefix}-'"));
+        assert!(
+            suffix.len() == 6
+                && suffix
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+            "{name:?} should end in six a-z0-9 characters"
+        );
+        suffix.to_string()
     }
 
     let project = "ratect-task-network-only-test";
@@ -2414,8 +2433,8 @@ fn task_containers_are_only_on_the_task_network_via_docker() {
         "--format",
         "{{.Name}}",
     ]);
-    // `(configured container, network keys)`.
-    let inspected: Vec<(String, String)> = containers
+    // `(configured container, Docker name, network keys)`.
+    let inspected: Vec<(String, String, String)> = containers
         .iter()
         .map(|id| {
             let line = docker_lines(&[
@@ -2423,13 +2442,13 @@ fn task_containers_are_only_on_the_task_network_via_docker() {
                 "inspect",
                 id,
                 "--format",
-                "{{index .Config.Labels \"eu.orican.ratect.container\"}} \
+                "{{index .Config.Labels \"eu.orican.ratect.container\"}} {{.Name}} \
                  {{range $name, $_ := .NetworkSettings.Networks}}{{$name}},{{end}}",
             ])
             .concat();
             let mut fields = line.split(' ');
             let mut field = || fields.next().unwrap_or_default().to_string();
-            (field(), field())
+            (field(), field(), field())
         })
         .collect();
     // Torn down before any assertion can fail.
@@ -2449,8 +2468,17 @@ fn task_containers_are_only_on_the_task_network_via_docker() {
     );
     assert_eq!(networks.len(), 1, "one task network: {networks:?}");
     let network = &networks[0];
+    let suffix = suffix_after(network, &format!("{project}-network"));
     assert_eq!(inspected.len(), 2, "app and database: {inspected:?}");
-    for (container, container_networks) in &inspected {
+    for (container, docker_name, container_networks) in &inspected {
+        assert_eq!(
+            suffix_after(
+                docker_name.trim_start_matches('/'),
+                &format!("{project}-{container}")
+            ),
+            suffix,
+            "'{container}' shares the network's suffix"
+        );
         assert_eq!(
             container_networks,
             &format!("{network},"),
@@ -2767,8 +2795,9 @@ fn a_passing_run_whose_cleanup_fails_exits_125_via_docker() {
     // `Error:` for the `CleanupFailed` it exits `125` with (decisions/0017).
     assert!(
         stderr.contains("Error: Cleanup failed: ")
-            && stderr.contains("left behind: network ratect-")
-            && stderr.contains(". Remove with: docker network rm ratect-"),
+            && stderr.contains("left behind: network ratect-cleanup-outcome-test-network-")
+            && stderr
+                .contains(". Remove with: docker network rm ratect-cleanup-outcome-test-network-"),
         "the failure says what went wrong and what to do:\n{stderr}"
     );
     assert_eq!(

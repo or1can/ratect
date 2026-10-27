@@ -166,8 +166,8 @@ the machine naming it addresses the same storage.
 distinct from an image a container names to be pulled.
 
 **Automatic tag** — the name every built image is given,
-`<project_name>-<container name>`; the only name Ratect writes without being
-asked.
+`<project_name>-<container name>`; the only image name Ratect writes without
+being asked.
 
 **Extra tag** — a further name given to one container's built image for one
 run (`--tag-image`).

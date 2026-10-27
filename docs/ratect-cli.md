@@ -260,8 +260,8 @@ outright, or crashed, leaves a network and every container it started, and they 
 make sense together. (Ctrl+C, `SIGTERM` and `SIGHUP` aren't those cases any more — each
 cleans up after itself. `SIGKILL` can't be trapped by anything, so it still is; see
 [Differences from Batect](differences-from-batect.md#runtime-behavior-gaps).)
-A container is named as your configuration names it, not by the random words
-Docker assigns.
+A container is named as your configuration names it, not by the
+`<project>-<container>-<suffix>` name it has in Docker.
 
 | Option | Applies to | Description |
 | --- | --- | --- |

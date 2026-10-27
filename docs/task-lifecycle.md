@@ -181,8 +181,11 @@ cleans both up — then starts a *second*, independent `database` instance and n
 for `test`. This matches Batect's own documented behavior ("each task will start its
 own instance of each container, even if multiple tasks share the same container") and
 is also what makes concurrent `ratect` invocations on the same host safe: each task
-execution's network is named with a random UUID, so there's no risk of two runs
-colliding.
+execution names its network and containers with a random six-character suffix of
+its own — `<project>-network-<suffix>` and `<project>-<container>-<suffix>`, as
+Batect names them — so two runs never share a container, nor a network Ratect
+created. In the rare case two draw the same suffix, the second run fails when
+Docker refuses its names.
 
 ## Known limitations
 

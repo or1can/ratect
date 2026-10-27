@@ -75,6 +75,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `engine.rs` | Task lifecycle, prerequisites, dependency graph, cleanup |
   | `exit_code.rs` | What a failed run exits with — the one mapping both binaries share, since `docs/ratect-cli.md` promises their codes are identical |
   | `labels.rs` | The `eu.orican.ratect.*` ownership labels, see [0002](decisions/0002-runtime-ownership-labels.md) |
+  | `resource_names.rs` | The Docker names a task execution's containers and network are created under — Batect's `<project>-<container>-<suffix>`, one suffix per run; names for people, never parsed (the labels say who owns what) |
   | `registry_auth.rs` | Resolving private registry credentials via real Docker credential helpers — the `RegistryCredentialResolver` trait, its `DockerCredentialHelperResolver` production implementation, registry-hostname extraction (for pull), and `config.json` registry-key enumeration (for build, which resolves every configured registry rather than one). A filesystem-and-subprocess concern kept out of `docker.rs`, which wires both into `pull_image`/`build_image` |
   | `resources.rs` | What previous runs left behind and how it's removed — `ratect resources list`/`clean`'s selection and removal, generic over its own `ResourceInventory` (the container/network inventory slice of `ContainerRuntime`, which requires it as a supertrait) |
   | `diagnostics.rs` | `Finding` and every producer of one that needs no daemon connection of its own — `ratect doctor`/`config validate`'s shared checks |
