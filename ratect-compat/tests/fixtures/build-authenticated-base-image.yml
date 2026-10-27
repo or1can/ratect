@@ -1,0 +1,17 @@
+# Proves registry credentials from the Docker config reach a real BuildKit
+# build whose base image needs them, as Batect's do (ratect#520). The test
+# starts a registry of its own that requires authentication, pushes the base
+# image to it, and names it in RATECT_AUTHENTICATED_BASE_IMAGE; the Docker
+# config it points `--docker-config` at holds that registry's credential
+# inline under `auths`, so no credential helper on the host is involved.
+project_name: ratect-build-authenticated-base-image-test
+containers:
+  build-env:
+    build_directory: ./build-authenticated-base-image
+    build_args:
+      BASE_IMAGE: $RATECT_AUTHENTICATED_BASE_IMAGE
+tasks:
+  build:
+    run:
+      container: build-env
+      command: echo ran

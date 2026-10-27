@@ -4618,6 +4618,235 @@ fn build_secrets_reach_a_real_buildkit_session_build() {
     assert_eq!(task_output(&stdout, "build-env"), "hello-from-build-secret");
 }
 
+/// Same requirements as `build_secrets_reach_a_real_buildkit_session_build`.
+///
+/// A `build_secrets` entry with `path` reaches a real build (ratect#520):
+/// see `tests/fixtures/build-secrets-file.yml`.
+#[test]
+#[ignore]
+fn a_file_build_secret_reaches_a_real_buildkit_session_build() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let output = ratect_command()
+        .arg("-f")
+        .arg(fixtures.join("build-secrets-file.yml"))
+        .arg("print-secret")
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let secret = std::fs::read_to_string(fixtures.join("build-secrets-file/token.txt")).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(task_output(&stdout, "build-env"), secret);
+}
+
+/// A throwaway `registry:2` on a loopback port that requires a username and
+/// password, holding one pushed image, plus a scratch directory for its
+/// password file and the Docker configs the test writes. Everything it
+/// made — the registry, every image naming it, the built image, the
+/// directory — is removed on `Drop`, even if the test panics.
+struct AuthenticatedRegistry {
+    container: String,
+    address: String,
+    directory: PathBuf,
+}
+
+impl AuthenticatedRegistry {
+    const USERNAME: &'static str = "ratect";
+    const PASSWORD: &'static str = "ratect-520";
+    const BUILT_IMAGE: &'static str = "ratect-build-authenticated-base-image-test-build-env";
+
+    /// Starts the registry and pushes `alpine:3.18.2` to it as
+    /// `<address>/ratect-520-base:1`, then removes that tag from the daemon,
+    /// so a build must pull it — through the registry's authentication.
+    fn start() -> Self {
+        let directory = scratch_directory("authenticated-registry");
+        let htpasswd = Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--entrypoint",
+                "htpasswd",
+                "httpd:2.4-alpine",
+            ])
+            .args(["-Bbn", Self::USERNAME, Self::PASSWORD])
+            .output()
+            .expect("failed to run htpasswd");
+        assert!(htpasswd.status.success(), "{htpasswd:?}");
+        std::fs::create_dir_all(directory.join("auth")).unwrap();
+        std::fs::write(directory.join("auth/htpasswd"), &htpasswd.stdout).unwrap();
+        let started = Command::new("docker")
+            .args(["run", "-d", "-p", "127.0.0.1:0:5000"])
+            .arg("-v")
+            .arg(format!("{}:/auth:ro", directory.join("auth").display()))
+            .args([
+                "-e",
+                "REGISTRY_AUTH=htpasswd",
+                "-e",
+                "REGISTRY_AUTH_HTPASSWD_REALM=ratect-520",
+                "-e",
+                "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
+                "registry:2",
+            ])
+            .output()
+            .expect("failed to start the registry");
+        assert!(started.status.success(), "{started:?}");
+        let container = String::from_utf8_lossy(&started.stdout).trim().to_string();
+        let port = Command::new("docker")
+            .args(["port", &container, "5000/tcp"])
+            .output()
+            .expect("failed to read the registry's port");
+        let port = String::from_utf8_lossy(&port.stdout);
+        let port = port.trim().rsplit(':').next().unwrap().to_string();
+        let registry = Self {
+            container,
+            address: format!("localhost:{port}"),
+            directory,
+        };
+
+        let pusher = registry.config_directory("pusher", true);
+        let docker = |args: &[&str]| {
+            let output = Command::new("docker")
+                .arg("--config")
+                .arg(&pusher)
+                .args(args)
+                .output()
+                .expect("failed to run docker");
+            assert!(output.status.success(), "docker {args:?}: {output:?}");
+        };
+        docker(&["pull", "alpine:3.18.2"]);
+        docker(&["tag", "alpine:3.18.2", &registry.base_image()]);
+        let pushed = poll_until(Duration::from_secs(30), || {
+            Command::new("docker")
+                .arg("--config")
+                .arg(&pusher)
+                .args(["push", &registry.base_image()])
+                .output()
+                .is_ok_and(|output| output.status.success())
+        });
+        assert!(
+            pushed,
+            "could not push to the registry at {}",
+            registry.address
+        );
+        docker(&["rmi", &registry.base_image()]);
+        registry
+    }
+
+    fn base_image(&self) -> String {
+        format!("{}/ratect-520-base:1", self.address)
+    }
+
+    /// A Docker config directory named `name`, holding this registry's
+    /// credential inline under `auths` when `with_credential` — and no
+    /// `credsStore` or `credHelpers` either way, so nothing on the host is
+    /// asked. Inline `auths` also keep the Docker CLI from choosing a
+    /// default store of its own for the pusher's config.
+    fn config_directory(&self, name: &str, with_credential: bool) -> PathBuf {
+        let directory = self.directory.join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = if with_credential {
+            let auth = base64_encode(&format!("{}:{}", Self::USERNAME, Self::PASSWORD));
+            format!(
+                r#"{{"auths": {{"{}": {{"auth": "{auth}"}}}}}}"#,
+                self.address
+            )
+        } else {
+            "{}".to_string()
+        };
+        std::fs::write(directory.join("config.json"), config).unwrap();
+        directory
+    }
+}
+
+impl Drop for AuthenticatedRegistry {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["rmi", "-f", &self.base_image(), Self::BUILT_IMAGE])
+            .output();
+        let _ = Command::new("docker")
+            .args(["rm", "-fv", &self.container])
+            .output();
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
+}
+
+/// Standard base64, padded — all a Docker config's inline `auth` needs.
+fn base64_encode(text: &str) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::new();
+    for chunk in text.as_bytes().chunks(3) {
+        let bytes = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let value = u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]);
+        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if index <= chunk.len() {
+                encoded.push(ALPHABET[(value >> shift & 63) as usize] as char);
+            } else {
+                encoded.push('=');
+            }
+        }
+    }
+    encoded
+}
+
+/// Requires a running Docker daemon with BuildKit, network access to pull
+/// `registry:2`, `httpd:2.4-alpine` and `alpine:3.18.2`, and a daemon that
+/// can reach a registry on the host's loopback. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Registry credentials in the Docker config reach a BuildKit build whose
+/// base image needs them (ratect#520), with a control: the same build with
+/// no credential is refused by the registry. See
+/// `tests/fixtures/build-authenticated-base-image.yml`.
+#[test]
+#[ignore]
+fn docker_config_credentials_reach_a_buildkit_build_of_an_authenticated_base_image() {
+    let registry = AuthenticatedRegistry::start();
+    let build = |config_directory: &Path| {
+        ratect_command()
+            .env("DOCKER_BUILDKIT", "1")
+            .env("RATECT_AUTHENTICATED_BASE_IMAGE", registry.base_image())
+            .arg("--docker-config")
+            .arg(config_directory)
+            .arg("-f")
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/build-authenticated-base-image.yml"),
+            )
+            .arg("build")
+            .output()
+            .expect("failed to run ratect")
+    };
+
+    let refused = build(&registry.config_directory("anonymous", false));
+    let refused_stderr = String::from_utf8_lossy(&refused.stderr).to_lowercase();
+    let authenticated = build(&registry.config_directory("authenticated", true));
+
+    assert!(
+        !refused.status.success()
+            && [
+                "unauthorized",
+                "authentication required",
+                "no basic auth credentials"
+            ]
+            .iter()
+            .any(|refusal| refused_stderr.contains(refusal)),
+        "without a credential the registry should refuse the pull:\n{refused_stderr}"
+    );
+    assert!(
+        authenticated.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&authenticated.stderr)
+    );
+}
+
 /// A dedicated throwaway `ssh-agent` process spawned for one test, plus a
 /// scratch keypair loaded into it — so the `build_ssh` test below never
 /// depends on (or leaks into) the developer's or CI runner's own agent.
