@@ -11219,12 +11219,14 @@ async fn container_tmpfs_mounts_reach_the_container() {
     engine.run_task("test", &[]).await.unwrap();
 
     // Only the `tmpfs` entry reaches `ContainerOptions.tmpfs` — the
-    // `local` entry is resolved separately, into the bind-mount string
-    // `run_container`'s own `volumes` parameter carries instead (not
-    // captured by `ContainerOptionsValue`, so nothing to assert here).
+    // `local` entry is resolved separately, into a bind string.
     assert_eq!(
         docker.tmpfs_for("build-env"),
         Some(vec![("/code/tmp".to_string(), "size=64m".to_string())])
+    );
+    assert_eq!(
+        docker.volumes_for("build-env"),
+        Some(vec!["/host/code:/code".to_string()])
     );
 }
 

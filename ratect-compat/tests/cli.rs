@@ -4560,6 +4560,10 @@ fn container_defaults_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/container-defaults.yml")
 }
 
+fn local_volumes_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/local-volumes.yml")
+}
+
 /// Runs `task` from the config at `config`, returning whether it succeeded
 /// and its output — stdout's task section, then all of stderr.
 fn run_fixture_task(config: PathBuf, task: &str, container: &str) -> (bool, String, String) {
@@ -4637,6 +4641,79 @@ fn a_container_setting_no_entrypoint_runs_the_images_own() {
 
     assert!(success, "stderr:\n{stderr}");
     assert_eq!(stdout, "from-the-entrypoint from-the-command", "{stderr}");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Batect's `DockerClientContainerManagementSpec`, a host file mounted into
+/// a container: the container reads the file's contents at its path.
+#[test]
+#[ignore]
+fn a_mounted_host_file_is_readable_in_the_container() {
+    let (success, stdout, stderr) =
+        run_fixture_task(local_volumes_config_path(), "read-file", "mounts");
+
+    assert!(success, "stderr:\n{stderr}");
+    assert_eq!(stdout, "from the host");
+}
+
+/// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Batect's `DockerClientContainerManagementSpec`, a file and a directory
+/// mounted with options `ro`: writing to either fails as a read-only file
+/// system, and the host file is untouched. Batect's own check for the file
+/// removes it, which fails as `Resource busy` for any mounted file, `ro` or
+/// not, so this appends to it instead.
+#[test]
+#[ignore]
+fn a_read_only_mount_refuses_writes() {
+    let host_file =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/local-volumes/file.txt");
+    for task in ["write-ro-file", "write-ro-dir"] {
+        let (success, stdout, stderr) =
+            run_fixture_task(local_volumes_config_path(), task, "mounts");
+
+        assert!(!success, "{task} should fail:\n{stdout}");
+        assert!(
+            format!("{stdout}\n{stderr}").contains("Read-only file system"),
+            "{task}:\n{stdout}\n{stderr}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(&host_file).unwrap(),
+        "from the host\n"
+    );
+    assert!(!host_file.with_file_name("new-file").exists());
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `docker:27.3.1-cli`, listening on `/var/run/docker.sock` — skipped when
+/// there's no such socket or `DOCKER_HOST` names another address, as
+/// Batect's own is when it connects over TCP. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Batect's `DockerClientContainerManagementSpec`, the Docker socket
+/// mounted into a container: the Docker CLI there reaches the daemon.
+#[test]
+#[ignore]
+fn the_docker_cli_reaches_the_daemon_through_a_mounted_socket() {
+    let socket = Path::new("/var/run/docker.sock");
+    let elsewhere = std::env::var("DOCKER_HOST")
+        .is_ok_and(|host| !host.is_empty() && host != "unix:///var/run/docker.sock");
+    if elsewhere || !socket.exists() {
+        eprintln!("skipped: the daemon isn't reached through /var/run/docker.sock");
+        return;
+    }
+    let (success, stdout, stderr) = run_fixture_task(
+        local_volumes_config_path(),
+        "docker-through-socket",
+        "docker-cli",
+    );
+
+    assert!(success, "stderr:\n{stderr}");
+    assert_eq!(stdout, "server-os=linux", "{stderr}");
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
