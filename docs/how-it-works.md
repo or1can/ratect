@@ -90,8 +90,11 @@ evaluation reads what the machine running it supplies — see
 
 ## 3. Task engine (`ratect-core/src/engine.rs`)
 
-`TaskEngine::run_task(name)` is a recursive async function. The order of its five
-steps is the part worth knowing here; for what each one does in detail, read
+`TaskEngine::run_task(name)` first walks the task's whole prerequisite order —
+wildcards expanded, each task once — without running anything, so a prerequisite
+naming no task, or a cycle among them, fails the run before any task starts, as in
+Batect. Then it runs a recursive async function. The order of its five steps is the
+part worth knowing here; for what each one does in detail, read
 `engine.rs`'s own module comment (`cargo doc --open -p ratect-core`), which is
 where that lives and stays current.
 
@@ -100,7 +103,7 @@ where that lives and stays current.
    only once.
 2. **Cycle detection**: a task already in the middle of being run — an ancestor of
    itself in the current call stack — errors immediately rather than recursing
-   forever.
+   forever. A backstop: the walk above has already refused every cycle.
 3. **Run prerequisites**, each through the same recursive function, before the
    task's own container step. They run with `top_level: false`, unlike the task
    actually named on the command line, and with no `-- ARGS`. The flag keeps

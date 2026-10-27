@@ -486,8 +486,8 @@ fn wildcard_to_regex(pattern: &str) -> Result<regex::Regex> {
 /// full set of task names — a direct port of Batect's own
 /// `TaskExecutionOrderResolver.resolveWildcards`. An entry with no `*` passes
 /// through unchanged, so a nonexistent literal prerequisite name still
-/// surfaces its usual "Task not found" error later (from `run_task_scoped`),
-/// rather than being silently dropped here. A wildcard matching zero tasks
+/// surfaces its usual "Task not found" error (from `find_task`), rather than
+/// being silently dropped here. A wildcard matching zero tasks
 /// contributes nothing — not an error, matching Batect ("if a wildcard does
 /// not match any tasks, no error is raised"). Multiple matches for one
 /// wildcard are sorted alphabetically, matching Batect too.
@@ -595,6 +595,83 @@ fn format_task_suggestions(tasks: &IndexMap<String, Task>, name: &str) -> String
     }
     let quoted: Vec<String> = suggestions.iter().map(|s| format!("'{}'", s)).collect();
     format!(" Did you mean {}?", human_readable_list(&quoted, "or"))
+}
+
+/// `name`'s task, or the error a run fails with when there is none — one
+/// lookup for `check_prerequisites` and `run_task_internal`, so their
+/// messages can't drift.
+fn find_task<'t>(tasks: &'t IndexMap<String, Task>, name: &str) -> Result<&'t Task> {
+    tasks.get(name).with_context(|| {
+        format!(
+            "Task '{}' not found.{}",
+            name,
+            format_task_suggestions(tasks, name)
+        )
+    })
+}
+
+/// The error for a task reached again while it is still in progress.
+fn task_cycle(name: &str) -> anyhow::Error {
+    anyhow::anyhow!("Dependency cycle detected involving task '{name}'")
+}
+
+/// Checks `task_name`'s whole prerequisite order before any of it runs, and
+/// fails with the missing task or cycle Batect's `TaskExecutionOrderResolver`
+/// would report — it resolves the order before `SessionRunner` starts the
+/// first task. Without this, a problem in a later prerequisite surfaced only
+/// after the earlier ones had run, side effects and all.
+///
+/// Batect's order: every entry of a task's list (wildcards expanded) is
+/// looked up and checked against the current path before any of them is
+/// walked into, so a problem in a shallower list is the one reported. Each
+/// task is walked at most once. The run itself still walks prerequisites
+/// one at a time, depth first (`run_task_internal`), with the same lookup
+/// and expansion. `skip_prerequisites` skips `task_name`'s own list, as
+/// `--skip-prerequisites` does, so nothing in it is looked up.
+fn check_prerequisites(
+    tasks: &IndexMap<String, Task>,
+    task_name: &str,
+    skip_prerequisites: bool,
+) -> Result<()> {
+    fn visit(
+        tasks: &IndexMap<String, Task>,
+        task: &Task,
+        path: &mut Vec<String>,
+        checked: &mut HashSet<String>,
+    ) -> Result<()> {
+        let Some(prerequisites) = &task.prerequisites else {
+            return Ok(());
+        };
+        let mut resolved = Vec::new();
+        for name in expand_prerequisite_wildcards(tasks, prerequisites)? {
+            let prerequisite = find_task(tasks, &name)?;
+            if path.contains(&name) {
+                return Err(task_cycle(&name));
+            }
+            resolved.push((name, prerequisite));
+        }
+        for (name, prerequisite) in resolved {
+            if checked.contains(&name) {
+                continue;
+            }
+            path.push(name.clone());
+            visit(tasks, prerequisite, path, checked)?;
+            path.pop();
+            checked.insert(name);
+        }
+        Ok(())
+    }
+
+    let task = find_task(tasks, task_name)?;
+    if skip_prerequisites {
+        return Ok(());
+    }
+    visit(
+        tasks,
+        task,
+        &mut vec![task_name.to_string()],
+        &mut HashSet::new(),
+    )
 }
 
 /// The error a task fails with when its command exited `0` but cleanup then
@@ -2094,7 +2171,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// always run with no additional args, matching Batect's behavior of
     /// scoping `-- ARGS` to the task named on the command line.
     ///
-    /// Thin wrapper over `run_task_scoped` fixing `top_level` to `true` — the
+    /// Checks the whole prerequisite order up front (`check_prerequisites`),
+    /// then runs `run_task_scoped` with `top_level` fixed to `true` — the
     /// only externally-visible entry point (called once from `main.rs`), so
     /// it's always the task actually named on the command line.
     ///
@@ -2109,6 +2187,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // same for every container in the run, and repeating it for each
         // would bury the run's own output under it.
         self.warn_about_unreachable_proxies();
+        check_prerequisites(
+            &self.project.config.tasks,
+            task_name,
+            self.skip_prerequisites,
+        )?;
         self.run_task_scoped(task_name, additional_args, true)
             .await?;
 
@@ -2168,11 +2251,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
 
         {
             let mut in_progress = self.in_progress_tasks.lock().unwrap();
+            // A backstop: `check_prerequisites` has already refused every
+            // cycle before anything ran.
             if in_progress.contains(task_name) {
-                return Err(anyhow::anyhow!(
-                    "Dependency cycle detected involving task '{}'",
-                    task_name
-                ));
+                return Err(task_cycle(task_name));
             }
             in_progress.insert(task_name.to_string());
         }
@@ -2236,22 +2318,17 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         additional_args: &[String],
         top_level: bool,
     ) -> Result<()> {
-        let task = self.project.config.tasks.get(task_name).with_context(|| {
-            format!(
-                "Task '{}' not found.{}",
-                task_name,
-                format_task_suggestions(&self.project.config.tasks, task_name)
-            )
-        })?;
+        let task = find_task(&self.project.config.tasks, task_name)?;
 
         // Run prerequisites (never with additional args, which are scoped to
         // only the originally-requested task). A `*`-wildcard entry is expanded
         // against the full task list first — see
         // `expand_prerequisite_wildcards` — then run through the same
-        // sequential loop as any other prerequisite; its own dedup/cycle
-        // detection (see `run_task_scoped`) already collapses a name reached
-        // more than once (e.g. named explicitly *and* matched by a wildcard)
-        // to a single actual run.
+        // sequential loop as any other prerequisite; its dedup (see
+        // `run_task_scoped`) already collapses a name reached more than once
+        // (e.g. named explicitly *and* matched by a wildcard) to a single
+        // actual run. Every name here exists and no cycle is reachable:
+        // `check_prerequisites` proved both before the run began.
         //
         // Skipped entirely when `--skip-prerequisites` was given and this is
         // the top-level task — never for a prerequisite task itself, which

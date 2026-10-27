@@ -1945,6 +1945,234 @@ async fn nonexistent_literal_prerequisite_still_errors() {
     assert!(err.to_string().contains("Task 'does-not-exist' not found"));
 }
 
+/// Every task in `tasks` runs `build-env`, with the prerequisites given —
+/// the shape of a prerequisite-order test.
+fn config_with_prerequisites(tasks: &[(&str, &[&str])]) -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("build-env".to_string(), container("alpine:3.18", None));
+    let mut declared = IndexMap::new();
+    for (name, prerequisites) in tasks {
+        let mut declared_task = task("build-env", name);
+        if !prerequisites.is_empty() {
+            declared_task.prerequisites =
+                Some(prerequisites.iter().map(|p| p.to_string()).collect());
+        }
+        declared.insert(name.to_string(), declared_task);
+    }
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks: declared,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Runs `main` and returns its error, having asserted that nothing ran
+/// first — Batect resolves the whole execution order before running any
+/// of it, so a problem anywhere in it fails the run with nothing done.
+async fn assert_refused_with_nothing_run(config: Config) -> anyhow::Error {
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let err = engine.run_task("main", &[]).await.unwrap_err();
+
+    assert_eq!(
+        docker.events(),
+        Vec::<String>::new(),
+        "nothing touches Docker"
+    );
+    let started: Vec<_> = sink
+        .events()
+        .into_iter()
+        .filter(|e| matches!(e, TaskEvent::TaskStarting { .. }))
+        .collect();
+    assert!(started.is_empty(), "no task starts: {started:?}");
+    err
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_after_a_valid_one_fails_before_anything_runs() {
+    let config =
+        config_with_prerequisites(&[("first", &[]), ("main", &["first", "does-not-exist"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'does-not-exist' not found.");
+}
+
+#[tokio::test]
+async fn a_prerequisite_cycle_after_a_valid_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("first", &[]),
+        ("cycle-other", &["main"]),
+        ("main", &["first", "cycle-other"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'main'"
+    );
+}
+
+#[tokio::test]
+async fn a_transitive_prerequisite_cycle_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("first", &[]),
+        ("a", &["b"]),
+        ("b", &["a"]),
+        ("main", &["first", "a"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'a'"
+    );
+}
+
+/// Batect checks every entry of a task's prerequisite list before going
+/// deeper into any of them, so of two problems the one in the shallower
+/// list is reported, even when it comes later in that list.
+#[tokio::test]
+async fn a_missing_prerequisite_is_reported_before_a_cycle_deeper_in_an_earlier_one() {
+    let config =
+        config_with_prerequisites(&[("a", &["b"]), ("b", &["a"]), ("main", &["a", "missing"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'missing' not found.");
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_is_reported_before_one_deeper_in_an_earlier_one() {
+    let config = config_with_prerequisites(&[("a", &["x-missing"]), ("main", &["a", "b-missing"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'b-missing' not found.");
+}
+
+#[tokio::test]
+async fn a_task_that_is_its_own_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[("main", &["main"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'main'"
+    );
+}
+
+/// A task reached through a second parent is checked against that parent's
+/// path too, so a cycle only that path closes is still found.
+#[tokio::test]
+async fn a_cycle_closed_through_a_shared_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("c", &["b"]),
+        ("a", &["c"]),
+        ("b", &["c"]),
+        ("main", &["a", "b"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(
+        err.to_string(),
+        "Dependency cycle detected involving task 'c'"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_of_a_shared_prerequisite_fails_before_anything_runs() {
+    let config = config_with_prerequisites(&[
+        ("s", &["does-not-exist"]),
+        ("a", &["s"]),
+        ("b", &["s"]),
+        ("main", &["a", "b"]),
+    ]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'does-not-exist' not found.");
+}
+
+#[tokio::test]
+async fn a_prerequisite_listed_twice_runs_once() {
+    let config = config_with_prerequisites(&[("a", &[]), ("main", &["a", "a"])]);
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("main", &[]).await.unwrap();
+
+    let events = docker.events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.starts_with("run:build-env:a:"))
+            .count(),
+        1,
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_prerequisite_of_a_skipped_prerequisite_list_is_never_looked_up() {
+    let config = config_with_prerequisites(&[("main", &["does-not-exist"])]);
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_prerequisites: false,
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("main", &[]).await.unwrap();
+
+    assert!(
+        docker
+            .events()
+            .iter()
+            .any(|e| e.starts_with("run:build-env:main:")),
+        "{:?}",
+        docker.events()
+    );
+}
+
+#[tokio::test]
+async fn a_prerequisite_reached_twice_still_runs_once_in_order() {
+    let config = config_with_prerequisites(&[
+        ("shared", &[]),
+        ("a", &["shared"]),
+        ("b", &["shared", "a"]),
+        ("main", &["a", "b"]),
+    ]);
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("main", &[]).await.unwrap();
+
+    let runs: Vec<_> = docker
+        .events()
+        .into_iter()
+        .filter_map(|e| {
+            e.strip_prefix("run:build-env:")
+                .and_then(|rest| rest.split(':').next().map(str::to_string))
+        })
+        .collect();
+    assert_eq!(runs, names(&["shared", "a", "b", "main"]));
+}
+
 #[tokio::test]
 async fn wildcard_pattern_with_multiple_asterisks_matches() {
     let mut containers = IndexMap::new();
