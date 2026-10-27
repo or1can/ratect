@@ -1680,6 +1680,32 @@ fn network_label(network: &crate::container_spec::ContainerNetwork) -> String {
     }
 }
 
+/// The directory every test project here is declared in. Real, not a
+/// made-up path: a build checks its `build_directory` and Dockerfile on the
+/// host before Docker is asked anything (ratect#296), so it holds a
+/// `Dockerfile` at its root and in each build directory the tests here
+/// name. Created once per test binary.
+fn project_directory() -> &'static std::path::Path {
+    static DIRECTORY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIRECTORY.get_or_init(|| {
+        let directory =
+            std::env::temp_dir().join(format!("ratect-engine-tests-{}", uuid::Uuid::new_v4()));
+        for build_directory in ["", "docker", "db", "app", "dep"] {
+            let build_directory = directory.join(build_directory);
+            std::fs::create_dir_all(&build_directory).unwrap();
+            std::fs::write(build_directory.join("Dockerfile"), "FROM scratch\n").unwrap();
+        }
+        std::fs::write(directory.join("docker/Dockerfile.prod"), "FROM scratch\n").unwrap();
+        directory
+    })
+}
+
+/// `config` as a project declared entirely in `project_directory`, as an
+/// engine takes it — every value unevaluated, as loading leaves it.
+fn project(config: Config) -> crate::config::LoadedProject {
+    crate::config::LoadedProject::in_memory(config, project_directory().to_path_buf())
+}
+
 /// [`TaskEngine::new`] with the two defaults almost every test here wants —
 /// a silent event sink, and an interrupt tracker nothing will ever record
 /// on (behaviourally identical to "no tracker", see `TaskEngine::interrupt`'s
@@ -1687,12 +1713,6 @@ fn network_label(network: &crate::container_spec::ContainerNetwork) -> String {
 /// `TaskEngine::new` directly instead, same as it would have called
 /// `with_event_sink`/`with_interrupt` before those became constructor
 /// arguments.
-/// `config` as a project declared entirely in `/project`, as an engine
-/// takes it — every value unevaluated, as loading leaves it.
-fn project(config: Config) -> crate::config::LoadedProject {
-    crate::config::LoadedProject::in_memory(config, PathBuf::from("/project"))
-}
-
 fn engine<D: ContainerRuntime + Send + Sync>(config: Config, docker: D) -> TaskEngine<D> {
     TaskEngine::new(
         project(config),
@@ -2885,7 +2905,10 @@ async fn build_directory_container_builds_then_runs_the_built_image() {
         .find(|e| e.starts_with("build:"))
         .expect("image should have been built");
     assert!(
-        build_event.ends_with(":/project/docker"),
+        build_event.ends_with(&format!(
+            ":{}",
+            project_directory().join("docker").display()
+        )),
         "build should use the container's build_directory: {build_event}"
     );
 
@@ -2955,6 +2978,75 @@ async fn build_directory_container_with_always_policy_force_pulls_the_base_image
     assert_eq!(docker.force_pull_for("demo-build-env"), Some(true));
 }
 
+fn config_building_with_dockerfile(dockerfile: &str) -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "build-env".to_string(),
+        Container {
+            dockerfile: Some(dockerfile.to_string()),
+            ..container_with_build_directory("./docker", None)
+        },
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("build".to_string(), task("build-env", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// A Dockerfile that can't be built from is refused naming the container
+/// and the field, before anything is asked of Docker (ratect#296) — see
+/// `check_build_files` for each refusal.
+#[tokio::test]
+async fn a_dockerfile_that_cant_be_built_from_is_refused_before_building() {
+    let docker = FakeContainerRuntime::default();
+    let error = engine(
+        config_building_with_dockerfile("Missing.Dockerfile"),
+        docker.clone(),
+    )
+    .run_task("build", &[])
+    .await
+    .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("Failed to build the image for container 'build-env'")
+            && message.contains(&format!(
+                "dockerfile 'Missing.Dockerfile' doesn't exist in build_directory '{}'",
+                project_directory().join("docker").display()
+            )),
+        "{message}"
+    );
+    assert!(
+        !docker
+            .events()
+            .iter()
+            .any(|event| event.starts_with("build:")),
+        "{:?}",
+        docker.events()
+    );
+}
+
+/// Docker is sent the Dockerfile's path inside the build context, however
+/// it was written (ratect#296).
+#[tokio::test]
+async fn the_dockerfile_is_sent_relative_to_the_build_context() {
+    let absolute = project_directory().join("docker/Dockerfile");
+    for written in ["./Dockerfile", absolute.to_str().unwrap()] {
+        let docker = FakeContainerRuntime::default();
+        engine(config_building_with_dockerfile(written), docker.clone())
+            .run_task("build", &[])
+            .await
+            .unwrap();
+        let (dockerfile, _) = docker.build_options_for("demo-build-env").unwrap();
+        assert_eq!(dockerfile, "Dockerfile", "{written}");
+    }
+}
+
 #[tokio::test]
 async fn build_directory_container_passes_dockerfile_and_target_through() {
     let mut containers = IndexMap::new();
@@ -2963,7 +3055,7 @@ async fn build_directory_container_passes_dockerfile_and_target_through() {
         Container {
             dockerfile: Some("docker/Dockerfile.prod".to_string()),
             build_target: Some("builder".to_string()),
-            ..container_with_build_directory("./docker", None)
+            ..container_with_build_directory(".", None)
         },
     );
     let mut tasks = IndexMap::new();
@@ -3446,7 +3538,10 @@ async fn dependency_container_with_build_directory_is_built_and_started() {
     let events = docker.events();
     let build_event = events
         .iter()
-        .find(|e| e.starts_with("build:") && e.ends_with(":/project/db"))
+        .find(|e| {
+            e.starts_with("build:")
+                && e.ends_with(&format!(":{}", project_directory().join("db").display()))
+        })
         .expect("dependency container should have been built");
     let tag = build_event
         .strip_prefix("build:")
@@ -10333,7 +10428,13 @@ async fn two_spellings_of_one_host_path_are_bound_once() {
     ])
     .await;
 
-    assert_eq!(binds, Some(vec!["/project/a:/a".to_string()]));
+    assert_eq!(
+        binds,
+        Some(vec![format!(
+            "{}:/a",
+            project_directory().join("a").display()
+        )])
+    );
 }
 
 #[tokio::test]

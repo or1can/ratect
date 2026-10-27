@@ -6982,6 +6982,99 @@ fn error_and_warning_markers_are_bold_on_a_terminal_and_plain_without_color() {
     }
 }
 
+/// A project in a scratch directory whose `ctx` build directory holds a
+/// Dockerfile and a `.dockerignore` of `*`, built by two containers that
+/// spell the same Dockerfile differently: `absolute` by its absolute path,
+/// `dotted` as `./Dockerfile`. Each has a task of its own name.
+fn dockerfile_spellings_project() -> PathBuf {
+    let dir = scratch_directory("dockerfile-spellings");
+    let context = dir.join("ctx");
+    std::fs::create_dir_all(&context).unwrap();
+    std::fs::write(context.join("Dockerfile"), "FROM alpine:3.18.2\nRUN true\n").unwrap();
+    std::fs::write(context.join(".dockerignore"), "*\n").unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        format!(
+            "project_name: ratect-dockerfile-spellings-test\n\
+             containers:\n\
+             \x20 absolute:\n    build_directory: ctx\n    dockerfile: {}\n\
+             \x20 dotted:\n    build_directory: ctx\n    dockerfile: ./Dockerfile\n\
+             tasks:\n\
+             \x20 absolute:\n    run:\n      container: absolute\n      command: \"true\"\n\
+             \x20 dotted:\n    run:\n      container: dotted\n      command: \"true\"\n",
+            context.join("Dockerfile").display()
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+/// A config whose build container can't be built still loads: the build's
+/// files are checked when it is built, not when the config loads
+/// (ratect#296).
+#[test]
+fn a_build_container_that_cant_be_built_still_lists_its_tasks() {
+    let dir = scratch_directory("unbuildable-lists");
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\n\
+         containers:\n  app:\n    build_directory: missing\n    dockerfile: Nope\n\
+         tasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A Dockerfile written as an absolute path inside the build directory, or
+/// as `./Dockerfile`, builds on both builders, even with a `.dockerignore`
+/// of `*` (ratect#296): Docker is sent the Dockerfile's path inside the
+/// build context, and that is the path the context always includes.
+#[test]
+#[ignore]
+fn a_dockerfile_however_spelled_builds_on_both_builders() {
+    let project = dockerfile_spellings_project();
+    let mut failures = Vec::new();
+    for buildkit in ["0", "1"] {
+        for task in ["absolute", "dotted"] {
+            let output = ratect_command()
+                .env("DOCKER_BUILDKIT", buildkit)
+                .arg("-f")
+                .arg(project.join("batect.yml"))
+                .arg(task)
+                .output()
+                .expect("failed to run ratect");
+            if !output.status.success() {
+                failures.push(format!(
+                    "DOCKER_BUILDKIT={buildkit} {task}:\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+    }
+    for tag in [
+        "ratect-dockerfile-spellings-test-absolute",
+        "ratect-dockerfile-spellings-test-dotted",
+    ] {
+        let _ = Command::new("docker").args(["rmi", tag]).output();
+    }
+    let _ = std::fs::remove_dir_all(&project);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A fresh, empty scratch directory named for `purpose`. Caller cleans up.
 fn scratch_directory(purpose: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

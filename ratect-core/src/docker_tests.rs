@@ -2403,10 +2403,15 @@ fn host_environment_proxies_and_build_args_beat_config_file_proxies() {
         )])),
         ..Default::default()
     };
-    let mut spec =
-        crate::container_spec::derive_build_spec(&container, "/project", "tag", Some(&host_proxy))
-            .unwrap();
-    spec.config_file_proxies = true;
+    let spec = crate::container_spec::derive_build_spec(
+        &container,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        Some(&host_proxy),
+        true,
+    )
+    .unwrap();
 
     let build_args = build_args_with_config_file_proxies(
         &spec,

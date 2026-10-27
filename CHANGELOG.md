@@ -159,6 +159,7 @@ history, from when it was the only binary.
 - A BuildKit image build that a run stops waiting for — because of a termination signal, or because another container failed — is cancelled in the Docker daemon, as in Batect, instead of running on to the end of its steps. A cancel the daemon refuses or doesn't answer is a warning naming the container.
 - A classic-builder image build whose step fails no longer leaves that step's stopped intermediate container behind, as in Batect.
 - Proxies set in the `proxies` section of Docker's `config.json` — the entry for the Docker host the run connects to, else `default` — reach image builds as build arguments, as in Batect, without overriding a proxy from the environment or a container's own `build_args`. `--no-proxy-vars` keeps them out.
+- A `dockerfile` given as an absolute path inside `build_directory`, or with `.` or `..` in it (`./Dockerfile`), builds, as in Batect. A `build_directory` or Dockerfile a build can't use — missing, not a directory or regular file, a symbolic link or reached through one, or outside `build_directory` — fails the build naming the field before Docker is asked anything, and `ratect doctor` and `ratect config validate` report it.
 
 ### Security
 

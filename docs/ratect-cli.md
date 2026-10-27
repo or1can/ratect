@@ -305,8 +305,9 @@ and exec instances die with their container, so there's nothing left to find.
 
 `ratect config validate` is `doctor`'s configuration half on its own — it loads the
 config, evaluates every container and task against this machine, and runs the same
-config-only checks (values this machine can't evaluate, missing
-`build_directory`/Dockerfile, floating image tags, dependencies with no
+config-only checks (values this machine can't evaluate, a
+`build_directory`/Dockerfile a build can't use, an absolute `dockerfile`,
+floating image tags, dependencies with no
 `health_check`, an entry given more than once in one `dependencies` or
 `prerequisites` list), exiting non-zero on a problem. It never touches Docker, so it's the
 gate to run in CI when all you want to know is "is the config valid?", without a
@@ -407,9 +408,10 @@ Answers "why did that fail?", or "will it?", without running a task.
 ```
 
 A **problem** will fail a run — an unreachable daemon, a configuration that doesn't
-load, a missing `build_directory` or Dockerfile. A **warning** works but is likely to
-bite: a floating image tag (`latest`, or no tag at all) means the same configuration
-runs a different image next week, and a dependency with no `health_check` counts as
+load, a `build_directory` or Dockerfile a build can't use. A **warning** works but is
+likely to bite: a floating image tag (`latest`, or no tag at all) means the same
+configuration runs a different image next week, an absolute `dockerfile` only works
+where the project is checked out at that path, and a dependency with no `health_check` counts as
 ready the moment it starts unless its image defines one, which is where "connection
 refused" on the first run comes from.
 

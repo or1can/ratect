@@ -1916,18 +1916,27 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             crate::image_reference::check_tag(extra_tag)
                                 .map_err(anyhow::Error::msg)?;
                         }
+                        // And so is everything the build reads on the host,
+                        // so a Dockerfile that can't work is refused naming
+                        // it, before the daemon is asked anything.
+                        let dockerfile = crate::container_spec::check_build_files(
+                            std::path::Path::new(build_directory),
+                            container_config.dockerfile.as_deref(),
+                        )
+                        .map_err(anyhow::Error::msg)?;
                         // No `extra_no_proxy_entries` at build time — matches
                         // Batect, which never adds container names to
                         // `no_proxy` for a build (nothing's running yet to be
                         // exempted from proxying).
                         let proxy = self.proxy_environment(&std::collections::BTreeSet::new());
-                        let mut spec = derive_build_spec(
+                        let spec = derive_build_spec(
                             container_config,
                             build_directory,
+                            dockerfile,
                             &tag,
                             proxy.as_ref(),
+                            self.propagate_proxy_environment_variables,
                         )?;
-                        spec.config_file_proxies = self.propagate_proxy_environment_variables;
                         self.event_sink.post(TaskEvent::ImageBuildStarting {
                             container: container_name.to_string(),
                         });

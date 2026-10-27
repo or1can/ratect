@@ -254,17 +254,20 @@ fn derive_build_spec_maps_dockerfile_target_and_defaults() {
     container_config.dockerfile = Some("Dockerfile.build".to_string());
     container_config.build_target = Some("builder".to_string());
 
-    let spec = derive_build_spec(&container_config, "/project/docker", "demo-app", None).unwrap();
+    let spec = derive_build_spec(
+        &container_config,
+        "/project/docker",
+        "Dockerfile.build".to_string(),
+        "demo-app",
+        None,
+        true,
+    )
+    .unwrap();
 
     assert_eq!(spec.build_directory, PathBuf::from("/project/docker"));
     assert_eq!(spec.dockerfile, "Dockerfile.build");
     assert_eq!(spec.target, Some("builder".to_string()));
     assert_eq!(spec.tag, "demo-app");
-
-    let mut no_dockerfile = sample_container();
-    no_dockerfile.dockerfile = None;
-    let spec = derive_build_spec(&no_dockerfile, "/project/docker", "demo-app", None).unwrap();
-    assert_eq!(spec.dockerfile, "Dockerfile");
 }
 
 /// Batect's second use of `image_pull_policy`: only `Always` force-pulls a
@@ -274,17 +277,41 @@ fn derive_build_spec_maps_dockerfile_target_and_defaults() {
 fn derive_build_spec_force_pulls_only_under_the_always_policy() {
     let mut container_config = sample_container();
     container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::Always);
-    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    let spec = derive_build_spec(
+        &container_config,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    )
+    .unwrap();
     assert!(spec.force_pull);
 
     let mut container_config = sample_container();
     container_config.image_pull_policy = Some(crate::config::ImagePullPolicy::IfNotPresent);
-    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    let spec = derive_build_spec(
+        &container_config,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    )
+    .unwrap();
     assert!(!spec.force_pull);
 
     let mut container_config = sample_container();
     container_config.image_pull_policy = None;
-    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    let spec = derive_build_spec(
+        &container_config,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    )
+    .unwrap();
     assert!(!spec.force_pull);
 }
 
@@ -294,7 +321,15 @@ fn derive_build_spec_force_pulls_only_under_the_always_policy() {
 #[test]
 fn derive_build_spec_includes_buildkit_only_when_secrets_or_ssh_are_set() {
     let container_config = sample_container();
-    let spec = derive_build_spec(&container_config, "/project", "tag", None).unwrap();
+    let spec = derive_build_spec(
+        &container_config,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    )
+    .unwrap();
     assert_eq!(spec.buildkit, None);
 
     let mut with_secrets = sample_container();
@@ -302,7 +337,15 @@ fn derive_build_spec_includes_buildkit_only_when_secrets_or_ssh_are_set() {
         "token".to_string(),
         crate::config::BuildSecret::Environment("TOKEN".to_string()),
     )]));
-    let spec = derive_build_spec(&with_secrets, "/project", "tag", None).unwrap();
+    let spec = derive_build_spec(
+        &with_secrets,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    )
+    .unwrap();
     let buildkit = spec.buildkit.expect("build_secrets requires BuildKit");
     assert_eq!(
         buildkit.secrets.get("token"),
@@ -332,8 +375,10 @@ fn derive_build_spec_refuses_a_secret_file_that_does_not_exist() {
     let err = derive_build_spec(
         &container_with_secret_file(&missing),
         "/project",
+        "Dockerfile".to_string(),
         "tag",
         None,
+        true,
     )
     .expect_err("a missing secret file should fail before the build");
     assert_eq!(
@@ -354,8 +399,10 @@ fn derive_build_spec_refuses_a_secret_path_that_is_not_a_file() {
     let err = derive_build_spec(
         &container_with_secret_file(&directory),
         "/project",
+        "Dockerfile".to_string(),
         "tag",
         None,
+        true,
     )
     .expect_err("a directory secret should fail before the build");
     assert_eq!(
@@ -383,7 +430,15 @@ fn derive_build_spec_reports_the_first_bad_secret_by_id() {
             })
             .collect(),
     );
-    let err = derive_build_spec(&container_config, "/project", "tag", None).unwrap_err();
+    let err = derive_build_spec(
+        &container_config,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    )
+    .unwrap_err();
     assert!(
         format!("{err:#}").starts_with("The 'build_secrets' entry 'a' "),
         "{err:#}"
@@ -395,7 +450,14 @@ fn derive_build_spec_reports_the_first_bad_secret_by_id() {
 fn derive_build_spec_accepts_a_secret_file_that_exists() {
     let file = std::env::temp_dir().join(format!("ratect-315-{}", uuid::Uuid::new_v4()));
     std::fs::write(&file, "secret").unwrap();
-    let result = derive_build_spec(&container_with_secret_file(&file), "/project", "tag", None);
+    let result = derive_build_spec(
+        &container_with_secret_file(&file),
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    );
     std::fs::remove_file(&file).unwrap();
     let buildkit = result
         .unwrap()
@@ -424,7 +486,15 @@ fn derive_build_spec_merges_proxy_vars_and_carries_the_host_gateway() {
         &std::collections::BTreeSet::new(),
     );
 
-    let spec = derive_build_spec(&container_config, "/project", "tag", Some(&proxy)).unwrap();
+    let spec = derive_build_spec(
+        &container_config,
+        "/project",
+        "Dockerfile".to_string(),
+        "tag",
+        Some(&proxy),
+        true,
+    )
+    .unwrap();
 
     let build_args = spec
         .build_args
@@ -747,8 +817,15 @@ fn derive_build_spec_passes_an_unquoted_yaml_build_arg_on_as_written() {
     )
     .unwrap();
 
-    let spec =
-        derive_build_spec(&config.containers["app"], "/project/docker", "tag", None).unwrap();
+    let spec = derive_build_spec(
+        &config.containers["app"],
+        "/project/docker",
+        "Dockerfile".to_string(),
+        "tag",
+        None,
+        true,
+    )
+    .unwrap();
 
     assert_eq!(spec.build_args.unwrap()["PYTHON_VERSION"], "3.10");
 }
@@ -880,4 +957,142 @@ fn one_container_port_on_two_host_ports_from_the_container_and_the_run_keeps_bot
         published_ports(&["9000:80"], &["9001:80"]),
         vec![tcp(9000, 80), tcp(9001, 80)]
     );
+}
+
+/// A fresh build directory holding a `Dockerfile`, for `check_build_files`.
+fn build_directory_with_dockerfile() -> PathBuf {
+    let directory = std::env::temp_dir().join(format!("ratect-296-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(directory.join("docker")).unwrap();
+    std::fs::write(directory.join("Dockerfile"), "FROM scratch").unwrap();
+    std::fs::write(directory.join("docker/Dockerfile"), "FROM scratch").unwrap();
+    directory
+}
+
+/// ratect#296: what's sent is the Dockerfile's path inside the build
+/// context, however it was written — `.`, `..` and an absolute path inside
+/// the build directory all come out as the same relative form.
+#[test]
+fn check_build_files_gives_the_dockerfile_relative_to_the_build_context() {
+    let directory = build_directory_with_dockerfile();
+    let absolute = directory.join("docker/Dockerfile");
+    for (written, sent) in [
+        ("Dockerfile", "Dockerfile"),
+        ("./Dockerfile", "Dockerfile"),
+        ("docker/../Dockerfile", "Dockerfile"),
+        ("docker/Dockerfile", "docker/Dockerfile"),
+        (absolute.to_str().unwrap(), "docker/Dockerfile"),
+    ] {
+        assert_eq!(
+            check_build_files(&directory, Some(written)).as_deref(),
+            Ok(sent),
+            "{written}"
+        );
+    }
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+fn refusal(directory: &Path, dockerfile: &str) -> String {
+    check_build_files(directory, Some(dockerfile)).unwrap_err()
+}
+
+#[test]
+fn check_build_files_refuses_a_build_directory_that_isnt_one() {
+    let directory = build_directory_with_dockerfile();
+    let missing = directory.join("missing");
+    assert_eq!(
+        refusal(&missing, "Dockerfile"),
+        format!("build_directory '{}' doesn't exist", missing.display())
+    );
+    let file = directory.join("Dockerfile");
+    assert_eq!(
+        refusal(&file, "Dockerfile"),
+        format!("build_directory '{}' isn't a directory", file.display())
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn check_build_files_refuses_a_dockerfile_that_cant_be_built_from() {
+    let directory = build_directory_with_dockerfile();
+    let shown = directory.display();
+    assert_eq!(
+        refusal(&directory, "Missing.Dockerfile"),
+        format!("dockerfile 'Missing.Dockerfile' doesn't exist in build_directory '{shown}'")
+    );
+    assert_eq!(
+        refusal(&directory, "docker"),
+        "dockerfile 'docker' isn't a regular file"
+    );
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("Dockerfile", directory.join("Linked.Dockerfile")).unwrap();
+        assert_eq!(
+            refusal(&directory, "Linked.Dockerfile"),
+            "dockerfile 'Linked.Dockerfile' is a symbolic link, which Ratect's \
+             build context doesn't carry"
+        );
+    }
+    let outside = build_directory_with_dockerfile();
+    let escaping = format!(
+        "../{}/Dockerfile",
+        outside.file_name().unwrap().to_str().unwrap()
+    );
+    assert_eq!(
+        refusal(&directory, &escaping),
+        format!("dockerfile '{escaping}' isn't inside build_directory '{shown}'")
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
+    std::fs::remove_dir_all(&outside).unwrap();
+}
+
+/// The checks run in order, so a Dockerfile that is both missing and outside
+/// the build directory is reported as missing.
+#[test]
+fn check_build_files_reports_a_missing_dockerfile_outside_the_build_directory_as_missing() {
+    let directory = build_directory_with_dockerfile();
+    assert_eq!(
+        refusal(&directory, "../nowhere/Dockerfile"),
+        format!(
+            "dockerfile '../nowhere/Dockerfile' doesn't exist in build_directory '{}'",
+            directory.display()
+        )
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// A Dockerfile reached through a symbolically linked directory is refused
+/// too: the build context skips the link, so the Dockerfile wouldn't be in
+/// it, and the link may lead out of `build_directory` altogether.
+#[cfg(unix)]
+#[test]
+fn check_build_files_refuses_a_dockerfile_in_a_linked_directory() {
+    let directory = build_directory_with_dockerfile();
+    let elsewhere = build_directory_with_dockerfile();
+    std::os::unix::fs::symlink(&elsewhere, directory.join("linked")).unwrap();
+    std::os::unix::fs::symlink("docker", directory.join("alias")).unwrap();
+    for (dockerfile, link) in [
+        ("linked/Dockerfile", "linked"),
+        ("alias/Dockerfile", "alias"),
+    ] {
+        assert_eq!(
+            refusal(&directory, dockerfile),
+            format!(
+                "dockerfile '{dockerfile}' is reached through '{link}', a symbolic link, which \
+                 Ratect's build context doesn't carry"
+            )
+        );
+    }
+    std::fs::remove_dir_all(&directory).unwrap();
+    std::fs::remove_dir_all(&elsewhere).unwrap();
+}
+
+/// No `dockerfile` means `Dockerfile` at the build directory's root.
+#[test]
+fn check_build_files_defaults_to_a_dockerfile_at_the_root() {
+    let directory = build_directory_with_dockerfile();
+    assert_eq!(
+        check_build_files(&directory, None).as_deref(),
+        Ok("Dockerfile")
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
 }
