@@ -506,8 +506,10 @@ containers:
   reasoning as above — this is where an existing Batect project already keeps its own
   directory-type caches.
 - `<project-key>` is a value unique to this project, generated once and persisted at
-  `<project_directory>/.batect/caches/key` (created lazily — only the first time a
-  `cache` volume is actually resolved, never eagerly) — without it, two unrelated
+  `<project_directory>/.batect/caches/key` (created lazily — the first time a run
+  resolves a `cache` mount, or `--clean` looks for cache volumes, under
+  `--cache-type=volume`, never eagerly; a `--cache-type=directory` run never reads,
+  creates or changes it) — without it, two unrelated
   projects that happen to declare a same-named cache (e.g. `gradle-cache`) would
   collide on the exact same Docker volume, since Docker volumes live in one flat,
   global namespace, not scoped by directory. If that file already exists (e.g. from a

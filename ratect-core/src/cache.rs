@@ -206,15 +206,21 @@ pub fn shared_cache_root() -> Result<PathBuf> {
 /// directory under `.batect/caches/<name>/` under `CacheType::Directory`
 /// (created here if missing, matching Batect's own
 /// `Files.createDirectories`).
+///
+/// `project_cache_key` is called only for a project-scoped mount under
+/// `CacheType::Volume`, the one source named after the key: Batect reads
+/// `CacheManager.projectCacheKey` only in `VolumeMountResolver`'s
+/// `CacheType.Volume` branch, so a directory-mode run never reads, creates
+/// or rewrites the key file (ratect#325), and neither does a shared cache.
 pub fn resolve_cache_mount(
     options: &CacheOptions,
-    project_cache_key: &str,
+    project_cache_key: impl FnOnce() -> Result<String>,
     mount: &CacheVolumeMount,
 ) -> Result<String> {
     let shared = mount.scope() == crate::config::CacheScope::Shared;
     let source = match options.cache_type {
         CacheType::Volume if shared => shared_cache_volume_name(&mount.name),
-        CacheType::Volume => cache_volume_name(project_cache_key, &mount.name),
+        CacheType::Volume => cache_volume_name(&project_cache_key()?, &mount.name),
         CacheType::Directory => {
             let dir = if shared {
                 shared_cache_directory(&mount.name)?

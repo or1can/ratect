@@ -75,7 +75,7 @@ fn resolve_cache_mount_builds_a_volume_bind_string() {
         scope: Default::default(),
     };
 
-    let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
+    let resolved = resolve_cache_mount(&options, || Ok("abc123".to_string()), &mount).unwrap();
 
     assert_eq!(resolved, "batect-cache-abc123-gradle-cache:/root/.gradle");
 
@@ -96,7 +96,7 @@ fn resolve_cache_mount_includes_options_when_given() {
         scope: Default::default(),
     };
 
-    let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
+    let resolved = resolve_cache_mount(&options, || Ok("abc123".to_string()), &mount).unwrap();
 
     assert_eq!(
         resolved,
@@ -120,7 +120,7 @@ fn resolve_cache_mount_creates_and_uses_a_host_directory_for_directory_type() {
         scope: Default::default(),
     };
 
-    let resolved = resolve_cache_mount(&options, "abc123", &mount).unwrap();
+    let resolved = resolve_cache_mount(&options, || Ok("abc123".to_string()), &mount).unwrap();
 
     let expected_dir = cache_directory(&dir).join("gradle-cache");
     assert_eq!(
@@ -319,8 +319,10 @@ fn a_shared_cache_resolves_to_the_same_volume_for_every_project() {
         project_directory: PathBuf::from("/irrelevant"),
     };
 
-    let first = resolve_cache_mount(&options, "project-one-key", &mount).unwrap();
-    let second = resolve_cache_mount(&options, "project-two-key", &mount).unwrap();
+    let first =
+        resolve_cache_mount(&options, || Ok("project-one-key".to_string()), &mount).unwrap();
+    let second =
+        resolve_cache_mount(&options, || Ok("project-two-key".to_string()), &mount).unwrap();
 
     assert_eq!(first, "ratect-shared-cache-registry:/registry");
     assert_eq!(first, second);
