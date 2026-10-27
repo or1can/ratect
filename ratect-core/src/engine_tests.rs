@@ -12435,6 +12435,81 @@ async fn no_proxy_vars_flag_suppresses_propagation() {
     );
 }
 
+/// A one-container `run` task whose `app` container declares
+/// `environment`, run with the host's proxy variables set (`http_proxy`
+/// and `no_proxy`) and proxy propagation `propagate`; returns the
+/// environment `app` was created with.
+async fn environment_with_host_proxies(
+    environment: &[(&str, &str)],
+    propagate: bool,
+) -> HashMap<String, String> {
+    let mut container_config = container("alpine:3.18", None);
+    container_config.environment = Some(
+        environment
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect(),
+    );
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), container_config);
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_host_env(|name| match name {
+            "http_proxy" => Some("http://proxy.example.com".to_string()),
+            "no_proxy" => Some("internal.example.com".to_string()),
+            _ => None,
+        })
+        .with_settings(TaskEngineSettings {
+            propagate_proxy_environment_variables: propagate,
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("run", &[]).await.unwrap();
+
+    docker.environment_for("app").unwrap_or_default()
+}
+
+/// Batect's `DockerContainerEnvironmentVariableProviderSpec`, proxy
+/// propagation off: the container gets exactly what it declares, and none
+/// of the host's proxy variables.
+#[tokio::test]
+async fn with_propagation_off_a_container_gets_exactly_its_declared_environment() {
+    let environment = environment_with_host_proxies(&[("SOME_VAR", "SOME_VALUE")], false).await;
+
+    assert_eq!(
+        environment,
+        HashMap::from([("SOME_VAR".to_string(), "SOME_VALUE".to_string())])
+    );
+}
+
+/// Batect's `DockerContainerEnvironmentVariableProviderSpec`, a container
+/// variable named like a proxy variable: the container's value wins for
+/// that one name, and every other proxy variable — `http_proxy`'s other
+/// spelling, and both of `no_proxy`'s, with the task's container names
+/// added as ever — still reaches it.
+#[tokio::test]
+async fn a_declared_proxy_variable_overrides_only_its_own_name() {
+    let environment =
+        environment_with_host_proxies(&[("HTTP_PROXY", "http://explicit.example.com")], true).await;
+
+    let get = |name: &str| environment.get(name).map(String::as_str);
+    assert_eq!(get("HTTP_PROXY"), Some("http://explicit.example.com"));
+    assert_eq!(get("http_proxy"), Some("http://proxy.example.com"));
+    assert_eq!(get("no_proxy"), Some("internal.example.com,app"));
+    assert_eq!(get("NO_PROXY"), Some("internal.example.com,app"));
+}
+
 /// `--no-proxy-vars` keeps the Docker CLI `config.json`'s proxies out of a
 /// build too (ratect#295), which only `DockerClient` reads — so what the
 /// engine decides is the spec's switch for that source, while the
