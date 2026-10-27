@@ -1928,6 +1928,22 @@ fn split_image_reference(reference: &str) -> (&str, Option<&str>) {
     }
 }
 
+/// The `from_image`/`tag` pair `pull_image` asks the daemon for, given a
+/// configured image reference. A reference with neither tag nor digest gets
+/// `latest`, as the docker CLI and Batect's docker-client both default it:
+/// the image-create API itself pulls *every* tag of the repository when
+/// given neither (ratect#536). A digest reference (`repo@sha256:…`, with or
+/// without a tag) goes unchanged — checked before [`split_image_reference`],
+/// which knows nothing of digests and would read the digest's own `sha256:`
+/// colon as a tag separator.
+fn pull_request_reference(reference: &str) -> (&str, Option<&str>) {
+    if reference.contains('@') {
+        return (reference, None);
+    }
+    let (repository, tag) = split_image_reference(reference);
+    (repository, Some(tag.unwrap_or("latest")))
+}
+
 /// The `DOCKER_BUILDKIT` value `select_builder_version` actually sees:
 /// forced to `"1"` when `--enable-buildkit` was given, taking precedence
 /// over `real_env_value` regardless of what it says — matching Batect's own
@@ -2781,8 +2797,13 @@ impl ContainerRuntime for DockerClient {
             self.event_sink.post(TaskEvent::Warning { message });
         }
 
+        // Only the request is normalised: events, errors and the engine's
+        // dedup keep `image` as the user wrote it, as Batect reports a pull
+        // under its own configured name.
+        let (from_image, tag) = pull_request_reference(image);
         let options = CreateImageOptions {
-            from_image: Some(image.to_string()),
+            from_image: Some(from_image.to_string()),
+            tag: tag.map(str::to_string),
             ..Default::default()
         };
 
