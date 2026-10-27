@@ -433,7 +433,7 @@ For a `local` mount, `local` (the host path) is resolved:
 
 - In the object form, the path is interpolated first (see
   [Expressions](#expressions)) — so a config variable that itself resolves to an
-  absolute path is used as-is, not treated as a literal relative fragment. The
+  absolute path is taken as absolute, not treated as a literal relative fragment. The
   string form's host path is used as written, as in Batect: a `$` or `<` in
   `$HOME/.m2:/root/.m2` is just part of a relative path, so a host path that needs
   an expression is written as an object. (`ratect.toml` interpolates both forms.)
@@ -445,7 +445,10 @@ For a `local` mount, `local` (the host path) is resolved:
 - *After* any interpolation, if the result is relative, it's resolved to an absolute path
   **relative to the directory containing the config file** (not the current working
   directory). If it's already absolute (whether literally written that way, expanded
-  from `~`, or because that's what an expression resolved to), it's left unchanged.
+  from `~`, or because that's what an expression resolved to), it isn't joined onto
+  anything. Either way, its `.` and `..` components and any trailing `/` are then
+  collapsed lexically, as in Batect — without following symbolic links, so
+  `/a/link/..` is `/a` wherever `link` points.
 - This all happens when a task is run, with CLI-supplied config variable overrides
   (`--config-var`/`--config-vars-file`) applied — not when the file loads.
 - `build_directory` is resolved the same way (it has no `:container_path` part to split
