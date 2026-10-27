@@ -5005,6 +5005,65 @@ fn a_failed_classic_build_leaves_no_intermediate_container() {
     );
 }
 
+/// Runs `tests/fixtures/build-missing-base-image.yml`'s `build` task with
+/// `DOCKER_BUILDKIT` set to `buildkit`, and returns its stderr after
+/// checking what both builders say about a base image that exists nowhere:
+/// a failed run, the build's own tag, and the daemon's reason, whose
+/// wording depends on the daemon.
+fn missing_base_image_build_stderr(buildkit: &str) -> String {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/build-missing-base-image.yml"),
+        )
+        .arg("build")
+        .env("DOCKER_BUILDKIT", buildkit)
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        !output.status.success(),
+        "the build should have failed: {stderr}"
+    );
+    assert!(
+        stderr.contains("Failed to build image 'ratect-build-missing-base-image-test-build-env'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("not found") || stderr.contains("pull access denied"),
+        "the daemon's reason should reach the error: {stderr}"
+    );
+    stderr
+}
+
+/// Requires a running Docker daemon with BuildKit and network access to a
+/// registry that answers for the nonexistent base image. Run explicitly
+/// with `cargo test -- --ignored`.
+///
+/// Pins Batect's `DockerClientBuildKitImageBuildSpec` "non-existent base
+/// image" rule (ratect#519): see `tests/fixtures/build-missing-base-image.yml`.
+#[test]
+#[ignore]
+fn a_buildkit_build_on_a_missing_base_image_fails_naming_it() {
+    let stderr = missing_base_image_build_stderr("1");
+    assert!(stderr.contains("load metadata for"), "{stderr}");
+}
+
+/// Requires a running Docker daemon and network access to a registry that
+/// answers for the nonexistent base image. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Pins Batect's `DockerClientLegacyImageBuildSpec` "base image does not
+/// exist" rule (ratect#519) on the classic builder: see
+/// `tests/fixtures/build-missing-base-image.yml`.
+#[test]
+#[ignore]
+fn a_classic_build_on_a_missing_base_image_fails_naming_it() {
+    let stderr = missing_base_image_build_stderr("0");
+    assert!(stderr.contains("Step 1/"), "{stderr}");
+}
+
 /// Requires a running Docker daemon that supports BuildKit sessions and
 /// network access to pull `alpine:3.18.2`. Run explicitly with
 /// `cargo test -- --ignored`.

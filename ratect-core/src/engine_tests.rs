@@ -3394,6 +3394,53 @@ async fn a_failed_build_names_the_container_whatever_layer_failed() {
     );
 }
 
+/// Batect's "non-existent base image" and "base image does not exist" rules
+/// (ratect#519): a failed build is announced as starting and never as
+/// completed, and the task fails. Ratect has no `BuildFailed` event; the
+/// error the run ends with plays that part.
+#[tokio::test]
+async fn a_failed_build_starts_and_never_completes() {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "build-env".to_string(),
+        container_with_build_directory("./docker", None),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("build".to_string(), task("build-env", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        FakeContainerRuntime::default().failing_image_build(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("build", &[]).await.unwrap_err();
+
+    let events = sink.events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            TaskEvent::ImageBuildStarting { container } if container == "build-env"
+        )),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            TaskEvent::ImageBuildCompleted { container } if container == "build-env"
+        )),
+        "{events:?}"
+    );
+}
+
 #[tokio::test]
 async fn built_image_is_tagged_with_project_and_container_name() {
     let mut containers = IndexMap::new();
