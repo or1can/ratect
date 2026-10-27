@@ -6172,6 +6172,39 @@ async fn a_signal_mid_build_cancels_that_build() {
     assert_eq!(build_cancels(&docker.events()), vec![build_id]);
 }
 
+/// Batect's `DockerClientImagePullSpec`, a pull whose coroutine is
+/// cancelled: an interrupt a second into a minute-long pull abandons it
+/// there, failing the run as interrupted rather than with whatever the
+/// pull would have said, and nothing waits for the pull to finish.
+#[tokio::test(start_paused = true)]
+async fn an_interrupt_mid_pull_abandons_the_pull_promptly() {
+    let docker = FakeContainerRuntime::default()
+        .with_pull_delay("postgres:16", std::time::Duration::from_secs(60))
+        .with_failing_pull("postgres:16");
+    let interrupt = crate::interrupt::Interrupt::new();
+    let signal = Arc::clone(&interrupt);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        signal.record();
+    });
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        interrupt,
+    );
+    let started = tokio::time::Instant::now();
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(error.is::<crate::interrupt::TaskInterrupted>(), "{error:#}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "the run waited {:?}, out to the pull's end",
+        started.elapsed()
+    );
+}
+
 /// A sibling's failure drops an in-flight build just as a signal does.
 #[tokio::test(start_paused = true)]
 async fn a_sibling_failure_mid_build_cancels_the_build() {

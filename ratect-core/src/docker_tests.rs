@@ -3279,3 +3279,126 @@ async fn run_container_reports_a_missing_container_naming_it() {
         "{err:#}"
     );
 }
+
+/// A [`recording_daemon`] route for pulling `alpine:3.20`: the pull answers
+/// with `stream` as its body, newline-delimited JSON as the daemon streams
+/// it, and the image's inspect finds it.
+fn pull_route(stream: String) -> impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static {
+    move |method, path| match (method, path) {
+        ("POST", "/images/create") => (200, stream.clone()),
+        ("GET", "/images/alpine:3.20/json") => (200, r#"{"Id":"sha256:abc"}"#.to_string()),
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    }
+}
+
+/// Whether `log` holds an inspect of the pulled image.
+fn inspected_after_pulling(log: &std::sync::Mutex<Vec<RecordedRequest>>) -> bool {
+    requests_sent(log)
+        .iter()
+        .any(|(method, path)| method == "GET" && path.starts_with("/images/"))
+}
+
+/// Batect's `DockerClientImagePullSpec`: a pull stream that ends (EOF)
+/// after its progress lines is a successful pull.
+#[tokio::test]
+async fn pull_image_succeeds_when_the_stream_ends_without_an_error() {
+    let (client, log) = client_for_recording_daemon(pull_route(
+        "{\"status\":\"Pulling from library/alpine\"}\n{\"status\":\"Download complete\"}\n"
+            .to_string(),
+    ))
+    .await;
+
+    assert_eq!(
+        client.pull_image("alpine:3.20").await.unwrap(),
+        "sha256:abc"
+    );
+    assert!(inspected_after_pulling(&log));
+}
+
+/// Batect's `DockerClientImagePullSpec`, an image that doesn't exist or is
+/// for another platform: the pull fails at the stream's error, naming the
+/// image, with the daemon's message in the chain — and goes no further.
+/// The headline is Ratect's (see `docs/differences-from-batect.md`'s
+/// "Failure messages are Ratect's own").
+#[tokio::test]
+async fn pull_image_fails_at_the_daemons_stream_error_with_its_message() {
+    for message in [
+        "manifest for alpine:3.20 not found: manifest unknown: manifest unknown",
+        "pull access denied for alpine, repository does not exist or may require 'docker login'",
+        "no matching manifest for linux/arm64/v8 in the manifest list entries",
+        "image operating system \"windows\" cannot be used on this platform",
+    ] {
+        let stream = format!(
+            "{{\"status\":\"Pulling from library/alpine\"}}\n{}\n{{\"status\":\"never read\"}}\n",
+            serde_json::json!({ "errorDetail": { "message": message }, "error": message })
+        );
+        let (client, log) = client_for_recording_daemon(pull_route(stream)).await;
+
+        let err = client.pull_image("alpine:3.20").await.unwrap_err();
+
+        assert_eq!(err.to_string(), "Failed to pull image alpine:3.20");
+        assert!(format!("{err:#}").contains(message), "{err:#}");
+        assert!(!inspected_after_pulling(&log), "{message}");
+    }
+}
+
+/// Batect's `DockerClientImagePullSpec`: a stream that isn't JSON fails the
+/// pull too, rather than being skipped.
+#[tokio::test]
+async fn pull_image_fails_on_a_malformed_stream() {
+    let (client, log) =
+        client_for_recording_daemon(pull_route("this is not json\n".to_string())).await;
+
+    let err = client.pull_image("alpine:3.20").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to pull image alpine:3.20");
+    assert!(!inspected_after_pulling(&log));
+}
+
+/// Batect's `DockerClientImagePullSpec`, getting an image that isn't there:
+/// only the daemon's not-found means "not present locally"; any other
+/// inspect failure is an error naming the image.
+#[tokio::test]
+async fn local_image_id_is_none_only_for_a_daemon_not_found() {
+    let inspect = "/images/alpine:3.20/json";
+    let (client, _) =
+        client_for_recording_daemon(one_route("GET", inspect, 200, r#"{"Id":"sha256:abc"}"#)).await;
+    assert_eq!(
+        client
+            .local_image_id("alpine:3.20")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("sha256:abc")
+    );
+
+    let (client, log) = client_for_recording_daemon(one_route(
+        "GET",
+        inspect,
+        404,
+        r#"{"message":"No such image: alpine:3.20"}"#,
+    ))
+    .await;
+    assert_eq!(client.local_image_id("alpine:3.20").await.unwrap(), None);
+    assert_eq!(
+        requests_sent(&log),
+        vec![("GET".to_string(), inspect.to_string())]
+    );
+
+    let (client, _) = client_for_recording_daemon(one_route(
+        "GET",
+        inspect,
+        500,
+        r#"{"message":"stub daemon failed the inspect"}"#,
+    ))
+    .await;
+    let err = client.local_image_id("alpine:3.20").await.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Failed to check whether image 'alpine:3.20' exists locally"
+    );
+    assert!(
+        format!("{err:#}").contains("stub daemon failed the inspect"),
+        "{err:#}"
+    );
+}
