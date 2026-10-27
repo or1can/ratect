@@ -825,7 +825,8 @@ async fn async_main() {
             // reached the user by another route — the task's own non-zero
             // exit (its code, the summary line and the container's own
             // output say it), a signal (the interrupt notice did), a
-            // cleanup failure the engine reported as it happened — where a
+            // failure to run the task or clean up after it, which the
+            // engine reported as it happened — where a
             // second line would be the same event twice (decisions/0017;
             // the list is `already_reported`'s, shared with `ratect`).
             if !ratect_core::exit_code::already_reported(&err) {

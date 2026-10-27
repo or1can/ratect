@@ -316,22 +316,22 @@ fn setup_command_output_gets_an_inner_numbered_prefix() {
 }
 
 #[test]
-fn task_failed_before_the_graph_resolves_still_flushes_the_preamble() {
+fn a_run_ending_before_the_graph_resolves_still_flushes_the_preamble() {
     // An infrastructure failure early enough that TaskGraphResolved
     // never posts (e.g. a `--use-network` validation failure) must not
-    // leave this task's line unprinted forever — TaskFailed flushes the
-    // deferred preamble itself in that case.
+    // leave this task's line unprinted forever — RunEnded flushes the
+    // deferred preamble itself in that case, before the `Error` event
+    // that reports the failure.
     let (logger, buffer) = logger();
     logger.post(TaskEvent::TaskStarting {
         task: "test".into(),
     });
-    logger.post(TaskEvent::TaskFailed {
+    logger.post(TaskEvent::RunEnded {
         task: "test".into(),
     });
     assert_eq!(buffer.contents(), "test | Running test...\n");
 
-    // A second TaskFailed (shouldn't happen in practice, but the guard
-    // must not double-print).
+    // TaskFailed after it must not print it again.
     logger.post(TaskEvent::TaskFailed {
         task: "test".into(),
     });
@@ -547,4 +547,28 @@ fn line_buffer_drops_an_unresolved_trailing_carriage_return_on_flush() {
     );
     buffer.flush(&mut |line: &str| lines.push(line.to_string()));
     assert_eq!(lines, vec!["last"]);
+}
+
+/// A prerequisites-only task's line, Batect's words with its name in bold,
+/// on that task's own prefix — not the previous task's (ratect#364).
+#[test]
+fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("database", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::PrerequisitesOnly { task: "all".into() });
+    assert!(
+        buffer.contents().ends_with(
+            "\nall | The task all only defines prerequisite tasks, nothing more to do.\n"
+        ),
+        "{:?}",
+        buffer.contents()
+    );
+
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    logger.post(TaskEvent::PrerequisitesOnly { task: "all".into() });
+    assert_eq!(
+        buffer.contents(),
+        "\x1b[1mall\x1b[0m | The task \x1b[1mall\x1b[0m only defines prerequisite tasks, \
+         nothing more to do.\n"
+    );
 }

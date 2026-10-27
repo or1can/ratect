@@ -103,6 +103,10 @@ fn unhealthy_dependency_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unhealthy-dependency.yml")
 }
 
+fn failing_setup_command_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/failing-setup-command.yml")
+}
+
 fn task_container_setup_commands_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-setup-commands.yml")
 }
@@ -1057,6 +1061,27 @@ fn unsupported_config_key_reports_error() {
                 .contains("containers.build-env.not_a_real_field: unknown field: not_a_real_field"),
         "stderr:\n{}",
         stderr
+    );
+}
+
+/// A run that fails before any task starts — here, a config that doesn't
+/// load — reached no event sink, so `main` prints its `Error:` line, and
+/// exactly once (ratect#334).
+#[test]
+fn a_run_failing_before_its_task_starts_prints_its_error_once() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(unsupported_key_config_path())
+        .args(["-o", "quiet", "build"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("Error: ") && stderr.matches("Error:").count() == 1,
+        "{stderr}"
     );
 }
 
@@ -2132,25 +2157,42 @@ fn fatal_error_reaches_stderr_even_with_logging_disabled() {
 ///
 /// Proves a task with only `prerequisites` and no `run` of its own still runs
 /// its prerequisites end to end, then stops cleanly (exit 0) — no container
-/// of the task's own to run.
+/// of the task's own to run — and says so on stdout, as Batect does, whatever
+/// `RUST_LOG` says; but not under `-o quiet`, which prints no progress
+/// (ratect#364).
 #[test]
 #[ignore]
 fn task_with_only_prerequisites_and_no_run_runs_its_prerequisites_via_docker() {
-    let output = ratect_command()
-        .arg("-f")
-        .arg(sample_config_path())
-        .arg("prerequisites-only-task")
-        .output()
-        .expect("failed to run ratect");
+    const NOTHING_MORE: &str =
+        "The task prerequisites-only-task only defines prerequisite tasks, nothing more to do.";
+    let run = |style: &str| {
+        ratect_command()
+            .arg("-f")
+            .arg(sample_config_path())
+            .args(["-o", style, "prerequisites-only-task"])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("failed to run ratect")
+    };
 
+    let output = run("simple");
     assert!(
         output.status.success(),
         "stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("I should only run once"));
+    assert!(stdout.trim_end().ends_with(NOTHING_MORE), "{stdout}");
+
+    let output = run("quiet");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains(NOTHING_MORE) && !stderr.contains(NOTHING_MORE),
+        "quiet prints no progress:\n{stdout}{stderr}"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `redis:7-alpine`
@@ -2923,6 +2965,11 @@ fn signalling_a_run_cleans_up_via_docker(
         !stderr.contains("Error:"),
         "a signalled run that cleaned up is no error of Ratect's:\n{stderr}"
     );
+    // And the sequence ends by saying cleanup is over (ratect#369).
+    assert!(
+        stderr.ends_with("Cleanup complete.\n"),
+        "the interrupt sequence's last line:\n{stderr}"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18`.
@@ -3603,6 +3650,204 @@ fn unhealthy_dependency_fails_the_task_via_docker() {
         !stdout.contains("the task should never run"),
         "the task's own command must never have run:\n{stdout}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// An infrastructure failure is reported when it happens — before cleanup
+/// says anything — and exactly once, as Batect reports a failure the moment
+/// it's posted (ratect#334). Stdout and stderr share one file here, so the
+/// order between them is the order a terminal would show.
+#[test]
+#[ignore]
+fn an_infrastructure_failure_is_reported_once_before_cleanup_via_docker() {
+    let merged = std::env::temp_dir().join(format!(
+        "ratect-compat-failure-order-{}.log",
+        std::process::id()
+    ));
+    let file = std::fs::File::create(&merged).unwrap();
+    let status = ratect_command()
+        .arg("-f")
+        .arg(unhealthy_dependency_config_path())
+        .args(["-o", "simple", "check"])
+        .env("RUST_LOG", "off")
+        .stdout(file.try_clone().unwrap())
+        .stderr(file)
+        .status()
+        .expect("failed to run ratect");
+    let output = std::fs::read_to_string(&merged).unwrap();
+    std::fs::remove_file(&merged).unwrap();
+    assert_eq!(status.code(), Some(125), "{output}");
+    assert_eq!(output.matches("Error:").count(), 1, "{output}");
+    let error_at = output.find("Error:").unwrap();
+    let cleanup_at = output.find("Cleaning up").expect(&output);
+    assert!(
+        error_at < cleanup_at,
+        "the failure is reported before cleanup:\n{output}"
+    );
+
+    let quiet = ratect_command()
+        .arg("-f")
+        .arg(unhealthy_dependency_config_path())
+        .args(["-o", "quiet", "check"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&quiet.stderr);
+    assert_eq!(String::from_utf8_lossy(&quiet.stdout), "");
+    assert!(
+        stderr.starts_with("Error: ") && stderr.matches("Error:").count() == 1,
+        "quiet prints the one error and nothing else:\n{stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A container the daemon can't create, set up for `run_as_current_user`, or
+/// start — the task's own or a dependency — fails the task with an error
+/// naming that container as configured, never by Docker id alone, with the
+/// daemon's own reason still in it (ratect#345). Nothing is left behind.
+#[test]
+#[ignore]
+fn a_container_that_cannot_be_created_or_started_is_named_via_docker() {
+    let config =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/container-setup-failures.yml");
+    let filter = "label=eu.orican.ratect.project=ratect-container-setup-failures-test";
+    for (task, container, says, cause) in [
+        (
+            "task-create",
+            "bad-log-driver",
+            "Failed to create container 'bad-log-driver'",
+            "does-not-exist-345",
+        ),
+        (
+            "dependency-create",
+            "bad-log-driver",
+            "Failed to create container 'bad-log-driver'",
+            "does-not-exist-345",
+        ),
+        (
+            "task-user-mapping",
+            "bad-home",
+            "Failed to apply run_as_current_user to container 'bad-home'",
+            "/does-not-exist-345/home",
+        ),
+        (
+            "dependency-user-mapping",
+            "bad-home",
+            "Failed to apply run_as_current_user to container 'bad-home'",
+            "/does-not-exist-345/home",
+        ),
+        (
+            "task-start",
+            "bad-device",
+            "Failed to start container 'bad-device'",
+            "/dev/does-not-exist-345",
+        ),
+        (
+            "dependency-start",
+            "bad-device",
+            "Failed to start container 'bad-device'",
+            "/dev/does-not-exist-345",
+        ),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .args(["-o", "quiet", task])
+            .env("RUST_LOG", "off")
+            .output()
+            .expect("failed to run ratect");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(125), "{task}:\n{stderr}");
+        assert!(
+            stderr.starts_with(&format!("Error: {says}")),
+            "{task} names {container} first:\n{stderr}"
+        );
+        assert_eq!(
+            stderr.matches(&format!("'{container}'")).count(),
+            1,
+            "{task} names it once:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(cause),
+            "{task} keeps the daemon's reason:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("sidecar"),
+            "{task} calls a dependency a container:\n{stderr}"
+        );
+        assert!(
+            docker_ids("container", filter, true).is_empty()
+                && docker_ids("network", filter, false).is_empty(),
+            "{task} left something behind"
+        );
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// A container that doesn't become ready — a setup command that fails, a
+/// health check that never passes — ends its error with the hint to re-run
+/// with `--no-cleanup-after-failure`, as Batect's does, but only while that
+/// flag would change something (ratect#368).
+#[test]
+#[ignore]
+fn a_readiness_failure_hints_no_cleanup_after_failure_via_docker() {
+    const HINT: &str = "You can re-run the task with --no-cleanup-after-failure to leave its \
+                        containers in place and diagnose the failure.";
+    let run = |config: PathBuf, flags: &[&str]| {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(config)
+            .args(["-o", "quiet"])
+            .args(flags)
+            .arg("check")
+            .output()
+            .expect("failed to run ratect");
+        assert_eq!(output.status.code(), Some(125));
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    let stderr = run(failing_setup_command_config_path(), &[]);
+    assert!(
+        stderr.contains("seeding failed") && stderr.trim_end().ends_with(HINT),
+        "the setup command's output, then the hint:\n{stderr}"
+    );
+    let stderr = run(unhealthy_dependency_config_path(), &[]);
+    assert!(
+        stderr.trim_end().ends_with(HINT),
+        "an unhealthy dependency is hinted too:\n{stderr}"
+    );
+
+    let stderr = run(
+        failing_setup_command_config_path(),
+        &["--no-cleanup-after-failure"],
+    );
+    assert!(
+        !stderr.contains(HINT),
+        "nothing to suggest once the flag is given:\n{stderr}"
+    );
+    // That run kept its containers and network on purpose.
+    let filter = "label=eu.orican.ratect.project=ratect-failing-setup-command-test";
+    for id in docker_ids("container", filter, true) {
+        Command::new("docker")
+            .args(["rm", "-f", "-v", &id])
+            .output()
+            .expect("failed to run docker rm");
+    }
+    for id in docker_ids("network", filter, false) {
+        Command::new("docker")
+            .args(["network", "rm", &id])
+            .output()
+            .expect("failed to run docker network rm");
+    }
+    assert!(docker_ids("container", filter, true).is_empty());
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

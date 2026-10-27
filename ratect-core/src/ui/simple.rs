@@ -85,6 +85,16 @@ impl EventSink for SimpleEventLogger {
                 state.task_container = None;
                 self.console.println(&format!("Running {task}..."));
             }
+            // In place of a task's `Running` line, so separated the same way.
+            TaskEvent::PrerequisitesOnly { task } => {
+                let mut state = self.state.lock().unwrap();
+                if state.printed_a_task {
+                    self.console.println("");
+                }
+                state.printed_a_task = true;
+                self.console
+                    .println(&super::nothing_more_to_do(&self.console, &task));
+            }
             TaskEvent::TaskFinished {
                 task,
                 exit_code,
@@ -192,8 +202,8 @@ impl EventSink for SimpleEventLogger {
             // `ImageBuildProgressEvent` are unhandled there too). The
             // creation and per-step cleanup events only feed fancy's live
             // displays (Batect's simple logger prints nothing for a create
-            // either), and a failure's error reaches stderr through the
-            // normal error chain, so none of them get a line here either.
+            // either), and a failure's error was an `Error` event, before
+            // cleanup, so none of them get a line here either.
             TaskEvent::ImagePullProgress { .. }
             | TaskEvent::ImageBuildProgress { .. }
             | TaskEvent::ImageResolved { .. }
@@ -227,8 +237,8 @@ impl SimpleEventLogger {
     /// of whatever the command last wrote, on the very same terminal row,
     /// at a nondeterministic point. Simple mode's whole contract is that it
     /// never touches the task's own output, so the milestone is what gives
-    /// way. Nothing is lost that matters: a readiness *failure* still
-    /// reaches stderr through the normal error chain, and `all` mode still
+    /// way. Nothing is lost that matters: a readiness *failure* is still
+    /// reported on stderr, as an `Error` event, and `all` mode still
     /// reports every one of these for every container (its output is
     /// line-buffered and prefixed, so it has no collision to avoid — same
     /// split Batect's own `InterleavedEventLogger` makes).

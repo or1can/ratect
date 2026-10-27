@@ -167,17 +167,21 @@ fn only_a_runs_failure_goes_through_the_mapping() {
     assert_eq!(for_failure(&other, false), VERB_FAILED);
 }
 
-/// The three failures a run has already reported by another route — the
-/// task's own exit (its code and the summary line), a signal (the interrupt
-/// notice), a cleanup failure (the engine's own `Error:` line) — need no
+/// The failures a run has already reported by another route — the task's
+/// own exit (its code and the summary line), a signal (the interrupt
+/// notice), stdout's reader going (its notice), a cleanup failure and an
+/// infrastructure failure (the engine's own `Error:` line each) — need no
 /// `Error:` from `main`; everything else does. Through `anyhow` context too,
 /// since the binaries see the error after the engine's own wrapping.
 #[test]
-fn already_reported_names_exactly_the_four_failures_reported_elsewhere() {
+fn already_reported_names_exactly_the_five_failures_reported_elsewhere() {
     use anyhow::Context;
 
     assert!(already_reported(&anyhow::Error::new(
         crate::docker::ContainerExitedNonZero { exit_code: 42 }
+    )));
+    assert!(already_reported(&anyhow::Error::new(
+        crate::engine::FailureReported(anyhow::anyhow!("no such image"))
     )));
     assert!(already_reported(&anyhow::Error::new(TaskInterrupted::new(
         TerminationSignal::Terminate
@@ -201,6 +205,33 @@ fn already_reported_names_exactly_the_four_failures_reported_elsewhere() {
             .context("Failed to pull image alpine")
             .unwrap_err()
     ));
+}
+
+/// A failure the engine reported early exits as what it wraps: the wrapper
+/// hides the inner type from `anyhow`'s downcasts, so `for_error` looks
+/// through it rather than relying on the engine never wrapping a type it
+/// dispatches on.
+#[test]
+fn a_failure_reported_early_exits_as_the_error_it_wraps() {
+    let reported = |error: anyhow::Error| {
+        anyhow::Error::new(crate::engine::FailureReported(error)).context("while running 'build'")
+    };
+    assert_eq!(
+        for_error(&reported(anyhow::Error::new(
+            crate::docker::ContainerExitedNonZero { exit_code: 3 }
+        ))),
+        3
+    );
+    assert_eq!(
+        for_error(&reported(anyhow::Error::new(TaskInterrupted::new(
+            TerminationSignal::Terminate
+        )))),
+        143
+    );
+    assert_eq!(
+        for_error(&reported(anyhow::anyhow!("no such image"))),
+        RATECT_FAILED
+    );
 }
 
 /// An invocation error — an argument `clap` rejects — takes its path's code:

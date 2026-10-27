@@ -50,8 +50,9 @@
 //!
 //! How a failure is printed is not here either — each `main` prints its own
 //! `Error:` line — but *whether* it needs printing is, as [`already_reported`]:
-//! the same four error types [`for_error`] dispatches over are the ones a
-//! run has already reported by another route (decisions/0017), and two
+//! the types [`for_error`] dispatches over, plus the engine's own two for a
+//! failure it has reported as an `Error:` line itself, are the ones a run
+//! has already reported by another route (decisions/0017), and two
 //! `main`s deciding that by hand could only ever differ by one being wrong.
 //! This takes an `anyhow::Error` rather than returning one for the same
 //! reason as before: by the time a binary asks, the run is over and it only
@@ -137,6 +138,12 @@ impl std::error::Error for InvalidOptionValue {}
 /// `-1`, 255) but returns `-1` (255) for a signal or any other failure alike,
 /// and so says nothing about which it was.
 pub fn for_error(error: &anyhow::Error) -> u8 {
+    // Looked through, since the wrapper hides the type it wraps from
+    // `anyhow`'s downcasts: whatever the engine reported early still exits
+    // as what it is.
+    let error = error
+        .downcast_ref::<crate::engine::FailureReported>()
+        .map_or(error, |reported| &reported.0);
     if let Some(failure) = error.downcast_ref::<crate::docker::ContainerExitedNonZero>() {
         return failure.exit_code as u8;
     }
@@ -165,16 +172,23 @@ pub fn for_error(error: &anyhow::Error) -> u8 {
 /// - **Cleanup failed after a passing run** — reported by the engine's own
 ///   `Error:` line at the time, which names what was left behind and how to
 ///   remove it; a second `Error:` from `main` would say less, twice.
+/// - **The task failed to run once it had started** — a failed pull or
+///   build, a container that couldn't be created or started, a dependency
+///   that never became ready: reported by the engine's own `Error:` line the
+///   moment it happened, before cleanup ([#334](https://github.com/or1can/ratect/issues/334)),
+///   as a [`crate::engine::FailureReported`].
 ///
 /// Every other failure — a config that doesn't load, an unknown task, a
-/// failed pull or build, a dependency that never became ready — is reported
-/// by nothing else, so `main` prints it, in every style and whatever
-/// `RUST_LOG` says. Downcasts through `anyhow` context like [`for_error`].
+/// prerequisite list that names a task that doesn't exist, anything else
+/// before a task starts — is reported by nothing else, so `main` prints it,
+/// in every style and whatever `RUST_LOG` says. Downcasts through `anyhow`
+/// context like [`for_error`].
 pub fn already_reported(error: &anyhow::Error) -> bool {
     error.is::<crate::docker::ContainerExitedNonZero>()
         || error.is::<crate::interrupt::TaskInterrupted>()
         || error.is::<crate::docker::StdoutClosed>()
         || error.is::<crate::engine::CleanupFailed>()
+        || error.is::<crate::engine::FailureReported>()
 }
 
 /// The process exit code for a failed invocation: [`for_error`]'s for a run;

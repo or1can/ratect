@@ -278,7 +278,10 @@ exit code, and outside `quiet` the `finished with exit code N` summary line, say
 and the container's own output says why), and a run ended by a signal or a closed
 stdout (rule 2 — the notice said so when it happened). A cleanup failure is reported once, as it
 happens, by a line naming what was left behind and the `docker` command that removes
-it.
+it. A failure to run a task that has started (an image that won't pull or build, a
+container that can't be created or started, a dependency that never becomes ready) is
+reported once too, when it happens — before the cleanup that follows it, as under
+Batect; any failure before a task starts is printed as the process exits.
 
 - Running with no task name, and none of `--list-tasks`, `--clean`, `--clean-cache` or
   `--upgrade`, is a command-line error, found before the config-variables file or the

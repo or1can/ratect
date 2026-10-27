@@ -37,7 +37,9 @@ prerequisites = ["compile", "test"]
 ```
 
 Running `ratect run ci` here runs `compile` then `test` to completion, same as above,
-then stops — there's no container of `ci`'s own left to run.
+then stops — there's no container of `ci`'s own left to run — saying `The task ci
+only defines prerequisite tasks, nothing more to do.` in every output style but
+`quiet`.
 
 ## Per-task steps
 

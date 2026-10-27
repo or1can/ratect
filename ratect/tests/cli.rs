@@ -304,6 +304,36 @@ fn tasks_list_refuses_a_malformed_expression_located_in_the_file() {
     );
 }
 
+/// A run that fails before any task starts — here, a config that doesn't
+/// load — reached no event sink, so `main` prints its `Error:` line, and
+/// exactly once (ratect#334).
+#[test]
+fn a_run_failing_before_its_task_starts_prints_its_error_once() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
+         image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
+         [tasks.build]\nrun = { container = \"app\" }\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["run", "build", "-o", "quiet"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("Error: ") && stderr.matches("Error:").count() == 1,
+        "{stderr}"
+    );
+}
+
 /// `tasks list` evaluates nothing, so its config-variable options are
 /// deprecated: still accepted, with a warning saying they do nothing — and
 /// the file one names, or an auto-discovered `ratect.local.toml`, is not
@@ -2526,6 +2556,79 @@ fn a_tasks_own_exit_code_prints_no_error_line_but_ratects_own_failure_does_via_d
     assert!(
         stderr.starts_with("Error: ") && stderr.contains("Failed to pull image"),
         "Ratect's own failure is printed whatever RUST_LOG says:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Error:").count(),
+        1,
+        "reported by the engine when it happened, and not again by main \
+         (ratect#334):\n{stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+/// Unix-only because it sends a signal.
+///
+/// `ratect run` ended by Ctrl+C under `-o quiet` and `RUST_LOG=off` prints
+/// the interrupt notice, then `Cleanup complete.`, and nothing else — no
+/// `Error: Interrupted` — and exits 130 (decisions/0017's interrupt
+/// sequence, ratect#369). That cleanup removed everything is
+/// `ratect-compat`'s signal tests' to prove; this proves `ratect`'s stderr.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn an_interrupted_run_ends_with_cleanup_complete_via_docker() {
+    use std::io::Read;
+    let _guard = serial_docker();
+    let filter = "label=eu.orican.ratect.project=ratect-exit-code-test";
+    let running = || {
+        let output = Command::new("docker")
+            .args(["ps", "-q", "--filter", filter])
+            .output()
+            .expect("failed to run docker ps");
+        !String::from_utf8_lossy(&output.stdout).trim().is_empty()
+    };
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(exit_code_fixture_path())
+        .args(["run", "waits", "-o", "quiet"])
+        .env("RUST_LOG", "off")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !running() {
+        assert!(Instant::now() < deadline, "the task never started");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let signalled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success());
+    let status = child.wait().expect("failed to wait for ratect");
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left, and \
+         Ctrl+C after that to stop cleaning up.\nCleanup complete.\n"
     );
 }
 

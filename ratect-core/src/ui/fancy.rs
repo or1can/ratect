@@ -587,6 +587,20 @@ impl EventSink for FancyEventLogger {
                 self.console
                     .println(&format!("Running {}...", self.console.bold(&task)));
             }
+            // In place of a task's `Running` line, so separated the same
+            // way; nothing live to draw, since nothing starts.
+            TaskEvent::PrerequisitesOnly { task } => {
+                let printed_a_task = state.printed_a_task;
+                *state = State {
+                    printed_a_task: true,
+                    ..State::default()
+                };
+                if printed_a_task {
+                    self.console.println("");
+                }
+                self.console
+                    .println(&super::nothing_more_to_do(&self.console, &task));
+            }
             TaskEvent::TaskGraphResolved { containers } => {
                 let mut containers = containers;
                 // Alphabetical, task container last — its line is the one
@@ -916,7 +930,7 @@ impl EventSink for FancyEventLogger {
             }
             // Nothing left live by now: `RunEnded` froze the startup block
             // and `CleanupFinished` cleared the countdown. The error itself
-            // reaches stderr through the normal error chain.
+            // was an `Error` event, before cleanup.
             TaskEvent::TaskFailed { .. } => {}
             // Interleaved-mode events — never posted under this logger's
             // (default) TaskContainerOnly streaming policy, and setup

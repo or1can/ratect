@@ -2510,6 +2510,7 @@ impl DockerClient {
     /// comment for why.
     async fn run_container_interactively(
         &self,
+        container_name: &str,
         container_id: &str,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
@@ -2526,14 +2527,14 @@ impl DockerClient {
             .docker
             .attach_container(container_id, Some(attach_options))
             .await
-            .context("Failed to attach to container")?;
+            .with_context(|| format!("Failed to attach to container '{container_name}'"))?;
 
         let _raw_mode = RawModeGuard::enable()?;
 
         self.docker
             .start_container(container_id, None)
             .await
-            .context("Failed to start container")?;
+            .with_context(|| format!("Failed to start container '{container_name}'"))?;
         tracing::debug!(container_id, "started container interactively");
         if let Some(started) = started {
             let _ = started.send(());
@@ -2597,7 +2598,10 @@ impl DockerClient {
         container_id: &str,
         started: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<i64> {
-        self.docker.start_container(container_id, None).await?;
+        self.docker
+            .start_container(container_id, None)
+            .await
+            .with_context(|| format!("Failed to start container '{container_name}'"))?;
         tracing::debug!(container_id, "started container");
         if let Some(started) = started {
             let _ = started.send(());
@@ -2660,7 +2664,7 @@ impl DockerClient {
             .docker
             .attach_container(container_id, Some(attach_options))
             .await
-            .context("Failed to attach to container")?;
+            .with_context(|| format!("Failed to attach to container '{container_name}'"))?;
 
         // Same as the interactive path's stdin pump — aborted once
         // output-following ends, not awaited to completion.
@@ -2946,7 +2950,16 @@ impl ContainerRuntime for DockerClient {
         // for the caller to remove — see `CreateContainerError`.
         let prepared: Result<()> = async {
             if let Some(mapping) = &shared.user_mapping {
-                self.apply_user_mapping(&container.id, mapping).await?;
+                // `apply_user_mapping`'s own detail names the Docker id; this
+                // names what the user wrote — the container and the field.
+                self.apply_user_mapping(&container.id, mapping)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to apply run_as_current_user to container '{}'",
+                            shared.name
+                        )
+                    })?;
             }
             if let ContainerNetwork::Task(network) = &shared.network {
                 self.join_network(
@@ -3186,7 +3199,7 @@ impl ContainerRuntime for DockerClient {
         let (interactive, use_tty) = self.task_container_io(spec);
 
         let exit_code = if use_tty {
-            self.run_container_interactively(container_id, started)
+            self.run_container_interactively(&shared.name, container_id, started)
                 .await
         } else if interactive {
             self.run_container_forwarding_stdin(&shared.name, container_id, started)

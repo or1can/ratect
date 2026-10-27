@@ -157,9 +157,9 @@ impl InterleavedEventLogger {
 
     /// Prints the deferred "Running `<task>`..." preamble if it hasn't
     /// already gone out — called both once the graph normally arrives
-    /// (`TaskGraphResolved`) and, as a fallback, on `TaskFailed`, so an
+    /// (`TaskGraphResolved`) and, as a fallback, on `RunEnded`, so an
     /// infrastructure failure early enough that the graph never resolved
-    /// still gets this task's own line onto stdout before the error.
+    /// still gets this task's own line out before the error.
     fn flush_preamble_if_pending(&self, state: &mut State) {
         if !state.preamble_pending {
             return;
@@ -219,6 +219,16 @@ impl EventSink for InterleavedEventLogger {
                     preamble_pending: true,
                     ..State::default()
                 };
+            }
+            // On this task's own prefix, never the last task's: it has no
+            // containers, so its own name is the whole column.
+            TaskEvent::PrerequisitesOnly { task } => {
+                *state = State {
+                    prefix_width: task.width(),
+                    task: Some(task.clone()),
+                    ..State::default()
+                };
+                self.print_for_task(&state, &super::nothing_more_to_do(&self.console, &task));
             }
             TaskEvent::TaskGraphResolved { containers } => {
                 state.task_container = containers
@@ -396,22 +406,23 @@ impl EventSink for InterleavedEventLogger {
                     &super::format_task_summary(&self.console, &task, exit_code, duration),
                 );
             }
-            // The error itself reaches stderr through the normal error
-            // chain — but an infrastructure failure early enough that
+            // Nothing to show of its own — `all` has no live display to
+            // stop — but an infrastructure failure early enough that
             // TaskGraphResolved never posted (e.g. `--use-network` naming a
             // nonexistent network) would otherwise leave the deferred
             // preamble (see TaskStarting/TaskGraphResolved above) stuck
-            // unprinted forever, so this task's prefix never appeared on
-            // stdout at all before the error. Flush it here if so —
+            // unprinted forever, so this task's prefix never appeared at
+            // all. Flushed here, the moment the run ends, so it still lands
+            // before the `Error` event that reports such a failure —
             // `prefix_width` may still be 0 (no graph arrived to size it
             // against), which just means no padding beyond the task name
             // itself, same as a single-container task would get anyway.
-            TaskEvent::TaskFailed { .. } => {
+            TaskEvent::RunEnded { .. } => {
                 self.flush_preamble_if_pending(&mut state);
             }
-            // Nothing to show: `all` has no live display to stop, and
+            // The error was an `Error` event, before cleanup; and
             // `CleanupStarting`'s line already said cleanup began.
-            TaskEvent::RunEnded { .. } | TaskEvent::CleanupFinished => {}
+            TaskEvent::TaskFailed { .. } | TaskEvent::CleanupFinished => {}
             // Printed on stderr before the match (`print_stderr_class`).
             TaskEvent::Error { .. } | TaskEvent::Warning { .. } | TaskEvent::Notice { .. } => {}
         }

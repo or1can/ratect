@@ -128,6 +128,9 @@ fn the_quiet_logger_prints_the_stderr_classes_and_no_progress() {
     logger.post(TaskEvent::Notice {
         message: "Left in place (--no-cleanup): app (abc)".into(),
     });
+    // Progress like any other, so silent here — ratect#364's recorded
+    // divergence from Batect, which prints it even in `quiet`.
+    logger.post(TaskEvent::PrerequisitesOnly { task: "all".into() });
     logger.post(TaskEvent::TaskFinished {
         task: "build".into(),
         exit_code: 0,

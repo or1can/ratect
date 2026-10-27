@@ -118,6 +118,15 @@ pub enum TaskEvent {
     TaskStarting {
         task: String,
     },
+    /// A task with no `run` of its own has had its prerequisites run, and
+    /// there is nothing more to do — posted in place of
+    /// [`TaskEvent::TaskStarting`], which such a task never posts, each time
+    /// one is reached: requested, or itself a prerequisite. Progress, so
+    /// `quiet` prints nothing for it (a divergence from Batect, which prints
+    /// it in every style).
+    PrerequisitesOnly {
+        task: String,
+    },
     /// The task's own container dependency graph, resolved and proven
     /// acyclic — posted right after [`TaskEvent::TaskStarting`], before any
     /// container work begins. Carries what a per-container progress display
@@ -310,9 +319,10 @@ pub enum TaskEvent {
     /// The task failed for an infrastructure reason (image build failed, a
     /// dependency never became healthy, ...) — the counterpart of
     /// [`TaskEvent::TaskFinished`], which covers the task's own command
-    /// completing (with any exit code). The error itself still propagates
-    /// to stderr through the normal error chain; this event only lets a
-    /// live display stop repainting cleanly before that error prints.
+    /// completing (with any exit code). Posted after cleanup, like
+    /// `TaskFinished`. It carries no error: that was reported when it
+    /// happened, before cleanup, as a [`TaskEvent::Error`] (or, for a
+    /// signal, by the interrupt notice).
     TaskFailed {
         task: String,
     },
@@ -792,8 +802,8 @@ impl EventSink for NullEventSink {
 /// "nothing" (decisions/0017): the interrupt notice and the `--no-cleanup*`
 /// reminder are exactly the lines a scripted, quiet run can't do without.
 /// Batect's quiet logger renders only task-failure events; a run's failure
-/// reaches stderr through the error chain here regardless of style, so the
-/// three classes are all this one renders.
+/// is one of those three classes here (an `Error` event, posted when it
+/// happens), so the three classes are all this one renders.
 pub struct QuietEventLogger {
     stderr: Console,
 }
@@ -1051,6 +1061,15 @@ impl OnceFlag {
     pub(crate) fn reset(&mut self) {
         self.0 = false;
     }
+}
+
+/// What every non-quiet style prints for [`TaskEvent::PrerequisitesOnly`]:
+/// Batect's own sentence, the task's name in bold.
+pub(crate) fn nothing_more_to_do(console: &Console, task: &str) -> String {
+    format!(
+        "The task {} only defines prerequisite tasks, nothing more to do.",
+        console.bold(task)
+    )
 }
 
 /// The task summary line every output mode ends a task with —

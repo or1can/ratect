@@ -305,3 +305,28 @@ fn task_finished_colors_exit_code_by_outcome() {
              lint finished with exit code \x1b[31m3\x1b[0m in 1m 1.0s.\n"
     );
 }
+
+/// A prerequisites-only task's line, Batect's words with its name in bold,
+/// separated from the task before it as a task's own `Running` line is
+/// (ratect#364).
+#[test]
+fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
+    let (logger, buffer) = logger();
+    logger.post(TaskEvent::TaskStarting {
+        task: "build".into(),
+    });
+    logger.post(TaskEvent::PrerequisitesOnly { task: "all".into() });
+    assert_eq!(
+        buffer.contents(),
+        "Running build...\n\
+         \n\
+         The task all only defines prerequisite tasks, nothing more to do.\n"
+    );
+
+    let (logger, buffer) = colored_logger();
+    logger.post(TaskEvent::PrerequisitesOnly { task: "all".into() });
+    assert_eq!(
+        buffer.contents(),
+        "The task \x1b[1mall\x1b[0m only defines prerequisite tasks, nothing more to do.\n"
+    );
+}

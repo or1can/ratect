@@ -37,8 +37,9 @@ both binaries, whatever `RUST_LOG` is set to: an error (`Error: ` in bold red,
 then the message), a warning (`Warning: ` in bold yellow — a deprecated flag,
 a proxy bound to loopback that containers can't reach, a credential helper
 that failed), and a notice (unmarked: the interrupt notice with its "press
-Ctrl+C again" instructions, and what `--no-cleanup*` left in place and how to
-remove it). Only the fourth kind, progress, is shaped by `-o`.
+Ctrl+C again" instructions, the `Cleanup complete.` that follows it once
+cleanup is over, and what `--no-cleanup*` left in place and how to remove it).
+Only the fourth kind, progress, is shaped by `-o`.
 `RUST_LOG` filters Ratect's internal diagnostics
 ([Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log)), which are a
 separate stream of breadcrumbs on stderr; nothing a user needs to act on is
@@ -46,9 +47,14 @@ behind it.
 
 A task's own non-zero exit is reported by the exit code and, outside `quiet`,
 by the summary line — never by an `Error:` line; a run ended by a signal is
-reported by the interrupt notice and its exit code, with no trailing
-`Error: Interrupted`. `Error:` is reserved for Ratect's own failures: it could
-not run the task, or could not clean up after it.
+reported by the interrupt notice and its exit code, and ends with `Cleanup
+complete.` (or the error saying what cleanup left behind) rather than a
+trailing `Error: Interrupted`. `Error:` is reserved for Ratect's own failures: it could
+not run the task, or could not clean up after it. A failure to run a task that
+has started — an image that won't pull, a dependency that never becomes
+healthy — is reported when it happens, before any cleanup line; a failure
+before any task starts, such as a config that doesn't load, is printed as the
+run exits.
 
 Each style is shown below from the *same* real run — `ratect run journey-test`
 against

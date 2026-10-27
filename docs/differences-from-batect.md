@@ -289,9 +289,10 @@ tables above:
   - **The notice names the signal and the next step**: a line on stderr such as
     `Interrupted; cleaning up. Press Ctrl+C again to force-remove what's left,
     and Ctrl+C after that to stop cleaning up.`, printed in every style whatever
-    `RUST_LOG` says, and no `Error: Interrupted` once cleanup ends — the exit
-    code says the run was signalled, and a cleanup that left something behind
-    is reported as the error it is, naming what was left and the `docker`
+    `RUST_LOG` says. Once cleanup ends, `Cleanup complete.` follows, and no
+    `Error: Interrupted` — the exit code says the run was signalled, and a
+    cleanup that left something behind is reported, in place of `Cleanup
+    complete.`, as the error it is, naming what was left and the `docker`
     command that removes it. Batect prints `Task cancelled: Interrupt received
     during execution.` and that it is waiting for outstanding operations, then
     its manual-cleanup commands.
@@ -372,11 +373,16 @@ tables above:
   whose output ends without one loses that last line.
 - **Failure messages are Ratect's own.** A task fails at the same step as under
   Batect — an image that won't pull or build, a task network that can't be
-  created, a dependency that doesn't become healthy, a failing setup command, a
-  dependency cycle — but Batect's headline and wording aren't reproduced:
-  `Failed to pull image X` and its `Caused by:` list, for example, rather than
-  `Could not pull image X.` and the daemon's message, and a failed build's
-  output under `Build output:` rather than `Output from Docker was:`. See
+  created, a container that can't be created, set up for
+  `run_as_current_user`, or started, a dependency that doesn't become healthy,
+  a failing setup command, a dependency cycle — but Batect's headline and
+  wording aren't reproduced: `Failed to pull image X` and its `Caused by:`
+  list, for example, rather than `Could not pull image X.` and the daemon's
+  message, a failed build's output under `Build output:` rather than `Output
+  from Docker was:`, and `Failed to start container 'X'` rather than `Could
+  not run container X.`. A `run_as_current_user` or network failure is
+  reported as itself, not, as Batect frames it, as a failure to create the
+  container; either way the container is named as configured. See
   [Load errors](#load-errors) for the cause chain. The message is an
   unprefixed `Error: …` line on stderr in every output style, `all` included,
   where Batect's `all` prints `<task> ! ` or `<container> ! ` lines on stdout;
@@ -449,6 +455,11 @@ tables above:
   the manual cleanup commands it prints. While that container is still attached
   to the network, Docker refuses, and that refusal is reported in the same
   `Cleanup failed:` error as the container's, which lists both as left behind.
+- **A task with only `prerequisites` says so in every style but `quiet`.**
+  Once its prerequisites have run, `The task <name> only defines prerequisite
+  tasks, nothing more to do.` is printed as under Batect, but not under
+  `-o quiet`, which prints only errors, warnings and notices; Batect prints it
+  in every style.
 - **What cleanup leaves is reported in one line, in every style.** A
   `--no-cleanup*` run ends with `Left in place (--no-cleanup): …`, and a cleanup
   that failed with `Error: Cleanup failed: …; left behind: …`, each naming the
