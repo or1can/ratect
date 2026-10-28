@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted — adopted immediately.
+Accepted — adopted immediately. The gate's mechanism has since changed:
+from `claims` 0.16 it is a git `pre-commit` hook, declared in this repo's
+`.pre-commit-config.yaml`, rather than the Claude Code `PreToolUse` hook
+this record describes, so it now gates a commit whatever makes it, in a
+clone where `pre-commit install` has been run. What follows is the
+decision as it was taken; `AGENTS.md`'s Tooling & CI section describes the
+current setup.
 
 ## Context
 

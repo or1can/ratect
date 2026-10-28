@@ -68,6 +68,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- The `claims` documentation gate runs as a git `pre-commit` hook, declared in `.pre-commit-config.yaml`; run `pre-commit install` once per clone to turn it on. No effect on the released binaries; contributor-tooling only.
 - `ratect-compat`: `--log-file` logs Ratect's own `debug` records unless `RUST_LOG` is set, including why the run failed. With `--log-file`, stderr keeps its colour.
 - Containers and the task network are created under Batect's Docker names, `<project>-<container>-<suffix>` and `<project>-network-<suffix>`, with one random six-character suffix per task run.
 - With `RUST_LOG=debug`, a run whose `-- ADDITIONAL_ARGS` replace the image's default `CMD`, because neither the task nor its container sets a `command`, logs the `CMD` replaced.

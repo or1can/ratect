@@ -5,6 +5,12 @@
     ":gitSignOff"
   ],
   "gitAuthor": "Ratect Renovate <renovate@ratect.invalid>",
+  // Renovate's pre-commit manager is opt-in. Without it, nothing proposes
+  // a bump of `.pre-commit-config.yaml`'s pinned `claims` release, and
+  // this repo's commit gate stays on that version indefinitely.
+  "pre-commit": {
+    "enabled": true
+  },
   // config:recommended extends `:ignoreModulesAndTests`, which sets ignorePaths
   // to ["**/node_modules/**", "**/bower_components/**", "**/vendor/**",
   // "**/examples/**", "**/__tests__/**", "**/test/**", "**/tests/**",
