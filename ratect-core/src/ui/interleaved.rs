@@ -414,11 +414,17 @@ impl EventSink for InterleavedEventLogger {
                     self.print_for_task(&state, "Cleaning up...");
                 }
             }
+            TaskEvent::ContainerStopped { container } => {
+                self.print_for_container(&state, &container, "Container stopped.");
+            }
             TaskEvent::ContainerRemoved { container } => {
                 self.print_for_container(&state, &container, "Container removed.");
             }
             TaskEvent::RemovingNetwork => {
                 self.print_for_task(&state, "Removing task network...");
+            }
+            TaskEvent::NetworkRemoved => {
+                self.print_for_task(&state, "Task network removed.");
             }
             TaskEvent::TaskFinished {
                 task,

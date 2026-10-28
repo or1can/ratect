@@ -2275,6 +2275,38 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
         stdout.contains("ping-sidecars | Cleaning up..."),
         "missing cleanup line:\n{stdout}"
     );
+    // Each container's stop then removal on its own prefix, the network's on
+    // the task's. Independent containers stop concurrently, so only each
+    // pair's own order is fixed.
+    let position = |line: &str| {
+        stdout
+            .lines()
+            .position(|candidate| candidate == line)
+            .unwrap_or_else(|| panic!("missing {line:?}:\n{stdout}"))
+    };
+    for (first, then) in [
+        (
+            "app           | Container stopped.",
+            "app           | Container removed.",
+        ),
+        (
+            "database      | Container stopped.",
+            "database      | Container removed.",
+        ),
+        (
+            "cache         | Container stopped.",
+            "cache         | Container removed.",
+        ),
+        (
+            "ping-sidecars | Removing task network...",
+            "ping-sidecars | Task network removed.",
+        ),
+    ] {
+        assert!(
+            position(first) < position(then),
+            "{first:?} after {then:?}:\n{stdout}"
+        );
+    }
     assert!(
         stdout.contains("ping-sidecars | ping-sidecars finished with exit code 0 in "),
         "missing summary line:\n{stdout}"

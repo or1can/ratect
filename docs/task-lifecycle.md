@@ -113,6 +113,9 @@ after every container that depends on it, so a dependent shutting down can still
 what it depends on. A dependency whose dependent's stop failed is still stopped.
 Containers with nothing left depending on them are stopped at the same time, so
 independent dependencies take one grace period between them, not one each.
+Under [`-o all`](output-styles.md#all) each step is reported as it happens: `Container
+stopped.` (for a container the run started) then `Container removed.` on each container's
+own prefix, and `Removing task network...` then `Task network removed.` on the task's.
 
 An image build that hasn't finished when the run ends — because of a termination signal,
 or because another container failed — is cancelled before anything is removed, and

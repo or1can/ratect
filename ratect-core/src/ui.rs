@@ -298,8 +298,17 @@ pub enum TaskEvent {
     /// cleanup display stops and clears its countdown here, so nothing
     /// printed afterwards sits under a countdown for work that is over.
     CleanupFinished,
-    /// A container was stopped and removed during cleanup — a dependency,
-    /// or the task's own.
+    /// A container was stopped during cleanup and is about to be removed — a
+    /// dependency, or the task's own, whether it stopped now or had already
+    /// exited, as Batect reports it. Not posted for one created but never
+    /// started, nor for one whose stop the cleanup ladder's escalation rung
+    /// cut short; one whose stop finished just before that has posted it,
+    /// and its removal is then the forced one.
+    ContainerStopped {
+        container: String,
+    },
+    /// A container was removed during cleanup — a dependency, or the task's
+    /// own.
     ContainerRemoved {
         container: String,
     },
@@ -307,6 +316,9 @@ pub enum TaskEvent {
     /// step. Never posted under `--use-network` (Ratect didn't create that
     /// network, so it never removes it).
     RemovingNetwork,
+    /// The task's own network was removed — posted only after a
+    /// [`TaskEvent::RemovingNetwork`] whose removal succeeded.
+    NetworkRemoved,
     /// The task's run has ended — its command finished, a failure stopped
     /// it, or a signal did — and nothing more of its startup will happen.
     /// Posted the moment the run resolves, before cleanup and before any

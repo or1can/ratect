@@ -585,6 +585,7 @@ impl ResourceInventory for FakeRuntime {
         _container_id: &str,
         _stop_signal: Option<&str>,
         _stop_grace_period: Option<std::time::Duration>,
+        _stopped: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> anyhow::Result<()> {
         unimplemented!("doctor never removes a container")
     }

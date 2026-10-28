@@ -856,6 +856,7 @@ impl ratect_core::resources::ResourceInventory for RefusingInventory {
         container_id: &str,
         _stop_signal: Option<&str>,
         _stop_grace_period: Option<Duration>,
+        _stopped: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
         self.remove(container_id)
     }

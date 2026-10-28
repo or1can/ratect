@@ -1459,6 +1459,7 @@ impl ResourceInventory for FakeContainerRuntime {
         container_id: &str,
         stop_signal: Option<&str>,
         stop_grace_period: Option<std::time::Duration>,
+        stopped: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
         self.stop_options.lock().unwrap().insert(
             container_id.to_string(),
@@ -1488,6 +1489,9 @@ impl ResourceInventory for FakeContainerRuntime {
             .filter(|(stopping, _, _)| *stopping == name)
         {
             interrupt.record_signal(*signal);
+        }
+        if let Some(stopped) = stopped {
+            let _ = stopped.send(());
         }
         self.refuses_removal_of(container_id)?;
         self.push(format!("sidecar-stop:{container_id}"));
@@ -15621,14 +15625,21 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         // The task's own container is removed by the engine like any
         // other, and first — before the dependencies it was using.
         // `run_container` used to remove it silently, which is why this
-        // event didn't exist here before.
+        // event didn't exist here before. Each is stopped, then removed.
+        TaskEvent::ContainerStopped {
+            container: "build-env".into(),
+        },
         TaskEvent::ContainerRemoved {
             container: "build-env".into(),
+        },
+        TaskEvent::ContainerStopped {
+            container: "database".into(),
         },
         TaskEvent::ContainerRemoved {
             container: "database".into(),
         },
         TaskEvent::RemovingNetwork,
+        TaskEvent::NetworkRemoved,
         TaskEvent::CleanupFinished,
     ];
     assert_eq!(
@@ -17208,5 +17219,112 @@ async fn a_prerequisite_that_already_ran_is_not_named_as_skipped() {
         notices.last().map(String::as_str),
         Some("Interrupted; not starting task 'main'."),
         "{notices:?}"
+    );
+}
+
+/// What cleanup says it did follows what the daemon did (decisions/0017):
+/// a refused network removal posts no `NetworkRemoved`, a refused container
+/// removal leaves that container `ContainerStopped` but never
+/// `ContainerRemoved`, a container whose stop the escalation rung cut short
+/// posts no `ContainerStopped`, and nor does one created but never started.
+#[tokio::test]
+async fn cleanup_reports_only_the_steps_that_happened() {
+    let cleanup_events = |docker: FakeContainerRuntime, interrupt| async move {
+        let sink = RawEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_database_dependency(|_| {})),
+            docker,
+            Arc::new(sink.clone()),
+            interrupt,
+        );
+        let _ = engine.run_task("start", &[]).await;
+        let events = sink.0.lock().unwrap().clone();
+        events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    TaskEvent::ContainerStopped { .. }
+                        | TaskEvent::ContainerRemoved { .. }
+                        | TaskEvent::NetworkRemoved
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let stopped = |name: &str| TaskEvent::ContainerStopped {
+        container: name.into(),
+    };
+    let removed = |name: &str| TaskEvent::ContainerRemoved {
+        container: name.into(),
+    };
+
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().refusing_network_removal(),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            stopped("app"),
+            removed("app"),
+            stopped("database"),
+            removed("database")
+        ]
+    );
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().refusing_container_removal("sidecar-id-database"),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            stopped("app"),
+            removed("app"),
+            stopped("database"),
+            TaskEvent::NetworkRemoved
+        ]
+    );
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+    assert_eq!(
+        cleanup_events(docker, interrupt).await,
+        vec![
+            removed("app"),
+            removed("database"),
+            TaskEvent::NetworkRemoved
+        ]
+    );
+
+    // `database` never becomes healthy, so `app` is created but never
+    // started: it is removed, but was never stopped. `database` was.
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().with_unhealthy_container("database"),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            removed("app"),
+            stopped("database"),
+            removed("database"),
+            TaskEvent::NetworkRemoved
+        ]
+    );
+    // A task container whose start Docker refused was never started either.
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().failing_start_of_run("app"),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            removed("app"),
+            stopped("database"),
+            removed("database"),
+            TaskEvent::NetworkRemoved
+        ]
     );
 }

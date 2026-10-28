@@ -216,8 +216,10 @@ impl EventSink for SimpleEventLogger {
             | TaskEvent::ImageResolved { .. }
             | TaskEvent::ContainerCreating { .. }
             | TaskEvent::ContainerCreated { .. }
+            | TaskEvent::ContainerStopped { .. }
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork
+            | TaskEvent::NetworkRemoved
             | TaskEvent::RunEnded { .. }
             | TaskEvent::CleanupFinished
             | TaskEvent::ContainerOutput { .. }

@@ -428,6 +428,7 @@ fn task_level_lines_use_the_task_name_prefix() {
     logger.post(TaskEvent::CleanupStarting);
     logger.post(TaskEvent::CleanupStarting);
     logger.post(TaskEvent::RemovingNetwork);
+    logger.post(TaskEvent::NetworkRemoved);
     logger.post(TaskEvent::TaskFinished {
         task: "test".into(),
         exit_code: 0,
@@ -438,6 +439,7 @@ fn task_level_lines_use_the_task_name_prefix() {
         "test | Running test...\n\
              test | Cleaning up...\n\
              test | Removing task network...\n\
+             test | Task network removed.\n\
              test | test finished with exit code 0 in 2.1s.\n"
     );
 }
@@ -928,5 +930,49 @@ fn a_trailing_newline_is_a_prefix_only_line() {
         &buffer.contents()[before..],
         "app  | last\n\
          app  | \n"
+    );
+}
+
+/// Each cleanup step on the prefix it belongs to (decisions/0017): a
+/// container's stop and removal on its own, the network's on the task's.
+/// Batect prints only `Cleaning up...` and each container's `Container
+/// stopped.`.
+#[test]
+fn cleanup_reports_each_containers_stop_and_removal_and_the_networks() {
+    let (logger, buffer) = logger();
+    start_task(
+        &logger,
+        vec![
+            TaskContainerInfo {
+                is_task_container: true,
+                ..info("app", Some("app:1"), None)
+            },
+            info("cache", Some("redis:7"), None),
+            info("db", Some("postgres:15"), None),
+        ],
+    );
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::CleanupStarting);
+    for container in ["app", "cache", "db"] {
+        logger.post(TaskEvent::ContainerStopped {
+            container: container.into(),
+        });
+        logger.post(TaskEvent::ContainerRemoved {
+            container: container.into(),
+        });
+    }
+    logger.post(TaskEvent::RemovingNetwork);
+    logger.post(TaskEvent::NetworkRemoved);
+    assert_eq!(
+        &buffer.contents()[before..],
+        "test  | Cleaning up...\n\
+         app   | Container stopped.\n\
+         app   | Container removed.\n\
+         cache | Container stopped.\n\
+         cache | Container removed.\n\
+         db    | Container stopped.\n\
+         db    | Container removed.\n\
+         test  | Removing task network...\n\
+         test  | Task network removed.\n"
     );
 }

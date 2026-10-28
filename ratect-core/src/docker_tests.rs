@@ -2296,7 +2296,7 @@ async fn stop_and_remove_container_stops_before_it_removes() {
     let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
 
     client
-        .stop_and_remove_container("abc", None, None)
+        .stop_and_remove_container("abc", None, None, None)
         .await
         .unwrap();
 
@@ -2311,7 +2311,7 @@ async fn stop_and_remove_container_does_not_remove_after_a_failed_stop() {
     let (client, log) = client_for_recording_daemon(cleanup_route(|_| 500)).await;
 
     let err = client
-        .stop_and_remove_container("abc", None, None)
+        .stop_and_remove_container("abc", None, None, None)
         .await
         .unwrap_err();
 
@@ -2322,6 +2322,36 @@ async fn stop_and_remove_container_does_not_remove_after_a_failed_stop() {
     assert_eq!(requests_sent(&log), vec![stop_of("abc")]);
 }
 
+/// `stopped` is signaled once the stop succeeds — a 304 for a container
+/// already stopped included, as Docker treats it — and never when it fails.
+/// Whether the container was ever started is the engine's to know.
+#[tokio::test]
+async fn stop_and_remove_container_signals_stopped_only_after_a_successful_stop() {
+    let (client, _) = client_for_recording_daemon(cleanup_route(|_| 304)).await;
+    let (stopped, on_stopped) = tokio::sync::oneshot::channel();
+    client
+        .stop_and_remove_container("abc", None, None, Some(stopped))
+        .await
+        .unwrap();
+    assert!(on_stopped.await.is_ok());
+
+    let (client, _) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
+    let (stopped, on_stopped) = tokio::sync::oneshot::channel();
+    client
+        .stop_and_remove_container("abc", None, None, Some(stopped))
+        .await
+        .unwrap();
+    assert!(on_stopped.await.is_ok());
+
+    let (client, _) = client_for_recording_daemon(cleanup_route(|_| 500)).await;
+    let (stopped, on_stopped) = tokio::sync::oneshot::channel();
+    client
+        .stop_and_remove_container("abc", None, None, Some(stopped))
+        .await
+        .unwrap_err();
+    assert!(on_stopped.await.is_err());
+}
+
 /// Batect's U31 (ratect#310): stopping a container that's already gone is
 /// an error naming both the container and the daemon's own reason, and no
 /// removal follows.
@@ -2330,7 +2360,7 @@ async fn stop_and_remove_container_reports_a_missing_container_without_removing(
     let (client, log) = client_for_recording_daemon(cleanup_route(|_| 404)).await;
 
     let err = client
-        .stop_and_remove_container("abc", None, None)
+        .stop_and_remove_container("abc", None, None, None)
         .await
         .unwrap_err();
 
@@ -2348,7 +2378,7 @@ async fn stop_and_remove_container_removes_a_never_started_container() {
     let (client, log) = client_for_recording_daemon(cleanup_route(|_| 304)).await;
 
     client
-        .stop_and_remove_container("abc", None, None)
+        .stop_and_remove_container("abc", None, None, None)
         .await
         .unwrap();
 
@@ -2362,7 +2392,7 @@ async fn stop_and_remove_container_removes_forcibly_with_volumes() {
     let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
 
     client
-        .stop_and_remove_container("abc", None, None)
+        .stop_and_remove_container("abc", None, None, None)
         .await
         .unwrap();
 
@@ -2383,7 +2413,7 @@ async fn stop_and_remove_container_sends_no_stop_options_by_default() {
     let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
 
     client
-        .stop_and_remove_container("abc", None, None)
+        .stop_and_remove_container("abc", None, None, None)
         .await
         .unwrap();
 
@@ -2403,7 +2433,12 @@ async fn stop_and_remove_container_sends_the_signal_and_a_rounded_up_grace_perio
     let (client, log) = client_for_recording_daemon(cleanup_route(|_| 204)).await;
 
     client
-        .stop_and_remove_container("abc", Some("SIGINT"), Some(Duration::from_millis(500)))
+        .stop_and_remove_container(
+            "abc",
+            Some("SIGINT"),
+            Some(Duration::from_millis(500)),
+            None,
+        )
         .await
         .unwrap();
 
@@ -2426,11 +2461,11 @@ async fn stop_and_remove_container_gates_each_removal_on_its_own_stop() {
             .await;
 
     assert!(client
-        .stop_and_remove_container("first", None, None)
+        .stop_and_remove_container("first", None, None, None)
         .await
         .is_err());
     client
-        .stop_and_remove_container("second", None, None)
+        .stop_and_remove_container("second", None, None, None)
         .await
         .unwrap();
 

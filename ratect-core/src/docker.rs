@@ -3710,6 +3710,7 @@ impl ResourceInventory for DockerClient {
         container_id: &str,
         stop_signal: Option<&str>,
         stop_grace_period: Option<std::time::Duration>,
+        stopped: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
         // `None` when neither is set, so this call is byte-for-byte what it
         // was before ratect#112 — no default-flip for a container that
@@ -3733,6 +3734,9 @@ impl ResourceInventory for DockerClient {
             .stop_container(container_id, stop_options)
             .await
             .with_context(|| format!("Failed to stop container '{}'", container_id))?;
+        if let Some(stopped) = stopped {
+            let _ = stopped.send(());
+        }
         // The removal itself is the forced one: the container has just been
         // stopped, and `force` only means an exit that raced the stop is not
         // an error (see `remove_container_options`).
