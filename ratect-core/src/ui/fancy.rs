@@ -171,7 +171,7 @@ impl State {
         }
         for line in &mut self.lines {
             if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
-                remaining.remove(container);
+                remaining.retain(|dependency| dependency != container);
             }
         }
         self.ready.insert(container.to_string());
@@ -205,7 +205,7 @@ enum Stage {
     /// ready when the line started waiting, drained as each becomes ready
     /// (see [`State::mark_ready`]). Empty once nothing is left, which it
     /// may be from the start.
-    WaitingForDependencies(BTreeSet<String>),
+    WaitingForDependencies(Vec<String>),
     /// `DependencyStarting`.
     StartingContainer,
     /// `DependencyStarted` — waiting for the health verdict.
@@ -236,7 +236,7 @@ enum Stage {
 }
 
 impl ContainerLine {
-    fn description(&self) -> String {
+    fn description(&self, console: &Console) -> String {
         match &self.stage {
             Stage::Pending => match (&self.info.image, &self.info.build_tag) {
                 (Some(image), _) => format!("ready to pull image {image}"),
@@ -258,18 +258,15 @@ impl ContainerLine {
             Stage::WaitingForDependencies(remaining) if remaining.is_empty() => {
                 "waiting to start...".to_string()
             }
-            Stage::WaitingForDependencies(remaining) => {
-                let names: Vec<&str> = remaining.iter().map(String::as_str).collect();
-                format!(
-                    "waiting for {} {} to be ready...",
-                    if names.len() == 1 {
-                        "dependency"
-                    } else {
-                        "dependencies"
-                    },
-                    names.join(", ")
-                )
-            }
+            Stage::WaitingForDependencies(remaining) => format!(
+                "waiting for {} {} to be ready...",
+                if remaining.len() == 1 {
+                    "dependency"
+                } else {
+                    "dependencies"
+                },
+                names_list(console, remaining.iter())
+            ),
             Stage::StartingContainer => "starting container...".to_string(),
             Stage::WaitingToBecomeHealthy => {
                 "container started, waiting for it to become healthy...".to_string()
@@ -296,8 +293,19 @@ impl ContainerLine {
     }
 
     fn render(&self, console: &Console) -> String {
-        format!("{}: {}", console.bold(&self.info.name), self.description())
+        format!(
+            "{}: {}",
+            console.bold(&self.info.name),
+            self.description(console)
+        )
     }
+}
+
+/// `names` as Batect's `humanReadableList` gives them — `a`, `a and b`,
+/// `a, b and c` — each name bold and the separators not.
+fn names_list<'name>(console: &Console, names: impl Iterator<Item = &'name String>) -> String {
+    let names: Vec<String> = names.map(|name| console.bold(name)).collect();
+    crate::engine::human_readable_list(&names, "and")
 }
 
 /// `text` as one painted row of the live display, fitted to `width`: every
@@ -588,16 +596,11 @@ impl FancyEventLogger {
 
     fn cleanup_text(&self, state: &State) -> String {
         if !state.created_containers.is_empty() {
-            let names: Vec<&str> = state
-                .created_containers
-                .iter()
-                .map(String::as_str)
-                .collect();
+            let count = state.created_containers.len();
             format!(
-                "Cleaning up: {} container{} ({}) left to remove...",
-                names.len(),
-                if names.len() == 1 { "" } else { "s" },
-                names.join(", ")
+                "Cleaning up: {count} container{} ({}) left to remove...",
+                if count == 1 { "" } else { "s" },
+                names_list(&self.console, state.created_containers.iter())
             )
         } else if state.removing_network {
             "Cleaning up: removing task network...".to_string()

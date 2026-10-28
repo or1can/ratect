@@ -1021,7 +1021,7 @@ fn cleanup_line_counts_down_then_summary_replaces_it() {
     assert!(
         buffer
             .contents()
-            .ends_with("Cleaning up: 2 containers (app, db) left to remove...\n"),
+            .ends_with("Cleaning up: 2 containers (app and db) left to remove...\n"),
         "{:?}",
         buffer.contents()
     );
@@ -1544,7 +1544,7 @@ fn a_dependant_never_waits_for_a_dependency_already_ready() {
     });
     assert_eq!(
         last_frame(&buffer, 1),
-        ["z-app: waiting for dependencies dep-a, dep-c to be ready..."]
+        ["z-app: waiting for dependencies dep-a and dep-c to be ready..."]
     );
 
     let (logger, buffer) = three_dependencies(built(
@@ -1559,7 +1559,7 @@ fn a_dependant_never_waits_for_a_dependency_already_ready() {
     });
     assert_eq!(
         last_frame(&buffer, 1),
-        ["z-app: waiting for dependencies dep-b, dep-c to be ready..."]
+        ["z-app: waiting for dependencies dep-b and dep-c to be ready..."]
     );
 
     let (logger, buffer) = three_dependencies(app());
@@ -1571,7 +1571,7 @@ fn a_dependant_never_waits_for_a_dependency_already_ready() {
     });
     assert_eq!(
         last_frame(&buffer, 1),
-        ["z-app: waiting for dependencies dep-a, dep-b to be ready..."]
+        ["z-app: waiting for dependencies dep-a and dep-b to be ready..."]
     );
 }
 
@@ -1776,4 +1776,141 @@ fn an_overridden_image_is_the_one_named_and_tracked() {
         last_frame(&buffer, 1),
         ["app: pulling alpine:3.19: Downloading"]
     );
+}
+
+/// A logger like `logger_with_width`'s, but with colour on, for the tests
+/// that pin which text is bold.
+fn colored_logger(width: u16) -> (FancyEventLogger, SharedBuffer) {
+    let buffer = SharedBuffer::default();
+    (
+        FancyEventLogger {
+            console: Console::new(Box::new(buffer.clone()), true),
+            stderr: Console::new(Box::new(SharedBuffer::default()), true),
+            stderr_on_screen: true,
+            fixed_width: AtomicU16::new(width),
+            state: Mutex::new(State::default()),
+        },
+        buffer,
+    )
+}
+
+fn bold(text: &str) -> String {
+    format!("\x1b[1m{text}\x1b[0m")
+}
+
+/// Batect's `humanReadableList`: `a`, `a and b`, `a, b and c` — no Oxford
+/// comma — each name bold and the separators not.
+#[test]
+fn name_lists_are_joined_with_and_and_each_name_is_bold() {
+    let console = Console::new(Box::new(SharedBuffer::default()), false);
+    let list = |names: &[&str]| {
+        names_list(
+            &console,
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+                .iter(),
+        )
+    };
+    assert_eq!(list(&["a"]), "a");
+    assert_eq!(list(&["a", "b"]), "a and b");
+    assert_eq!(list(&["a", "b", "c"]), "a, b and c");
+    assert_eq!(list(&["a", "b", "c", "d"]), "a, b, c and d");
+
+    let colored = Console::new(Box::new(SharedBuffer::default()), true);
+    assert_eq!(
+        names_list(&colored, ["a".to_string(), "b".to_string()].iter()),
+        format!("{} and {}", bold("a"), bold("b"))
+    );
+}
+
+/// The cleanup countdown lists what is left sorted, joined with `and`, the
+/// names bold.
+#[test]
+fn the_cleanup_line_joins_its_names_with_and() {
+    let (logger, buffer) = colored_logger(120);
+    for container in ["db", "app", "cache"] {
+        logger.post(TaskEvent::ContainerCreated {
+            container: container.into(),
+        });
+    }
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    assert_eq!(
+        buffer.contents(),
+        format!(
+            "\nCleaning up: 3 containers ({}, {} and {}) left to remove...\n",
+            bold("app"),
+            bold("cache"),
+            bold("db")
+        )
+    );
+}
+
+/// The waiting list keeps the order the dependencies were declared in —
+/// as each becomes ready, too — joined with `and`, the names bold.
+#[test]
+fn the_waiting_list_is_in_declared_order_and_joined_with_and() {
+    let (logger, buffer) = colored_logger(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("dep-c", None, &[], false),
+            info("dep-a", None, &[], false),
+            info("dep-b", None, &[], false),
+            info("x-app", Some("app:1"), &["dep-c", "dep-a", "dep-b"], true),
+        ],
+    });
+    logger.post(TaskEvent::ImageResolved {
+        container: "x-app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: waiting for dependencies {}, {} and {} to be ready...",
+            bold("x-app"),
+            bold("dep-c"),
+            bold("dep-a"),
+            bold("dep-b")
+        )]
+    );
+    logger.post(healthy("dep-a"));
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: waiting for dependencies {} and {} to be ready...",
+            bold("x-app"),
+            bold("dep-c"),
+            bold("dep-b")
+        )]
+    );
+    logger.post(healthy("dep-c"));
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: waiting for dependency {} to be ready...",
+            bold("x-app"),
+            bold("dep-b")
+        )]
+    );
+}
+
+/// A clipped line with several bold names still ends its styling.
+#[test]
+fn a_clipped_line_of_bold_names_closes_its_style() {
+    let text = format!(
+        "{}: waiting for dependencies {}, {} and {} to be ready...",
+        bold("app"),
+        bold("first-dependency"),
+        bold("second"),
+        bold("third")
+    );
+    for width in 1..=display_width(&text) as u16 {
+        let clipped = clip_to_width(&text, Some(width));
+        let last = clipped.rfind('\x1b').map(|at| &clipped[at..]);
+        assert!(
+            last.is_none_or(|escape| escape.starts_with("\x1b[0m")),
+            "{clipped:?} at {width}"
+        );
+        assert!(display_width(&clipped) <= width as usize);
+    }
 }
