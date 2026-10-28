@@ -136,8 +136,10 @@ impl InterleavedEventLogger {
         // and break alignment with every other column.
         let padding = " ".repeat(state.prefix_width.saturating_sub(name.width()));
         let padded = format!("{name}{padding}");
+        // One span, one reset; the separator outside it, unstyled
+        // (decisions/0017) where Batect bolds and colours it too.
         let prefix = match color {
-            Some(color) => console.colored(color, &console.bold(&padded)),
+            Some(color) => console.bold_colored(color, &padded),
             None => console.bold(&padded),
         };
         console.println(&format!("{prefix} | {line}"));

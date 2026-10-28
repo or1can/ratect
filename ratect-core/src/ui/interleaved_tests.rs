@@ -546,9 +546,7 @@ fn no_prefix_is_ever_white_or_black() {
         buffer.contents()
     );
     assert!(
-        buffer
-            .contents()
-            .contains("\x1b[34m\x1b[1mdb  \x1b[0m\x1b[0m | hi\n"),
+        buffer.contents().contains("\x1b[1;34mdb  \x1b[0m | hi\n"),
         "{:?}",
         buffer.contents()
     );
@@ -557,6 +555,27 @@ fn no_prefix_is_ever_white_or_black() {
         "{:?}",
         buffer.contents()
     );
+}
+
+/// A container's prefix is one bold, coloured span with a single reset —
+/// Batect's styling minus the separator, which stays unstyled
+/// (decisions/0017: separators are never emphasised).
+#[test]
+fn a_prefix_is_one_styled_span_and_the_separator_is_plain() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::ContainerOutput {
+        container: "db".into(),
+        line: "hi".into(),
+    });
+    assert!(
+        buffer
+            .contents()
+            .ends_with("\n\x1b[1;34mdb  \x1b[0m | hi\n"),
+        "{:?}",
+        buffer.contents()
+    );
+    assert!(!buffer.contents().contains("\x1b[0m\x1b[0m"));
 }
 
 #[test]
