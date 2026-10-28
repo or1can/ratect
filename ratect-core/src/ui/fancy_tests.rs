@@ -1266,3 +1266,14 @@ fn a_pull_line_ignores_another_images_pull() {
         ]
     );
 }
+
+/// Batect's ELP-18: only the task container's output is streamed, straight
+/// to the console — no dependency's, and nothing posted as events.
+#[test]
+fn declares_the_task_container_only_io_policy() {
+    let (logger, _) = logger_with_width(120);
+    assert_eq!(
+        logger.container_io_streaming(),
+        super::super::ContainerIoStreaming::TaskContainerOnly
+    );
+}

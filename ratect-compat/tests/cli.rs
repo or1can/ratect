@@ -137,6 +137,10 @@ fn stream_routing_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stream-routing.yml")
 }
 
+fn fancy_streams_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fancy-streams.yml")
+}
+
 fn dependency_output_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dependency-output.yml")
 }
@@ -2211,6 +2215,101 @@ fn fancy_output_keeps_task_container_stderr_off_process_stderr_via_docker() {
         );
         assert!(!stderr.contains(line), "{line} reached stderr:\n{stderr}");
     }
+}
+
+/// Runs `fancy-streams.yml`'s `task` with fancy auto-selected — no `-o`, no
+/// `--no-color`, `TERM=xterm-256color`, stdout on a terminal — and stderr
+/// redirected to a file by `sh`, so the two streams can be told apart.
+/// Reads until the terminal shows `last`, then returns the exit status,
+/// what reached the terminal, and stderr.
+fn fancy_streams_run(task: &str, last: &str) -> (portable_pty::ExitStatus, String, String) {
+    let stderr_path = std::env::temp_dir().join(format!(
+        "ratect-fancy-streams-{task}-{}",
+        std::process::id()
+    ));
+    let mut cmd = CommandBuilder::new("sh");
+    cmd.arg("-c");
+    cmd.arg(r#"exec "$0" "$@" 2>"$RATECT_TEST_STDERR""#);
+    cmd.arg(env!("CARGO_BIN_EXE_ratect-compat"));
+    cmd.arg("-f");
+    cmd.arg(fancy_streams_config_path());
+    cmd.arg(task);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("RATECT_TEST_STDERR", &stderr_path);
+
+    let mut terminal = OnTerminal::spawn(cmd, 120);
+    terminal.read_until(last, Duration::from_secs(60));
+    let (status, output) = terminal.wait(Duration::from_secs(30));
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&stderr_path);
+    (status, output, stderr)
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and a local pseudo-terminal (see
+/// `fancy_output_renders_a_live_status_block_on_a_terminal_via_docker`).
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Batect's ELP-14 and ELP-18: under auto-selected fancy, the live block —
+/// the `Running` preamble, its repaints, the summary — and the task
+/// container's own output are all on stdout, and none of it on stderr.
+#[test]
+#[ignore]
+fn fancy_output_draws_its_block_and_task_output_on_stdout_only_via_docker() {
+    let (status, output, stderr) = fancy_streams_run("succeed", "finished with exit code");
+
+    assert!(
+        status.success(),
+        "{status:?}: {output:?}\nstderr:\n{stderr}"
+    );
+    for expected in [
+        "Running \x1b[1msucceed\x1b[0m...",
+        "\x1b[2K\x1b[1mapp\x1b[0m: ",
+        "fancy-task-output",
+        "finished with exit code",
+    ] {
+        assert!(
+            output.contains(expected),
+            "{expected:?} missing: {output:?}"
+        );
+    }
+    for unexpected in ["Running", "app", "fancy-task-output", "finished"] {
+        assert!(
+            !stderr.contains(unexpected),
+            "{unexpected:?} reached stderr:\n{stderr}"
+        );
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and a local pseudo-terminal. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// Batect's ELP-15: under auto-selected fancy, a failure's `Error:` line is
+/// on stderr and not on stdout, while the block is still drawn on stdout.
+/// The failure is infrastructure — a dependency's setup command — not a
+/// task exiting non-zero, which prints no `Error:` at all (ratect#454).
+/// Stderr is checked for containment only: what else is printed around the
+/// error is not this test's business.
+#[test]
+#[ignore]
+fn fancy_output_prints_a_failure_on_stderr_only_via_docker() {
+    let (status, output, stderr) = fancy_streams_run("fail-setup", "failed after");
+
+    assert_eq!(status.exit_code(), 125, "{output:?}\nstderr:\n{stderr}");
+    let error = "Setup command 'false' in container 'dep' exited with code 1";
+    assert!(
+        stderr.contains("Error: ") && stderr.contains(error),
+        "stderr:\n{stderr}"
+    );
+    assert!(
+        !output.contains(error),
+        "the error reached stdout: {output:?}"
+    );
+    assert!(
+        output.contains("\x1b[2K\x1b[1mdep\x1b[0m: "),
+        "the fancy block was not drawn: {output:?}"
+    );
 }
 
 /// Requires a running Docker daemon with network access to pull
