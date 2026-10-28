@@ -156,6 +156,9 @@ struct FakeContainerRuntime {
     build_cancel_hangs: Arc<Mutex<bool>>,
     // Makes `create_network` fail (see `failing_network_creation`).
     fail_network_creation: Arc<Mutex<bool>>,
+    // Makes `network_exists` fail rather than answer (see
+    // `failing_network_lookup`).
+    fail_network_lookup: Arc<Mutex<bool>>,
     // Same idea, for `exec_in_container` (keyed by command) and
     // `wait_for_container_healthy` (keyed by container id) — used to
     // prove `--max-parallelism` serializes setup-command execution but
@@ -290,6 +293,7 @@ impl Default for FakeContainerRuntime {
             fail_build_cancel: Default::default(),
             build_cancel_hangs: Default::default(),
             fail_network_creation: Default::default(),
+            fail_network_lookup: Default::default(),
             exec_delays: Default::default(),
             health_check_delays: Default::default(),
             run_delays: Default::default(),
@@ -515,6 +519,13 @@ impl FakeContainerRuntime {
     /// pool would.
     fn failing_network_creation(self) -> Self {
         *self.fail_network_creation.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `network_exists` fail — the lookup itself, not a network
+    /// that isn't there (`without_existing_network`) — after recording it.
+    fn failing_network_lookup(self) -> Self {
+        *self.fail_network_lookup.lock().unwrap() = true;
         self
     }
 
@@ -1091,6 +1102,9 @@ impl ContainerRuntime for FakeContainerRuntime {
 
     async fn network_exists(&self, name: &str) -> Result<bool> {
         self.push(format!("network-exists:{name}"));
+        if *self.fail_network_lookup.lock().unwrap() {
+            anyhow::bail!("Docker responded with status code 500: network inspect failed");
+        }
         Ok(*self.network_exists_result.lock().unwrap())
     }
 
@@ -9832,6 +9846,151 @@ async fn a_failed_network_creation_attempts_no_pull_or_build() {
     assert!(
         image_work.is_empty(),
         "no image should be pulled or built once the network has failed: {image_work:?}"
+    );
+}
+
+/// `app`, pulled, depends on `dep`, built: a run that pulls, builds,
+/// creates, starts and runs, so where the network sits among them is
+/// observable.
+fn config_with_a_pulled_task_container_and_a_built_dependency() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "dep".to_string(),
+        container_with_build_directory("./dep", None),
+    );
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(vec!["dep".to_string()])),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("start".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// The task network is created before any image or container work: every
+/// local image lookup, pull, build, create, start and run follows it.
+#[tokio::test]
+async fn the_task_network_is_created_before_any_image_or_container_work() {
+    let docker = FakeContainerRuntime::default();
+    engine(
+        config_with_a_pulled_task_container_and_a_built_dependency(),
+        docker.clone(),
+    )
+    .run_task("start", &[])
+    .await
+    .unwrap();
+
+    let events = docker.events();
+    let network = event_index(&events, "network-create:");
+    for kind in [
+        "exists:",
+        "pull:",
+        "build:",
+        "create:",
+        "sidecar-start:",
+        "run:",
+    ] {
+        let first = event_index(&events, kind);
+        assert!(
+            network < first,
+            "the network must be created before any '{kind}': {events:?}"
+        );
+    }
+}
+
+/// What the sink receives for a task that fails before anything is
+/// created: no `CleanupStarting`, no `RemovingNetwork`.
+fn failed_before_anything_was_created(task: &str, error: &anyhow::Error) -> Vec<TaskEvent> {
+    vec![
+        TaskEvent::TaskStarting { task: task.into() },
+        TaskEvent::RunEnded { task: task.into() },
+        TaskEvent::Error {
+            message: format!("{error:?}"),
+        },
+        TaskEvent::TaskFailed { task: task.into() },
+    ]
+}
+
+/// A task network that can't be created fails the task — Batect's
+/// `TaskNetworkCreationFailedEvent` — and, since it was never created,
+/// nothing is cleaned up or removed, with cleanup after failure on or off:
+/// the network creation is the only daemon call made, and it recorded
+/// nothing.
+#[tokio::test]
+async fn a_failed_network_creation_fails_the_task_and_removes_nothing() {
+    for cleanup_after_failure in [true, false] {
+        let sink = RecordingEventSink::default();
+        let docker = FakeContainerRuntime::default().failing_network_creation();
+        let engine = TaskEngine::new(
+            project(config_with_a_pulled_task_container_and_a_built_dependency()),
+            docker.clone(),
+            Arc::new(sink.clone()),
+            crate::interrupt::Interrupt::new(),
+        )
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("non-overlapping IPv4 address pool"),
+            "the network creation must be what failed: {error:#}"
+        );
+        assert_eq!(
+            sink.events(),
+            failed_before_anything_was_created("start", &error),
+            "cleanup_after_failure: {cleanup_after_failure}"
+        );
+        assert_eq!(
+            docker.events(),
+            Vec::<String>::new(),
+            "cleanup_after_failure: {cleanup_after_failure}"
+        );
+    }
+}
+
+/// A `--use-network` network whose lookup fails — Batect's
+/// `CustomTaskNetworkCheckFailedEvent`, as opposed to one reported missing —
+/// fails the task: nothing is created or run, and the user's network is
+/// never removed.
+#[tokio::test]
+async fn a_failed_network_lookup_fails_the_task_and_removes_nothing() {
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default().failing_network_lookup();
+    let engine = TaskEngine::new(
+        project(config_with_a_pulled_task_container_and_a_built_dependency()),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        existing_network: Some("my-network".to_string()),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("network inspect failed"),
+        "{error:#}"
+    );
+    assert_eq!(
+        sink.events(),
+        failed_before_anything_was_created("start", &error)
+    );
+    assert_eq!(
+        docker.events(),
+        vec!["network-exists:my-network".to_string()]
     );
 }
 
