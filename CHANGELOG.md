@@ -103,6 +103,17 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `fancy` output with cleanup off: the summary line no longer runs onto the end of task output that lacks a trailing newline, and follows a blank line otherwise, as in Batect.
+- `fancy` output bolds the task's command, and the image a container pulls, as Batect does.
+- `fancy` output bolds the setup command it is running — and, for a `run_in` setup command (ratect only), the container it runs in — and a container with nothing left to wait for reads `ready to start`, as in Batect, rather than `waiting to start...`.
+- `fancy` output joins the names in its waiting and cleanup lines as Batect does (`a and b`, `a, b and c`), with each name bold, and lists what a container is waiting for in the order its dependencies were declared.
+- With `--override-image`, `fancy` and `-o all` output name the override image and show its pull, rather than the container's configured image or build.
+- `fancy` output shows `image built, ready to create container` once a container's image is built and `creating container...` while it is created, as Batect does.
+- `fancy` output: a dependency with setup commands shows `running setup commands...` when it becomes healthy, and `ready` only once they have all run — until then, the containers depending on it still show it as one they are waiting for.
+- `fancy` output: a container's "waiting for dependencies" list no longer names dependencies that are already ready.
+- `fancy` output lists a task's containers in dependency order — each after the containers it depends on, in the order they were declared, the task's own last — as Batect does, rather than alphabetically.
+- `fancy` output draws a multi-line command, setup command or build-output line on one row, each line break a space, so the live display no longer leaves stale rows behind.
+- `fancy` output: on a 1- or 2-column terminal a clipped line is cut to fit instead of wrapping, and a name cut short stays bold up to its `...`, as in Batect.
 - `-o all` prefixes every line of a multi-line command, setup command or image-build message, as in Batect, rather than only its first; each build line carries `Image build | `.
 - Under `run_as_current_user`, a `local` mount whose host path contains `:` has that whole path created when it's missing, as in Batect, not the part before the first `:`.
 - Under `run_as_current_user`, a mount point inside a `local` mount (or a directory-type `cache` mount) — another `local` mount, a `cache` mount or a `tmpfs` mount, at any depth — is created in that mount's host directory as the current user, as in Batect. Unlike Batect, a file or socket mounted there gets an empty file rather than a directory, and a mount point reached through a symlink leading out of that directory is left to the daemon.

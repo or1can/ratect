@@ -405,15 +405,25 @@ pub enum TaskEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskContainerInfo {
     pub name: String,
-    /// `Some` for an `image` container — the reference
-    /// [`TaskEvent::ImagePullProgress`] events carry.
+    /// `Some` for a container whose image is pulled — the reference
+    /// [`TaskEvent::ImagePullProgress`] events carry: its `image`, or the
+    /// `--override-image` that replaces it (or its `build_directory`).
     pub image: Option<String>,
-    /// `Some` for a `build_directory` container — the tag
+    /// `Some` for a `build_directory` container that is built — the tag
     /// (`<project>-<name>`) [`TaskEvent::ImageBuildProgress`] events carry.
+    /// `None` under `--override-image`, which pulls instead.
     pub build_tag: Option<String>,
-    /// The container's own direct dependencies, for "waiting for X to be
-    /// ready" descriptions.
+    /// The container's own direct dependencies, in the order they were
+    /// declared — for the task's own container, the task's `dependencies`
+    /// first — each once: what a display orders its lines by, and what it
+    /// shows a container waiting for. (Sorted instead for a container the
+    /// configuration doesn't declare, which a loaded one never has.)
     pub dependencies: Vec<String>,
+    /// Whether the container has `setup_commands` to run once it is
+    /// healthy — so whether becoming healthy makes it ready, or only
+    /// starts its setup commands, which then end in
+    /// [`TaskEvent::SetupCommandsCompleted`].
+    pub has_setup_commands: bool,
     /// `true` for the task's own container (the one
     /// [`TaskEvent::RunningTaskContainer`] is about, whose output streams
     /// to stdout).

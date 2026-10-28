@@ -35,9 +35,17 @@
 //!   the wrong place (ratect#73).
 //! - A reported width of 0 counts as unknown, so lines print unclipped;
 //!   Batect clips every line to nothing.
+//! - A pull line names the image (`ready to pull image <image>`, `pulling
+//!   image <image>...`), and a dependency past its readiness gate reads
+//!   `ready` where Batect's reads `running`.
+//! - Nothing is in the palette's white: Batect paints every line of the
+//!   block, the cleanup line and the summary white (SGR 37), which isn't
+//!   legible on every theme (decisions/0017).
+//! - A multi-line setup command is drawn on one row, each line break a
+//!   space, like the task's own command; Batect fails the task instead.
 
 use super::{Console, EventSink, TaskContainerInfo, TaskEvent};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthChar;
@@ -69,9 +77,8 @@ pub struct FancyEventLogger {
 
 #[derive(Default)]
 struct State {
-    /// One display line per container in the current task's graph —
-    /// alphabetical, task container last (a deterministic Ratect choice;
-    /// Batect's own order falls out of its graph's node set).
+    /// One display line per container in the current task's graph, in
+    /// Batect's order — see [`dependency_post_order`].
     lines: Vec<ContainerLine>,
     /// How many block lines are currently painted on screen (0 = nothing
     /// painted yet, so the first paint doesn't cursor-up) — exact only
@@ -106,6 +113,12 @@ struct State {
     /// counts `containersCreated - containersRemoved` with no special case
     /// for it. `BTreeSet` so the rendered list is stable.
     created_containers: BTreeSet<String>,
+    /// Every container in this task that has reached readiness so far,
+    /// whether or not anything was waiting on it yet — Batect's
+    /// `readyContainers`. What a line starting to wait leaves out (see
+    /// [`State::waiting_for`]), since a dependency can be ready before the
+    /// container depending on it has even resolved its image.
+    ready: BTreeSet<String>,
     /// The task's own network is being removed (the last cleanup step).
     removing_network: bool,
     /// The cleanup countdown is the line directly above the cursor, so the
@@ -122,10 +135,59 @@ struct State {
     /// painted — same purpose as `painted_width`, for the single cleanup
     /// line rather than the multi-line startup block.
     cleanup_width: Option<u16>,
+    /// The task container's raw output may be the last thing on screen,
+    /// not yet followed by a line of this logger's own — from its
+    /// `RunningTaskContainer` until the cleanup line's first paint. While
+    /// set, a summary line has to start with the separator that paint
+    /// would have written (see `repaint_cleanup`).
+    separator_owed: bool,
     /// Whether any task has rendered yet — a blank separator line goes
     /// between one task's output and the next's, matching the simple
     /// logger.
     printed_a_task: bool,
+}
+
+impl State {
+    /// What `info`'s line waits on once its image is ready: its
+    /// dependencies, less every one already ready — possibly none.
+    fn waiting_for(&self, info: &TaskContainerInfo) -> Stage {
+        Stage::WaitingForDependencies(
+            info.dependencies
+                .iter()
+                .filter(|dependency| !self.ready.contains(*dependency))
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// Moves every line `starts_waiting` picks on to waiting for its
+    /// dependencies.
+    fn start_waiting(&mut self, starts_waiting: impl Fn(&ContainerLine) -> bool) {
+        for index in 0..self.lines.len() {
+            if starts_waiting(&self.lines[index]) {
+                self.lines[index].stage = self.waiting_for(&self.lines[index].info);
+            }
+        }
+    }
+
+    /// `container` has reached readiness: its line shows it, it is no
+    /// longer waited on by any line, and none that starts waiting later
+    /// will wait on it.
+    fn mark_ready(&mut self, container: &str) {
+        if let Some(line) = self
+            .lines
+            .iter_mut()
+            .find(|line| line.info.name == container)
+        {
+            line.stage = Stage::Ready;
+        }
+        for line in &mut self.lines {
+            if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
+                remaining.retain(|dependency| dependency != container);
+            }
+        }
+        self.ready.insert(container.to_string());
+    }
 }
 
 /// One container's progress line: `<bold name>: <stage description>`.
@@ -145,15 +207,24 @@ enum Stage {
     Pulling(Option<String>),
     /// `ImageBuildStarting`/`ImageBuildProgress` — the latest build line.
     Building(Option<String>),
-    /// Image resolved; waiting on the named dependencies (drained as their
-    /// `ContainerBecameHealthy` events arrive — an approximation of full
-    /// readiness that at worst under-reports the wait by a dependency's own
-    /// setup-command time).
-    WaitingForDependencies(BTreeSet<String>),
+    /// `ImageBuildCompleted` — built, and the container not yet being
+    /// created.
+    ImageBuilt,
+    /// `ContainerCreating`.
+    Creating,
+    /// Image resolved — and, once `ContainerCreated` arrives, the container
+    /// created; waiting on the named dependencies — those not yet
+    /// ready when the line started waiting, drained as each becomes ready
+    /// (see [`State::mark_ready`]). Empty once nothing is left, which it
+    /// may be from the start.
+    WaitingForDependencies(Vec<String>),
     /// `DependencyStarting`.
     StartingContainer,
     /// `DependencyStarted` — waiting for the health verdict.
     WaitingToBecomeHealthy,
+    /// Healthy, with setup commands still to run — Batect's `running setup
+    /// commands...`, until the first `RunningSetupCommand`.
+    AboutToRunSetupCommands,
     /// `RunningSetupCommand`.
     RunningSetupCommand {
         command: String,
@@ -177,42 +248,42 @@ enum Stage {
 }
 
 impl ContainerLine {
-    fn description(&self) -> String {
+    fn description(&self, console: &Console) -> String {
         match &self.stage {
             Stage::Pending => match (&self.info.image, &self.info.build_tag) {
-                (Some(image), _) => format!("ready to pull image {image}"),
+                (Some(image), _) => format!("ready to pull image {}", console.bold(image)),
                 (None, Some(_)) => "ready to build image".to_string(),
                 (None, None) => "ready".to_string(),
             },
             Stage::Pulling(None) => match &self.info.image {
-                Some(image) => format!("pulling image {image}..."),
+                Some(image) => format!("pulling image {}...", console.bold(image)),
                 None => "pulling image...".to_string(),
             },
             Stage::Pulling(Some(status)) => match &self.info.image {
-                Some(image) => format!("pulling {image}: {status}"),
+                Some(image) => format!("pulling {}: {status}", console.bold(image)),
                 None => format!("pulling image: {status}"),
             },
             Stage::Building(None) => "building image...".to_string(),
             Stage::Building(Some(line)) => format!("building image: {line}"),
+            Stage::ImageBuilt => "image built, ready to create container".to_string(),
+            Stage::Creating => "creating container...".to_string(),
             Stage::WaitingForDependencies(remaining) if remaining.is_empty() => {
-                "waiting to start...".to_string()
+                "ready to start".to_string()
             }
-            Stage::WaitingForDependencies(remaining) => {
-                let names: Vec<&str> = remaining.iter().map(String::as_str).collect();
-                format!(
-                    "waiting for {} {} to be ready...",
-                    if names.len() == 1 {
-                        "dependency"
-                    } else {
-                        "dependencies"
-                    },
-                    names.join(", ")
-                )
-            }
+            Stage::WaitingForDependencies(remaining) => format!(
+                "waiting for {} {} to be ready...",
+                if remaining.len() == 1 {
+                    "dependency"
+                } else {
+                    "dependencies"
+                },
+                names_list(console, remaining.iter())
+            ),
             Stage::StartingContainer => "starting container...".to_string(),
             Stage::WaitingToBecomeHealthy => {
                 "container started, waiting for it to become healthy...".to_string()
             }
+            Stage::AboutToRunSetupCommands => "running setup commands...".to_string(),
             Stage::RunningSetupCommand {
                 command,
                 index,
@@ -221,34 +292,65 @@ impl ContainerLine {
             } => {
                 // This row already names the declaring container, so only
                 // a command running somewhere else names anything more.
-                let elsewhere = run_in
-                    .as_ref()
-                    .map_or(String::new(), |run_in| format!(" in {run_in}"));
-                format!("running setup command {command} ({index} of {total}){elsewhere}...")
+                let elsewhere = run_in.as_ref().map_or(String::new(), |run_in| {
+                    format!(" in {}", console.bold(run_in))
+                });
+                format!(
+                    "running setup command {} ({index} of {total}){elsewhere}...",
+                    console.bold(command)
+                )
             }
             Stage::Ready => "ready".to_string(),
-            Stage::RunningCommand(Some(command)) => format!("running {command}"),
+            Stage::RunningCommand(Some(command)) => format!("running {}", console.bold(command)),
             Stage::RunningCommand(None) => "running".to_string(),
             Stage::ExitedUnexpectedly(exit_code) => super::exited_unexpectedly(*exit_code),
         }
     }
 
     fn render(&self, console: &Console) -> String {
-        format!("{}: {}", console.bold(&self.info.name), self.description())
+        format!(
+            "{}: {}",
+            console.bold(&self.info.name),
+            self.description(console)
+        )
     }
 }
 
-/// Truncates `text` to `width` *display columns*, appending `...` when it
-/// had to cut — ANSI escape sequences (bold container names) count for
-/// zero, and a truncation that severed one gets a trailing reset so the
-/// styling can't bleed into the next line. Uses each character's real
-/// Unicode display width (wide CJK characters count as 2, zero-width/
-/// combining marks count as 0) rather than approximating with a plain
-/// character count — a plain count under-measures exactly the characters
-/// most likely to appear in a container name or streamed build output,
-/// which would otherwise let a rendered line wrap onto more terminal rows
-/// than this logger accounts for, desyncing its own repaint math (see
-/// [`display_width`]) from what's actually on screen.
+/// `names` as Batect's `humanReadableList` gives them — `a`, `a and b`,
+/// `a, b and c` — each name bold and the separators not.
+fn names_list<'name>(console: &Console, names: impl Iterator<Item = &'name String>) -> String {
+    let names: Vec<String> = names.map(|name| console.bold(name)).collect();
+    crate::engine::human_readable_list(&names, "and")
+}
+
+/// `text` as one painted row of the live display, fitted to `width`: every
+/// line break (`\n` or `\r`) a space, then clipped. Every row the display
+/// paints goes through here, so whatever a stage puts in its text — a
+/// multi-line command, build output — can never take a second terminal row
+/// that the repaint's row count doesn't know about.
+fn fit_row(text: &str, width: Option<u16>) -> String {
+    clip_to_width(&text.replace(['\n', '\r'], " "), width)
+}
+
+/// Fits `text` into `width` *display columns*, as Batect's
+/// `TextRun.limitToLength` does: unchanged if it fits (or `width` is
+/// unknown), otherwise cut and ended with `...`. ANSI escape sequences (the
+/// bold names) count for zero. The ellipsis takes the style of the last
+/// character kept — escapes between that character and the cut are written
+/// after the `...`, not before it, so a cut just after a bold name gives a
+/// bold `app...` — and below four columns it is all that is left, cut to fit
+/// (`..` at 2) in the style of the text's first character. Styling never
+/// bleeds past the end of the line: a reset follows unless the last escape
+/// written was already one.
+///
+/// Uses each character's real Unicode display width (wide CJK characters
+/// count as 2, zero-width/combining marks count as 0) rather than
+/// approximating with a plain character count — a plain count
+/// under-measures exactly the characters most likely to appear in a
+/// container name or streamed build output, which would otherwise let a
+/// rendered line wrap onto more terminal rows than this logger accounts
+/// for, desyncing its own repaint math (see [`display_width`]) from what's
+/// actually on screen.
 fn clip_to_width(text: &str, width: Option<u16>) -> String {
     let Some(width) = width else {
         return text.to_string();
@@ -259,32 +361,42 @@ fn clip_to_width(text: &str, width: Option<u16>) -> String {
     }
     let keep = width.saturating_sub(3);
     let mut out = String::new();
+    // Escapes seen since the last kept character: written before the next
+    // one if it fits, after the ellipsis if it doesn't.
+    let mut held = String::new();
+    let mut kept_any = false;
     let mut kept_width = 0;
-    let mut in_escape = false;
-    let mut saw_escape = false;
-    for c in text.chars() {
-        if in_escape {
-            out.push(c);
-            if c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-            continue;
-        }
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
         if c == '\x1b' {
-            in_escape = true;
-            saw_escape = true;
-            out.push(c);
+            held.push(c);
+            for c in chars.by_ref() {
+                held.push(c);
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
             continue;
         }
         let char_width = c.width().unwrap_or(0);
         if kept_width + char_width > keep {
             break;
         }
+        out.push_str(&std::mem::take(&mut held));
         out.push(c);
+        kept_any = true;
         kept_width += char_width;
     }
-    out.push_str("...");
-    if saw_escape {
+    if kept_any {
+        out.push_str("...");
+        out.push_str(&held);
+    } else {
+        // Nothing kept: the ellipsis is the first element's.
+        out.push_str(&held);
+        out.push_str(&"..."[..width.min(3)]);
+    }
+    let last_escape = out.rfind('\x1b').map(|at| &out[at..]);
+    if last_escape.is_some_and(|escape| !escape.starts_with("\x1b[0m")) {
         out.push_str("\x1b[0m");
     }
     out
@@ -308,6 +420,43 @@ fn display_width(text: &str) -> usize {
         }
     }
     width
+}
+
+/// `containers` in Batect's startup-block order, which falls out of its
+/// graph's insertion-ordered node map: depth first from the task container,
+/// each container's dependencies in the order they were declared, every
+/// container after what it depends on — so the task container comes last,
+/// and a shared dependency once, where it is first reached. A container the
+/// walk can't reach (none, from the engine) follows, by name.
+fn dependency_post_order(containers: Vec<TaskContainerInfo>) -> Vec<TaskContainerInfo> {
+    fn visit(
+        name: &str,
+        by_name: &mut BTreeMap<String, TaskContainerInfo>,
+        ordered: &mut Vec<TaskContainerInfo>,
+    ) {
+        let Some(info) = by_name.remove(name) else {
+            return;
+        };
+        for dependency in &info.dependencies {
+            visit(dependency, by_name, ordered);
+        }
+        ordered.push(info);
+    }
+
+    let root = containers
+        .iter()
+        .find(|info| info.is_task_container)
+        .map(|info| info.name.clone());
+    let mut by_name: BTreeMap<String, TaskContainerInfo> = containers
+        .into_iter()
+        .map(|info| (info.name.clone(), info))
+        .collect();
+    let mut ordered = Vec::with_capacity(by_name.len());
+    if let Some(root) = root {
+        visit(&root, &mut by_name, &mut ordered);
+    }
+    ordered.extend(by_name.into_values());
+    ordered
 }
 
 const CURSOR_UP_ONE_AND_CLEAR: &str = "\x1b[1A\r\x1b[2K";
@@ -422,7 +571,7 @@ impl FancyEventLogger {
         let mut rendered = String::new();
         for line in &state.lines {
             rendered.push_str("\r\x1b[2K");
-            rendered.push_str(&clip_to_width(&line.render(&self.console), width));
+            rendered.push_str(&fit_row(&line.render(&self.console), width));
             rendered.push('\n');
         }
         if state.last_rendered.as_deref() == Some(rendered.as_str()) {
@@ -462,16 +611,11 @@ impl FancyEventLogger {
 
     fn cleanup_text(&self, state: &State) -> String {
         if !state.created_containers.is_empty() {
-            let names: Vec<&str> = state
-                .created_containers
-                .iter()
-                .map(String::as_str)
-                .collect();
+            let count = state.created_containers.len();
             format!(
-                "Cleaning up: {} container{} ({}) left to remove...",
-                names.len(),
-                if names.len() == 1 { "" } else { "s" },
-                names.join(", ")
+                "Cleaning up: {count} container{} ({}) left to remove...",
+                if count == 1 { "" } else { "s" },
+                names_list(&self.console, state.created_containers.iter())
             )
         } else if state.removing_network {
             "Cleaning up: removing task network...".to_string()
@@ -505,10 +649,13 @@ impl FancyEventLogger {
             // (`docker.rs`, outside this logger's control) and may not end
             // in a newline, so painting cleanup directly would land on the
             // same row as that output — which the *next* repaint's
-            // cursor-up-and-clear would then erase, destroying it.
+            // cursor-up-and-clear would then erase, destroying it. With no
+            // cleanup to paint, the summary line writes it instead
+            // (`separator_owed`).
             frame.push('\n');
+            state.separator_owed = false;
         }
-        frame.push_str(&clip_to_width(&self.cleanup_text(state), width));
+        frame.push_str(&fit_row(&self.cleanup_text(state), width));
         frame.push('\n');
         state.cleanup_shown = true;
         state.cleanup_width = width;
@@ -527,6 +674,17 @@ impl FancyEventLogger {
                 self.console.println("");
             }
             state.cleanup_shown = false;
+        }
+    }
+
+    /// Ends the task container's output with the separator the cleanup
+    /// line would have, when no cleanup line was painted after it — cleanup
+    /// was off — so a summary never runs onto that output's last row.
+    /// Batect gets the same blank line by painting a cleanup line anyway,
+    /// which then says containers are left to remove when none will be.
+    fn pay_separator(&self, state: &mut State) {
+        if std::mem::take(&mut state.separator_owed) {
+            self.console.println("");
         }
     }
 
@@ -602,13 +760,7 @@ impl EventSink for FancyEventLogger {
                     .println(&super::nothing_more_to_do(&self.console, &task));
             }
             TaskEvent::TaskGraphResolved { containers } => {
-                let mut containers = containers;
-                // Alphabetical, task container last — its line is the one
-                // the eye follows into the streamed output below the block.
-                containers.sort_by(|a, b| {
-                    (a.is_task_container, &a.name).cmp(&(b.is_task_container, &b.name))
-                });
-                state.lines = containers
+                state.lines = dependency_post_order(containers)
                     .into_iter()
                     .map(|info| ContainerLine {
                         info,
@@ -659,13 +811,7 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                for line in &mut state.lines {
-                    if line.info.image.as_deref() == Some(image.as_str()) {
-                        line.stage = Stage::WaitingForDependencies(
-                            line.info.dependencies.iter().cloned().collect(),
-                        );
-                    }
-                }
+                state.start_waiting(|line| line.info.image.as_deref() == Some(image.as_str()));
                 self.repaint_startup(&mut state);
             }
             TaskEvent::ImageBuildStarting { container } => {
@@ -693,9 +839,7 @@ impl EventSink for FancyEventLogger {
                     return;
                 }
                 if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::WaitingForDependencies(
-                        line.info.dependencies.iter().cloned().collect(),
-                    );
+                    line.stage = Stage::ImageBuilt;
                 }
                 self.repaint_startup(&mut state);
             }
@@ -703,25 +847,19 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    // Only advance a line still sitting at `Pending` — a
-                    // pull/build that actually happened this task already
-                    // moved it on via `ImagePullCompleted`/
-                    // `ImageBuildCompleted` (posted before this event, since
-                    // `resolve_image` awaits them first). This is purely the
-                    // fallback for when neither ever fired at all — an
-                    // already-local image under the default
-                    // `IfNotPresent` policy, or an image/build this
-                    // invocation already resolved for an earlier task —
-                    // without it the line would otherwise sit at "ready to
-                    // pull/build" for the container's entire dependency
-                    // wait, never showing what it's actually waiting on.
-                    if matches!(line.stage, Stage::Pending) {
-                        line.stage = Stage::WaitingForDependencies(
-                            line.info.dependencies.iter().cloned().collect(),
-                        );
-                    }
-                }
+                // Only advance a line still sitting at `Pending` — a
+                // pull/build that actually happened this task already moved
+                // it on via `ImagePullCompleted`/`ImageBuildCompleted`
+                // (posted before this event, since `resolve_image` awaits
+                // them first). This is purely the fallback for when neither
+                // ever fired at all — an already-local image under the
+                // default `IfNotPresent` policy, or an image/build this
+                // invocation already resolved for an earlier task — without
+                // it the line would sit at "ready to pull/build" until the
+                // container starts, never showing what it waits on.
+                state.start_waiting(|line| {
+                    line.info.name == container && matches!(line.stage, Stage::Pending)
+                });
                 self.repaint_startup(&mut state);
             }
             TaskEvent::DependencyStarting { container } => {
@@ -746,35 +884,23 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::Ready;
-                }
-                // The now-healthy container stops being waited on by
-                // anything else in the graph (see `WaitingForDependencies`'
-                // approximation note).
-                for line in &mut state.lines {
-                    if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
-                        remaining.remove(&container);
+                // Ready now only if there are no setup commands to run;
+                // otherwise `SetupCommandsCompleted` is what makes it so.
+                match Self::line_mut(&mut state, &container) {
+                    Some(line) if line.info.has_setup_commands => {
+                        line.stage = Stage::AboutToRunSetupCommands;
                     }
+                    _ => state.mark_ready(&container),
                 }
                 self.repaint_startup(&mut state);
             }
-            // A `run_to_completion` dependency's own terminal state — same
-            // treatment as `ContainerBecameHealthy` above (`Ready`, cleared
-            // from any other line's `WaitingForDependencies`), since it
-            // reaches "ready" by exiting rather than by a health check.
+            // A `run_to_completion` dependency reaches readiness by
+            // exiting rather than by a health check.
             TaskEvent::DependencyCompleted { container } => {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::Ready;
-                }
-                for line in &mut state.lines {
-                    if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
-                        remaining.remove(&container);
-                    }
-                }
+                state.mark_ready(&container);
                 self.repaint_startup(&mut state);
             }
             TaskEvent::RunningSetupCommand {
@@ -801,9 +927,7 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::Ready;
-                }
+                state.mark_ready(&container);
                 self.repaint_startup(&mut state);
             }
             TaskEvent::DependencyExitedUnexpectedly {
@@ -844,12 +968,25 @@ impl EventSink for FancyEventLogger {
                     }
                 }
             }
-            // The creation step has no stage of its own here yet — Batect's
-            // `creating container...` and `image built, ready to create
-            // container` are ratect#500's — so the line stays at whatever it
-            // was showing.
-            TaskEvent::ContainerCreating { .. } => {}
+            TaskEvent::ContainerCreating { container } => {
+                if !state.keep_updating_startup {
+                    return;
+                }
+                if let Some(line) = Self::line_mut(&mut state, &container) {
+                    line.stage = Stage::Creating;
+                }
+                self.repaint_startup(&mut state);
+            }
             TaskEvent::ContainerCreated { container } => {
+                // Created, the container waits only for its dependencies.
+                // Whatever stage the line is in: the engine creates a
+                // container before it starts it, so nothing later than
+                // `Creating` can be showing yet. Were a start ever posted
+                // before its create, this would move the line back.
+                if state.keep_updating_startup {
+                    state.start_waiting(|line| line.info.name == container);
+                    self.repaint_startup(&mut state);
+                }
                 // Counted from *created*, not from `RunningTaskContainer` or
                 // `DependencyStarted` — those are posted when a container's
                 // start begins, and a container that is created but never
@@ -864,6 +1001,7 @@ impl EventSink for FancyEventLogger {
                 state.created_containers.insert(container);
             }
             TaskEvent::RunningTaskContainer { container, command } => {
+                state.separator_owed = true;
                 if !state.keep_updating_startup {
                     return;
                 }
@@ -925,6 +1063,7 @@ impl EventSink for FancyEventLogger {
                 // last painted, otherwise leave it and print the summary
                 // on a fresh line below.
                 self.clear_cleanup_line(&mut state);
+                self.pay_separator(&mut state);
                 self.console.println(&super::format_task_summary(
                     &self.console,
                     &self.console.bold(&task),
@@ -936,6 +1075,7 @@ impl EventSink for FancyEventLogger {
             // place. The error itself was an `Error` event, before cleanup.
             TaskEvent::TaskFailed { task, duration } => {
                 self.clear_cleanup_line(&mut state);
+                self.pay_separator(&mut state);
                 self.console.println(&super::format_task_failed_summary(
                     &self.console,
                     &task,

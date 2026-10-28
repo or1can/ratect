@@ -256,6 +256,7 @@ fn info(name: &str, is_task_container: bool) -> super::super::TaskContainerInfo 
         build_tag: None,
         dependencies: Vec::new(),
         is_task_container,
+        has_setup_commands: false,
     }
 }
 

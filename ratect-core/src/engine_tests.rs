@@ -5985,6 +5985,46 @@ async fn an_external_health_checks_companion_reports_the_checked_containers_read
     }
 }
 
+/// An external health check's companion gets no line of its own, and the
+/// container depending on it waits only for the container it checks.
+#[tokio::test]
+async fn an_external_health_checks_companion_is_left_out_of_the_graph() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        COMPANION,
+        std::time::Duration::ZERO,
+        0,
+    );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_an_external_health_check()),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let mut graph: Vec<(String, Vec<String>)> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("the graph is posted")
+        .into_iter()
+        .map(|info| (info.name, info.dependencies))
+        .collect();
+    graph.sort();
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), names(&["database"])),
+            ("database".to_string(), vec![]),
+        ]
+    );
+}
+
 /// A failed external check is a failure of the container it checks, in that
 /// container's name — carrying what the check actually saw, which only the
 /// companion's own output knows, and naming the companion so it can still be
@@ -10107,6 +10147,43 @@ async fn max_parallelism_of_one_serializes_independent_container_starts() {
     );
 }
 
+/// Under the cap, a dependency is announced as starting only once it holds a
+/// slot, so a queued one never says so while it waits: the second
+/// `DependencyStarting` follows the first `DependencyStarted`, as Batect
+/// announces a container only when its run step starts.
+#[tokio::test(start_paused = true)]
+async fn max_parallelism_announces_a_start_only_once_it_holds_a_slot() {
+    let delay = std::time::Duration::from_millis(100);
+    let docker = FakeContainerRuntime::default()
+        .with_start_delay("dep-a", delay)
+        .with_start_delay("dep-b", delay);
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_two_independent_dependencies()),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        max_parallelism: Some(1),
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let starts: Vec<&'static str> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            TaskEvent::DependencyStarting { .. } => Some("starting"),
+            TaskEvent::DependencyStarted { .. } => Some("started"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts, ["starting", "started", "starting", "started"]);
+}
+
 #[tokio::test(start_paused = true)]
 async fn max_parallelism_of_one_serializes_independent_setup_command_execution() {
     let mut config = config_with_two_independent_dependencies();
@@ -10886,6 +10963,75 @@ async fn a_task_level_dependency_brings_its_own_dependencies() {
     assert!(
         sidecar_start_index(&events, "c") < sidecar_start_index(&events, "b"),
         "'b' waits for 'c': {events:?}"
+    );
+}
+
+/// The graph event carries each container's dependencies in the order they
+/// were declared — for the task's own container, the task-level ones first,
+/// each name once at its first position — for a display to order by, as
+/// Batect's insertion-ordered graph does. What starts, and when, is
+/// unaffected.
+#[tokio::test]
+async fn the_graph_carries_dependencies_in_declaration_order() {
+    let config = config_with_task_dependencies(
+        &["c", "a"],
+        &["b", "a"],
+        &[("a", &[]), ("b", &["c", "a"]), ("c", &[])],
+    );
+
+    let (graph, _) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("a".to_string(), vec![], false),
+            ("app".to_string(), names(&["b", "a", "c"]), true),
+            ("b".to_string(), names(&["c", "a"]), false),
+            ("c".to_string(), vec![], false),
+        ]
+    );
+}
+
+/// The graph event says which containers have setup commands, so a display
+/// can tell a container that is ready from one that is only healthy.
+#[tokio::test]
+async fn the_graph_says_which_containers_have_setup_commands() {
+    let mut config = config_with_containers(&["a", "b"], &[("a", &[]), ("b", &[])]);
+    config.containers.get_mut("a").unwrap().setup_commands =
+        Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    config.containers.get_mut("b").unwrap().setup_commands = Some(vec![]);
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+    engine.run_task("start", &[]).await.unwrap();
+
+    let mut graph: Vec<(String, bool)> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("the graph is posted")
+        .into_iter()
+        .map(|info| (info.name, info.has_setup_commands))
+        .collect();
+    graph.sort();
+    assert_eq!(
+        graph,
+        vec![
+            ("a".to_string(), true),
+            ("app".to_string(), false),
+            ("b".to_string(), false),
+        ]
     );
 }
 
@@ -12900,6 +13046,77 @@ async fn image_override_pulls_the_override_instead_of_the_configured_image() {
     assert!(
         !events.iter().any(|e| e.contains("alpine")),
         "the configured image should never be touched once overridden: {events:?}"
+    );
+}
+
+/// The graph event describes the image an overridden container will actually
+/// use — the override, pulled, even in place of a `build_directory` — so a
+/// display names and tracks that image; a container with no override keeps
+/// its own.
+#[tokio::test]
+async fn image_overrides_are_what_the_graph_reports() {
+    let mut built = container("unused-if-overridden", None);
+    built.image = None;
+    built.build_directory = Some(".".to_string());
+    let mut kept = container("postgres:15", None);
+    kept.image = None;
+    kept.build_directory = Some(".".to_string());
+    let mut containers = IndexMap::new();
+    containers.insert("built".to_string(), built);
+    containers.insert("kept".to_string(), kept);
+    containers.insert("pulled".to_string(), container("alpine:3.18", None));
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(names(&["built", "kept", "pulled"]))),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("test".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        image_overrides: HashMap::from([
+            ("built".to_string(), "busybox:1".to_string()),
+            ("pulled".to_string(), "alpine:3.19".to_string()),
+        ]),
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    let mut graph: Vec<(String, Option<String>, Option<String>)> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("the graph is posted")
+        .into_iter()
+        .map(|info| (info.name, info.image, info.build_tag))
+        .collect();
+    graph.sort();
+    let some = |text: &str| Some(text.to_string());
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), some("alpine:3.18"), None),
+            ("built".to_string(), some("busybox:1"), None),
+            ("kept".to_string(), None, some("demo-kept")),
+            ("pulled".to_string(), some("alpine:3.19"), None),
+        ]
     );
 }
 

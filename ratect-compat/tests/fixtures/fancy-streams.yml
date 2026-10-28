@@ -1,0 +1,26 @@
+# Which stream fancy output uses, with stderr kept apart from the terminal:
+# `succeed` proves the live block, the task's own output and the summary go
+# to stdout only; `fail-setup` fails on infrastructure — a dependency's setup
+# command — rather than a task exit, and proves its `Error:` line goes to
+# stderr only (ratect#510). Its own project name, so no other test's
+# label-filtered cleanup can reach these containers mid-run.
+project_name: ratect-fancy-streams-test
+containers:
+  dep:
+    image: alpine:3.18.2
+    command: sleep 300
+    setup_commands:
+      - command: "false"
+  app:
+    image: alpine:3.18.2
+tasks:
+  succeed:
+    run:
+      container: app
+      command: echo fancy-task-output
+  fail-setup:
+    run:
+      container: app
+      command: echo the task should never run
+    dependencies:
+      - dep

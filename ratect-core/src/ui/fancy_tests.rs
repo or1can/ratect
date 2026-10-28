@@ -48,6 +48,7 @@ fn info(name: &str, image: Option<&str>, deps: &[&str], is_task: bool) -> TaskCo
         build_tag: None,
         dependencies: deps.iter().map(|d| d.to_string()).collect(),
         is_task_container: is_task,
+        has_setup_commands: false,
     }
 }
 
@@ -59,10 +60,91 @@ fn clip_to_width_truncates_visible_chars_only() {
     // styled string gets a trailing reset.
     let styled = "\x1b[1mapp\x1b[0m: something quite long";
     assert_eq!(clip_to_width(styled, Some(30)), styled);
+    // Cut after the name's own reset, which already closed the style — so
+    // nothing more is appended.
+    assert_eq!(clip_to_width(styled, Some(10)), "\x1b[1mapp\x1b[0m: so...");
+}
+
+/// TRUN-18: a cut exactly at the end of a styled element puts the ellipsis
+/// inside it — the escapes after the last kept character follow the `...`.
+#[test]
+fn clip_to_width_styles_the_ellipsis_like_the_last_kept_character() {
     assert_eq!(
-        clip_to_width(styled, Some(10)),
-        "\x1b[1mapp\x1b[0m: so...\x1b[0m"
+        clip_to_width("\x1b[1mapp\x1b[0m: ready...", Some(6)),
+        "\x1b[1mapp...\x1b[0m"
     );
+}
+
+/// TRUN-17: a cut inside a styled element keeps the style on the ellipsis,
+/// closes it once, and drops every later element.
+#[test]
+fn clip_to_width_inside_a_styled_element_closes_it_after_the_ellipsis() {
+    assert_eq!(
+        clip_to_width("\x1b[1mlong-container-name\x1b[0m: ready", Some(10)),
+        "\x1b[1mlong-co...\x1b[0m"
+    );
+    // An element that opens after the cut doesn't style the ellipsis.
+    assert_eq!(
+        clip_to_width("ab\x1b[1mcd\x1b[0m", Some(4)),
+        "ab\x1b[1mcd\x1b[0m"
+    );
+    assert_eq!(clip_to_width("abc\x1b[1mde\x1b[0m", Some(4)), "a...");
+}
+
+/// TRUN-19, TRUN-20: at 3 columns or fewer only the ellipsis is left, cut to
+/// fit, in the formatting of the text's first character.
+#[test]
+fn clip_to_width_below_four_columns_is_the_ellipsis_alone() {
+    let styled = "\x1b[1mapp\x1b[0m: ready";
+    assert_eq!(clip_to_width(styled, Some(3)), "\x1b[1m...\x1b[0m");
+    assert_eq!(clip_to_width(styled, Some(2)), "\x1b[1m..\x1b[0m");
+    assert_eq!(clip_to_width(styled, Some(1)), "\x1b[1m.\x1b[0m");
+    let plain = "Cleaning up...";
+    assert_eq!(clip_to_width(plain, Some(3)), "...");
+    assert_eq!(clip_to_width(plain, Some(2)), "..");
+    assert_eq!(clip_to_width(plain, Some(1)), ".");
+    // Doesn't panic.
+    clip_to_width(styled, Some(0));
+}
+
+/// TRUN-13, TRUN-22, CON-25/TRUN-34/SPD-8: what fits — exactly, or because
+/// the width is unknown — comes back unchanged.
+#[test]
+fn clip_to_width_leaves_what_fits_unchanged() {
+    let styled = "\x1b[1mapp\x1b[0m: \x1b[1mready\x1b[0m";
+    assert_eq!(clip_to_width(styled, Some(10)), styled);
+    assert_eq!(clip_to_width("", Some(5)), "");
+    let long = format!("\x1b[1mapp\x1b[0m: {}", "x".repeat(10_000));
+    assert_eq!(clip_to_width(&long, None), long);
+}
+
+/// Whatever the width, the result never takes more columns than it.
+#[test]
+fn clip_to_width_never_exceeds_the_width() {
+    for text in [
+        "\x1b[1mapp\x1b[0m: waiting for \x1b[1mdb\x1b[0m and \x1b[1mcache\x1b[0m",
+        "Cleaning up: 2 containers left to remove...",
+        "数据库: ready",
+    ] {
+        for width in 1..=display_width(text) as u16 + 2 {
+            let clipped = clip_to_width(text, Some(width));
+            assert!(
+                display_width(&clipped) <= width as usize,
+                "{clipped:?} at {width}"
+            );
+        }
+    }
+}
+
+/// CPDL-14/CPD-1: the cleanup line is clipped like the startup block.
+#[test]
+fn the_cleanup_line_is_clipped_to_the_terminal_width() {
+    let (logger, buffer) = logger_with_width(20);
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    assert_eq!(buffer.contents(), "\nCleaning up: 1 co...\n");
 }
 
 #[test]
@@ -80,8 +162,22 @@ fn clip_to_width_uses_real_display_width_not_char_count() {
     assert_eq!(clip_to_width(wide, Some(8)), "数据...");
 }
 
+/// The block's lines in Batect's order: a depth-first post-order of the
+/// graph from the task container, each container's dependencies visited in
+/// the order they were declared — so every container comes after what it
+/// depends on, and the task container last.
+fn painted_order(containers: Vec<TaskContainerInfo>) -> Vec<String> {
+    let rows = containers.len();
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved { containers });
+    last_frame(&buffer, rows)
+        .into_iter()
+        .map(|row| row.split(':').next().unwrap().to_string())
+        .collect()
+}
+
 #[test]
-fn graph_resolution_paints_one_line_per_container_task_container_last() {
+fn graph_resolution_paints_one_line_per_container() {
     let (logger, buffer) = logger_with_width(120);
     logger.post(TaskEvent::TaskStarting {
         task: "test".into(),
@@ -97,6 +193,43 @@ fn graph_resolution_paints_one_line_per_container_task_container_last() {
         "Running test...\n\
              \r\x1b[2Kdb: ready to pull image postgres:15\n\
              \r\x1b[2Kapp: ready to pull image app:1\n"
+    );
+}
+
+#[test]
+fn the_block_follows_the_declared_order_of_dependencies() {
+    assert_eq!(
+        painted_order(vec![
+            info("alpha", None, &[], false),
+            info("app", None, &["zeta", "alpha"], true),
+            info("zeta", None, &[], false),
+        ]),
+        ["zeta", "alpha", "app"]
+    );
+}
+
+#[test]
+fn the_block_puts_each_container_after_what_it_depends_on() {
+    assert_eq!(
+        painted_order(vec![
+            info("alpha", None, &["zeta"], false),
+            info("app", None, &["alpha"], true),
+            info("zeta", None, &[], false),
+        ]),
+        ["zeta", "alpha", "app"]
+    );
+}
+
+#[test]
+fn the_block_paints_a_shared_dependency_once_where_first_reached() {
+    assert_eq!(
+        painted_order(vec![
+            info("app", None, &["b", "c"], true),
+            info("b", None, &["d"], false),
+            info("c", None, &["d"], false),
+            info("d", None, &[], false),
+        ]),
+        ["d", "b", "c", "app"]
     );
 }
 
@@ -664,16 +797,16 @@ fn dependency_becoming_healthy_unblocks_waiting_lines() {
     });
     let contents = buffer.contents();
     assert!(contents.contains("db: ready"), "{contents}");
-    assert!(contents.contains("app: waiting to start..."), "{contents}");
+    assert!(contents.contains("app: ready to start"), "{contents}");
 }
 
 #[test]
 fn image_resolved_advances_a_stalled_line_when_no_pull_or_build_ever_fired() {
     // Without a pull or build actually happening this task (an
-    // already-local image, or a resolution reused from an earlier
-    // task), a line would otherwise sit at "ready to pull image X" for
-    // its entire dependency wait — ImageResolved is the fallback signal
-    // that advances it anyway.
+    // already-local image, or a resolution reused from an earlier task), a
+    // line would otherwise sit at "ready to pull image X" until its
+    // container starts — ImageResolved is the fallback signal that advances
+    // it anyway.
     let (logger, buffer) = logger_with_width(120);
     logger.post(TaskEvent::TaskGraphResolved {
         containers: vec![info("app", Some("app:1"), &["db"], true)],
@@ -711,7 +844,7 @@ fn image_resolved_does_not_undo_progress_from_a_real_pull() {
     logger.post(TaskEvent::ContainerBecameHealthy {
         container: "db".into(),
     });
-    assert!(buffer.contents().contains("app: waiting to start..."));
+    assert!(buffer.contents().contains("app: ready to start"));
     let before = buffer.contents();
 
     // ImageResolved changes nothing visible here (app's line is
@@ -739,7 +872,7 @@ fn image_resolved_does_not_undo_progress_from_a_real_pull() {
     });
     let added = &buffer.contents()[before.len()..];
     assert!(
-        added.contains("app: waiting to start..."),
+        added.contains("app: ready to start"),
         "ImageResolved must not have reset app's already-satisfied dependencies: {added:?}"
     );
     assert!(
@@ -888,7 +1021,7 @@ fn cleanup_line_counts_down_then_summary_replaces_it() {
     assert!(
         buffer
             .contents()
-            .ends_with("Cleaning up: 2 containers (app, db) left to remove...\n"),
+            .ends_with("Cleaning up: 2 containers (app and db) left to remove...\n"),
         "{:?}",
         buffer.contents()
     );
@@ -1042,5 +1175,1016 @@ fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
     assert_eq!(
         buffer.contents(),
         "The task \x1b[1mall\x1b[0m only defines prerequisite tasks, nothing more to do.\n"
+    );
+}
+
+/// A `build_directory` container: no image to pull, a tag its build output
+/// is reported under.
+fn built(name: &str, tag: &str, deps: &[&str], is_task: bool) -> TaskContainerInfo {
+    TaskContainerInfo {
+        image: None,
+        build_tag: Some(tag.to_string()),
+        ..info(name, None, deps, is_task)
+    }
+}
+
+/// The text of the last `rows` rows painted — each row's whole content, with
+/// its clear-line prefix (and any cursor-up before it) stripped — so a test
+/// can assert every line of the current frame, not only the one an event
+/// was meant to change.
+fn last_frame(buffer: &SharedBuffer, rows: usize) -> Vec<String> {
+    let contents = buffer.contents();
+    let painted: Vec<&str> = contents.trim_end_matches('\n').split('\n').collect();
+    painted[painted.len() - rows..]
+        .iter()
+        .map(|row| match row.rfind("\x1b[2K") {
+            Some(at) => row[at + "\x1b[2K".len()..].to_string(),
+            None => row.to_string(),
+        })
+        .collect()
+}
+
+/// Two build containers and the task container that depends on both —
+/// alphabetical order and dependency order agree, task container last.
+fn two_builds_and_a_task() -> (FancyEventLogger, SharedBuffer) {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            built("build-a", "p-build-a", &[], false),
+            built("build-b", "p-build-b", &[], false),
+            info("task", Some("task:1"), &["build-a", "build-b"], true),
+        ],
+    });
+    (logger, buffer)
+}
+
+/// CSPLA-2, CSPLA-3, CSPLA-6: a build line is matched by its container's
+/// name when the build starts and by its tag for build output, and no other
+/// line moves.
+#[test]
+fn a_build_line_tracks_its_own_build_and_no_other() {
+    let (logger, buffer) = two_builds_and_a_task();
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "build-a: ready to build image",
+            "build-b: ready to build image",
+            "task: ready to pull image task:1",
+        ]
+    );
+
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "build-a".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "build-a: building image...",
+            "build-b: ready to build image",
+            "task: ready to pull image task:1",
+        ]
+    );
+
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-build-a".into(),
+        message: "Step 1/3 : FROM alpine".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "build-a: building image: Step 1/3 : FROM alpine",
+            "build-b: ready to build image",
+            "task: ready to pull image task:1",
+        ]
+    );
+}
+
+/// CSPLA-7, -10, -11, -16, -21, CSPLB-3, -6, -8, -10: every event about
+/// another container leaves a still-pending build line as it was.
+#[test]
+fn a_pending_build_line_ignores_every_other_containers_events() {
+    let (logger, buffer) = two_builds_and_a_task();
+    let other = || "build-b".to_string();
+    for event in [
+        TaskEvent::ImagePullStarting {
+            image: "task:1".into(),
+        },
+        TaskEvent::ImagePullCompleted {
+            image: "task:1".into(),
+        },
+        TaskEvent::ImageBuildCompleted { container: other() },
+        TaskEvent::ImageResolved { container: other() },
+        TaskEvent::DependencyStarting { container: other() },
+        TaskEvent::DependencyStarted { container: other() },
+        TaskEvent::ContainerBecameHealthy { container: other() },
+        TaskEvent::RunningSetupCommand {
+            container: other(),
+            command: "true".into(),
+            index: 1,
+            total: 1,
+            run_in: None,
+        },
+        TaskEvent::SetupCommandsCompleted { container: other() },
+    ] {
+        let description = format!("{event:?}");
+        logger.post(event);
+        assert_eq!(
+            last_frame(&buffer, 3)[0],
+            "build-a: ready to build image",
+            "after {description}"
+        );
+    }
+}
+
+/// CSPLB-14, CSPLB-2: a dependency's start, then the wait for its health.
+#[test]
+fn a_dependency_shows_its_start_then_its_health_wait() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    logger.post(TaskEvent::DependencyStarting {
+        container: "db".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "db: starting container...",
+            "app: ready to pull image app:1"
+        ]
+    );
+    logger.post(TaskEvent::DependencyStarted {
+        container: "db".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "db: container started, waiting for it to become healthy...",
+            "app: ready to pull image app:1"
+        ]
+    );
+}
+
+/// CSPLB-11: a task container with no command configured.
+#[test]
+fn a_task_container_with_no_command_shows_a_bare_running() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    assert!(
+        buffer.contents().ends_with("\r\x1b[2Kapp: running\n\n"),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
+/// FEL-7, FEL-8: a dependency starting repaints the block and adds nothing
+/// else — no blank line, no cleanup line.
+#[test]
+fn a_dependency_starting_adds_only_one_repaint() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    let before = buffer.contents();
+    logger.post(TaskEvent::DependencyStarting {
+        container: "db".into(),
+    });
+    assert_eq!(
+        &buffer.contents()[before.len()..],
+        "\x1b[2A\
+         \r\x1b[2Kdb: starting container...\n\
+         \r\x1b[2Kapp: ready to pull image app:1\n"
+    );
+}
+
+/// CSPLB-20, CSPLB-23: a pull line is matched by its own image only.
+#[test]
+fn a_pull_line_ignores_another_images_pull() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("a-dep", Some("image-a"), &[], false),
+            info("b-dep", Some("image-c"), &[], false),
+            info("task", Some("task:1"), &["a-dep", "b-dep"], true),
+        ],
+    });
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "image-a".into(),
+    });
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "image-b".into(),
+        message: "Downloading".into(),
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "image-b".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "a-dep: pulling image image-a...",
+            "b-dep: ready to pull image image-c",
+            "task: ready to pull image task:1",
+        ]
+    );
+}
+
+/// Batect's ELP-18: only the task container's output is streamed, straight
+/// to the console — no dependency's, and nothing posted as events.
+#[test]
+fn declares_the_task_container_only_io_policy() {
+    let (logger, _) = logger_with_width(120);
+    assert_eq!(
+        logger.container_io_streaming(),
+        super::super::ContainerIoStreaming::TaskContainerOnly
+    );
+}
+
+/// A multi-line command (a `|` block, trailing newline included) is drawn
+/// on one row, each line break a space, as Batect's `descriptionWhenRunning`
+/// draws it.
+#[test]
+fn a_multi_line_task_command_is_drawn_on_one_row() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("echo hello\n  world\n".into()),
+    });
+    assert!(
+        buffer.contents().ends_with(
+            "\x1b[1A\
+             \r\x1b[2Kapp: running echo hello   world \n\
+             \n"
+        ),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
+/// A multi-line setup command is drawn on one row too, so the next frame's
+/// cursor-up covers exactly the rows the last one painted. Batect fails the
+/// task here instead — a divergence (decisions/0013 rule 3).
+#[test]
+fn a_multi_line_setup_command_keeps_one_row_per_container() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["dep"], true),
+            info("dep", Some("dep:1"), &[], false),
+        ],
+    });
+    let setup = |command: &str, index| TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: command.into(),
+        index,
+        total: 2,
+        run_in: None,
+    };
+    logger.post(setup("echo\none", 1));
+    let first = buffer.contents();
+    logger.post(setup("echo two", 2));
+    let second = &buffer.contents()[first.len()..];
+
+    assert!(
+        first.ends_with(
+            "\x1b[2A\
+             \r\x1b[2Kdep: running setup command echo one (1 of 2)...\n\
+             \r\x1b[2Kapp: ready to pull image app:1\n"
+        ),
+        "{first:?}"
+    );
+    assert_eq!(
+        second,
+        "\x1b[2A\
+         \r\x1b[2Kdep: running setup command echo two (2 of 2)...\n\
+         \r\x1b[2Kapp: ready to pull image app:1\n"
+    );
+}
+
+/// The guard is the row's, not each stage's: build output and a carriage
+/// return are flattened alike, before the row is clipped.
+#[test]
+fn every_row_is_flattened_before_it_is_clipped() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![built("app", "p-app", &[], true)],
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-app".into(),
+        message: "line one\nline two\rline three".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: building image: line one line two line three"]
+    );
+
+    logger.fixed_width.store(24, Ordering::Relaxed);
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-app".into(),
+        message: "a\nb\nc\nd\ne\nf\ng\nh".into(),
+    });
+    assert_eq!(last_frame(&buffer, 1), ["app: building image: ..."]);
+}
+
+/// Three dependencies and the task container waiting on them, in an order
+/// alphabetical and post-order agree on.
+fn three_dependencies(app: TaskContainerInfo) -> (FancyEventLogger, SharedBuffer) {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("dep-a", Some("dep:1"), &[], false),
+            info("dep-b", Some("dep:1"), &[], false),
+            info("dep-c", Some("dep:1"), &[], false),
+            app,
+        ],
+    });
+    (logger, buffer)
+}
+
+fn healthy(container: &str) -> TaskEvent {
+    TaskEvent::ContainerBecameHealthy {
+        container: container.into(),
+    }
+}
+
+/// CSPLA-18/-20: a dependency that was ready before the dependant began
+/// waiting is not waited for — readiness is remembered, whichever order the
+/// events come in.
+#[test]
+fn a_dependant_never_waits_for_a_dependency_already_ready() {
+    let app = || info("z-app", Some("app:1"), &["dep-a", "dep-b", "dep-c"], true);
+
+    let (logger, buffer) = three_dependencies(app());
+    for dep in ["dep-a", "dep-b", "dep-c"] {
+        logger.post(healthy(dep));
+    }
+    logger.post(TaskEvent::ImageResolved {
+        container: "z-app".into(),
+    });
+    assert_eq!(last_frame(&buffer, 1), ["z-app: ready to start"]);
+
+    let (logger, buffer) = three_dependencies(app());
+    logger.post(healthy("dep-b"));
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["z-app: waiting for dependencies dep-a and dep-c to be ready..."]
+    );
+
+    let (logger, buffer) = three_dependencies(built(
+        "z-app",
+        "p-z-app",
+        &["dep-a", "dep-b", "dep-c"],
+        true,
+    ));
+    logger.post(healthy("dep-a"));
+    logger.post(TaskEvent::ContainerCreated {
+        container: "z-app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["z-app: waiting for dependencies dep-b and dep-c to be ready..."]
+    );
+
+    let (logger, buffer) = three_dependencies(app());
+    logger.post(TaskEvent::DependencyCompleted {
+        container: "dep-c".into(),
+    });
+    logger.post(TaskEvent::ImageResolved {
+        container: "z-app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["z-app: waiting for dependencies dep-a and dep-b to be ready..."]
+    );
+}
+
+/// Readiness belongs to one task: the next task's containers, even under the
+/// same names, are waited for again.
+#[test]
+fn readiness_does_not_carry_over_to_the_next_task() {
+    let (logger, buffer) = logger_with_width(120);
+    let graph = || TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("db:1"), &[], false),
+        ],
+    };
+    logger.post(TaskEvent::TaskStarting { task: "one".into() });
+    logger.post(graph());
+    logger.post(healthy("db"));
+    logger.post(TaskEvent::TaskStarting { task: "two".into() });
+    logger.post(graph());
+    logger.post(TaskEvent::ImageResolved {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: waiting for dependency db to be ready..."]
+    );
+}
+
+/// CSPLB-4: a dependency with setup commands is not ready when it becomes
+/// healthy — it shows it is about to run them, and is still waited on —
+/// and is shown ready once, after the last of them.
+#[test]
+fn a_dependency_with_setup_commands_is_ready_only_after_them() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["dep"], true),
+            TaskContainerInfo {
+                has_setup_commands: true,
+                ..info("dep", Some("dep:1"), &[], false)
+            },
+        ],
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    logger.post(healthy("dep"));
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "dep: running setup commands...",
+            "app: waiting for dependency dep to be ready...",
+        ]
+    );
+
+    for index in [1, 2] {
+        logger.post(TaskEvent::RunningSetupCommand {
+            container: "dep".into(),
+            command: format!("seed {index}"),
+            index,
+            total: 2,
+            run_in: None,
+        });
+    }
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "dep: running setup command seed 2 (2 of 2)...",
+            "app: waiting for dependency dep to be ready...",
+        ]
+    );
+
+    logger.post(TaskEvent::SetupCommandsCompleted {
+        container: "dep".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        ["dep: ready", "app: ready to start"]
+    );
+    assert_eq!(buffer.contents().matches("dep: ready\n").count(), 1);
+}
+
+/// A container whose health an `external_health_check` reports: its
+/// companion's `ContainerBecameHealthy` names the checked container, which
+/// is then treated like any other. The loader refuses setup commands on such
+/// a container today, but nothing here depends on that.
+#[test]
+fn an_externally_checked_container_with_setup_commands_runs_them_first() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            TaskContainerInfo {
+                has_setup_commands: true,
+                ..info("checked", Some("db:1"), &[], false)
+            },
+            info("app", Some("app:1"), &["checked"], true),
+        ],
+    });
+    logger.post(TaskEvent::DependencyStarted {
+        container: "checked".into(),
+    });
+    logger.post(healthy("checked"));
+    assert_eq!(
+        last_frame(&buffer, 2)[0],
+        "checked: running setup commands..."
+    );
+}
+
+/// Batect's states between an image and a container: built, then being
+/// created, then — once created — waiting for its dependencies.
+#[test]
+fn a_built_container_is_created_before_it_waits() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("db", Some("db:1"), &[], false),
+            built("app", "p-app", &["db"], true),
+        ],
+    });
+    logger.post(TaskEvent::ImageBuildCompleted {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: image built, ready to create container"]
+    );
+    logger.post(TaskEvent::ImageResolved {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: image built, ready to create container"]
+    );
+    logger.post(TaskEvent::ContainerCreating {
+        container: "app".into(),
+    });
+    assert_eq!(last_frame(&buffer, 1), ["app: creating container..."]);
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: waiting for dependency db to be ready..."]
+    );
+}
+
+/// A dependency is created like the task's own container, and one that
+/// became ready while its dependant was being created is not waited for.
+#[test]
+fn a_dependency_is_created_too_and_readiness_survives_creation() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("db", Some("db:1"), &[], false),
+            info("app", Some("app:1"), &["db"], true),
+        ],
+    });
+    logger.post(TaskEvent::ContainerCreating {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::ContainerCreating {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        ["db: creating container...", "app: creating container..."]
+    );
+    logger.post(healthy("db"));
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    assert_eq!(last_frame(&buffer, 2), ["db: ready", "app: ready to start"]);
+}
+
+/// Given the override the engine now reports as the line's image, the line
+/// names it and follows its pull.
+#[test]
+fn an_overridden_image_is_the_one_named_and_tracked() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("alpine:3.19"), &[], true)],
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: ready to pull image alpine:3.19"]
+    );
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "alpine:3.19".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: pulling image alpine:3.19..."]
+    );
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "alpine:3.19".into(),
+        message: "Downloading".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: pulling alpine:3.19: Downloading"]
+    );
+}
+
+/// A logger like `logger_with_width`'s, but with colour on, for the tests
+/// that pin which text is bold.
+fn colored_logger(width: u16) -> (FancyEventLogger, SharedBuffer) {
+    let buffer = SharedBuffer::default();
+    (
+        FancyEventLogger {
+            console: Console::new(Box::new(buffer.clone()), true),
+            stderr: Console::new(Box::new(SharedBuffer::default()), true),
+            stderr_on_screen: true,
+            fixed_width: AtomicU16::new(width),
+            state: Mutex::new(State::default()),
+        },
+        buffer,
+    )
+}
+
+fn bold(text: &str) -> String {
+    format!("\x1b[1m{text}\x1b[0m")
+}
+
+/// Batect's `humanReadableList`: `a`, `a and b`, `a, b and c` — no Oxford
+/// comma — each name bold and the separators not.
+#[test]
+fn name_lists_are_joined_with_and_and_each_name_is_bold() {
+    let console = Console::new(Box::new(SharedBuffer::default()), false);
+    let list = |names: &[&str]| {
+        names_list(
+            &console,
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+                .iter(),
+        )
+    };
+    assert_eq!(list(&["a"]), "a");
+    assert_eq!(list(&["a", "b"]), "a and b");
+    assert_eq!(list(&["a", "b", "c"]), "a, b and c");
+    assert_eq!(list(&["a", "b", "c", "d"]), "a, b, c and d");
+
+    let colored = Console::new(Box::new(SharedBuffer::default()), true);
+    assert_eq!(
+        names_list(&colored, ["a".to_string(), "b".to_string()].iter()),
+        format!("{} and {}", bold("a"), bold("b"))
+    );
+}
+
+/// The cleanup countdown lists what is left sorted, joined with `and`, the
+/// names bold.
+#[test]
+fn the_cleanup_line_joins_its_names_with_and() {
+    let (logger, buffer) = colored_logger(120);
+    for container in ["db", "app", "cache"] {
+        logger.post(TaskEvent::ContainerCreated {
+            container: container.into(),
+        });
+    }
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    assert_eq!(
+        buffer.contents(),
+        format!(
+            "\nCleaning up: 3 containers ({}, {} and {}) left to remove...\n",
+            bold("app"),
+            bold("cache"),
+            bold("db")
+        )
+    );
+}
+
+/// The waiting list keeps the order the dependencies were declared in —
+/// as each becomes ready, too — joined with `and`, the names bold.
+#[test]
+fn the_waiting_list_is_in_declared_order_and_joined_with_and() {
+    let (logger, buffer) = colored_logger(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("dep-c", None, &[], false),
+            info("dep-a", None, &[], false),
+            info("dep-b", None, &[], false),
+            info("x-app", Some("app:1"), &["dep-c", "dep-a", "dep-b"], true),
+        ],
+    });
+    logger.post(TaskEvent::ImageResolved {
+        container: "x-app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: waiting for dependencies {}, {} and {} to be ready...",
+            bold("x-app"),
+            bold("dep-c"),
+            bold("dep-a"),
+            bold("dep-b")
+        )]
+    );
+    logger.post(healthy("dep-a"));
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: waiting for dependencies {} and {} to be ready...",
+            bold("x-app"),
+            bold("dep-c"),
+            bold("dep-b")
+        )]
+    );
+    logger.post(healthy("dep-c"));
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: waiting for dependency {} to be ready...",
+            bold("x-app"),
+            bold("dep-b")
+        )]
+    );
+}
+
+/// A clipped line with several bold names still ends its styling.
+#[test]
+fn a_clipped_line_of_bold_names_closes_its_style() {
+    let text = format!(
+        "{}: waiting for dependencies {}, {} and {} to be ready...",
+        bold("app"),
+        bold("first-dependency"),
+        bold("second"),
+        bold("third")
+    );
+    for width in 1..=display_width(&text) as u16 {
+        let clipped = clip_to_width(&text, Some(width));
+        let last = clipped.rfind('\x1b').map(|at| &clipped[at..]);
+        assert!(
+            last.is_none_or(|escape| escape.starts_with("\x1b[0m")),
+            "{clipped:?} at {width}"
+        );
+        assert!(display_width(&clipped) <= width as usize);
+    }
+}
+
+/// The setup command is bold, as in Batect, and so is the container it runs
+/// in when that isn't the row's own.
+#[test]
+fn a_setup_command_is_bold() {
+    let (logger, buffer) = colored_logger(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("dep", None, &[], false)],
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "./seed.sh".into(),
+        index: 1,
+        total: 2,
+        run_in: None,
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: running setup command {} (1 of 2)...",
+            bold("dep"),
+            bold("./seed.sh")
+        )]
+    );
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "./seed.sh".into(),
+        index: 2,
+        total: 2,
+        run_in: Some("db".into()),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: running setup command {} (2 of 2) in {}...",
+            bold("dep"),
+            bold("./seed.sh"),
+            bold("db")
+        )]
+    );
+}
+
+/// What Batect's fancy bolds beyond names: the task's command and the image
+/// while it is pulled — and the image before that too, since it is the
+/// user's value (decisions/0017) — and never anything in the palette's
+/// white.
+#[test]
+fn the_command_and_a_pulling_image_are_bold() {
+    let (logger, buffer) = colored_logger(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: ready to pull image {}",
+            bold("app"),
+            bold("app:1")
+        )]
+    );
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "app:1".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: pulling image {}...",
+            bold("app"),
+            bold("app:1")
+        )]
+    );
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "app:1".into(),
+        message: "Downloading".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: pulling {}: Downloading",
+            bold("app"),
+            bold("app:1")
+        )]
+    );
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test".into()),
+    });
+    assert!(
+        buffer.contents().ends_with(&format!(
+            "\r\x1b[2K{}: running {}\n\n",
+            bold("app"),
+            bold("cargo test")
+        )),
+        "{:?}",
+        buffer.contents()
+    );
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(100),
+    });
+    assert!(
+        !buffer.contents().contains("\x1b[37m"),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
+/// A cut inside the bold command still closes its style, within the width.
+#[test]
+fn a_line_clipped_inside_a_bold_command_ends_its_style() {
+    let (logger, buffer) = colored_logger(20);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test --workspace".into()),
+    });
+    let row = &last_frame(&buffer, 1)[0];
+    assert_eq!(
+        row,
+        &format!("{}: running {}", bold("app"), "\x1b[1mcarg...\x1b[0m")
+    );
+    assert!(display_width(row) <= 20);
+}
+
+/// Runs a task container that writes `output` raw and then finishes with no
+/// cleanup — `--no-cleanup-after-success` — returning what was printed
+/// after the block froze.
+fn finished_without_cleanup(output: &str) -> String {
+    let (logger, mut buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    let frozen = buffer.contents();
+    use std::io::Write;
+    write!(buffer, "{output}").unwrap();
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(300),
+    });
+    buffer.contents()[frozen.len()..].to_string()
+}
+
+/// With cleanup off there is no cleanup line to separate the summary from
+/// the task's output, so a line break does instead: it ends output that
+/// didn't end its own line, and otherwise leaves Batect's blank line. No
+/// cleanup line flashes up, as Batect's does, saying something will be
+/// removed.
+#[test]
+fn the_summary_is_separated_from_task_output_without_cleanup() {
+    assert_eq!(
+        finished_without_cleanup("hello"),
+        "hello\nt finished with exit code 0 in 0.3s.\n"
+    );
+    assert_eq!(
+        finished_without_cleanup("hello\n"),
+        "hello\n\nt finished with exit code 0 in 0.3s.\n"
+    );
+}
+
+/// No task container ran, so there is no output to separate from.
+#[test]
+fn no_separator_when_the_task_container_never_ran() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    let before = buffer.contents();
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(300),
+    });
+    assert_eq!(
+        &buffer.contents()[before.len()..],
+        "t finished with exit code 0 in 0.3s.\n"
+    );
+}
+
+/// The failed summary is separated the same way.
+#[test]
+fn the_failed_summary_is_separated_from_task_output_without_cleanup() {
+    let (logger, mut buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    use std::io::Write;
+    write!(buffer, "partial").unwrap();
+    logger.post(TaskEvent::TaskFailed {
+        task: "t".into(),
+        duration: Duration::from_millis(300),
+    });
+    assert!(
+        buffer
+            .contents()
+            .ends_with("partial\nt failed after 0.3s.\n"),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
+/// With colour off, the lines that bold a command, an image or names carry
+/// no styling at all — the same text, byte for byte.
+#[test]
+fn with_colour_off_the_bold_lines_are_plain_text() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("dep", Some("dep:1"), &[], false),
+            info("db", None, &[], false),
+            info("app", Some("app:1"), &["dep", "db"], true),
+        ],
+    });
+    assert_eq!(last_frame(&buffer, 3)[0], "dep: ready to pull image dep:1");
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "dep:1".into(),
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "db".into(),
+        command: "./seed.sh".into(),
+        index: 1,
+        total: 1,
+        run_in: Some("dep".into()),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "dep: pulling image dep:1...",
+            "db: running setup command ./seed.sh (1 of 1) in dep...",
+            "app: waiting for dependencies dep and db to be ready...",
+        ]
+    );
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test".into()),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(100),
+    });
+    let contents = buffer.contents();
+    assert!(
+        contents.contains("\r\x1b[2Kapp: running cargo test\n"),
+        "{contents:?}"
+    );
+    assert!(
+        contents.ends_with("t finished with exit code 0 in 0.1s.\n"),
+        "{contents:?}"
+    );
+    assert!(
+        !contents.contains("\x1b[1m") && !contents.contains("\x1b[0m"),
+        "{contents:?}"
     );
 }

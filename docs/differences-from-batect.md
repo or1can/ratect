@@ -406,8 +406,10 @@ tables above:
   Batect's blank line before the error: the bold red `Error:` marker separates
   it, and under `quiet` a leading newline would be the first byte on stderr.
 - **No white text.** Batect paints its `simple` status lines, `all`'s
-  task-level prefix, and `all`'s inner `Setup command N | ` and
-  `Image build | ` labels, in the terminal palette's white (SGR 37) — light
+  task-level prefix, `all`'s inner `Setup command N | ` and
+  `Image build | ` labels, and every line `fancy` draws (the startup block,
+  the cleanup line, `Running <task>...` and the summary), in the terminal
+  palette's white (SGR 37) — light
   grey on a dark theme, near-invisible on a light one. Ratect's own lines are the
   terminal's default foreground, with bold for emphasis, and it never sets the
   palette's white or black
@@ -535,6 +537,22 @@ tables above:
   place on common terminals and corrupts the display. Ratect leaves the old
   block where it is and draws the new one below it, at the cost of that
   leftover block.
+- **`fancy` mode names the image it pulls, and calls a ready dependency
+  `ready`.** A container's line reads `ready to pull image <image>` and then
+  `pulling image <image>...`, where Batect's reads `ready to pull image` and
+  `pulling <image>...`. A dependency that has passed its readiness gate —
+  healthy, and its setup commands done — reads `ready`, where Batect's reads
+  `running`, which would fit a container that has started but isn't yet
+  healthy just as well.
+- **`fancy` mode shows no cleanup line when cleanup is off.** Under
+  `--no-cleanup` or `--no-cleanup-after-success`, Batect briefly shows
+  `Cleaning up: N containers (...) left to remove...` when the task's
+  container exits, though nothing will be removed. Ratect shows none.
+- **`fancy` mode draws a multi-line setup command on one row.** Each line
+  break in it is shown as a space, and the command runs as usual. Batect
+  can't draw it, and fails the task with an unexpected-exception error and
+  exit code 255 before the command runs — which a `|` block's trailing
+  newline is enough to cause, even for a one-line command.
 - **`fancy` mode treats a reported terminal width of 0 as unknown.** Some
   pseudo-terminals report it (`script`'s, some CI runners'), and lines are
   then printed unclipped; Batect clips every line to nothing.
