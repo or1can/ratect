@@ -17,6 +17,7 @@ use crate::cache::VolumeStore;
 use crate::config::{
     BuildSecret, Config, Container, Dialect, NetworkMode, PortMapping, Task, TaskRun,
 };
+use crate::container_spec::BindMount;
 use crate::resources::ResourceInventory;
 use crate::ui::NullEventSink;
 use std::collections::HashMap;
@@ -965,7 +966,11 @@ impl FakeContainerRuntime {
     /// The bind strings a prior `run_container`/
     /// `start_background_container` call for `name` was given.
     fn volumes_for(&self, name: &str) -> Option<Vec<String>> {
-        self.spec_for(name).and_then(|spec| spec.shared.volumes)
+        self.spec_for(name).and_then(|spec| {
+            spec.shared
+                .volumes
+                .map(|binds| binds.iter().map(BindMount::to_bind_string).collect())
+        })
     }
 }
 

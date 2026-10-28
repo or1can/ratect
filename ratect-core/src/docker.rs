@@ -96,19 +96,20 @@
 //! explicitly dropped *after* the build stream is drained, since dropping one
 //! stops the agent that every `RUN --mount=type=ssh` in the build depends on.
 //! `ensure_host_volume_directories_exist` (the `run_as_current_user` host-dir
-//! pre-creation step) only `mkdir -p`s a bind's source when it's *absolute*
-//! (a bare non-absolute source is a `CacheType::Volume` name, 0.18.0, not a
-//! host path), *doesn't already exist* (an existing directory Docker reuses,
-//! or a single file/socket the config bind-mounts like `~/.gitconfig` or an
-//! SSH agent socket — `mkdir` over a non-directory both fails and is wrong),
-//! and *isn't a special Docker Desktop path* (`/run/host-services`/
-//! `/run/guest-services`, which Docker injects into its own VM and don't
-//! exist on a macOS host — the SSH agent socket lives at
-//! `/run/host-services/ssh-auth.sock`). The latter two guards are a
-//! straight port of Batect's `!Files.exists && !isSpecialDockerDesktopPath`;
-//! 0.10.0's `52e8d59` dropped the exists-check as "TOCTOU-prone" and the
-//! special-path one was never ported, which together broke mounting the SSH
-//! agent under `run_as_current_user` — don't re-simplify them away. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
+//! pre-creation step) only `mkdir -p`s a bind's source when it's a *host*
+//! source (`BindSource::Host` — a `CacheType::Volume` cache is a
+//! `BindSource::Volume` name, 0.18.0, not a host path), *doesn't already
+//! exist* (an existing directory Docker reuses, or a single file/socket the
+//! config bind-mounts like `~/.gitconfig` or an SSH agent socket — `mkdir`
+//! over a non-directory both fails and is wrong), and *isn't a special
+//! Docker Desktop path* (`/run/host-services`/`/run/guest-services`, which
+//! Docker injects into its own VM and don't exist on a macOS host — the SSH
+//! agent socket lives at `/run/host-services/ssh-auth.sock`). The latter two
+//! guards are a straight port of Batect's `!Files.exists &&
+//! !isSpecialDockerDesktopPath`; 0.10.0's `52e8d59` dropped the exists-check
+//! as "TOCTOU-prone" and the special-path one was never ported, which
+//! together broke mounting the SSH agent under `run_as_current_user` — don't
+//! re-simplify them away. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
 //! `--clean-cache`) are thin wrappers over bollard's own volume API — see
 //! `cache.rs` for the actual removal-decision logic built on top of them.
 //! `list_containers`/`list_networks` (0.2.0-dev) are the equivalent pair for
@@ -643,7 +644,8 @@ pub struct LabelledResource {
 }
 
 pub use crate::container_spec::{
-    ContainerNetwork, ContainerOptions, ContainerSpec, HealthCheckOptions, NetworkOptions,
+    BindMount, BindSource, ContainerNetwork, ContainerOptions, ContainerSpec, HealthCheckOptions,
+    NetworkOptions,
 };
 
 /// Configures BuildKit-only build features — `build_image` receives one
@@ -1469,44 +1471,16 @@ fn owned_directory_parent(path: &str) -> String {
         .into_owned()
 }
 
-/// Creates any host-side bind-mount directories in `volumes` (already
-/// resolved `"host:container"` strings) that don't exist yet — as the
-/// current host user, before the container is created. Otherwise Docker's
-/// daemon (running as root) would auto-create them as `root:root` on first
-/// use, defeating the point of `run_as_current_user` for the common "mount
-/// my code directory, get build artifacts back with sane ownership" case.
-/// Pure filesystem logic, no Docker involved. Ported from Batect's
-/// `createMissingMountDirectories`.
-fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result<()> {
-    let Some(volumes) = volumes else {
-        return Ok(());
-    };
-
-    for volume in volumes {
-        let Some((host_path, _)) = volume.split_once(':') else {
-            continue;
-        };
-        let path = Path::new(host_path);
-        // A non-absolute source is a Docker named volume, not a host path —
-        // a `cache` mount under `CacheType::Volume` resolves to exactly
-        // this (e.g. `"batect-cache-<key>-<name>"`). Every *local* mount's
-        // host path is already made absolute by `LoadedProject::evaluate`
-        // before it ever reaches here, so this only ever skips a named
-        // volume, never a genuine (if unusual) relative local path.
-        // Without this guard, `create_dir_all` would `mkdir -p` a directory
-        // named after the volume, relative to the current working
-        // directory — not what anyone wants.
-        if !path.is_absolute() {
-            continue;
-        }
-        // Docker Desktop injects a few paths into its own Linux VM that
-        // don't exist on the host at all — most notably the SSH agent
-        // socket at `/run/host-services/ssh-auth.sock`. `mkdir -p` on one
-        // fails (there's no `/run` on a macOS host to create under), so
-        // skip them and let Docker provide them. Component-wise prefix
-        // match, so `/run/host-services-something` isn't caught. Ported
-        // from Batect's own `isSpecialDockerDesktopPath`.
-        if path.starts_with("/run/host-services") || path.starts_with("/run/guest-services") {
+/// Creates any host-side bind-mount directories in `binds` that don't exist
+/// yet — as the current host user, before the container is created.
+/// Otherwise Docker's daemon (running as root) would auto-create them as
+/// `root:root` on first use, defeating the point of `run_as_current_user`
+/// for the common "mount my code directory, get build artifacts back with
+/// sane ownership" case. Pure filesystem logic, no Docker involved. Ported
+/// from Batect's `createMissingMountDirectories`'s first loop.
+fn ensure_host_volume_directories_exist(binds: &[BindMount]) -> Result<()> {
+    for path in binds.iter().filter_map(BindMount::host_path) {
+        if is_special_docker_desktop_path(path) {
             continue;
         }
         // Only a *missing* source is pre-created. The whole reason to do so
@@ -1528,6 +1502,17 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
     }
 
     Ok(())
+}
+
+/// Docker Desktop injects a few paths into its own Linux VM that don't
+/// exist on the host at all — most notably the SSH agent socket at
+/// `/run/host-services/ssh-auth.sock`. `mkdir -p` on one fails (there's no
+/// `/run` on a macOS host to create under), so they're skipped and left for
+/// Docker to provide. Component-wise prefix match, so
+/// `/run/host-services-something` isn't caught. Ported from Batect's own
+/// `isSpecialDockerDesktopPath`.
+fn is_special_docker_desktop_path(path: &Path) -> bool {
+    path.starts_with("/run/host-services") || path.starts_with("/run/guest-services")
 }
 
 /// Abstracts the container operations the task engine needs, so tests can
@@ -2548,7 +2533,7 @@ impl DockerClient {
         let shared = &spec.shared;
         let options = &shared.options;
         if shared.user_mapping.is_some() {
-            ensure_host_volume_directories_exist(shared.volumes.as_ref())?;
+            ensure_host_volume_directories_exist(shared.volumes.as_deref().unwrap_or_default())?;
         }
         let cmd = build_cmd(shared.command.as_deref(), &spec.additional_args)?;
         let entrypoint = options
@@ -2562,7 +2547,10 @@ impl DockerClient {
         let stdin = stdin_flags(interactive, use_tty);
 
         let host_config = HostConfig {
-            binds: shared.volumes.clone(),
+            binds: shared
+                .volumes
+                .as_ref()
+                .map(|binds| binds.iter().map(BindMount::to_bind_string).collect()),
             extra_hosts: build_extra_hosts(
                 shared.network_options.additional_hosts.as_ref(),
                 shared.network_options.proxy_host_gateway,

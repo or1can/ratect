@@ -2562,14 +2562,31 @@ fn owned_directory_parent_is_root_for_a_top_level_home_directory() {
     assert_eq!(owned_directory_parent("/ratect"), "/");
 }
 
+/// A `local` (or directory-type `cache`) mount of `source` at `container`.
+fn host_bind(source: &Path, container: &str) -> BindMount {
+    BindMount {
+        source: BindSource::Host(source.display().to_string()),
+        container: container.to_string(),
+        options: None,
+    }
+}
+
+/// A named-volume `cache` mount at `container`.
+fn volume_bind(name: &str, container: &str) -> BindMount {
+    BindMount {
+        source: BindSource::Volume(name.to_string()),
+        container: container.to_string(),
+        options: None,
+    }
+}
+
 #[test]
 fn ensure_host_volume_directories_exist_creates_a_missing_directory() {
     let dir = unique_temp_dir();
     let host_path = dir.join("missing");
-    let volumes = vec![format!("{}:/code", host_path.display())];
 
     assert!(!host_path.exists());
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&[host_bind(&host_path, "/code")]).unwrap();
     assert!(host_path.is_dir());
 
     fs::remove_dir_all(&dir).unwrap();
@@ -2578,9 +2595,8 @@ fn ensure_host_volume_directories_exist_creates_a_missing_directory() {
 #[test]
 fn ensure_host_volume_directories_exist_leaves_an_existing_directory_alone() {
     let dir = unique_temp_dir();
-    let volumes = vec![format!("{}:/code", dir.display())];
 
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&[host_bind(&dir, "/code")]).unwrap();
     assert!(dir.is_dir());
 
     fs::remove_dir_all(&dir).unwrap();
@@ -2588,21 +2604,20 @@ fn ensure_host_volume_directories_exist_leaves_an_existing_directory_alone() {
 
 #[test]
 fn ensure_host_volume_directories_exist_does_nothing_when_there_are_no_volumes() {
-    ensure_host_volume_directories_exist(None).unwrap();
+    ensure_host_volume_directories_exist(&[]).unwrap();
 }
 
 #[test]
 fn ensure_host_volume_directories_exist_skips_a_named_docker_volume() {
     // A `cache` mount under `CacheType::Volume` resolves to a bare
-    // volume name (non-absolute), not a host path — this must not be
-    // `mkdir -p`'d relative to the current directory. Deliberately
-    // doesn't mutate the process's real current directory to prove
-    // this (unsafe under `cargo test`'s default parallel execution —
-    // other tests, e.g. in config.rs, read the real current directory
-    // too); instead uses a name specific enough that no other test
-    // could plausibly create a same-named directory in the real
-    // current directory, and cleans it up regardless in case a
-    // regression here ever did create it.
+    // volume name, not a host path — this must not be `mkdir -p`'d
+    // relative to the current directory. Deliberately doesn't mutate the
+    // process's real current directory to prove this (unsafe under `cargo
+    // test`'s default parallel execution — other tests, e.g. in
+    // config.rs, read the real current directory too); instead uses a
+    // name specific enough that no other test could plausibly create a
+    // same-named directory in the real current directory, and cleans it
+    // up regardless in case a regression here ever did create it.
     let unlikely_relative_name =
         "ratect-test-ensure-host-volume-directories-exist-skips-a-named-docker-volume";
     let would_be_created_here = std::env::current_dir()
@@ -2610,8 +2625,8 @@ fn ensure_host_volume_directories_exist_skips_a_named_docker_volume() {
         .join(unlikely_relative_name);
     assert!(!would_be_created_here.exists());
 
-    let volumes = vec![format!("{unlikely_relative_name}:/root/.gradle")];
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&[volume_bind(unlikely_relative_name, "/root/.gradle")])
+        .unwrap();
 
     let created = would_be_created_here.exists();
     if created {
@@ -2630,9 +2645,8 @@ fn ensure_host_volume_directories_exist_leaves_an_existing_file_alone() {
     fs::create_dir_all(&dir).unwrap();
     let host_path = dir.join("gitconfig");
     fs::write(&host_path, "[user]\n  name = someone\n").unwrap();
-    let volumes = vec![format!("{}:/root/.gitconfig", host_path.display())];
 
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&[host_bind(&host_path, "/root/.gitconfig")]).unwrap();
 
     assert!(host_path.is_file(), "the file must be left untouched");
 
@@ -2646,13 +2660,65 @@ fn ensure_host_volume_directories_exist_leaves_an_existing_file_alone() {
 /// created. See Batect's `isSpecialDockerDesktopPath`.
 #[test]
 fn ensure_host_volume_directories_exist_skips_special_docker_desktop_paths() {
-    let volumes = vec![
-        "/run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock".to_string(),
-        "/run/guest-services/something:/something".to_string(),
+    let binds = [
+        host_bind(
+            Path::new("/run/host-services/ssh-auth.sock"),
+            "/run/host-services/ssh-auth.sock",
+        ),
+        host_bind(Path::new("/run/guest-services/something"), "/something"),
     ];
 
     // The bug was this returning an error; that it's `Ok` is the fix.
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&binds).unwrap();
+}
+
+/// A host path can contain `:` (an object-form `local`, or `.` under a
+/// project directory like `my:proj`); the whole path is what's created,
+/// never the text before its first `:` (ratect#452).
+#[test]
+fn ensure_host_volume_directories_exist_creates_a_host_path_containing_a_colon_whole() {
+    let dir = unique_temp_dir();
+    let host_path = dir.join("a:b");
+
+    ensure_host_volume_directories_exist(&[host_bind(&host_path, "/code")]).unwrap();
+
+    assert!(host_path.is_dir());
+    assert!(
+        !dir.join("a").exists(),
+        "the prefix before ':' must not be created"
+    );
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A `cache` under `--cache-type=directory`, in a project directory whose
+/// path contains `:`, is still only created at its full path — the route
+/// to the stray `:`-prefix ratect#452's triage found besides `local`.
+#[test]
+fn a_directory_cache_in_a_project_path_containing_a_colon_creates_no_stray_prefix() {
+    let dir = unique_temp_dir();
+    let project = dir.join("my:proj");
+    let options = crate::cache::CacheOptions {
+        cache_type: crate::cache::CacheType::Directory,
+        project_directory: project.clone(),
+    };
+    let mount = crate::config::CacheVolumeMount {
+        name: "gradle-cache".to_string(),
+        container: "/root/.gradle".to_string(),
+        options: None,
+        scope: Default::default(),
+    };
+
+    let bind =
+        crate::cache::resolve_cache_mount(&options, || Ok("key".to_string()), &mount).unwrap();
+    ensure_host_volume_directories_exist(&[bind]).unwrap();
+
+    assert!(crate::cache::cache_directory(&project)
+        .join("gradle-cache")
+        .is_dir());
+    assert!(!dir.join("my").exists());
+
+    fs::remove_dir_all(&dir).unwrap();
 }
 
 fn build_spec_with(

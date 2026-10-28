@@ -267,9 +267,9 @@ pub struct SharedContainerSpec {
     /// own default `CMD` instead — unless the task's own container has
     /// `additional_args`, which then replace that `CMD` (`build_cmd`).
     pub command: Option<String>,
-    /// Already-resolved bind-mount strings (`resolve_volumes`) — `tmpfs`
+    /// Already-resolved `local`/`cache` mounts (`resolve_volumes`) — `tmpfs`
     /// mounts are carried separately, on `options.tmpfs`.
-    pub volumes: Option<Vec<String>>,
+    pub volumes: Option<Vec<BindMount>>,
     /// This container's own `environment`, merged with `TERM`/proxy
     /// variables and the overlay's own `environment` — see
     /// `merged_environment`.
@@ -296,6 +296,52 @@ pub struct SharedContainerSpec {
     /// for images with no health check of their own.
     pub health_check: Option<HealthCheckOptions>,
     pub options: ContainerOptions,
+}
+
+/// One resolved `local` or `cache` volume mount — what becomes one of
+/// Docker's `HostConfig.binds` entries, kept structured until `docker.rs`
+/// formats it ([`Self::to_bind_string`]). Structured because the formatted
+/// string can't be taken apart again: a host path may itself contain `:`
+/// (ratect#452), and `run_as_current_user`'s directory pre-creation needs
+/// the source and the container path separately (ratect#321).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BindMount {
+    pub source: BindSource,
+    pub container: String,
+    pub options: Option<String>,
+}
+
+/// What a [`BindMount`] mounts — Batect's `HostMount`/`VolumeMount`
+/// distinction, which decides whether `run_as_current_user` creates
+/// anything for it on the host.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BindSource {
+    /// An absolute host path: a `local` mount, or a `cache` under
+    /// `CacheType::Directory`.
+    Host(String),
+    /// A named Docker volume: a `cache` under `CacheType::Volume`.
+    Volume(String),
+}
+
+impl BindMount {
+    /// The host path this mounts — `None` for a named volume.
+    pub fn host_path(&self) -> Option<&Path> {
+        match &self.source {
+            BindSource::Host(path) => Some(Path::new(path)),
+            BindSource::Volume(_) => None,
+        }
+    }
+
+    /// Docker's `source:container[:options]` bind string.
+    pub fn to_bind_string(&self) -> String {
+        let source = match &self.source {
+            BindSource::Host(path) | BindSource::Volume(path) => path,
+        };
+        match &self.options {
+            Some(options) => format!("{source}:{}:{options}", self.container),
+            None => format!("{source}:{}", self.container),
+        }
+    }
 }
 
 /// One container's complete, owned runtime specification — the argument
@@ -416,7 +462,7 @@ pub struct ContainerSpecInputs<'a> {
     /// Empty for a dependency — see [`ContainerSpec::additional_args`].
     pub additional_args: &'a [String],
     pub user_mapping: Option<&'a UserMapping>,
-    pub volumes: Option<&'a Vec<String>>,
+    pub volumes: Option<&'a Vec<BindMount>>,
     /// The host's own `TERM` (when it has one), or `TERM=dumb` under the
     /// interleaved output policy — the same for every container, see
     /// `TaskEngine::term_environment_variable`.

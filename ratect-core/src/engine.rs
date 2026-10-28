@@ -95,7 +95,7 @@
 use crate::config::{
     container_names_in_task, Container, Evaluated, LoadedProject, Task, TaskContainerCustomisation,
 };
-use crate::container_spec::derive_build_spec;
+use crate::container_spec::{derive_build_spec, BindMount, BindSource};
 use crate::docker::ContainerRuntime;
 use crate::ui::{EventSink, TaskEvent};
 use anyhow::{Context, Result};
@@ -1335,19 +1335,19 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         Ok(self)
     }
 
-    /// Resolves a container's `volumes` into the literal Docker bind
-    /// strings `docker.rs`'s `run_container`/`start_background_container`
-    /// expect. `Local` mounts are already fully resolved (host path made
-    /// absolute, interpolated) by `LoadedProject::evaluate` — nothing
-    /// left to do here but reassemble the `"local:container[:options]"`
-    /// string. `Cache` mounts are resolved here instead, since that needs
+    /// Resolves a container's `volumes` into the [`BindMount`]s a
+    /// [`ContainerSpec`](crate::container_spec::ContainerSpec) carries to
+    /// `docker.rs`. `Local` mounts
+    /// are already fully resolved (host path made absolute, interpolated) by
+    /// `LoadedProject::evaluate` — nothing left to do here but carry them
+    /// over as host mounts. `Cache` mounts are resolved here instead, since that needs
     /// `--cache-type` (see `with_settings`) and the project's own cache
     /// key, neither available to `config.rs`. `cache_key` is only ever
     /// computed the first time a `Cache` mount needs it — a project-scoped
     /// one under `CacheType::Volume` — so a config with none, or a
     /// directory-mode run, never touches the key file at all.
     /// `Tmpfs` mounts are skipped entirely here — they can't be expressed as
-    /// a bind string at all, and need no async resolution, so they're pulled
+    /// a bind at all, and need no async resolution, so they're pulled
     /// out separately (and synchronously) by `container_spec::tmpfs_mounts`
     /// instead.
     ///
@@ -1360,7 +1360,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     async fn resolve_volumes(
         &self,
         volumes: Option<&Vec<crate::config::VolumeMount>>,
-    ) -> Result<Option<Vec<String>>> {
+    ) -> Result<Option<Vec<BindMount>>> {
         let Some(volumes) = volumes else {
             return Ok(None);
         };
@@ -1368,11 +1368,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         let mut resolved = Vec::with_capacity(volumes.len());
         for volume in volumes {
             let bind = match volume {
-                crate::config::VolumeMount::Local(local) => match &local.options {
-                    Some(options) => {
-                        format!("{}:{}:{}", local.local, local.container, options)
-                    }
-                    None => format!("{}:{}", local.local, local.container),
+                crate::config::VolumeMount::Local(local) => BindMount {
+                    source: BindSource::Host(local.local.clone()),
+                    container: local.container.clone(),
+                    options: local.options.clone(),
                 },
                 crate::config::VolumeMount::Cache(cache) => {
                     let cache_options = self.cache_options.as_ref().expect(

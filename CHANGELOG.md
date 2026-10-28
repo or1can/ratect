@@ -96,6 +96,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- Under `run_as_current_user`, a `local` mount whose host path contains `:` has that whole path created when it's missing, as in Batect, not the part before the first `:`.
 - An unknown task's error ends with how to list the project's tasks and get help, as in Batect: `ratect-compat --list-tasks` and `--help` for `ratect-compat`, `ratect tasks list` and `ratect run --help` for `ratect`. A missing prerequisite's error doesn't.
 - A prerequisite that names no task, or a prerequisite cycle, fails the run before any task runs, as in Batect.
 - A container dependency cycle, or a container depending on itself, is reported before the task starts, as in Batect: no `Running` line, no task network created, and no cleanup. With `--use-network`, the cycle is reported rather than a missing network.
