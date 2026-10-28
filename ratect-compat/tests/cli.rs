@@ -2244,6 +2244,15 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
         stdout.contains("database      | Container became healthy."),
         "missing prefixed dependency milestone:\n{stdout}"
     );
+    // A dependency's start is reported; the task container's never is.
+    assert!(
+        stdout.contains("database      | Container started."),
+        "missing dependency start:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("app           | Container started."),
+        "the task container's start was reported:\n{stdout}"
+    );
     // The task container's own output, prefixed.
     assert!(
         stdout.contains("app           | ") && stdout.contains("packets transmitted"),

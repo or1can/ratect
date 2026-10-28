@@ -299,6 +299,62 @@ fn build_output_gets_an_inner_image_build_prefix() {
     );
 }
 
+/// Batect's `Building image...`/`Image built.`, under the container's own
+/// prefix and without its inner `Batect | ` (a recorded divergence).
+#[test]
+fn an_image_build_starts_and_completes_under_the_containers_prefix() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("app", None, Some("proj-app"))]);
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::ImageBuildCompleted {
+        container: "app".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+             app  | Building image...\n\
+             app  | Image built.\n"
+    );
+}
+
+/// Batect's `Container started.` — posted for a dependency only, so the
+/// task container never gets one, as in Batect.
+#[test]
+fn a_dependency_starting_says_its_container_started() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("database", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::DependencyStarted {
+        container: "database".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test     | Running test...\n\
+             database | Container started.\n"
+    );
+}
+
+/// Silent, as Batect is: `ImagePullProgress` mirrors Batect ignoring
+/// `ImagePullProgressEvent` in `all`; `ImageResolved` has no Batect
+/// counterpart. Creation's silence is `container_creation_prints_nothing`'s;
+/// network creation and the start of a health wait have no event at all, so
+/// their silence is structural — the exhaustive match guards it.
+#[test]
+fn pull_progress_and_image_resolution_print_nothing() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    let before = buffer.contents();
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "postgres:15".into(),
+        message: "Downloading 3/7".into(),
+    });
+    logger.post(TaskEvent::ImageResolved {
+        container: "db".into(),
+    });
+    assert_eq!(buffer.contents(), before);
+}
+
 #[test]
 fn setup_command_output_gets_an_inner_numbered_prefix() {
     let (logger, buffer) = logger();
