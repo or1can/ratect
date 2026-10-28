@@ -37,8 +37,7 @@
 //!   stdout; and a failed setup command or network check is reported, where
 //!   Batect's `all` prints nothing for either.
 //!
-//! The prefix colours also differ — see `CONTAINER_COLORS`; the palette and
-//! order decided in decisions/0017 land with ratect#489.
+//! The prefix colours also differ — see `CONTAINER_COLORS`.
 //!
 //! Streams (decisions/0017): every prefixed line goes to the progress
 //! console — stdout under `ratect-compat` (Batect's placement, kept), stderr
@@ -53,17 +52,19 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
 
-/// The prefix colors assigned to containers, round-robin in (sorted) name
-/// order — deliberately excluding red (errors); the task-level prefix is
-/// bold in the default foreground. Batect also excludes red and cycles
-/// black, paints the task prefix white, and assigns by the containers'
-/// order in its set rather than by name.
+/// The prefix colors assigned to containers, round-robin in sorted name
+/// order, so a container's colour doesn't change between runs — in
+/// `docker compose`'s order, which keeps blue and cyan off neighbouring
+/// containers until the cycle wraps; red is reserved for errors, and the
+/// task-level prefix is bold in the default foreground (decisions/0017).
+/// Batect cycles six, starting at black, assigns by graph order, and paints
+/// the task prefix white.
 const CONTAINER_COLORS: [Color; 5] = [
-    Color::Blue,
     Color::Cyan,
+    Color::Yellow,
     Color::Green,
     Color::Magenta,
-    Color::Yellow,
+    Color::Blue,
 ];
 
 pub struct InterleavedEventLogger {

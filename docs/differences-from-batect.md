@@ -414,6 +414,13 @@ tables above:
   interrupt notice, the `--no-cleanup*` reminder and a cleanup that left
   something behind are printed on stderr in every style rather than logged;
   Batect prints its equivalents on stdout, as task output.
+- **`all`'s prefix colours.** Container prefixes cycle five colours — cyan,
+  yellow, green, magenta, blue — assigned by the containers' sorted names, so
+  a container keeps its colour whatever order its task's graph lists it in,
+  and the task's own prefix is bold in the default foreground. Batect cycles
+  six starting at black, assigns them in its dependency graph's order, and
+  paints the task prefix white
+  ([decisions/0017](../decisions/0017-output-streams-and-styles.md)).
 - **An unhealthy dependency's error can lack the last health check's
   details.** If the container, or the daemon, goes away between Docker's
   unhealthy verdict and Ratect looking up that check's exit code and output,

@@ -546,7 +546,7 @@ fn no_prefix_is_ever_white_or_black() {
         buffer.contents()
     );
     assert!(
-        buffer.contents().contains("\x1b[1;34mdb  \x1b[0m | hi\n"),
+        buffer.contents().contains("\x1b[1;36mdb  \x1b[0m | hi\n"),
         "{:?}",
         buffer.contents()
     );
@@ -571,7 +571,7 @@ fn a_prefix_is_one_styled_span_and_the_separator_is_plain() {
     assert!(
         buffer
             .contents()
-            .ends_with("\n\x1b[1;34mdb  \x1b[0m | hi\n"),
+            .ends_with("\n\x1b[1;36mdb  \x1b[0m | hi\n"),
         "{:?}",
         buffer.contents()
     );
@@ -672,5 +672,61 @@ fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
         buffer.contents(),
         "\x1b[1mall\x1b[0m | The task \x1b[1mall\x1b[0m only defines prerequisite tasks, \
          nothing more to do.\n"
+    );
+}
+
+/// The prefix palette (decisions/0017): cyan, yellow, green, magenta, blue,
+/// by sorted name, wrapping at a sixth — and the task's own prefix bold in
+/// the default foreground.
+#[test]
+fn prefix_colours_cycle_the_palette_in_sorted_name_order() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    let names = ["f", "e", "d", "c", "b", "a"];
+    start_task(
+        &logger,
+        names
+            .iter()
+            .map(|name| info(name, Some("x:1"), None))
+            .collect(),
+    );
+    for name in names.iter().rev() {
+        logger.post(TaskEvent::DependencyStarted {
+            container: (*name).into(),
+        });
+    }
+    assert_eq!(
+        buffer.contents(),
+        "\x1b[1mtest\x1b[0m | Running \x1b[1mtest\x1b[0m...\n\
+         \x1b[1;36ma   \x1b[0m | Container started.\n\
+         \x1b[1;33mb   \x1b[0m | Container started.\n\
+         \x1b[1;32mc   \x1b[0m | Container started.\n\
+         \x1b[1;35md   \x1b[0m | Container started.\n\
+         \x1b[1;34me   \x1b[0m | Container started.\n\
+         \x1b[1;36mf   \x1b[0m | Container started.\n"
+    );
+}
+
+/// A container's colour doesn't depend on the order the graph lists it in.
+#[test]
+fn prefix_colours_dont_depend_on_graph_order() {
+    let render = |containers: Vec<TaskContainerInfo>| {
+        let (logger, buffer, _, _) = logger_with_streams(true);
+        start_task(&logger, containers);
+        for name in ["app", "cache", "db"] {
+            logger.post(TaskEvent::DependencyStarted {
+                container: name.into(),
+            });
+        }
+        buffer.contents()
+    };
+    let app = || TaskContainerInfo {
+        is_task_container: true,
+        ..info("app", Some("app:1"), None)
+    };
+    let cache = || info("cache", Some("redis:7"), None);
+    let db = || info("db", Some("postgres:15"), None);
+    assert_eq!(
+        render(vec![db(), cache(), app()]),
+        render(vec![app(), cache(), db()])
     );
 }
