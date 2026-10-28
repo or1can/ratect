@@ -62,6 +62,9 @@ type CapturedStopOptions = Arc<Mutex<HashMap<String, StopOptionsValue>>>;
 #[derive(Clone)]
 struct FakeContainerRuntime {
     events: Arc<Mutex<Vec<String>>>,
+    // Every `events` entry again, interleaved with whatever was posted to a
+    // `sequencing_sink` of this fake — see `Sequenced`.
+    sequence: Arc<Mutex<Vec<Sequenced>>>,
     fail_run: Arc<Mutex<bool>>,
     // Container name -> the exit code its `run_container` reports, overriding
     // `fail_run` for that container alone (see `with_run_exit`).
@@ -266,6 +269,7 @@ impl Default for FakeContainerRuntime {
     fn default() -> Self {
         Self {
             events: Default::default(),
+            sequence: Default::default(),
             fail_run: Default::default(),
             run_exits: Default::default(),
             stdout_closed_runs: Default::default(),
@@ -326,7 +330,25 @@ impl FakeContainerRuntime {
     }
 
     fn push(&self, event: String) {
+        self.sequence
+            .lock()
+            .unwrap()
+            .push(Sequenced::Call(event.clone()));
         self.events.lock().unwrap().push(event);
+    }
+
+    /// Every runtime call `events` holds, and every event posted to a
+    /// `sequencing_sink` of this fake, in the one order they happened.
+    fn sequence(&self) -> Vec<Sequenced> {
+        self.sequence.lock().unwrap().clone()
+    }
+
+    /// An event sink whose posts land in this fake's `sequence`, so a
+    /// `TaskEvent` can be ordered against the runtime calls around it.
+    fn sequencing_sink(&self) -> SequencingEventSink {
+        SequencingEventSink {
+            sequence: Arc::clone(&self.sequence),
+        }
     }
 
     /// Makes `run_container` simulate the task's own command exiting
@@ -15158,6 +15180,214 @@ impl EventSink for RecordingEventSink {
     fn post(&self, event: TaskEvent) {
         self.events.lock().unwrap().push(event);
     }
+}
+
+/// One entry in a `FakeContainerRuntime`'s `sequence`: a runtime call, as
+/// its `events` records it, or a `TaskEvent` posted to its
+/// `sequencing_sink`.
+#[derive(Clone, Debug, PartialEq)]
+enum Sequenced {
+    Call(String),
+    Event(TaskEvent),
+}
+
+/// Posts into a `FakeContainerRuntime`'s `sequence` — see
+/// `FakeContainerRuntime::sequencing_sink`.
+#[derive(Clone)]
+struct SequencingEventSink {
+    sequence: Arc<Mutex<Vec<Sequenced>>>,
+}
+
+impl EventSink for SequencingEventSink {
+    fn post(&self, event: TaskEvent) {
+        self.sequence.lock().unwrap().push(Sequenced::Event(event));
+    }
+}
+
+/// `start` runs `app`, whose dependency `database` has three setup
+/// commands, `one`, `two` and `three`; returns the run's result and the
+/// fake's sequence.
+async fn run_with_three_setup_commands(
+    docker: FakeContainerRuntime,
+) -> (Result<()>, Vec<Sequenced>) {
+    let config = config_with_database_dependency(|database| {
+        database.setup_commands = Some(
+            ["one", "two", "three"]
+                .into_iter()
+                .map(|command| crate::config::SetupCommand {
+                    command: command.to_string(),
+                    working_directory: None,
+                    run_in: None,
+                })
+                .collect(),
+        );
+    });
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(docker.sequencing_sink()),
+        crate::interrupt::Interrupt::new(),
+    );
+    let result = engine.run_task("start", &[]).await;
+    (result, docker.sequence())
+}
+
+/// The `RunningSetupCommand` for `database`'s `index`th of three.
+fn running_setup_command(command: &str, index: usize) -> Sequenced {
+    Sequenced::Event(TaskEvent::RunningSetupCommand {
+        container: "database".into(),
+        command: command.into(),
+        index,
+        total: 3,
+        run_in: None,
+    })
+}
+
+/// The fake's record of `command` being exec'd in `database`.
+fn database_exec(command: &str) -> Sequenced {
+    Sequenced::Call(format!("exec:sidecar-id-database:{command}"))
+}
+
+/// `sequence` narrowed to the setup-command story: each
+/// `RunningSetupCommand` and `SetupCommandsCompleted`, and each exec.
+fn setup_command_story(sequence: &[Sequenced]) -> Vec<Sequenced> {
+    sequence
+        .iter()
+        .filter(|entry| match entry {
+            Sequenced::Call(call) => call.starts_with("exec:"),
+            Sequenced::Event(event) => matches!(
+                event,
+                TaskEvent::RunningSetupCommand { .. } | TaskEvent::SetupCommandsCompleted { .. }
+            ),
+        })
+        .cloned()
+        .collect()
+}
+
+fn database_setup_completed() -> Sequenced {
+    Sequenced::Event(TaskEvent::SetupCommandsCompleted {
+        container: "database".into(),
+    })
+}
+
+/// Batect's `RunContainerSetupCommandsStepRunnerSpec`, NSC-8/NSC-14 and
+/// NSC-9/NSC-15, and its `SetupCommandsCompletedEvent` rule ESCC-2: each
+/// command is announced, 1..N of N, before its own exec with no other
+/// setup-command event or exec between them, in declared order, and
+/// completion is posted once, after the last exec and before the task
+/// container runs.
+#[tokio::test]
+async fn setup_commands_are_each_announced_before_their_exec_and_completed_once() {
+    let (result, sequence) = run_with_three_setup_commands(FakeContainerRuntime::default()).await;
+
+    result.unwrap();
+    assert_eq!(
+        setup_command_story(&sequence),
+        vec![
+            running_setup_command("one", 1),
+            database_exec("one"),
+            running_setup_command("two", 2),
+            database_exec("two"),
+            running_setup_command("three", 3),
+            database_exec("three"),
+            database_setup_completed(),
+        ]
+    );
+    let completed = sequence
+        .iter()
+        .position(|entry| *entry == database_setup_completed())
+        .unwrap();
+    let run = sequence
+        .iter()
+        .position(|entry| matches!(entry, Sequenced::Call(call) if call.starts_with("run:app:")))
+        .unwrap_or_else(|| panic!("'app' should run: {sequence:?}"));
+    assert!(completed < run, "{sequence:?}");
+}
+
+/// NSC-18 and ESCC-2: a middle command exiting non-zero ends the
+/// sequence — the next is never announced or exec'd, completion is never
+/// posted — and fails the task.
+#[tokio::test]
+async fn a_middle_setup_command_exiting_non_zero_stops_the_rest() {
+    let docker = FakeContainerRuntime::default().with_failing_setup_command("two");
+    let (result, sequence) = run_with_three_setup_commands(docker.clone()).await;
+
+    result.unwrap_err();
+    assert_eq!(docker.exec_for("three"), None);
+    assert_eq!(
+        setup_command_story(&sequence),
+        vec![
+            running_setup_command("one", 1),
+            database_exec("one"),
+            running_setup_command("two", 2),
+            database_exec("two"),
+        ]
+    );
+}
+
+/// NSC-19 to NSC-21: a middle command whose exec itself fails ends the
+/// sequence the same way, and fails the task with the exec's error.
+#[tokio::test]
+async fn a_middle_setup_command_that_cannot_be_run_stops_the_rest() {
+    let docker = FakeContainerRuntime::default().with_unrunnable_setup_command("two");
+    let (result, sequence) = run_with_three_setup_commands(docker.clone()).await;
+
+    let error = result.unwrap_err();
+    assert!(format!("{error:#}").contains("exec failed"), "{error:#}");
+    assert_eq!(docker.exec_for("three"), None);
+    assert_eq!(
+        setup_command_story(&sequence),
+        vec![
+            running_setup_command("one", 1),
+            database_exec("one"),
+            running_setup_command("two", 2),
+            database_exec("two"),
+        ]
+    );
+}
+
+/// Batect's `SetupCommandExecutionErrorEventSpec`, ESCE-2, and NSC-12/
+/// NSC-13: a dependency's only setup command whose exec fails is announced,
+/// then fails the task with an error naming the command and the container
+/// and carrying the cause. Completion is never posted for it — asserted
+/// directly, not inferred from what follows — and, separately, the task
+/// container never runs.
+#[tokio::test]
+async fn a_dependencys_setup_command_that_cannot_be_run_fails_the_task() {
+    let docker = FakeContainerRuntime::default().with_unrunnable_setup_command("./seed-data.sh");
+    let engine = TaskEngine::new(
+        project(config_with_a_setup_command()),
+        docker.clone(),
+        Arc::new(docker.sequencing_sink()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    let message = format!("{error:#}");
+    for expected in ["./seed-data.sh", "'database'", "exec failed"] {
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
+    let sequence = docker.sequence();
+    assert_eq!(
+        setup_command_story(&sequence),
+        vec![
+            Sequenced::Event(TaskEvent::RunningSetupCommand {
+                container: "database".into(),
+                command: "./seed-data.sh".into(),
+                index: 1,
+                total: 1,
+                run_in: None,
+            }),
+            database_exec("./seed-data.sh"),
+        ]
+    );
+    assert!(
+        !sequence
+            .iter()
+            .any(|entry| matches!(entry, Sequenced::Call(call) if call.starts_with("run:app:"))),
+        "{sequence:?}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
