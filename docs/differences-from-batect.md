@@ -535,6 +535,11 @@ tables above:
   place on common terminals and corrupts the display. Ratect leaves the old
   block where it is and draws the new one below it, at the cost of that
   leftover block.
+- **`fancy` mode draws a multi-line setup command on one row.** Each line
+  break in it is shown as a space, and the command runs as usual. Batect
+  can't draw it, and fails the task with an unexpected-exception error and
+  exit code 255 before the command runs — which a `|` block's trailing
+  newline is enough to cause, even for a one-line command.
 - **`fancy` mode treats a reported terminal width of 0 as unknown.** Some
   pseudo-terminals report it (`script`'s, some CI runners'), and lines are
   then printed unclipped; Batect clips every line to nothing.

@@ -35,6 +35,8 @@
 //!   the wrong place (ratect#73).
 //! - A reported width of 0 counts as unknown, so lines print unclipped;
 //!   Batect clips every line to nothing.
+//! - A multi-line setup command is drawn on one row, each line break a
+//!   space, like the task's own command; Batect fails the task instead.
 
 use super::{Console, EventSink, TaskContainerInfo, TaskEvent};
 use std::collections::BTreeSet;
@@ -236,6 +238,15 @@ impl ContainerLine {
     fn render(&self, console: &Console) -> String {
         format!("{}: {}", console.bold(&self.info.name), self.description())
     }
+}
+
+/// `text` as one painted row of the live display, fitted to `width`: every
+/// line break (`\n` or `\r`) a space, then clipped. Every row the display
+/// paints goes through here, so whatever a stage puts in its text — a
+/// multi-line command, build output — can never take a second terminal row
+/// that the repaint's row count doesn't know about.
+fn fit_row(text: &str, width: Option<u16>) -> String {
+    clip_to_width(&text.replace(['\n', '\r'], " "), width)
 }
 
 /// Fits `text` into `width` *display columns*, as Batect's
@@ -440,7 +451,7 @@ impl FancyEventLogger {
         let mut rendered = String::new();
         for line in &state.lines {
             rendered.push_str("\r\x1b[2K");
-            rendered.push_str(&clip_to_width(&line.render(&self.console), width));
+            rendered.push_str(&fit_row(&line.render(&self.console), width));
             rendered.push('\n');
         }
         if state.last_rendered.as_deref() == Some(rendered.as_str()) {
@@ -526,7 +537,7 @@ impl FancyEventLogger {
             // cursor-up-and-clear would then erase, destroying it.
             frame.push('\n');
         }
-        frame.push_str(&clip_to_width(&self.cleanup_text(state), width));
+        frame.push_str(&fit_row(&self.cleanup_text(state), width));
         frame.push('\n');
         state.cleanup_shown = true;
         state.cleanup_width = width;

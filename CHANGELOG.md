@@ -103,6 +103,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `fancy` output draws a multi-line command, setup command or build-output line on one row, each line break a space, so the live display no longer leaves stale rows behind.
 - `fancy` output: on a 1- or 2-column terminal a clipped line is cut to fit instead of wrapping, and a name cut short stays bold up to its `...`, as in Batect.
 - `-o all` prefixes every line of a multi-line command, setup command or image-build message, as in Batect, rather than only its first; each build line carries `Image build | `.
 - Under `run_as_current_user`, a `local` mount whose host path contains `:` has that whole path created when it's missing, as in Batect, not the part before the first `:`.

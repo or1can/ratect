@@ -1358,3 +1358,92 @@ fn declares_the_task_container_only_io_policy() {
         super::super::ContainerIoStreaming::TaskContainerOnly
     );
 }
+
+/// A multi-line command (a `|` block, trailing newline included) is drawn
+/// on one row, each line break a space, as Batect's `descriptionWhenRunning`
+/// draws it.
+#[test]
+fn a_multi_line_task_command_is_drawn_on_one_row() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("echo hello\n  world\n".into()),
+    });
+    assert!(
+        buffer.contents().ends_with(
+            "\x1b[1A\
+             \r\x1b[2Kapp: running echo hello   world \n\
+             \n"
+        ),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
+/// A multi-line setup command is drawn on one row too, so the next frame's
+/// cursor-up covers exactly the rows the last one painted. Batect fails the
+/// task here instead — a divergence (decisions/0013 rule 3).
+#[test]
+fn a_multi_line_setup_command_keeps_one_row_per_container() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["dep"], true),
+            info("dep", Some("dep:1"), &[], false),
+        ],
+    });
+    let setup = |command: &str, index| TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: command.into(),
+        index,
+        total: 2,
+        run_in: None,
+    };
+    logger.post(setup("echo\none", 1));
+    let first = buffer.contents();
+    logger.post(setup("echo two", 2));
+    let second = &buffer.contents()[first.len()..];
+
+    assert!(
+        first.ends_with(
+            "\x1b[2A\
+             \r\x1b[2Kdep: running setup command echo one (1 of 2)...\n\
+             \r\x1b[2Kapp: ready to pull image app:1\n"
+        ),
+        "{first:?}"
+    );
+    assert_eq!(
+        second,
+        "\x1b[2A\
+         \r\x1b[2Kdep: running setup command echo two (2 of 2)...\n\
+         \r\x1b[2Kapp: ready to pull image app:1\n"
+    );
+}
+
+/// The guard is the row's, not each stage's: build output and a carriage
+/// return are flattened alike, before the row is clipped.
+#[test]
+fn every_row_is_flattened_before_it_is_clipped() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![built("app", "p-app", &[], true)],
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-app".into(),
+        message: "line one\nline two\rline three".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: building image: line one line two line three"]
+    );
+
+    logger.fixed_width.store(24, Ordering::Relaxed);
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-app".into(),
+        message: "a\nb\nc\nd\ne\nf\ng\nh".into(),
+    });
+    assert_eq!(last_frame(&buffer, 1), ["app: building image: ..."]);
+}
