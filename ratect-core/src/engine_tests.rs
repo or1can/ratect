@@ -3736,28 +3736,16 @@ async fn a_failed_build_names_the_container_whatever_layer_failed() {
 }
 
 /// Batect's "non-existent base image" and "base image does not exist" rules
-/// (ratect#519): a failed build is announced as starting and never as
-/// completed, and the task fails. Ratect has no `BuildFailed` event; the
-/// error the run ends with plays that part.
+/// (ratect#519), and NBI-11's failure half with
+/// `DockerClientBuildKitImageBuildSpec`'s U17 ("BuildComplete is never
+/// emitted"): a failed build is announced as starting and never as
+/// completed, and the task fails, posting `TaskFailed`. Ratect has no
+/// `BuildFailed` event; the error the run ends with plays that part.
 #[tokio::test]
 async fn a_failed_build_starts_and_never_completes() {
-    let mut containers = IndexMap::new();
-    containers.insert(
-        "build-env".to_string(),
-        container_with_build_directory("./docker", None),
-    );
-    let mut tasks = IndexMap::new();
-    tasks.insert("build".to_string(), task("build-env", "echo hi"));
-    let config = Config {
-        project_name: "demo".to_string(),
-        containers,
-        tasks,
-        config_variables: None,
-        forbid_telemetry: None,
-    };
     let sink = RecordingEventSink::default();
     let engine = TaskEngine::new(
-        project(config),
+        project(config_building_build_env(None)),
         FakeContainerRuntime::default().failing_image_build(),
         Arc::new(sink.clone()),
         crate::interrupt::Interrupt::new(),
@@ -3778,6 +3766,121 @@ async fn a_failed_build_starts_and_never_completes() {
             event,
             TaskEvent::ImageBuildCompleted { container } if container == "build-env"
         )),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&TaskEvent::TaskFailed {
+            task: "build".into(),
+        }),
+        "{events:?}"
+    );
+}
+
+/// A `build` task whose one container, `build-env`, is built from
+/// `./docker` with `build_args`.
+fn config_building_build_env(build_args: Option<HashMap<String, String>>) -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "build-env".to_string(),
+        container_with_build_directory("./docker", build_args),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("build".to_string(), task("build-env", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Where in `events` the first one equal to `wanted` was posted, if any.
+fn task_event_index(events: &[TaskEvent], wanted: &TaskEvent) -> Option<usize> {
+    events.iter().position(|event| event == wanted)
+}
+
+/// Batect's `BuildImageStepRunnerSpec`, NBI-11: a build that succeeds is
+/// announced as starting and then as completed, for its own container.
+#[tokio::test]
+async fn a_successful_build_starts_and_then_completes() {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_building_build_env(None)),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("build", &[]).await.unwrap();
+
+    let events = sink.events();
+    let starting = task_event_index(
+        &events,
+        &TaskEvent::ImageBuildStarting {
+            container: "build-env".into(),
+        },
+    )
+    .unwrap_or_else(|| panic!("the build should be announced: {events:?}"));
+    let completed = task_event_index(
+        &events,
+        &TaskEvent::ImageBuildCompleted {
+            container: "build-env".into(),
+        },
+    )
+    .unwrap_or_else(|| panic!("the build should be reported complete: {events:?}"));
+    assert!(starting < completed, "{events:?}");
+}
+
+/// Batect's `BuildImageStepRunnerSpec`, NBI-15: with proxy propagation off
+/// (`--no-proxy-vars`), a host proxy that would otherwise be passed — and,
+/// pointing at `localhost`, rewritten with a host-gateway entry — reaches
+/// the build as neither, while the container's own build args still do,
+/// evaluated, and the build completes.
+#[tokio::test]
+async fn no_proxy_vars_keeps_host_proxies_out_of_a_build_but_not_its_own_build_args() {
+    let config = config_building_build_env(Some(HashMap::from([(
+        "VERSION".to_string(),
+        "$RATECT_TEST_HOST".to_string(),
+    )])));
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        propagate_proxy_environment_variables: false,
+        ..Default::default()
+    })
+    .unwrap()
+    .with_host_env(|name| match name {
+        "http_proxy" => Some("http://localhost:3333".to_string()),
+        "RATECT_TEST_HOST" => Some("1.2.3".to_string()),
+        _ => None,
+    });
+
+    engine.run_task("build", &[]).await.unwrap();
+
+    assert_eq!(
+        docker.build_args_for("demo-build-env"),
+        Some(HashMap::from([(
+            "VERSION".to_string(),
+            "1.2.3".to_string()
+        )]))
+    );
+    assert_eq!(docker.build_host_gateway_for("demo-build-env"), None);
+    let events = sink.events();
+    assert!(
+        task_event_index(
+            &events,
+            &TaskEvent::ImageBuildCompleted {
+                container: "build-env".into(),
+            },
+        )
+        .is_some(),
         "{events:?}"
     );
 }
