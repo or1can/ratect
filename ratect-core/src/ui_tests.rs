@@ -316,6 +316,34 @@ fn an_explicit_fancy_refusal_names_the_progress_consoles_stream() {
     }
 }
 
+/// Picking the style picks the container I/O policy, as Batect's
+/// `EventLoggerProvider` does: only `all` follows dependency output; every
+/// other style streams the task container alone.
+#[test]
+fn only_all_output_streams_more_than_the_task_container() {
+    let terminal = TerminalFacts {
+        term: Some("xterm".to_string()),
+        stdout_is_terminal: true,
+        stderr_is_terminal: true,
+        console_dimensions_available: true,
+    };
+    for (style, policy) in [
+        (OutputStyle::Simple, ContainerIoStreaming::TaskContainerOnly),
+        (OutputStyle::Quiet, ContainerIoStreaming::TaskContainerOnly),
+        (OutputStyle::Fancy, ContainerIoStreaming::TaskContainerOnly),
+        (OutputStyle::All, ContainerIoStreaming::Interleaved),
+    ] {
+        let sink = create_event_sink(
+            Some(style),
+            ColorMode::Off,
+            &terminal,
+            ProgressStream::Stdout,
+        )
+        .expect("every style can be built on an interactive console");
+        assert_eq!(sink.container_io_streaming(), policy, "{style:?}");
+    }
+}
+
 #[test]
 fn an_explicit_request_always_wins() {
     let terminal = TerminalFacts {

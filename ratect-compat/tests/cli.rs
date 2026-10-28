@@ -136,6 +136,10 @@ fn stream_routing_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stream-routing.yml")
 }
 
+fn dependency_output_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dependency-output.yml")
+}
+
 /// #324: Batect reads a config-variables file's values as strings, so an
 /// unquoted number in one — named by `--config-vars-file` or the default
 /// `batect.local.yml` — loads rather than failing the run. No daemon: the
@@ -2222,6 +2226,175 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
             line.contains(" | "),
             "unprefixed line in all-mode output: {line:?}\nfull:\n{stdout}"
         );
+    }
+}
+
+/// The markers `dependency-output.yml`'s dependency writes, one per stream.
+const DEPENDENCY_MARKERS: [&str; 2] = ["dependency-stdout-marker", "dependency-stderr-marker"];
+
+/// Runs `dependency-output.yml`'s task under `style` with both streams
+/// piped, returning `(stdout, stderr)` after asserting the run succeeded.
+fn run_dependency_output_task(style: &str) -> (String, String) {
+    let output = ratect_command()
+        .args(["-o", style, "-f"])
+        .arg(dependency_output_config_path())
+        .arg("with-dependency")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "{style}: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
+    (stdout, stderr)
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// The control for the three tests below: under `all`, the dependency's
+/// markers do reach stdout, under its prefix — so their absence elsewhere
+/// is the style's doing, not a dependency that never printed.
+#[test]
+#[ignore]
+fn all_output_shows_a_dependencys_output_on_both_its_streams_via_docker() {
+    let (stdout, _) = run_dependency_output_task("all");
+    for marker in DEPENDENCY_MARKERS {
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line.starts_with("dep ") && line.ends_with(marker)),
+            "{marker} missing from stdout under its prefix:\n{stdout}"
+        );
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Under `simple`, a dependency's output reaches neither stream, while the
+/// task's own still reaches stdout (ratect#512, TCIO-22).
+#[test]
+#[ignore]
+fn simple_output_shows_no_dependency_output_via_docker() {
+    let (stdout, stderr) = run_dependency_output_task("simple");
+    for marker in DEPENDENCY_MARKERS {
+        assert!(!stdout.contains(marker), "{marker} on stdout:\n{stdout}");
+        assert!(!stderr.contains(marker), "{marker} on stderr:\n{stderr}");
+    }
+    assert!(
+        stdout.contains("task-stdout-marker"),
+        "task output missing from stdout:\n{stdout}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// Under `quiet`, a dependency's output reaches neither stream, and stdout
+/// is the task's own output alone (ratect#512, QEL-7, TCIO-24).
+#[test]
+#[ignore]
+fn quiet_output_shows_no_dependency_output_via_docker() {
+    let (stdout, stderr) = run_dependency_output_task("quiet");
+    for marker in DEPENDENCY_MARKERS {
+        assert!(!stdout.contains(marker), "{marker} on stdout:\n{stdout}");
+        assert!(!stderr.contains(marker), "{marker} on stderr:\n{stderr}");
+    }
+    assert_eq!(stdout.trim_end(), "task-stdout-marker", "stdout:\n{stdout}");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and a local pseudo-terminal (see
+/// `fancy_output_renders_a_live_status_block_on_a_terminal_via_docker`).
+/// Run explicitly with `cargo test -- --ignored`.
+///
+/// Under `fancy`, a dependency's output reaches neither the terminal nor
+/// Ratect's stderr, which `sh` redirects to a file so the two can be told
+/// apart (ratect#512, TCIO-23).
+#[test]
+#[ignore]
+fn fancy_output_shows_no_dependency_output_via_docker() {
+    let stderr_path = std::env::temp_dir().join(format!(
+        "ratect-dependency-output-stderr-{}",
+        std::process::id()
+    ));
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+
+    let mut cmd = CommandBuilder::new("sh");
+    cmd.arg("-c");
+    cmd.arg(r#"exec "$0" "$@" 2>"$RATECT_TEST_STDERR""#);
+    cmd.arg(env!("CARGO_BIN_EXE_ratect-compat"));
+    cmd.args(["-o", "fancy", "-f"]);
+    cmd.arg(dependency_output_config_path());
+    cmd.arg("with-dependency");
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("RATECT_TEST_STDERR", &stderr_path);
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n @ 1..) = reader.read(&mut buf) {
+            if tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut output = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !String::from_utf8_lossy(&output).contains("finished with exit code")
+        && Instant::now() < deadline
+    {
+        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+            output.extend_from_slice(&chunk);
+        }
+    }
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("ratect did not exit after the task finished")
+        .expect("failed to wait for ratect");
+    let output = String::from_utf8_lossy(&output);
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&stderr_path);
+
+    assert!(
+        status.success(),
+        "{status:?}: {output:?}\nstderr:\n{stderr}"
+    );
+    assert!(
+        output.contains("finished with exit code"),
+        "summary line missing from the pty: {output:?}"
+    );
+    assert!(
+        output.contains("task-stdout-marker"),
+        "task output missing from the pty: {output:?}"
+    );
+    for marker in DEPENDENCY_MARKERS {
+        assert!(!output.contains(marker), "{marker} on the pty: {output:?}");
+        assert!(!stderr.contains(marker), "{marker} on stderr:\n{stderr}");
     }
 }
 
