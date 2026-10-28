@@ -1392,6 +1392,9 @@ impl ContainerRuntime for FakeContainerRuntime {
             .lock()
             .unwrap()
             .insert(format!("sidecar-id-{name}"));
+        // The main command's exit, so a test can tell what happened while
+        // it was still running from what happened after.
+        self.push(format!("run-exited:{name}"));
         let drain = self.run_drain_delays.lock().unwrap().get(name).copied();
         if let Some(drain) = drain {
             tokio::time::sleep(drain).await;
@@ -10146,6 +10149,41 @@ async fn max_parallelism_does_not_gate_health_check_waits() {
         elapsed < delay * 2,
         "health-check waits should still overlap even under --max-parallelism 1 — only \
              pulls/builds, starts, and setup-command execution are gated (elapsed: {elapsed:?})"
+    );
+}
+
+/// The task container's run holds no `--max-parallelism` slot: under a cap
+/// of 1, its own setup command — which takes one, and runs alongside the
+/// main command under the Batect-compatible dialect's readiness gate —
+/// still runs while the main command is going. A run holding the only slot
+/// would leave the setup command waiting until the main command exited,
+/// and dropped with the gate then. Bounded, so a deadlock fails rather than
+/// hangs.
+#[tokio::test(start_paused = true)]
+async fn max_parallelism_never_holds_a_slot_for_the_task_containers_run() {
+    let config = with_own_setup_commands(config_with_containers(&[], &[]), &["app"]);
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(10));
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            max_parallelism: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        engine.run_task("start", &[]),
+    )
+    .await
+    .expect("the run should not deadlock")
+    .unwrap();
+
+    let events = docker.events();
+    assert!(
+        event_index(&events, "exec:sidecar-id-app:setup-app")
+            < event_index(&events, "run-exited:app"),
+        "the setup command should run while the main command is still running: {events:?}"
     );
 }
 

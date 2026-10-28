@@ -3,7 +3,12 @@
 **Status:** Accepted — image work shipped
 ([#312](https://github.com/or1can/ratect/issues/312), ratect-compat 0.33.0 ·
 ratect 0.12.0); container creation planned
-([#603](https://github.com/or1can/ratect/issues/603)).
+([#603](https://github.com/or1can/ratect/issues/603)). Corrected on
+2026-10-28, before that release shipped
+([#360](https://github.com/or1can/ratect/issues/360)): Decision 2 called a
+capped create and start "Batect's every-step model, narrowed to the steps
+Ratect caps", but Batect never caps a start. The decision itself is
+unchanged, so no rework follows.
 
 ## Context
 
@@ -75,8 +80,11 @@ started proceeds without regard to its dependencies:
    it creates — so a run that fails between the two leaves nothing
    unaccounted for. Under `--max-parallelism`, a create and a start each hold
    one permit, released when that step ends; a permit is never held while
-   waiting on a dependency, so a small limit can't deadlock a chain. This is
-   Batect's every-step model, narrowed to the steps Ratect caps.
+   waiting on a dependency, so a small limit can't deadlock a chain. Batect
+   caps a create too, but never a start: its run step, start included, is
+   exempt for every container — a divergence
+   [`docs/differences-from-batect.md`](../docs/differences-from-batect.md#cli-flags)
+   records.
 3. **A container starts only when every container it depends on has passed
    its readiness gate.** Unchanged, and the only gate there is. The task's
    own container's start is gated the same way; what its *own* gate does
