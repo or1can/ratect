@@ -2042,6 +2042,95 @@ fn a_line_clipped_inside_a_bold_command_ends_its_style() {
     assert!(display_width(row) <= 20);
 }
 
+/// Runs a task container that writes `output` raw and then finishes with no
+/// cleanup — `--no-cleanup-after-success` — returning what was printed
+/// after the block froze.
+fn finished_without_cleanup(output: &str) -> String {
+    let (logger, mut buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    let frozen = buffer.contents();
+    use std::io::Write;
+    write!(buffer, "{output}").unwrap();
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(300),
+    });
+    buffer.contents()[frozen.len()..].to_string()
+}
+
+/// With cleanup off there is no cleanup line to separate the summary from
+/// the task's output, so a line break does instead: it ends output that
+/// didn't end its own line, and otherwise leaves Batect's blank line. No
+/// cleanup line flashes up, as Batect's does, saying something will be
+/// removed.
+#[test]
+fn the_summary_is_separated_from_task_output_without_cleanup() {
+    assert_eq!(
+        finished_without_cleanup("hello"),
+        "hello\nt finished with exit code 0 in 0.3s.\n"
+    );
+    assert_eq!(
+        finished_without_cleanup("hello\n"),
+        "hello\n\nt finished with exit code 0 in 0.3s.\n"
+    );
+}
+
+/// No task container ran, so there is no output to separate from.
+#[test]
+fn no_separator_when_the_task_container_never_ran() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    let before = buffer.contents();
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(300),
+    });
+    assert_eq!(
+        &buffer.contents()[before.len()..],
+        "t finished with exit code 0 in 0.3s.\n"
+    );
+}
+
+/// The failed summary is separated the same way.
+#[test]
+fn the_failed_summary_is_separated_from_task_output_without_cleanup() {
+    let (logger, mut buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    use std::io::Write;
+    write!(buffer, "partial").unwrap();
+    logger.post(TaskEvent::TaskFailed {
+        task: "t".into(),
+        duration: Duration::from_millis(300),
+    });
+    assert!(
+        buffer
+            .contents()
+            .ends_with("partial\nt failed after 0.3s.\n"),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
 /// With colour off, the lines that bold a command, an image or names carry
 /// no styling at all — the same text, byte for byte.
 #[test]

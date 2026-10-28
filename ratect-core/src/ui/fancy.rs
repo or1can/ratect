@@ -135,6 +135,12 @@ struct State {
     /// painted — same purpose as `painted_width`, for the single cleanup
     /// line rather than the multi-line startup block.
     cleanup_width: Option<u16>,
+    /// The task container's raw output may be the last thing on screen,
+    /// not yet followed by a line of this logger's own — from its
+    /// `RunningTaskContainer` until the cleanup line's first paint. While
+    /// set, a summary line has to start with the separator that paint
+    /// would have written (see `repaint_cleanup`).
+    separator_owed: bool,
     /// Whether any task has rendered yet — a blank separator line goes
     /// between one task's output and the next's, matching the simple
     /// logger.
@@ -643,8 +649,11 @@ impl FancyEventLogger {
             // (`docker.rs`, outside this logger's control) and may not end
             // in a newline, so painting cleanup directly would land on the
             // same row as that output — which the *next* repaint's
-            // cursor-up-and-clear would then erase, destroying it.
+            // cursor-up-and-clear would then erase, destroying it. With no
+            // cleanup to paint, the summary line writes it instead
+            // (`separator_owed`).
             frame.push('\n');
+            state.separator_owed = false;
         }
         frame.push_str(&fit_row(&self.cleanup_text(state), width));
         frame.push('\n');
@@ -665,6 +674,17 @@ impl FancyEventLogger {
                 self.console.println("");
             }
             state.cleanup_shown = false;
+        }
+    }
+
+    /// Ends the task container's output with the separator the cleanup
+    /// line would have, when no cleanup line was painted after it — cleanup
+    /// was off — so a summary never runs onto that output's last row.
+    /// Batect gets the same blank line by painting a cleanup line anyway,
+    /// which then says containers are left to remove when none will be.
+    fn pay_separator(&self, state: &mut State) {
+        if std::mem::take(&mut state.separator_owed) {
+            self.console.println("");
         }
     }
 
@@ -981,6 +1001,7 @@ impl EventSink for FancyEventLogger {
                 state.created_containers.insert(container);
             }
             TaskEvent::RunningTaskContainer { container, command } => {
+                state.separator_owed = true;
                 if !state.keep_updating_startup {
                     return;
                 }
@@ -1042,6 +1063,7 @@ impl EventSink for FancyEventLogger {
                 // last painted, otherwise leave it and print the summary
                 // on a fresh line below.
                 self.clear_cleanup_line(&mut state);
+                self.pay_separator(&mut state);
                 self.console.println(&super::format_task_summary(
                     &self.console,
                     &self.console.bold(&task),
@@ -1053,6 +1075,7 @@ impl EventSink for FancyEventLogger {
             // place. The error itself was an `Error` event, before cleanup.
             TaskEvent::TaskFailed { task, duration } => {
                 self.clear_cleanup_line(&mut state);
+                self.pay_separator(&mut state);
                 self.console.println(&super::format_task_failed_summary(
                     &self.console,
                     &task,

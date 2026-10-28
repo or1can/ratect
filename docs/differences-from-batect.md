@@ -544,6 +544,10 @@ tables above:
   healthy, and its setup commands done — reads `ready`, where Batect's reads
   `running`, which would fit a container that has started but isn't yet
   healthy just as well.
+- **`fancy` mode shows no cleanup line when cleanup is off.** Under
+  `--no-cleanup` or `--no-cleanup-after-success`, Batect briefly shows
+  `Cleaning up: N containers (...) left to remove...` when the task's
+  container exits, though nothing will be removed. Ratect shows none.
 - **`fancy` mode draws a multi-line setup command on one row.** Each line
   break in it is shown as a space, and the command runs as usual. Batect
   can't draw it, and fails the task with an unexpected-exception error and
