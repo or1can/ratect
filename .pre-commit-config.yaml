@@ -1,0 +1,14 @@
+# The `claims` commit gate (decisions/0009; configured in `claims.toml`): a
+# git `pre-commit` hook, so it checks every commit — Claude Code's, a
+# terminal's, another editor's — not only those an agent makes. Run
+# `pre-commit install` once per clone to turn it on; until then commits go
+# unchecked, and a Claude Code session with the plugin enabled says so.
+#
+# Pinned to a release tag, as `claims`' own installation guide asks, so an
+# upstream change starts deciding this repo's commits only once a bump
+# lands here — Renovate proposes those (`renovate.json5`'s `pre-commit`).
+repos:
+  - repo: https://github.com/or1can/claims
+    rev: v0.16.2
+    hooks:
+      - id: claims

@@ -27,6 +27,15 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
+Documentation is checked on every commit by the
+[`claims`](https://github.com/or1can/claims) hook in
+`.pre-commit-config.yaml`. Turn it on once per clone, with
+[pre-commit](https://pre-commit.com) and Python 3.11 or later:
+
+```bash
+pre-commit install
+```
+
 ## Conventions
 
 - **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/)
