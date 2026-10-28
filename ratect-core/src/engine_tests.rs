@@ -4592,6 +4592,60 @@ async fn setup_commands_own_working_directory_overrides_the_containers() {
     assert_eq!(working_directory.as_deref(), Some("/from-setup-command"));
 }
 
+/// Under `run_as_current_user`, a setup command in its own container runs as
+/// the mapped user, as Batect's exec sends `uid:gid` (ratect#347).
+#[tokio::test]
+async fn a_setup_command_runs_as_its_containers_mapped_user() {
+    let config = config_with_database_dependency(|database| {
+        *database = container_with_run_as_current_user("postgres:16", None, "/home/container-user");
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./apply-migrations.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    });
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let expected_user = crate::user::current_user().unwrap();
+    let (_, _, user) = docker.exec_for("./apply-migrations.sh").unwrap();
+    assert_eq!(user, Some((expected_user.uid, expected_user.gid)));
+}
+
+/// A setup command with `run_in` runs with no user mapping, even when the
+/// container declaring it has `run_as_current_user`: the mapping is the
+/// declaring container's, not the one the command runs in.
+#[tokio::test]
+async fn a_setup_command_with_run_in_runs_with_no_user_mapping() {
+    let mut config = config_with_database_dependency(|database| {
+        *database = container_with_run_as_current_user(
+            "postgres:16",
+            Some(vec!["seed-client".to_string()]),
+            "/home/container-user",
+        );
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: Some("seed-client".to_string()),
+        }]);
+    });
+    config.containers.insert(
+        "seed-client".to_string(),
+        container("my-org/db-tools", None),
+    );
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (_, _, user) = docker.exec_for("./seed.sh").unwrap();
+    assert_eq!(user, None);
+}
+
 /// `run_in` (ratect#111): the declaring container's readiness gate runs the
 /// command, but Docker's `exec` targets the named dependency's container —
 /// the whole point being that the tooling lives in a different image.
@@ -11776,6 +11830,113 @@ async fn an_always_pulled_image_runs_by_the_pulled_id_even_when_one_is_local() {
             "{name}"
         );
     }
+}
+
+/// [`two_containers_on_one_image`], with the task's container (`build-env`)
+/// and its dependency (`helper`) each under a policy of their own.
+fn one_image_under_two_policies(
+    build_env: crate::config::ImagePullPolicy,
+    helper: crate::config::ImagePullPolicy,
+) -> Config {
+    let mut config = two_containers_on_one_image(build_env);
+    config.containers["helper"].image_pull_policy = Some(helper);
+    config
+}
+
+/// The pull decision is shared per image *and* policy, as Batect's
+/// `PullImage` source compares both: a dependency's `IfNotPresent`,
+/// decided from a local copy, doesn't stand in for the task container's
+/// `Always`, whichever resolves first (ratect#313). The fake's local copy
+/// never changes, so each container shows which decision it got.
+#[tokio::test]
+async fn an_always_container_pulls_beside_an_if_not_present_one_that_found_the_image_locally() {
+    use crate::config::ImagePullPolicy::{Always, IfNotPresent};
+    let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+    let engine = engine(
+        one_image_under_two_policies(Always, IfNotPresent),
+        docker.clone(),
+    );
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    let pulls: Vec<_> = docker
+        .events()
+        .into_iter()
+        .filter(|e| e.starts_with("pull:"))
+        .collect();
+    assert_eq!(pulls, vec!["pull:alpine:3.18"]);
+    assert_eq!(
+        docker.image_for("build-env").as_deref(),
+        Some("sha256:pulled-alpine:3.18")
+    );
+    assert_eq!(
+        docker.image_for("helper").as_deref(),
+        Some("sha256:local-alpine:3.18")
+    );
+}
+
+/// The policies the other way round: an `Always` dependency's pull doesn't
+/// stand in for the task container's `IfNotPresent` lookup, which runs the
+/// image it found by its own ID.
+#[tokio::test]
+async fn an_if_not_present_container_looks_up_its_image_beside_an_always_one_that_pulled_it() {
+    use crate::config::ImagePullPolicy::{Always, IfNotPresent};
+    let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+    let engine = engine(
+        one_image_under_two_policies(IfNotPresent, Always),
+        docker.clone(),
+    );
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    let pulls: Vec<_> = docker
+        .events()
+        .into_iter()
+        .filter(|e| e.starts_with("pull:"))
+        .collect();
+    assert_eq!(pulls, vec!["pull:alpine:3.18"]);
+    assert_eq!(
+        docker.image_for("helper").as_deref(),
+        Some("sha256:pulled-alpine:3.18")
+    );
+    assert_eq!(
+        docker.image_for("build-env").as_deref(),
+        Some("sha256:local-alpine:3.18")
+    );
+}
+
+/// An `--override-image` resolves under `IfNotPresent`, so overriding a
+/// dependency onto the image an `Always` container uses gives each its own
+/// decision.
+#[tokio::test]
+async fn an_image_override_gets_its_own_pull_decision_beside_an_always_container() {
+    use crate::config::ImagePullPolicy::Always;
+    let mut config = one_image_under_two_policies(Always, Always);
+    config.containers["helper"].image = Some("busybox:1".to_string());
+    let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            image_overrides: HashMap::from([("helper".to_string(), "alpine:3.18".to_string())]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    let pulls: Vec<_> = docker
+        .events()
+        .into_iter()
+        .filter(|e| e.starts_with("pull:"))
+        .collect();
+    assert_eq!(pulls, vec!["pull:alpine:3.18"]);
+    assert_eq!(
+        docker.image_for("build-env").as_deref(),
+        Some("sha256:pulled-alpine:3.18")
+    );
+    assert_eq!(
+        docker.image_for("helper").as_deref(),
+        Some("sha256:local-alpine:3.18")
+    );
 }
 
 #[tokio::test]

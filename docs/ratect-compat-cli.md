@@ -114,7 +114,7 @@ connects, as in Batect.
 |---|---|---|---|
 | `--output <STYLE>` | `-o` | auto | `fancy`, `simple`, `quiet` or `all`; unset auto-selects `fancy` on an interactive console, `simple` otherwise — see [Output Styles](output-styles.md). |
 | `--no-color` | — | — | No color in Ratect's own output (a task's own output is never affected), and `simple` becomes the auto-selected style — see [Colour](output-styles.md#colour) for how it combines with `NO_COLOR`/`CLICOLOR_FORCE`. |
-| `--log-file <PATH>` | — | — | Writes Ratect's own internal logs to this file, in addition to stderr (both still governed by `RUST_LOG` — see [Environment variables](#environment-variables)). Plain text, no ANSI color codes — on stderr too, while the file is in use. |
+| `--log-file <PATH>` | — | — | Writes Ratect's own internal logs to this file, in addition to stderr: Ratect's own at `debug` and other crates' at `info`, ending with why the run failed when it did — unless `RUST_LOG` is set, in which case it governs the file too (see [Environment variables](#environment-variables)). Bollard's `debug` records, which carry each Docker request's body, a container's environment included, reach the file only when `RUST_LOG` asks for them. Plain text, one record per line, no ANSI color codes; stderr's own output, colour included, is the same with or without it. |
 
 ### Recognized, no effect
 
@@ -242,7 +242,9 @@ did the task's own container run to an exit code of its own?
    *second* signal does. A signal that arrives only during the cleanup of a run that
    had already finished ended nothing, so rule 1 applies: a passing run whose cleanup
    then completes still exits `0`. One that arrives during a prerequisite's cleanup
-   ends the run before the next task starts, and exits 128 + its number. A run whose
+   ends the run before the next task starts, and exits 128 + its number. One that
+   arrives while the run is still connecting to Docker ends it at once, with nothing
+   yet to clean up, however long the connection would have taken. A run whose
    **stdout** reader goes away — `ratect-compat test | head -n 1`, once `head` has its
    line — ends the same way, as though `SIGPIPE` had ended it: it exits `141`, after the
    same cleanup, with a notice on stderr saying the stdout closed. A closed stderr
@@ -312,7 +314,7 @@ Batect; any failure before a task starts is printed as the process exits.
 
 | Variable | Effect |
 |---|---|
-| `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`) — and, if `--log-file` is given, the same file too. See [Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log) for scoping it to Ratect's own targets. Unlike Batect, Ratect always logs to stderr regardless of `--log-file`; Batect's own default with no `--log-file` is silent. See [Differences from Batect](differences-from-batect.md#cli-flags). |
+| `RUST_LOG` | Controls log verbosity on stderr (`error`, `warn`, `info` [default], `debug`, `trace`) — and, if `--log-file` is given, in the file too, which logs Ratect's own records at `debug` when it's unset. See [Filtering `RUST_LOG`](troubleshooting.md#filtering-rust_log) for scoping it to Ratect's own targets. Unlike Batect, Ratect always logs to stderr regardless of `--log-file`; Batect's own default with no `--log-file` is silent. See [Differences from Batect](differences-from-batect.md#cli-flags). |
 | `BATECT_CACHE_TYPE` | The default for `--cache-type`: `volume` or `directory`, exactly. Any other value, empty included, fails every command but `--help` and `--version`, unless `--cache-type` is given. |
 | `DOCKER_HOST` | The default for `--docker-host` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |
 | `DOCKER_CONTEXT` | The default for `--docker-context` — see [Connecting to Docker](connecting-to-docker.md#environment-variables). |

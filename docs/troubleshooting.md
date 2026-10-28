@@ -58,15 +58,26 @@ If you do want a blanket `debug` sweep across everything (including `bollard`) b
 silence one specific dependency, add it as its own `=off` directive instead:
 `RUST_LOG=debug,bollard=off`.
 
-The same variable and syntax apply to `ratect-compat`, which can also tee
-the same output into a file with
-[`--log-file`](ratect-compat-cli.md#output).
+The same variable and syntax apply to `ratect-compat`, which can also write
+its logs to a file with [`--log-file`](ratect-compat-cli.md#output). With
+`RUST_LOG` unset, the file gets `info,ratect_core=debug,ratect_compat=debug`:
+Ratect's own `debug` records, so it has something to read even when stderr
+was quiet and says why a run failed, but other crates only at `info`, so
+`bollard`'s request bodies (below) never reach a file nobody asked to hold
+them. Setting `RUST_LOG` replaces that default for the file as well as
+stderr — `RUST_LOG=debug` puts `bollard`'s records in the file too, and
+`RUST_LOG=warn` leaves out Ratect's `debug` records, including why the run
+failed.
 
-**Before pasting a `debug` log anywhere**, remember that a `setup_commands`
-exec's output is whatever the command itself printed — so if a setup
-command's own output could include something sensitive (a failed connection
-string, a verbose HTTP client dumping request headers), that ends up in the
-debug log too. Treat `RUST_LOG=debug` (or narrower `ratect_core=debug`)
+**Before pasting a `debug` log anywhere**, remember two things it can carry.
+`bollard`'s `debug` records include the body of each Docker API request and
+response — a container's create request carries its whole `environment`,
+secrets passed through from the host included — so any directive that lets
+`bollard` through at `debug` (a bare `RUST_LOG=debug`) logs them. And a
+`setup_commands` exec's output is whatever the command itself printed — so if
+a setup command's own output could include something sensitive (a failed
+connection string, a verbose HTTP client dumping request headers), that ends
+up in the debug log too. Treat `RUST_LOG=debug` (or narrower `ratect_core=debug`)
 output with the same care you'd give the command's own output before pasting
 it into a support ticket, chat message, or CI log.
 
@@ -76,5 +87,6 @@ reporting](ratect-compat-cli.md#exit-codes-and-error-reporting).
 
 ## Coming from Batect?
 
-One deliberate difference in where the logs go, `--log-file` or not — listed
-under [Differences from Batect](differences-from-batect.md#cli-flags).
+Ratect's logs differ from Batect's on purpose — where they go, `--log-file`
+or not, and what `--log-file` writes — as listed under
+[Differences from Batect](differences-from-batect.md#cli-flags).

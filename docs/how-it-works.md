@@ -152,8 +152,8 @@ where that lives and stays current.
 The "run once", "pull once" and "build once" guarantees are in-memory and scoped to
 a **single invocation** — nothing persists between runs, so a `build_directory`
 container is rebuilt every time. Pulls and builds are memoized as shareable futures
-rather than plain sets, so two containers resolving the same image share one
-in-flight operation instead of racing. Dependency readiness, by contrast, is scoped
+rather than plain sets, so two containers resolving the same image under the same
+pull policy share one in-flight operation instead of racing. Dependency readiness, by contrast, is scoped
 to a single **task execution** and discarded when it finishes.
 
 Concurrency follows Batect's in outline: **prerequisites run sequentially**, one to
@@ -272,12 +272,14 @@ it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017
   a best-effort retry that then succeeded — via
   [`tracing`](https://docs.rs/tracing) /
   [`tracing-subscriber`](https://docs.rs/tracing-subscriber) on stderr,
-  filtered by `RUST_LOG` (defaults to `info`). A fatal error is never one of
-  these: `main.rs` prints it directly (`Error: <message>`), so it stays visible
-  under `RUST_LOG=off` and `-o quiet` alike — except for a run's failure the
-  run has already reported by another route (the task's own non-zero exit, a
-  signal, a cleanup failure the engine reported as it happened), which gets no
-  second line.
+  filtered by `RUST_LOG` (defaults to `info`; `ratect-compat`'s `--log-file`
+  defaults to `debug` for Ratect's own targets). A fatal error is never only one of these: `main.rs`
+  prints it directly (`Error: <message>`), so it stays visible under
+  `RUST_LOG=off` and `-o quiet` alike — except for a run's failure the run has
+  already reported by another route (the task's own non-zero exit, a signal, a
+  cleanup failure the engine reported as it happened), which gets no second
+  line. `ratect-compat` also records every one at `debug`, so `--log-file`
+  says why the run failed unless `RUST_LOG` filters that record out.
 
 Colours (e.g. the exit code in the task summary line, the `Error:` marker) are,
 by default, only emitted when the stream being written to is actually a

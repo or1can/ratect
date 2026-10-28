@@ -143,9 +143,11 @@ failed, prerequisites included.
 reference](ratect-compat-config-reference.md#container)): `IfNotPresent`, the default, checks whether
 the image already exists locally first and skips the pull entirely if so; `Always`
 skips that check and pulls unconditionally. Either way, the *decision* (pull or don't)
-is made once per image name per `ratect` invocation, same as before this field
-existed — a dependency and the task's own container sharing an image name don't
-re-decide for each other. The container is then created from the image's
+is made once per image name and policy per run — a dependency and the task's own
+container sharing both don't re-decide for each other, but an `Always` container
+still pulls when another container already found the same image locally under
+`IfNotPresent`, and an `IfNotPresent` one still checks locally when an `Always`
+one pulled it. The container is then created from the image's
 ID — the one the pull fetched, found by the digest it reported, or the local one —
 not from its name, so a tag moved by another pull meanwhile doesn't change what
 runs, as in Batect.

@@ -107,6 +107,10 @@ fn failing_setup_command_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/failing-setup-command.yml")
 }
 
+fn empty_setup_command_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty-setup-command.yml")
+}
+
 fn task_container_setup_commands_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-setup-commands.yml")
 }
@@ -2182,6 +2186,35 @@ fn a_tasks_own_exit_code_prints_no_error_line_via_docker() {
 
 /// Requires a running Docker daemon. Run explicitly with `cargo test -- --ignored`.
 ///
+/// `--log-file` records a task's own non-zero exit as why the run failed,
+/// though stderr still prints no `Error:` line for it (ratect#326).
+#[test]
+#[ignore]
+fn the_log_file_records_a_tasks_own_exit_via_docker() {
+    let log = std::env::temp_dir().join(format!("ratect-exit-log-{}.log", std::process::id()));
+    let output = ratect_command()
+        .env_remove("RUST_LOG")
+        .args(["-o", "quiet", "-f"])
+        .arg(exit_code_config_path())
+        .arg("--log-file")
+        .arg(&log)
+        .arg("fails")
+        .output()
+        .expect("failed to run ratect");
+    let content = std::fs::read_to_string(&log).unwrap_or_default();
+    std::fs::remove_file(&log).ok();
+
+    assert_eq!(output.status.code(), Some(42));
+    assert!(
+        content.contains("The run failed: container command exited with code 42"),
+        "{content}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Error:"), "{stderr}");
+}
+
+/// Requires a running Docker daemon. Run explicitly with `cargo test -- --ignored`.
+///
 /// The failure half of quiet's pipe-safety for a failure of Ratect's own: a
 /// run that fails before its command runs leaves stdout untouched — no
 /// milestone lines, nothing — while the exit code is `125` and the error
@@ -2804,6 +2837,96 @@ fn poll_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+/// Runs `test-task` against a Docker host that accepts the connection and
+/// never answers, sends `signal` (`kill`'s name for it) once the run is
+/// connecting, and with `close` then drops the connection, as a failed
+/// connect would. Returns the exit code, how long after the signal the run
+/// ended, and stderr. No daemon involved. Quiet, with `RUST_LOG=off`,
+/// since the notice must show even then (decisions/0017).
+#[cfg(unix)]
+fn signal_while_connecting(signal: &str, close: bool) -> (Option<i32>, Duration, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let host = format!("tcp://{}", listener.local_addr().unwrap());
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.yml"))
+        .args(["--docker-host", &host, "-o", "quiet", "test-task"])
+        .env("RUST_LOG", "off")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let mut connection = None;
+    if !poll_until(Duration::from_secs(30), || {
+        connection = listener.accept().ok();
+        connection.is_some()
+    }) {
+        let _ = child.kill();
+        panic!("ratect never connected to the stub Docker host");
+    }
+    let signalled = Command::new("kill")
+        .args([&format!("-{signal}"), &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success(), "could not send SIG{signal} to ratect");
+    let sent = Instant::now();
+    if close {
+        std::thread::sleep(Duration::from_millis(50));
+        drop(connection.take());
+    }
+
+    let mut status = None;
+    if !poll_until(Duration::from_secs(5), || {
+        status = child.try_wait().expect("failed to poll ratect");
+        status.is_some()
+    }) {
+        let _ = child.kill();
+    }
+    let ended = sent.elapsed();
+    let output = child.wait_with_output().expect("failed to wait on ratect");
+    (
+        status.and_then(|s| s.code()),
+        ended,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A signal while the run is still connecting to Docker ends it promptly,
+/// with the signal's exit code and the notice saying so, rather than being
+/// held until the connect finishes (ratect#319).
+#[test]
+#[cfg(unix)]
+fn a_signal_while_connecting_ends_the_run_promptly() {
+    for (signal, code, notice) in [
+        ("INT", 130, "Interrupted; not starting task 'test-task'."),
+        (
+            "TERM",
+            143,
+            "Terminated by SIGTERM; not starting task 'test-task'.",
+        ),
+    ] {
+        let (exit, ended, stderr) = signal_while_connecting(signal, false);
+
+        assert_eq!(exit, Some(code), "SIG{signal}, stderr:\n{stderr}");
+        assert!(ended < Duration::from_secs(2), "SIG{signal} took {ended:?}");
+        assert!(stderr.contains(notice), "SIG{signal}, stderr:\n{stderr}");
+        assert!(!stderr.contains("Error:"), "SIG{signal}, stderr:\n{stderr}");
+    }
+}
+
+/// The signal wins over the connect failure it raced: the run still exits
+/// with the signal's code, not `1` (ratect#319).
+#[test]
+#[cfg(unix)]
+fn a_signal_while_connecting_wins_over_the_failed_connect() {
+    let (exit, _, stderr) = signal_while_connecting("INT", true);
+
+    assert_eq!(exit, Some(130), "stderr:\n{stderr}");
+    assert!(!stderr.contains("Error:"), "stderr:\n{stderr}");
 }
 
 /// Runs `task` from the cleanup-outcome fixture with a bystander container
@@ -4053,6 +4176,42 @@ fn a_readiness_failure_hints_no_cleanup_after_failure_via_docker() {
             .expect("failed to run docker network rm");
     }
     assert!(docker_ids("container", filter, true).is_empty());
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// An empty setup command is left to the daemon to refuse, as in Batect,
+/// and that refusal fails the task, naming the command and its container
+/// (ratect#347) — see `tests/fixtures/empty-setup-command.yml`.
+#[test]
+#[ignore]
+fn an_empty_setup_command_is_refused_by_the_daemon_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(empty_setup_command_config_path())
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("Failed to run setup command ''"),
+        "names the setup command:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("'database'"),
+        "names the container:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("No exec command specified"),
+        "carries the daemon's refusal:\n{stderr}"
+    );
+    let filter = "label=eu.orican.ratect.project=ratect-empty-setup-command-test";
+    assert!(docker_ids("container", filter, true).is_empty());
+    assert!(docker_ids("network", filter, false).is_empty());
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.
@@ -8947,6 +9106,149 @@ fn log_file_must_be_a_file_or_not_yet_exist() {
         log.contains("127.0.0.1:9"),
         "the log file holds no log: {log:?}"
     );
+}
+
+/// Runs `args` from a fresh directory against a daemon that refuses the
+/// connection, with `RUST_LOG` set to `rust_log` or unset, and `--log-file`
+/// when `log` is set. Returns the exit code, stderr and the log file's
+/// content (empty with no `--log-file`).
+fn run_with_log_file(
+    rust_log: Option<&str>,
+    log: bool,
+    args: &[&str],
+) -> (Option<i32>, String, String) {
+    static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let project = std::env::temp_dir().join(format!(
+        "ratect-log-file-{}-{}",
+        std::process::id(),
+        RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&project).unwrap();
+    let mut command = ratect_command();
+    command
+        .current_dir(&project)
+        .env_remove("RUST_LOG")
+        .env("DOCKER_HOST", "tcp://127.0.0.1:9")
+        .arg("-f")
+        .arg(sample_config_path());
+    if let Some(rust_log) = rust_log {
+        command.env("RUST_LOG", rust_log);
+    }
+    if log {
+        command.args(["--log-file", "out.log"]);
+    }
+    let output = command.args(args).output().expect("failed to run ratect");
+    let content = std::fs::read_to_string(project.join("out.log")).unwrap_or_default();
+    std::fs::remove_dir_all(&project).ok();
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        content,
+    )
+}
+
+/// `--log-file` records why a run failed, at its own default filter —
+/// Ratect's own `debug` records, with `RUST_LOG` unset (ratect#326). Not
+/// every crate's: bollard's `debug` records carry each request's body, a
+/// container's environment included, which a file nobody asked for
+/// secrets in mustn't hold.
+#[test]
+fn the_log_file_records_why_the_run_failed() {
+    let (code, stderr, log) = run_with_log_file(None, true, &["test-task"]);
+
+    assert_eq!(code, Some(125), "{stderr}");
+    assert!(
+        log.contains("The run failed: Couldn't reach the Docker daemon at 'tcp://127.0.0.1:9'"),
+        "the log file doesn't say why the run failed: {log:?}"
+    );
+    assert!(
+        !log.contains(" DEBUG bollard"),
+        "the log file holds bollard's debug records: {log:?}"
+    );
+}
+
+/// A `RUST_LOG` that is set still governs the file (ratect#326): this one
+/// lets bollard's `debug` records in, which the file's own default
+/// keeps out, and keeps out the failure record the default lets in.
+#[test]
+fn rust_log_still_filters_the_log_file() {
+    let (_, stderr, log) = run_with_log_file(Some("bollard=debug"), true, &["test-task"]);
+
+    assert!(
+        log.contains(" DEBUG bollard"),
+        "RUST_LOG=bollard=debug kept bollard out of the file: {log:?}\n{stderr}"
+    );
+    assert!(
+        !log.contains("The run failed"),
+        "RUST_LOG=bollard=debug let ratect_compat's record in: {log:?}\n{stderr}"
+    );
+}
+
+/// `--log-file` changes nothing on stderr, and puts no ANSI code in the
+/// file (ratect#326).
+#[test]
+fn the_log_file_leaves_stderr_alone_and_holds_no_ansi() {
+    let (_, without, _) = run_with_log_file(None, false, &["test-task"]);
+    let (_, with, log) = run_with_log_file(None, true, &["test-task"]);
+
+    assert_eq!(with, without);
+    assert!(!log.is_empty());
+    assert!(!log.contains('\u{1b}'), "{log:?}");
+}
+
+/// On a terminal, stderr's log records keep their colour with `--log-file`,
+/// while the file's stay plain (ratect#326). Needs a pseudo-terminal, not a
+/// daemon: the run fails on a refused connection after logging at `debug`.
+#[test]
+fn the_log_file_stays_plain_while_a_terminals_stderr_keeps_its_colour() {
+    let project = std::env::temp_dir().join(format!("ratect-log-tty-{}", std::process::id()));
+    std::fs::create_dir_all(&project).unwrap();
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 200,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
+    cmd.cwd(&project);
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("RUST_LOG", "debug");
+    cmd.env("DOCKER_HOST", "tcp://127.0.0.1:9");
+    cmd.env_remove("NO_COLOR");
+    cmd.arg("-f");
+    cmd.arg(sample_config_path());
+    cmd.args(["--log-file", "out.log", "test-task"]);
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = reader.read_to_end(&mut output);
+        let _ = tx.send(output);
+    });
+
+    child.wait().expect("failed to wait on ratect");
+    drop(pair.master);
+    let terminal = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_default();
+    let terminal = String::from_utf8_lossy(&terminal);
+    let log = std::fs::read_to_string(project.join("out.log")).unwrap_or_default();
+    std::fs::remove_dir_all(&project).ok();
+
+    assert!(
+        terminal.contains("\u{1b}[34mDEBUG"),
+        "stderr's records lost their colour: {terminal:?}"
+    );
+    assert!(log.contains("DEBUG"), "{log:?}");
+    assert!(!log.contains('\u{1b}'), "{log:?}");
 }
 
 /// ratect#437: a file `--docker-tls-ca-cert`, `--docker-tls-cert` or

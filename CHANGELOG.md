@@ -68,6 +68,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- `ratect-compat`: `--log-file` logs Ratect's own `debug` records unless `RUST_LOG` is set, including why the run failed. With `--log-file`, stderr keeps its colour.
 - Containers and the task network are created under Batect's Docker names, `<project>-<container>-<suffix>` and `<project>-network-<suffix>`, with one random six-character suffix per task run.
 - With `RUST_LOG=debug`, a run whose `-- ADDITIONAL_ARGS` replace the image's default `CMD`, because neither the task nor its container sets a `command`, logs the `CMD` replaced.
 - `ratect config convert` (ratect only) escapes each `\` in an `image`, string-form `volumes` host path or `run_as_current_user.home_directory` (`foo\bar` becomes `foo\\bar`), and each `$` and `<` too in an `image`, or when the value would otherwise be no valid expression (`img$` becomes `img\$`). A `batect.yml` uses these as written, so the converted file loads and keeps the value; a reference in a volume host path or `home_directory` is still carried across and listed.
@@ -177,6 +178,8 @@ history, from when it was the only binary.
 - A container whose image is pulled, or found locally, is created from that image's ID rather than its tag, as in Batect.
 - A `--cache-type=directory` run no longer creates, reads or rewrites `.batect/caches/key`, as in Batect, so a cache named `key` works in that mode and an unreadable key file no longer fails the run. Nor does a run whose only caches under `--cache-type=volume` have `scope = "shared"`.
 - An existing `.batect/caches/key` is never overwritten. One with no key line or more than one, or that can't be read, is an error naming the file, as in Batect, instead of being replaced with a new key or having its first key used. Bytes in it that aren't UTF-8 no longer count as unreadable. A key path that is a symbolic link to nothing is an error too, instead of a new key file being created wherever it points.
+- `image_pull_policy: Always` is honoured even when another container already used the same image under `IfNotPresent`, including through `--override-image`.
+- A Ctrl+C, `SIGTERM` or `SIGHUP` while a run is still connecting to Docker ends it promptly with the signal's exit code, instead of waiting for the connection to finish or fail.
 
 ### Security
 

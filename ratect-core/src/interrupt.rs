@@ -188,6 +188,13 @@ impl TerminationSignal {
         }
     }
 
+    /// The notice for a run this signal ends before `task` starts — said
+    /// because nothing else would say it: `main` prints no `Error:` for a
+    /// signalled run (decisions/0017).
+    pub fn not_starting(self, task: &str) -> String {
+        format!("{}; not starting task '{task}'.", self.ended_run())
+    }
+
     /// How to ask a second time — the press or signal that climbs the
     /// cleanup ladder's next rung, whichever rung the message is about.
     pub fn send_again(self) -> &'static str {
@@ -309,22 +316,26 @@ impl Interrupt {
         for signal in TerminationSignal::ALL {
             let interrupt = Arc::clone(self);
 
-            tokio::spawn(async move {
-                let mut stream = match tokio::signal::unix::signal(signal.kind()) {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        // Nothing to report to the user: a signal they
-                        // haven't sent yet isn't a problem they can act on,
-                        // and the run itself is unaffected.
-                        tracing::debug!(
-                            ?error,
-                            signal = signal.name(),
-                            "Could not listen for this signal; it will not clean up"
-                        );
-                        return;
-                    }
-                };
+            // Subscribed here, not inside the task: the handler is then
+            // installed before this returns, rather than whenever the task
+            // first runs, so a signal straight after — while connecting to
+            // Docker, say — is recorded instead of killing the process.
+            let mut stream = match tokio::signal::unix::signal(signal.kind()) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // Nothing to report to the user: a signal they
+                    // haven't sent yet isn't a problem they can act on,
+                    // and the run itself is unaffected.
+                    tracing::debug!(
+                        ?error,
+                        signal = signal.name(),
+                        "Could not listen for this signal; it will not clean up"
+                    );
+                    continue;
+                }
+            };
 
+            tokio::spawn(async move {
                 while stream.recv().await.is_some() {
                     interrupt.record_signal(signal);
                 }
@@ -421,6 +432,28 @@ impl Interrupt {
     /// else arrived in between — immediately if that many already have.
     pub async fn wait_for_interrupts(&self, count: usize) {
         self.wait_until(|| self.interrupt_count() >= count).await;
+    }
+
+    /// Awaits `work` unless a termination signal arrives first — one
+    /// already recorded included — in which case `work` is dropped
+    /// unfinished and this fails with that signal's [`TaskInterrupted`]. A
+    /// signal wins over `work` finishing in the same instant, so a connect
+    /// that fails as the run is abandoned reports the signal, not the
+    /// failure.
+    ///
+    /// For what a run awaits before the engine's own interrupt handling
+    /// starts: connecting to Docker can hang for as long as the connection's
+    /// timeout, and a signal would otherwise be held until it ended, or lost
+    /// if it failed (ratect#319).
+    pub async fn unless_signalled<F: std::future::Future>(
+        &self,
+        work: F,
+    ) -> Result<F::Output, TaskInterrupted> {
+        tokio::select! {
+            biased;
+            () = self.interrupted() => Err(TaskInterrupted::new(self.last_signal())),
+            output = work => Ok(output),
+        }
     }
 
     async fn wait_until(&self, reached: impl Fn() -> bool) {

@@ -275,10 +275,13 @@ type PendingCreates<'a> = Mutex<
 /// for a `HashMap` lookup/insert, never across `.await` — same
 /// double-checked-lock convention this file already used for
 /// `pulled_images`/`built_images` pre-0.15.0.
-fn get_or_create_cell<T>(cells: &Mutex<HashMap<String, Cell<T>>>, key: &str) -> Cell<T> {
+fn get_or_create_cell<K: Eq + std::hash::Hash, T>(
+    cells: &Mutex<HashMap<K, Cell<T>>>,
+    key: K,
+) -> Cell<T> {
     let mut cells = cells.lock().unwrap();
     cells
-        .entry(key.to_string())
+        .entry(key)
         .or_insert_with(|| Arc::new(OnceCell::new()))
         .clone()
 }
@@ -929,15 +932,20 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// unchanged — method resolution derefs through the `Arc` for free.
     docker: Arc<D>,
     executed_tasks: Mutex<HashSet<String>>,
-    /// Image name -> the shared, memoized pull outcome for that name (the
-    /// image ID to run — see `resolve_pulled_image`), so an image
-    /// referenced by multiple containers (across tasks, or by concurrent
-    /// branches of one task's own dependency graph — 0.15.0) is only ever
-    /// decided/pulled once per invocation. A `ReadyCell` rather
+    /// Image name and pull policy -> the shared, memoized pull outcome for
+    /// that pair (the image ID to run — see `resolve_pulled_image`), so an
+    /// image referenced by multiple containers (across tasks, or by
+    /// concurrent branches of one task's own dependency graph — 0.15.0) is
+    /// only ever decided/pulled once per invocation for each policy. The
+    /// policy is part of the key, as it is of Batect's `PullImage` source,
+    /// so an `IfNotPresent` container finding the image locally never
+    /// stands in for an `Always` one's pull, nor the reverse (ratect#313).
+    /// Batect re-decides for each task of a prerequisite chain; this
+    /// doesn't — see docs/differences-from-batect.md. A `ReadyCell` rather
     /// than a plain `HashSet`+check-then-act specifically so two containers
     /// racing to resolve the same image concurrently share one in-flight
     /// pull instead of double-pulling.
-    pulled_images: Mutex<HashMap<String, ReadyCell>>,
+    pulled_images: Mutex<HashMap<(String, crate::config::ImagePullPolicy), ReadyCell>>,
     /// Container name -> the shared, memoized build outcome (the built image
     /// ID) for that container, so a container with `build_directory` is only
     /// ever built once per invocation even if referenced by multiple tasks,
@@ -1775,10 +1783,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             return Ok(());
         }
         let signal = self.interrupt.last_signal();
-        self.post_notice(format!(
-            "{}; not starting task '{next}'.",
-            signal.ended_run()
-        ));
+        self.post_notice(signal.not_starting(next));
         Err(crate::interrupt::TaskInterrupted::new(signal).into())
     }
 
@@ -1857,12 +1862,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         }
     }
 
-    /// Pulls `image` under `policy` (deduped by image name across the whole
-    /// invocation via `pulled_images` — see `resolve_image`), returning the
-    /// ID of the image to run: the one the pull fetched, or under
-    /// `IfNotPresent` the local one the lookup found — never `image` itself,
-    /// a tag that could be moved before the container is created, as Batect
-    /// runs a pulled image by ID too (ratect#301). Shared by
+    /// Pulls `image` under `policy` (deduped by image name and policy across
+    /// the whole invocation via `pulled_images` — see `resolve_image`),
+    /// returning the ID of the image to run: the one the pull fetched, or
+    /// under `IfNotPresent` the local one the lookup found — never `image`
+    /// itself, a tag that could be moved before the container is created, as
+    /// Batect runs a pulled image by ID too (ratect#301). Shared by
     /// `resolve_image`'s two pull-shaped callers: a container's own
     /// configured `image`, and an `--override-image` replacement (always
     /// `IfNotPresent`, never the container's own configured policy).
@@ -1871,7 +1876,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         image: &str,
         policy: crate::config::ImagePullPolicy,
     ) -> Result<String> {
-        let cell = get_or_create_cell(&self.pulled_images, image);
+        let cell = get_or_create_cell(&self.pulled_images, (image.to_string(), policy));
         let result = cell
             .get_or_init(|| async {
                 let outcome: Result<String> = async {
@@ -1940,20 +1945,20 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     }
 
     /// Resolves `container_config`'s `image` (pulling it, deduped by image
-    /// name) or `build_directory` (building it, deduped by `container_name`)
-    /// into the image reference to actually run. Shared by a task's own
-    /// container and its dependency containers — both need exactly this and
-    /// nothing else, which is also why dependency containers now support
-    /// `build_directory` (they didn't before this was unified).
+    /// name and pull policy) or `build_directory` (building it, deduped by
+    /// `container_name`) into the image reference to actually run. Shared by
+    /// a task's own container and its dependency containers — both need
+    /// exactly this and nothing else, which is also why dependency containers
+    /// now support `build_directory` (they didn't before this was unified).
     ///
     /// `image`'s `image_pull_policy` (`IfNotPresent` by default, matching
     /// Batect) decides whether a pull actually reaches the registry the
-    /// first time an image name is seen this session: `IfNotPresent` skips
-    /// it entirely when `ContainerRuntime::local_image_id` already
-    /// finds it; `Always` never checks. Either way, once decided for a
-    /// given image name, later containers reusing that same name within
-    /// this session reuse the decision rather than re-checking or
-    /// re-pulling.
+    /// first time an image name is seen under that policy this session:
+    /// `IfNotPresent` skips it entirely when
+    /// `ContainerRuntime::local_image_id` already finds it; `Always` never
+    /// checks. Either way, once decided for a given image name and policy,
+    /// later containers reusing that same pair within this session reuse
+    /// the decision rather than re-checking or re-pulling.
     ///
     /// Built images are tagged `<project_name>-<container_name>` — the same
     /// convention Batect uses — so `docker images` shows something a user can
@@ -2002,7 +2007,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             let policy = container_config.image_pull_policy.unwrap_or_default();
             self.resolve_pulled_image(image, policy).await
         } else if let Some(build_directory) = &container_config.build_directory {
-            let cell = get_or_create_cell(&self.built_images, container_name);
+            let cell = get_or_create_cell(&self.built_images, container_name.to_string());
             let result = cell
                 .get_or_init(|| async {
                     let build: Result<String> = async {
@@ -2130,7 +2135,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         containers: &HashMap<String, Container>,
         cells: &Mutex<HashMap<String, ReadyCell>>,
     ) -> Result<String> {
-        let cell = get_or_create_cell(cells, name);
+        let cell = get_or_create_cell(cells, name.to_string());
         let result = cell
             .get_or_init(|| async {
                 let outcome: Result<String> = async {
@@ -3507,7 +3512,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         name: &str,
         context: &TaskRunContext<'_, 'p>,
     ) -> Result<CreatedContainer> {
-        let cell = get_or_create_cell(context.created_cells, name);
+        let cell = get_or_create_cell(context.created_cells, name.to_string());
         let result = cell
             .get_or_init(|| async {
                 let outcome: Result<CreatedContainer> = async {
@@ -3703,7 +3708,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         name: &str,
         context: &TaskRunContext<'_, 'p>,
     ) -> Result<String> {
-        let cell = get_or_create_cell(context.ready_cells, name);
+        let cell = get_or_create_cell(context.ready_cells, name.to_string());
         let result = cell
             .get_or_init(|| async {
                 let outcome: Result<String> = async {

@@ -243,3 +243,65 @@ async fn an_interrupt_racing_registration_is_not_missed() {
         .expect("a concurrently-recorded interrupt should still wake the waiter");
     handle.await.expect("recorder should not panic");
 }
+
+#[tokio::test]
+async fn unless_signalled_gives_the_works_output_when_no_signal_arrives() {
+    let interrupt = Interrupt::new();
+
+    assert_eq!(interrupt.unless_signalled(async { 7 }).await, Ok(7));
+}
+
+#[tokio::test]
+async fn unless_signalled_ends_pending_work_when_a_signal_arrives() {
+    let interrupt = Interrupt::new();
+    let signaller = Arc::clone(&interrupt);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        signaller.record_signal(TerminationSignal::Terminate);
+    });
+
+    let outcome = interrupt
+        .unless_signalled(std::future::pending::<()>())
+        .await;
+
+    assert_eq!(
+        outcome,
+        Err(TaskInterrupted::new(TerminationSignal::Terminate))
+    );
+}
+
+/// A signal already recorded wins over work that is ready at once, as it
+/// would over a connect failing in the same instant.
+#[tokio::test]
+async fn unless_signalled_prefers_a_recorded_signal_over_finished_work() {
+    let interrupt = Interrupt::new();
+    interrupt.record_signal(TerminationSignal::Hangup);
+
+    assert_eq!(
+        interrupt.unless_signalled(async { 7 }).await,
+        Err(TaskInterrupted::new(TerminationSignal::Hangup))
+    );
+}
+
+/// The handlers are installed by the time [`Interrupt::listen`] returns,
+/// not once its spawned tasks first run: on this single-threaded runtime
+/// they haven't by the time the signal is sent, and an uninstalled handler
+/// leaves `SIGHUP` its default action, which kills this test binary. A run
+/// connecting to Docker straight after arming them depends on this.
+#[cfg(unix)]
+#[tokio::test]
+async fn listen_has_installed_its_handlers_when_it_returns() {
+    let interrupt = Interrupt::new();
+    interrupt.listen();
+
+    let sent = std::process::Command::new("kill")
+        .args(["-HUP", &std::process::id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(sent.success());
+
+    tokio::time::timeout(Duration::from_secs(5), interrupt.interrupted())
+        .await
+        .expect("the signal was never recorded");
+    assert_eq!(interrupt.last_signal(), TerminationSignal::Hangup);
+}
