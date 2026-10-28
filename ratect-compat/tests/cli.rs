@@ -107,6 +107,10 @@ fn failing_setup_command_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/failing-setup-command.yml")
 }
 
+fn empty_setup_command_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/empty-setup-command.yml")
+}
+
 fn task_container_setup_commands_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/task-container-setup-commands.yml")
 }
@@ -4053,6 +4057,42 @@ fn a_readiness_failure_hints_no_cleanup_after_failure_via_docker() {
             .expect("failed to run docker network rm");
     }
     assert!(docker_ids("container", filter, true).is_empty());
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// An empty setup command is left to the daemon to refuse, as in Batect,
+/// and that refusal fails the task, naming the command and its container
+/// (ratect#347) — see `tests/fixtures/empty-setup-command.yml`.
+#[test]
+#[ignore]
+fn an_empty_setup_command_is_refused_by_the_daemon_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(empty_setup_command_config_path())
+        .arg("check")
+        .output()
+        .expect("failed to run ratect");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("Failed to run setup command ''"),
+        "names the setup command:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("'database'"),
+        "names the container:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("No exec command specified"),
+        "carries the daemon's refusal:\n{stderr}"
+    );
+    let filter = "label=eu.orican.ratect.project=ratect-empty-setup-command-test";
+    assert!(docker_ids("container", filter, true).is_empty());
+    assert!(docker_ids("network", filter, false).is_empty());
 }
 
 /// Requires a running Docker daemon with network access to pull `alpine:3.18.2`.

@@ -4592,6 +4592,60 @@ async fn setup_commands_own_working_directory_overrides_the_containers() {
     assert_eq!(working_directory.as_deref(), Some("/from-setup-command"));
 }
 
+/// Under `run_as_current_user`, a setup command in its own container runs as
+/// the mapped user, as Batect's exec sends `uid:gid` (ratect#347).
+#[tokio::test]
+async fn a_setup_command_runs_as_its_containers_mapped_user() {
+    let config = config_with_database_dependency(|database| {
+        *database = container_with_run_as_current_user("postgres:16", None, "/home/container-user");
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./apply-migrations.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    });
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let expected_user = crate::user::current_user().unwrap();
+    let (_, _, user) = docker.exec_for("./apply-migrations.sh").unwrap();
+    assert_eq!(user, Some((expected_user.uid, expected_user.gid)));
+}
+
+/// A setup command with `run_in` runs with no user mapping, even when the
+/// container declaring it has `run_as_current_user`: the mapping is the
+/// declaring container's, not the one the command runs in.
+#[tokio::test]
+async fn a_setup_command_with_run_in_runs_with_no_user_mapping() {
+    let mut config = config_with_database_dependency(|database| {
+        *database = container_with_run_as_current_user(
+            "postgres:16",
+            Some(vec!["seed-client".to_string()]),
+            "/home/container-user",
+        );
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: Some("seed-client".to_string()),
+        }]);
+    });
+    config.containers.insert(
+        "seed-client".to_string(),
+        container("my-org/db-tools", None),
+    );
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (_, _, user) = docker.exec_for("./seed.sh").unwrap();
+    assert_eq!(user, None);
+}
+
 /// `run_in` (ratect#111): the declaring container's readiness gate runs the
 /// command, but Docker's `exec` targets the named dependency's container —
 /// the whole point being that the tooling lives in a different image.

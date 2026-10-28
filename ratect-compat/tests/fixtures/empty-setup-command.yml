@@ -1,0 +1,24 @@
+# A dependency whose one setup command is the empty string. Neither loading
+# nor the engine refuses it: it reaches Docker as an exec with an empty
+# command, as in Batect, and the daemon's own refusal ("No exec command
+# specified") fails the task, naming the setup command and its container
+# (ratect#347).
+#
+# redis is used purely because its default command stays running with no
+# configuration (same reasoning as sidecar.yml) — a setup command needs a
+# running container to exec in.
+project_name: ratect-empty-setup-command-test
+containers:
+  database:
+    image: redis:7-alpine
+    setup_commands:
+      - command: ''
+  app:
+    image: alpine:3.18.2
+    dependencies:
+      - database
+tasks:
+  check:
+    run:
+      container: app
+      command: echo the task should never run
