@@ -69,6 +69,12 @@ struct FakeContainerRuntime {
     // Container names whose `run_container` fails with `StdoutClosed` while
     // the container is still running (see `with_stdout_closed_during_run`).
     stdout_closed_runs: Arc<Mutex<HashSet<String>>>,
+    // Container name -> what `run_container` waits on before sending
+    // `started` (see `holding_started`, ratect#349).
+    held_starts: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
+    // Container names whose `run_container` fails with neither `started`
+    // sent nor an exit code (see `failing_start_of_run`, ratect#349).
+    failing_run_starts: Arc<Mutex<HashSet<String>>>,
     // Every `create_container` call, in order — see `CapturedSpecs`'s own
     // doc comment.
     specs: CapturedSpecs,
@@ -257,6 +263,8 @@ impl Default for FakeContainerRuntime {
             fail_run: Default::default(),
             run_exits: Default::default(),
             stdout_closed_runs: Default::default(),
+            held_starts: Default::default(),
+            failing_run_starts: Default::default(),
             specs: Default::default(),
             build_specs: Default::default(),
             network_exists_result: Arc::new(Mutex::new(true)),
@@ -336,6 +344,29 @@ impl FakeContainerRuntime {
     /// started and still running.
     fn with_stdout_closed_during_run(self, name: &str) -> Self {
         self.stdout_closed_runs
+            .lock()
+            .unwrap()
+            .insert(name.to_string());
+        self
+    }
+
+    /// Makes `run_container` for container `name` hold back `started` (and
+    /// the rest of the run) until `release` is notified. The run is recorded
+    /// and the container counts as running before the hold, as against a
+    /// real daemon between Docker's start and the engine being told of it.
+    fn holding_started(self, name: &str, release: Arc<tokio::sync::Notify>) -> Self {
+        self.held_starts
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), release);
+        self
+    }
+
+    /// Makes `run_container` for container `name` fail as the real one does
+    /// when Docker's `start` is refused (a command not found, say): after
+    /// the container was created, with no `started` and no exit code.
+    fn failing_start_of_run(self, name: &str) -> Self {
+        self.failing_run_starts
             .lock()
             .unwrap()
             .insert(name.to_string());
@@ -1275,6 +1306,9 @@ impl ContainerRuntime for FakeContainerRuntime {
             format!("sidecar-id-{name}"),
             "the task container is run by the id its own creation returned"
         );
+        if self.failing_run_starts.lock().unwrap().contains(name) {
+            anyhow::bail!("Failed to start container '{name}'");
+        }
         self.started_containers
             .lock()
             .unwrap()
@@ -1285,6 +1319,10 @@ impl ContainerRuntime for FakeContainerRuntime {
             spec.additional_args.join(","),
             network_label(&spec.shared.network)
         ));
+        let held = self.held_starts.lock().unwrap().get(name).cloned();
+        if let Some(release) = held {
+            release.notified().await;
+        }
         // Fired before `run_delays`' own sleep (if any), so a concurrent
         // readiness task genuinely overlaps with this call still being in
         // flight, the same way it would against a real, still-running
@@ -7780,6 +7818,96 @@ async fn a_readiness_failure_is_unaffected_by_no_cleanup_after_success() {
     );
 }
 
+/// The task container's readiness gate waits for `run_container`'s
+/// `started`, not merely for the run to have been asked for: a container
+/// Docker hasn't started yet has nothing to health-check or exec into
+/// (ratect#349, NRC-2). Its setup command only fails under
+/// `with_failing_setup_command`, which this doesn't set.
+#[tokio::test(start_paused = true)]
+async fn the_task_containers_readiness_gate_waits_for_its_start() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(1))
+        .holding_started("app", release.clone());
+    let engine = engine(
+        config_with_failing_task_container_setup_command(),
+        docker.clone(),
+    );
+
+    let (result, before_start) = tokio::join!(engine.run_task("start", &[]), async {
+        // Long past anything else the run could be waiting on.
+        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+        let events = docker.events();
+        release.notify_one();
+        events
+    });
+    result.unwrap();
+
+    let gated = |e: &String| e == "wait-healthy:sidecar-id-app" || e.starts_with("exec:");
+    assert!(
+        before_start.iter().any(|e| e.starts_with("run:app:")),
+        "{before_start:?}"
+    );
+    assert!(!before_start.iter().any(gated), "{before_start:?}");
+    let events = docker.events();
+    assert!(
+        events.contains(&"exec:sidecar-id-app:./migrate.sh".to_string()),
+        "{events:?}"
+    );
+}
+
+/// A run that fails after its container was created, with no exit code —
+/// Docker refusing the start — is an infrastructure failure, so it falls
+/// in `cleanup_after_failure`'s bucket, not `cleanup_after_success`'s
+/// (ratect#349, NRC-5). One run per flag, each asserted on its own.
+#[tokio::test(start_paused = true)]
+async fn a_run_failing_after_create_is_cleaned_up_as_a_failure() {
+    for (flags, settings, removed) in [
+        ("default", TaskEngineSettings::default(), true),
+        (
+            "--no-cleanup-after-success",
+            TaskEngineSettings {
+                cleanup_after_success: false,
+                ..Default::default()
+            },
+            true,
+        ),
+        (
+            "--no-cleanup-after-failure",
+            TaskEngineSettings {
+                cleanup_after_failure: false,
+                ..Default::default()
+            },
+            false,
+        ),
+    ] {
+        let docker = FakeContainerRuntime::default().failing_start_of_run("app");
+        let engine = engine(
+            config_with_failing_task_container_setup_command(),
+            docker.clone(),
+        )
+        .with_settings(settings)
+        .unwrap();
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("Failed to start container 'app'"),
+            "{error:#}"
+        );
+
+        let events = docker.events();
+        assert!(
+            events.iter().any(|e| e.starts_with("create:app:")),
+            "{flags}: {events:?}"
+        );
+        assert_eq!(
+            events.contains(&"sidecar-stop:sidecar-id-app".to_string()),
+            removed,
+            "{flags}: {events:?}"
+        );
+    }
+}
+
 /// The task's own container's create can fail with nothing created — a spec
 /// the daemon refuses. The run fails with that error, there is nothing of
 /// the task container's to remove, and the rest of the run's cleanup still
@@ -7827,8 +7955,10 @@ async fn a_task_container_whose_create_fails_fails_the_run_and_still_cleans_up()
 }
 
 /// One task container whose own `setup_commands` entry fails — the
-/// shared fixture for the three cleanup-policy tests above, which differ
-/// only in which flag they set.
+/// shared fixture for the three readiness-failure cleanup-policy tests
+/// above, which differ only in which flag they set. The two ratect#349
+/// tests above use it too, without `with_failing_setup_command`, so for
+/// them the entry succeeds.
 fn config_with_failing_task_container_setup_command() -> Config {
     let mut containers = IndexMap::new();
     let mut app = container("alpine:3.18", None);

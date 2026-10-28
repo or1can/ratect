@@ -149,6 +149,86 @@ async fn drain_interleaved_output_flushes_a_buffered_partial_line_before_a_strea
     );
 }
 
+/// Under `-o all` the container's stderr is a `ContainerOutput` line like
+/// its stdout, in the order the two arrived — never set aside for the
+/// process's own stderr, as Batect's single stdout sink for both streams
+/// does (ratect#349, NRC-1).
+#[tokio::test]
+async fn drain_interleaved_output_posts_stderr_and_stdout_in_arrival_order() {
+    let chunks = vec![
+        Ok(bollard::container::LogOutput::StdErr {
+            message: bytes::Bytes::from_static(b"err 1\n"),
+        }),
+        Ok(bollard::container::LogOutput::StdOut {
+            message: bytes::Bytes::from_static(b"out 1\n"),
+        }),
+        Ok(bollard::container::LogOutput::StdErr {
+            message: bytes::Bytes::from_static(b"err 2\n"),
+        }),
+    ];
+    let sink = std::sync::Arc::new(RecordingEventSink::default());
+    let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+
+    drain_interleaved_output(futures::stream::iter(chunks), &dyn_sink, "app")
+        .await
+        .unwrap();
+
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["err 1", "out 1", "err 2"]);
+}
+
+/// A line is posted as soon as its newline arrives, not when the stream
+/// ends: polled once after each send, the sink already holds every
+/// completed line, one event apiece (ratect#349, U28).
+#[tokio::test]
+async fn drain_interleaved_output_posts_each_line_as_it_arrives() {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let sink = std::sync::Arc::new(RecordingEventSink::default());
+    let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+    let mut drain = std::pin::pin!(drain_interleaved_output(rx, &dyn_sink, "app"));
+
+    tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 1\n"),
+    }))
+    .unwrap();
+    assert!(futures::poll!(drain.as_mut()).is_pending());
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["Line 1"]);
+
+    tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 2\n"),
+    }))
+    .unwrap();
+    assert!(futures::poll!(drain.as_mut()).is_pending());
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["Line 1", "Line 2"]);
+
+    drop(tx);
+    drain.await.unwrap();
+}
+
+/// An interrupt drops the run future, and with it this one: what was
+/// posted before the drop stays posted, and nothing sent afterwards is
+/// (ratect#349, U33).
+#[tokio::test]
+async fn drain_interleaved_output_dropped_mid_stream_keeps_only_earlier_lines() {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let sink = std::sync::Arc::new(RecordingEventSink::default());
+    let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+    let mut drain = Box::pin(drain_interleaved_output(rx, &dyn_sink, "app"));
+
+    tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 1\n"),
+    }))
+    .unwrap();
+    assert!(futures::poll!(drain.as_mut()).is_pending());
+    drop(drain);
+    // The receiver went with the dropped future, so this send has nowhere
+    // to go — which is the point.
+    let _ = tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 2\n"),
+    }));
+
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["Line 1"]);
+}
+
 #[tokio::test]
 async fn await_log_follower_waits_for_the_spawned_task_to_finish() {
     let followers = LogFollowers::default();
