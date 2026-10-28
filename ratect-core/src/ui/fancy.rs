@@ -238,17 +238,25 @@ impl ContainerLine {
     }
 }
 
-/// Truncates `text` to `width` *display columns*, appending `...` when it
-/// had to cut — ANSI escape sequences (bold container names) count for
-/// zero, and a truncation that severed one gets a trailing reset so the
-/// styling can't bleed into the next line. Uses each character's real
-/// Unicode display width (wide CJK characters count as 2, zero-width/
-/// combining marks count as 0) rather than approximating with a plain
-/// character count — a plain count under-measures exactly the characters
-/// most likely to appear in a container name or streamed build output,
-/// which would otherwise let a rendered line wrap onto more terminal rows
-/// than this logger accounts for, desyncing its own repaint math (see
-/// [`display_width`]) from what's actually on screen.
+/// Fits `text` into `width` *display columns*, as Batect's
+/// `TextRun.limitToLength` does: unchanged if it fits (or `width` is
+/// unknown), otherwise cut and ended with `...`. ANSI escape sequences (the
+/// bold names) count for zero. The ellipsis takes the style of the last
+/// character kept — escapes between that character and the cut are written
+/// after the `...`, not before it, so a cut just after a bold name gives a
+/// bold `app...` — and below four columns it is all that is left, cut to fit
+/// (`..` at 2) in the style of the text's first character. Styling never
+/// bleeds past the end of the line: a reset follows unless the last escape
+/// written was already one.
+///
+/// Uses each character's real Unicode display width (wide CJK characters
+/// count as 2, zero-width/combining marks count as 0) rather than
+/// approximating with a plain character count — a plain count
+/// under-measures exactly the characters most likely to appear in a
+/// container name or streamed build output, which would otherwise let a
+/// rendered line wrap onto more terminal rows than this logger accounts
+/// for, desyncing its own repaint math (see [`display_width`]) from what's
+/// actually on screen.
 fn clip_to_width(text: &str, width: Option<u16>) -> String {
     let Some(width) = width else {
         return text.to_string();
@@ -259,32 +267,42 @@ fn clip_to_width(text: &str, width: Option<u16>) -> String {
     }
     let keep = width.saturating_sub(3);
     let mut out = String::new();
+    // Escapes seen since the last kept character: written before the next
+    // one if it fits, after the ellipsis if it doesn't.
+    let mut held = String::new();
+    let mut kept_any = false;
     let mut kept_width = 0;
-    let mut in_escape = false;
-    let mut saw_escape = false;
-    for c in text.chars() {
-        if in_escape {
-            out.push(c);
-            if c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-            continue;
-        }
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
         if c == '\x1b' {
-            in_escape = true;
-            saw_escape = true;
-            out.push(c);
+            held.push(c);
+            for c in chars.by_ref() {
+                held.push(c);
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
             continue;
         }
         let char_width = c.width().unwrap_or(0);
         if kept_width + char_width > keep {
             break;
         }
+        out.push_str(&std::mem::take(&mut held));
         out.push(c);
+        kept_any = true;
         kept_width += char_width;
     }
-    out.push_str("...");
-    if saw_escape {
+    if kept_any {
+        out.push_str("...");
+        out.push_str(&held);
+    } else {
+        // Nothing kept: the ellipsis is the first element's.
+        out.push_str(&held);
+        out.push_str(&"..."[..width.min(3)]);
+    }
+    let last_escape = out.rfind('\x1b').map(|at| &out[at..]);
+    if last_escape.is_some_and(|escape| !escape.starts_with("\x1b[0m")) {
         out.push_str("\x1b[0m");
     }
     out

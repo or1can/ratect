@@ -59,10 +59,91 @@ fn clip_to_width_truncates_visible_chars_only() {
     // styled string gets a trailing reset.
     let styled = "\x1b[1mapp\x1b[0m: something quite long";
     assert_eq!(clip_to_width(styled, Some(30)), styled);
+    // Cut after the name's own reset, which already closed the style — so
+    // nothing more is appended.
+    assert_eq!(clip_to_width(styled, Some(10)), "\x1b[1mapp\x1b[0m: so...");
+}
+
+/// TRUN-18: a cut exactly at the end of a styled element puts the ellipsis
+/// inside it — the escapes after the last kept character follow the `...`.
+#[test]
+fn clip_to_width_styles_the_ellipsis_like_the_last_kept_character() {
     assert_eq!(
-        clip_to_width(styled, Some(10)),
-        "\x1b[1mapp\x1b[0m: so...\x1b[0m"
+        clip_to_width("\x1b[1mapp\x1b[0m: ready...", Some(6)),
+        "\x1b[1mapp...\x1b[0m"
     );
+}
+
+/// TRUN-17: a cut inside a styled element keeps the style on the ellipsis,
+/// closes it once, and drops every later element.
+#[test]
+fn clip_to_width_inside_a_styled_element_closes_it_after_the_ellipsis() {
+    assert_eq!(
+        clip_to_width("\x1b[1mlong-container-name\x1b[0m: ready", Some(10)),
+        "\x1b[1mlong-co...\x1b[0m"
+    );
+    // An element that opens after the cut doesn't style the ellipsis.
+    assert_eq!(
+        clip_to_width("ab\x1b[1mcd\x1b[0m", Some(4)),
+        "ab\x1b[1mcd\x1b[0m"
+    );
+    assert_eq!(clip_to_width("abc\x1b[1mde\x1b[0m", Some(4)), "a...");
+}
+
+/// TRUN-19, TRUN-20: at 3 columns or fewer only the ellipsis is left, cut to
+/// fit, in the formatting of the text's first character.
+#[test]
+fn clip_to_width_below_four_columns_is_the_ellipsis_alone() {
+    let styled = "\x1b[1mapp\x1b[0m: ready";
+    assert_eq!(clip_to_width(styled, Some(3)), "\x1b[1m...\x1b[0m");
+    assert_eq!(clip_to_width(styled, Some(2)), "\x1b[1m..\x1b[0m");
+    assert_eq!(clip_to_width(styled, Some(1)), "\x1b[1m.\x1b[0m");
+    let plain = "Cleaning up...";
+    assert_eq!(clip_to_width(plain, Some(3)), "...");
+    assert_eq!(clip_to_width(plain, Some(2)), "..");
+    assert_eq!(clip_to_width(plain, Some(1)), ".");
+    // Doesn't panic.
+    clip_to_width(styled, Some(0));
+}
+
+/// TRUN-13, TRUN-22, CON-25/TRUN-34/SPD-8: what fits — exactly, or because
+/// the width is unknown — comes back unchanged.
+#[test]
+fn clip_to_width_leaves_what_fits_unchanged() {
+    let styled = "\x1b[1mapp\x1b[0m: \x1b[1mready\x1b[0m";
+    assert_eq!(clip_to_width(styled, Some(10)), styled);
+    assert_eq!(clip_to_width("", Some(5)), "");
+    let long = format!("\x1b[1mapp\x1b[0m: {}", "x".repeat(10_000));
+    assert_eq!(clip_to_width(&long, None), long);
+}
+
+/// Whatever the width, the result never takes more columns than it.
+#[test]
+fn clip_to_width_never_exceeds_the_width() {
+    for text in [
+        "\x1b[1mapp\x1b[0m: waiting for \x1b[1mdb\x1b[0m and \x1b[1mcache\x1b[0m",
+        "Cleaning up: 2 containers left to remove...",
+        "数据库: ready",
+    ] {
+        for width in 1..=display_width(text) as u16 + 2 {
+            let clipped = clip_to_width(text, Some(width));
+            assert!(
+                display_width(&clipped) <= width as usize,
+                "{clipped:?} at {width}"
+            );
+        }
+    }
+}
+
+/// CPDL-14/CPD-1: the cleanup line is clipped like the startup block.
+#[test]
+fn the_cleanup_line_is_clipped_to_the_terminal_width() {
+    let (logger, buffer) = logger_with_width(20);
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    assert_eq!(buffer.contents(), "\nCleaning up: 1 co...\n");
 }
 
 #[test]
