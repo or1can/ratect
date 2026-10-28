@@ -301,8 +301,8 @@ fn task_finished_colors_exit_code_by_outcome() {
     });
     assert_eq!(
         buffer.contents(),
-        "build finished with exit code \x1b[32m0\x1b[0m in 2.3s.\n\
-             lint finished with exit code \x1b[31m3\x1b[0m in 1m 1.0s.\n"
+        "build finished with exit code \x1b[1;32m0\x1b[0m in 2.3s.\n\
+             lint finished with exit code \x1b[1;31m3\x1b[0m in 1m 1.0s.\n"
     );
 }
 

@@ -2157,7 +2157,7 @@ fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
     );
     // The summary line, with the colored exit code.
     assert!(
-        output.contains("finished with exit code \x1b[32m0\x1b[0m"),
+        output.contains("finished with exit code \x1b[1;32m0\x1b[0m"),
         "missing summary line: {output:?}"
     );
 

@@ -730,3 +730,93 @@ fn prefix_colours_dont_depend_on_graph_order() {
         render(vec![app(), cache(), db()])
     );
 }
+
+/// Bold on the user's own names and values in a status line — the command,
+/// the setup command, the image, the task and its exit code — and nowhere
+/// else (decisions/0017).
+#[test]
+fn status_lines_bold_the_users_own_names_and_values() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(
+        &logger,
+        vec![
+            info("a", Some("shared:1"), None),
+            info("b", Some("shared:1"), None),
+        ],
+    );
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "shared:1".into(),
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "shared:1".into(),
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "a".into(),
+        command: "./init.sh".into(),
+        index: 1,
+        total: 2,
+        run_in: Some("b".into()),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "b".into(),
+        command: Some("make".into()),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "b".into(),
+        command: None,
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: "test".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(2100),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: "test".into(),
+        exit_code: 3,
+        duration: Duration::from_millis(2100),
+    });
+    let a = "\x1b[1;36ma   \x1b[0m";
+    let b = "\x1b[1;33mb   \x1b[0m";
+    let task = "\x1b[1mtest\x1b[0m";
+    assert_eq!(
+        &buffer.contents()[before..],
+        format!(
+            "{a} | Pulling \x1b[1mshared:1\x1b[0m...\n\
+             {b} | Pulling \x1b[1mshared:1\x1b[0m...\n\
+             {a} | Pulled \x1b[1mshared:1\x1b[0m.\n\
+             {b} | Pulled \x1b[1mshared:1\x1b[0m.\n\
+             {a} | Running setup command \x1b[1m./init.sh\x1b[0m (1 of 2) in b...\n\
+             {b} | Running \x1b[1mmake\x1b[0m...\n\
+             {b} | Running...\n\
+             {task} | {task} finished with exit code \x1b[1;32m0\x1b[0m in 2.1s.\n\
+             {task} | {task} finished with exit code \x1b[1;31m3\x1b[0m in 2.1s.\n"
+        )
+    );
+}
+
+/// The inner `Setup command N | ` and `Image build | ` labels stay in the
+/// default foreground, where Batect paints them white (decisions/0017).
+#[test]
+fn inner_labels_are_unstyled() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(&logger, vec![info("app", None, Some("proj-app"))]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::SetupCommandOutput {
+        container: "app".into(),
+        index: 1,
+        line: "seeded".into(),
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "proj-app".into(),
+        message: "Step 1/3".into(),
+    });
+    let app = "\x1b[1;36mapp \x1b[0m";
+    assert_eq!(
+        &buffer.contents()[before..],
+        format!(
+            "{app} | Setup command 1 | seeded\n\
+             {app} | Image build | Step 1/3\n"
+        )
+    );
+}

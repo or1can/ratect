@@ -36,6 +36,8 @@
 //!   style, where Batect prints `<task> ! `/`<container> ! ` lines on
 //!   stdout; and a failed setup command or network check is reported, where
 //!   Batect's `all` prints nothing for either.
+//! - The inner `Setup command N | ` and `Image build | ` labels are in the
+//!   default foreground, where Batect paints them white (decisions/0017).
 //!
 //! The prefix colours also differ — see `CONTAINER_COLORS`.
 //!
@@ -273,7 +275,11 @@ impl EventSink for InterleavedEventLogger {
             }
             TaskEvent::ImagePullStarting { image } => {
                 for container in Self::containers_for_image(&state, &image) {
-                    self.print_for_container(&state, &container, &format!("Pulling {image}..."));
+                    self.print_for_container(
+                        &state,
+                        &container,
+                        &format!("Pulling {}...", self.console.bold(&image)),
+                    );
                 }
             }
             // Pull progress detail stays off even here, matching Batect
@@ -295,7 +301,11 @@ impl EventSink for InterleavedEventLogger {
             TaskEvent::ContainerCreating { .. } | TaskEvent::ContainerCreated { .. } => {}
             TaskEvent::ImagePullCompleted { image } => {
                 for container in Self::containers_for_image(&state, &image) {
-                    self.print_for_container(&state, &container, &format!("Pulled {image}."));
+                    self.print_for_container(
+                        &state,
+                        &container,
+                        &format!("Pulled {}.", self.console.bold(&image)),
+                    );
                 }
             }
             TaskEvent::ImageBuildStarting { container } => {
@@ -339,7 +349,10 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!("Running setup command {command} ({index} of {total}){elsewhere}..."),
+                    &format!(
+                        "Running setup command {} ({index} of {total}){elsewhere}...",
+                        self.console.bold(&command)
+                    ),
                 );
             }
             TaskEvent::SetupCommandOutput {
@@ -372,7 +385,7 @@ impl EventSink for InterleavedEventLogger {
             }
             TaskEvent::RunningTaskContainer { container, command } => {
                 let line = match command {
-                    Some(command) => format!("Running {command}..."),
+                    Some(command) => format!("Running {}...", self.console.bold(&command)),
                     None => "Running...".to_string(),
                 };
                 self.print_for_container(&state, &container, &line);
@@ -406,7 +419,12 @@ impl EventSink for InterleavedEventLogger {
             } => {
                 self.print_for_task(
                     &state,
-                    &super::format_task_summary(&self.console, &task, exit_code, duration),
+                    &super::format_task_summary(
+                        &self.console,
+                        &self.console.bold(&task),
+                        exit_code,
+                        duration,
+                    ),
                 );
             }
             // Nothing to show of its own — `all` has no live display to
