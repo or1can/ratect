@@ -111,9 +111,8 @@ struct FakeContainerRuntime {
     // `failing_creation`).
     failing_creations: Arc<Mutex<HashSet<String>>>,
     // Container names whose `create_container` fails *after* Docker has
-    // created the container — the user-mapping upload or network join
-    // failing — so the error carries the id (see
-    // `failing_creation_after_docker_created`).
+    // created the container — a user-mapping upload failing — so the
+    // error carries the id (see `failing_creation_after_docker_created`).
     failing_creations_after_docker_created: Arc<Mutex<HashSet<String>>>,
     // Makes `build_image` fail, standing in for any Docker-layer build
     // failure (see `failing_image_build`).
@@ -509,8 +508,8 @@ impl FakeContainerRuntime {
     }
 
     /// Makes `create_container` for container `name` fail *after* Docker
-    /// has created the container — the user-mapping upload or the network
-    /// join failing — so the error carries the id the engine has to remove.
+    /// has created the container — a user-mapping upload failing — so the
+    /// error carries the id the engine has to remove.
     fn failing_creation_after_docker_created(self, name: &str) -> Self {
         self.failing_creations_after_docker_created
             .lock()
@@ -1188,9 +1187,14 @@ impl ContainerRuntime for FakeContainerRuntime {
             .unwrap()
             .contains(name)
         {
+            // `apply_user_mapping`'s own words, naming the Docker id: the
+            // container's name is `DockerClient`'s to attach (ratect#345).
+            let error = anyhow::anyhow!(
+                "Failed to upload user mapping files to container '{container_id}'"
+            );
             return Err(crate::docker::CreateContainerError {
                 created: Some(container_id),
-                error: anyhow::anyhow!("Failed to connect '{name}' to network"),
+                error,
             });
         }
         Ok(container_id)
@@ -5541,11 +5545,11 @@ async fn a_dependency_whose_start_fails_after_creation_is_still_cleaned_up() {
     assert_removed_before_network(&docker.events(), "fails");
 }
 
-/// Creation is more than Docker's `create`: the user-mapping upload and the
-/// network join come after it, and a failure there leaves a container
-/// behind. `CreateContainerError` carries its id out, and the engine
-/// registers it like any other, so it is removed — and the failure itself
-/// is what the run reports.
+/// Creation is more than Docker's `create`: the user-mapping uploads come
+/// after it, and a failure there leaves a container behind.
+/// `CreateContainerError` carries its id out, and the engine registers it
+/// like any other, so it is removed — and the failure itself is what the
+/// run reports.
 #[tokio::test]
 async fn a_dependency_whose_creation_fails_after_docker_created_it_is_still_cleaned_up() {
     let docker = FakeContainerRuntime::default().failing_creation_after_docker_created("fails");
@@ -5555,7 +5559,7 @@ async fn a_dependency_whose_creation_fails_after_docker_created_it_is_still_clea
 
     let message = format!("{:#}", result.unwrap_err());
     assert!(
-        message.contains("Failed to connect 'fails' to network"),
+        message.contains("Failed to upload user mapping files to container 'sidecar-id-fails'"),
         "the run must report the creation failure: {message}"
     );
     assert_removed_before_network(&docker.events(), "fails");

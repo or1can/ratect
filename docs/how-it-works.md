@@ -196,9 +196,9 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   first packs the build directory into an in-memory tar, honouring
   `.dockerignore` via the [`dockerignore`](../dockerignore) crate.
 - **`create_container`**: creates a container — a dependency's or the task's own
-  — ready to be started: Docker's create, the user-mapping upload, the join to the
-  task network. It hands the container's id back the moment that is done (inside
-  its error, if the upload or join failed after Docker's create), and the engine
+  — ready to be started: Docker's create, which attaches it to its network, then
+  the user-mapping uploads. It hands the container's id back the moment that is
+  done (inside its error, if an upload failed after Docker's create), and the engine
   registers it for cleanup there and then, so a container whose start later fails
   or is cut short by another dependency failing is still removed. Its own step,
   separate from starting, because it waits for less: a container is created once

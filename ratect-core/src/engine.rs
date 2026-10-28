@@ -3475,8 +3475,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         result
     }
 
-    /// Ensures `name`'s container is *created* — Docker has it, user mapping
-    /// applied and network joined, ready to be started — memoized per this
+    /// Ensures `name`'s container is *created* — Docker has it on its
+    /// network, user mapping applied, ready to be started — memoized per this
     /// one task execution via `context.created_cells`, and returns its id
     /// and the spec it was created from. Waits for exactly what creation
     /// needs and nothing else (decisions/0019, Batect's

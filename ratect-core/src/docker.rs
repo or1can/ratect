@@ -221,10 +221,10 @@ fn output_write_error(error: std::io::Error) -> anyhow::Error {
 /// Why [`ContainerRuntime::create_container`] failed — and, when Docker's own
 /// create had already succeeded, the container it left behind.
 ///
-/// Creation is more than Docker's `create` call: the user-mapping upload
-/// and the task-network join come after it and before the container counts
-/// as created (see `create_container`'s own docs), and either can fail with
-/// a container already in existence. That container is the caller's to
+/// Creation is more than Docker's `create` call: the user-mapping uploads
+/// come after it and before the container counts as created (see
+/// `create_container`'s own docs), and one can fail with a container
+/// already in existence. That container is the caller's to
 /// remove — the engine registers every id it is handed for cleanup — so the
 /// id travels with the error rather than being lost to it. `None` when
 /// nothing was created: Docker refused the `create` itself, or the spec
