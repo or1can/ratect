@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::test_support::SharedBuffer;
+use super::super::CleanupCause;
 use super::super::TaskContainerInfo;
 use super::*;
 use std::time::Duration;
@@ -425,8 +426,8 @@ fn task_failed_prints_the_failed_summary_on_the_task_prefix() {
 fn task_level_lines_use_the_task_name_prefix() {
     let (logger, buffer) = logger();
     start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
-    logger.post(TaskEvent::CleanupStarting);
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::RemovingNetwork);
     logger.post(TaskEvent::NetworkRemoved);
     logger.post(TaskEvent::TaskFinished {
@@ -525,7 +526,7 @@ fn no_prefix_is_ever_white_or_black() {
         container: "unknown".into(),
         line: "hi".into(),
     });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     let everything = format!(
         "{}{}{}",
         buffer.contents(),
@@ -952,7 +953,7 @@ fn cleanup_reports_each_containers_stop_and_removal_and_the_networks() {
         ],
     );
     let before = buffer.contents().len();
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     for container in ["app", "cache", "db"] {
         logger.post(TaskEvent::ContainerStopped {
             container: container.into(),
@@ -974,5 +975,37 @@ fn cleanup_reports_each_containers_stop_and_removal_and_the_networks() {
          db    | Container removed.\n\
          test  | Removing task network...\n\
          test  | Task network removed.\n"
+    );
+}
+
+/// The opening cleanup line names the failure it follows, on the task's
+/// prefix, the task and its exit code bold (decisions/0017).
+#[test]
+fn cleanup_names_a_failure_it_follows() {
+    let (colored, buffer, _, _) = logger_with_streams(true);
+    start_task(&colored, vec![info("db", Some("postgres:15"), None)]);
+    let before = buffer.contents().len();
+    colored.post(TaskEvent::CleanupStarting {
+        cause: Some(CleanupCause::Exited {
+            task: "test".into(),
+            exit_code: 3,
+        }),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "\x1b[1mtest\x1b[0m | Cleaning up after \x1b[1mtest\x1b[0m exited with code \x1b[1m3\x1b[0m...\n"
+    );
+
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::CleanupStarting {
+        cause: Some(CleanupCause::Failed {
+            task: "test".into(),
+        }),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "test | Cleaning up after test failed...\n"
     );
 }

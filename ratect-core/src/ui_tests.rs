@@ -165,7 +165,7 @@ fn print_stderr_class_renders_only_the_three_stderr_classes() {
     assert!(console.print_stderr_class(&TaskEvent::Notice {
         message: "n".into()
     }));
-    assert!(!console.print_stderr_class(&TaskEvent::CleanupStarting));
+    assert!(!console.print_stderr_class(&TaskEvent::CleanupStarting { cause: None }));
     assert_eq!(buffer.contents(), "Error: e\nWarning: w\nn\n");
 }
 
@@ -590,5 +590,72 @@ fn quiet_and_all_are_never_auto_selected() {
                 }
             }
         }
+    }
+}
+
+/// Each cause's opening cleanup line, subject first (decisions/0017).
+#[test]
+fn cleaning_up_names_what_it_follows() {
+    let console = Console::new(Box::new(std::io::sink()), false);
+    let db = || "db".to_string();
+    for (cause, expected) in [
+        (None, "Cleaning up..."),
+        (
+            Some(CleanupCause::Exited {
+                task: "test".into(),
+                exit_code: 3,
+            }),
+            "Cleaning up after test exited with code 3...",
+        ),
+        (
+            Some(CleanupCause::ImagePullFailed { container: db() }),
+            "Cleaning up after db's image failed to pull...",
+        ),
+        (
+            Some(CleanupCause::ImageBuildFailed { container: db() }),
+            "Cleaning up after db's image failed to build...",
+        ),
+        (
+            Some(CleanupCause::CreateFailed { container: db() }),
+            "Cleaning up after db failed to be created...",
+        ),
+        (
+            Some(CleanupCause::StartFailed { container: db() }),
+            "Cleaning up after db failed to start...",
+        ),
+        (
+            Some(CleanupCause::NotHealthy { container: db() }),
+            "Cleaning up after db did not become healthy...",
+        ),
+        (
+            Some(CleanupCause::SetupCommandExited {
+                container: db(),
+                index: 2,
+                exit_code: 1,
+            }),
+            "Cleaning up after db's setup command 2 exited with code 1...",
+        ),
+        (
+            Some(CleanupCause::SetupCommandNotRun {
+                container: db(),
+                index: 2,
+            }),
+            "Cleaning up after db's setup command 2 could not be run...",
+        ),
+        (
+            Some(CleanupCause::DependencyExited {
+                container: db(),
+                exit_code: 2,
+            }),
+            "Cleaning up after db exited with code 2...",
+        ),
+        (
+            Some(CleanupCause::Failed {
+                task: "test".into(),
+            }),
+            "Cleaning up after test failed...",
+        ),
+    ] {
+        assert_eq!(cleaning_up(&console, cause.as_ref()), expected);
     }
 }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::test_support::SharedBuffer;
+use super::super::CleanupCause;
 use super::*;
 use std::time::Duration;
 
@@ -197,9 +198,34 @@ fn task_without_command_renders_container_only_run_line() {
 #[test]
 fn cleanup_prints_once_per_task() {
     let (logger, buffer) = logger();
-    logger.post(TaskEvent::CleanupStarting);
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     assert_eq!(buffer.contents(), "\nCleaning up...\n");
+}
+
+/// The opening line names what cleanup follows when it isn't the task
+/// simply finishing (decisions/0017).
+#[test]
+fn cleanup_names_a_failure_it_follows() {
+    for (cause, expected) in [
+        (
+            CleanupCause::Exited {
+                task: "test".into(),
+                exit_code: 3,
+            },
+            "\nCleaning up after test exited with code 3...\n",
+        ),
+        (
+            CleanupCause::Failed {
+                task: "test".into(),
+            },
+            "\nCleaning up after test failed...\n",
+        ),
+    ] {
+        let (logger, buffer) = logger();
+        logger.post(TaskEvent::CleanupStarting { cause: Some(cause) });
+        assert_eq!(buffer.contents(), expected);
+    }
 }
 
 #[test]
@@ -208,11 +234,11 @@ fn blank_line_separates_tasks_and_cleanup_guard_resets() {
     logger.post(TaskEvent::TaskStarting {
         task: "prereq".into(),
     });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::TaskStarting {
         task: "main".into(),
     });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     assert_eq!(
         buffer.contents(),
         "Running prereq...\n\

@@ -28,7 +28,8 @@ fn ratect_command() -> Command {
 /// Since the 0.16.0 output-modes work, stdout also carries milestone lines
 /// (see `ratect-core/src/ui/`): the container's own output sits between the
 /// task container's "Running `<command>` in `<container>`..." line and the
-/// blank line before "Cleaning up...". Tests asserting on exactly what the
+/// blank line before "Cleaning up..." (or "Cleaning up after ...", when the
+/// task failed). Tests asserting on exactly what the
 /// container printed use this instead of raw stdout — deliberately still
 /// exact-match on the extracted chunk, not weakened to `contains`, so they
 /// keep proving the container printed that and nothing else.
@@ -69,7 +70,7 @@ fn task_output(stdout: &str, container: &str) -> String {
         .unwrap_or(0);
     let end = lines[start..]
         .iter()
-        .position(|line| *line == "Cleaning up...")
+        .position(|line| line.starts_with("Cleaning up"))
         .map(|index| start + index)
         .unwrap_or(lines.len());
     lines[start..end].join("\n").trim().to_string()

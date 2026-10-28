@@ -290,8 +290,12 @@ pub enum TaskEvent {
     /// Teardown (stopping dependency containers, removing the task
     /// network) is about to begin. Not posted when there's nothing to tear
     /// down (`--use-network`, no dependencies started, and no task
-    /// container created).
-    CleanupStarting,
+    /// container created). `cause` is what cleanup follows when that isn't
+    /// the task simply finishing — `None` for a clean exit, and for a signal
+    /// or a closed stdout, whose notice already said why.
+    CleanupStarting {
+        cause: Option<CleanupCause>,
+    },
     /// Cleanup has ended, however it went — posted after the last removal
     /// it attempted (or abandoned), and before any line reporting what it
     /// left. Only posted when [`TaskEvent::CleanupStarting`] was. A live
@@ -852,6 +856,53 @@ impl EventSink for QuietEventLogger {
     }
 }
 
+/// Why cleanup began, when it isn't the task simply finishing — what the
+/// opening cleanup line names (decisions/0017): the task's own non-zero
+/// exit, or the step that failed and the container it failed for. The
+/// `Error:` line before cleanup says how; this says what.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CleanupCause {
+    /// The task's own container exited with a non-zero code.
+    Exited {
+        task: String,
+        exit_code: i64,
+    },
+    ImagePullFailed {
+        container: String,
+    },
+    ImageBuildFailed {
+        container: String,
+    },
+    CreateFailed {
+        container: String,
+    },
+    StartFailed {
+        container: String,
+    },
+    NotHealthy {
+        container: String,
+    },
+    /// `index` is 1-based, as `Running setup command` numbers it.
+    SetupCommandExited {
+        container: String,
+        index: usize,
+        exit_code: i64,
+    },
+    SetupCommandNotRun {
+        container: String,
+        index: usize,
+    },
+    /// A `run_to_completion` dependency exited with a non-zero code.
+    DependencyExited {
+        container: String,
+        exit_code: i64,
+    },
+    /// A failure no step claimed — named by the task it ended.
+    Failed {
+        task: String,
+    },
+}
+
 /// The colors loggers actually use — grown as needed, not a full ANSI
 /// palette up front. Never white or black (SGR 37/30, bright or not): those
 /// are the theme's own foreground and background, light grey on a dark theme
@@ -1102,6 +1153,61 @@ impl OnceFlag {
     pub(crate) fn reset(&mut self) {
         self.0 = false;
     }
+}
+
+/// The opening cleanup line `simple` and `all` print: `Cleaning up...`, or
+/// `Cleaning up after <what failed>...` when cleanup follows a failure,
+/// subject first and the user's own names and values bold (decisions/0017).
+pub(crate) fn cleaning_up(console: &Console, cause: Option<&CleanupCause>) -> String {
+    let bold = |text: &str| console.bold(text);
+    let after = match cause {
+        None => return "Cleaning up...".to_string(),
+        Some(CleanupCause::Exited { task, exit_code }) => format!(
+            "{} exited with code {}",
+            bold(task),
+            bold(&exit_code.to_string())
+        ),
+        Some(CleanupCause::ImagePullFailed { container }) => {
+            format!("{}'s image failed to pull", bold(container))
+        }
+        Some(CleanupCause::ImageBuildFailed { container }) => {
+            format!("{}'s image failed to build", bold(container))
+        }
+        Some(CleanupCause::CreateFailed { container }) => {
+            format!("{} failed to be created", bold(container))
+        }
+        Some(CleanupCause::StartFailed { container }) => {
+            format!("{} failed to start", bold(container))
+        }
+        Some(CleanupCause::NotHealthy { container }) => {
+            format!("{} did not become healthy", bold(container))
+        }
+        Some(CleanupCause::SetupCommandExited {
+            container,
+            index,
+            exit_code,
+        }) => format!(
+            "{}'s setup command {index} exited with code {}",
+            bold(container),
+            bold(&exit_code.to_string())
+        ),
+        Some(CleanupCause::SetupCommandNotRun { container, index }) => {
+            format!(
+                "{}'s setup command {index} could not be run",
+                bold(container)
+            )
+        }
+        Some(CleanupCause::DependencyExited {
+            container,
+            exit_code,
+        }) => format!(
+            "{} exited with code {}",
+            bold(container),
+            bold(&exit_code.to_string())
+        ),
+        Some(CleanupCause::Failed { task }) => format!("{} failed", bold(task)),
+    };
+    format!("Cleaning up after {after}...")
 }
 
 /// What every non-quiet style prints for [`TaskEvent::PrerequisitesOnly`]:

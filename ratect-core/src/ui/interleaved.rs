@@ -409,9 +409,9 @@ impl EventSink for InterleavedEventLogger {
                     self.print_for_container(&state, &container, &line);
                 }
             }
-            TaskEvent::CleanupStarting => {
+            TaskEvent::CleanupStarting { cause } => {
                 if state.started_cleanup.fire_once() {
-                    self.print_for_task(&state, "Cleaning up...");
+                    self.print_for_task(&state, &super::cleaning_up(&self.console, cause.as_ref()));
                 }
             }
             TaskEvent::ContainerStopped { container } => {

@@ -218,6 +218,21 @@ fn output_write_error(error: std::io::Error) -> anyhow::Error {
     }
 }
 
+/// A container's start, refused — the context a start failure carries, so
+/// the engine can tell it from the run's other failures without reading
+/// its message (decisions/0017's cleanup line names it). Displays as the
+/// message it always had.
+#[derive(Debug)]
+pub struct ContainerStartFailed(pub String);
+
+impl std::error::Error for ContainerStartFailed {}
+
+impl std::fmt::Display for ContainerStartFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to start container '{}'", self.0)
+    }
+}
+
 /// Why [`ContainerRuntime::create_container`] failed — and, when Docker's own
 /// create had already succeeded, the container it left behind.
 ///
@@ -2837,7 +2852,7 @@ impl DockerClient {
         self.docker
             .start_container(container_id, None)
             .await
-            .with_context(|| format!("Failed to start container '{container_name}'"))?;
+            .with_context(|| ContainerStartFailed(container_name.to_string()))?;
         tracing::debug!(container_id, "started container interactively");
         if let Some(started) = started {
             let _ = started.send(());
@@ -2934,7 +2949,7 @@ impl DockerClient {
         self.docker
             .start_container(container_id, None)
             .await
-            .with_context(|| format!("Failed to start container '{container_name}'"))?;
+            .with_context(|| ContainerStartFailed(container_name.to_string()))?;
         tracing::debug!(container_id, "started container");
         if let Some(started) = started {
             let _ = started.send(());

@@ -415,11 +415,14 @@ tables above:
   interrupt notice, the `--no-cleanup*` reminder and a cleanup that left
   something behind are printed on stderr in every style rather than logged;
   Batect prints its equivalents on stdout, as task output.
-- **`all` reports every cleanup step.** Each container's `Container
-  stopped.` is followed by `Container removed.` on its own prefix, and the
-  task's prefix says `Removing task network...` and `Task network removed.`.
-  Batect's `all` prints `Cleaning up...` and each container's `Container
-  stopped.` only
+- **Cleanup says what it follows, and `all` reports every step.** After a
+  failure, `simple` and `all` open cleanup by naming it — `Cleaning up after
+  <task> exited with code <N>...`, or the step and container that failed,
+  such as `Cleaning up after db did not become healthy...` — rather than
+  Batect's `Cleaning up...`. Under `all`, each container the run started
+  says `Container stopped.` and then `Container removed.` on its own prefix,
+  and the task's prefix says `Removing task network...` and `Task network removed.`;
+  Batect's `all` prints each container's `Container stopped.` only
   ([decisions/0017](../decisions/0017-output-streams-and-styles.md)).
 - **`all`'s prefix colours.** Container prefixes cycle five colours — cyan,
   yellow, green, magenta, blue — assigned by the containers' sorted names, so

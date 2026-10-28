@@ -187,11 +187,12 @@ impl EventSink for SimpleEventLogger {
                 };
                 self.console.println(&line);
             }
-            TaskEvent::CleanupStarting => {
+            TaskEvent::CleanupStarting { cause } => {
                 let mut state = self.state.lock().unwrap();
                 if state.started_cleanup.fire_once() {
                     self.console.println("");
-                    self.console.println("Cleaning up...");
+                    self.console
+                        .println(&super::cleaning_up(&self.console, cause.as_ref()));
                 }
             }
             // Recorded only so `is_task_container` can recognize the task's

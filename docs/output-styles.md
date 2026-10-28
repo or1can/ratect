@@ -125,6 +125,13 @@ printing them would drop a line into the middle of that command's own output
 — [`all`](#all) shows them. A readiness *failure* is still reported, on stderr,
 in every style.
 
+Cleanup opens with `Cleaning up...`, or, when it follows a failure, names it —
+`Cleaning up after journey-test exited with code 3...`, or, when the task
+couldn't run, the step and container that failed: `Cleaning up after db did not
+become healthy...`, `Cleaning up after db's setup command 1 exited with code
+3...`, `Cleaning up after cache's image failed to pull...`. The `Error:` above
+it says why. `all` opens it the same way.
+
 ## `quiet`
 
 `ratect run journey-test -o quiet`, captured the same way:

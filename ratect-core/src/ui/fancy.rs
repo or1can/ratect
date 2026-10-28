@@ -884,7 +884,7 @@ impl EventSink for FancyEventLogger {
             TaskEvent::RunEnded { .. } => {
                 state.keep_updating_startup = false;
             }
-            TaskEvent::CleanupStarting => {
+            TaskEvent::CleanupStarting { .. } => {
                 // The startup block is already frozen: `RunEnded` comes
                 // first, and is the one event that ends it.
                 state.cleanup_live = true;
