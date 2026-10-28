@@ -144,6 +144,9 @@ struct FakeContainerRuntime {
     // Images whose `pull_image` fails, after any `pull_delays` entry for
     // them has elapsed (see `with_failing_pull`).
     failing_pulls: Arc<Mutex<HashSet<String>>>,
+    // Makes `local_image_id` fail rather than answer (see
+    // `failing_local_image_lookup`).
+    fail_local_image_lookup: Arc<Mutex<bool>>,
     // Same idea as `pull_delays`, for `build_image` (keyed by the build's
     // tag — see `with_build_delay`).
     build_delays: Arc<Mutex<HashMap<String, std::time::Duration>>>,
@@ -288,6 +291,7 @@ impl Default for FakeContainerRuntime {
             failing_starts: Default::default(),
             pull_delays: Default::default(),
             failing_pulls: Default::default(),
+            fail_local_image_lookup: Default::default(),
             build_delays: Default::default(),
             build_ids: Default::default(),
             fail_build_cancel: Default::default(),
@@ -708,6 +712,13 @@ impl FakeContainerRuntime {
         self
     }
 
+    /// Makes `local_image_id` fail for every image — an inspect error other
+    /// than "no such image" — after recording the lookup.
+    fn failing_local_image_lookup(self) -> Self {
+        *self.fail_local_image_lookup.lock().unwrap() = true;
+        self
+    }
+
     /// Makes `build_image` for the build tagged `tag` artificially
     /// `tokio::time::sleep` for `delay` before doing anything else — used
     /// with `#[tokio::test(start_paused = true)]` to hold a build open
@@ -1033,6 +1044,10 @@ impl ContainerRuntime for FakeContainerRuntime {
     }
 
     async fn local_image_id(&self, image: &str) -> Result<Option<String>> {
+        self.push(format!("exists:{image}"));
+        if *self.fail_local_image_lookup.lock().unwrap() {
+            anyhow::bail!("Docker responded with status code 500: image inspect failed");
+        }
         Ok(self
             .locally_present_images
             .lock()
@@ -12352,6 +12367,232 @@ async fn always_policy_pulls_even_when_the_image_already_exists_locally() {
     engine.run_task("test", &[]).await.unwrap();
 
     assert!(docker.events().contains(&"pull:alpine:3.18".to_string()));
+}
+
+/// Batect's `PullImageStepRunnerSpec`, NPI-7: under `Always` the image is
+/// never looked up locally, whether or not it is there; under
+/// `IfNotPresent` it is.
+#[tokio::test]
+async fn only_if_not_present_looks_the_image_up_locally() {
+    use crate::config::ImagePullPolicy;
+    for (policy, local, looked_up) in [
+        (ImagePullPolicy::Always, true, false),
+        (ImagePullPolicy::Always, false, false),
+        (ImagePullPolicy::IfNotPresent, true, true),
+        (ImagePullPolicy::IfNotPresent, false, true),
+    ] {
+        let mut container_config = container("alpine:3.18", None);
+        container_config.image_pull_policy = Some(policy);
+        let config = Config {
+            project_name: "demo".to_string(),
+            containers: IndexMap::from([("build-env".to_string(), container_config)]),
+            tasks: IndexMap::from([("test".to_string(), task("build-env", "echo hi"))]),
+            config_variables: None,
+            forbid_telemetry: None,
+        };
+        let mut docker = FakeContainerRuntime::default();
+        if local {
+            docker = docker.with_local_image("alpine:3.18");
+        }
+
+        engine(config, docker.clone())
+            .run_task("test", &[])
+            .await
+            .unwrap();
+
+        let events = docker.events();
+        assert_eq!(
+            events.contains(&"exists:alpine:3.18".to_string()),
+            looked_up,
+            "{policy:?}, local: {local}: {events:?}"
+        );
+    }
+}
+
+/// A one-container `start` task whose `app` runs `image`.
+fn config_running(image: &str) -> Config {
+    Config {
+        project_name: "demo".to_string(),
+        containers: IndexMap::from([("app".to_string(), container(image, None))]),
+        tasks: IndexMap::from([("start".to_string(), task("app", "echo hi"))]),
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Batect's `PullImageStepRunnerSpec`/`ImagePullFailedEventSpec`: a failed
+/// pull fails the task with the registry's cause, is announced as starting
+/// and never as completed, and the container that needed it is never
+/// created or run.
+#[tokio::test]
+async fn a_failed_pull_fails_the_task_before_its_container_is_created() {
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default().with_failing_pull("nope:missing");
+    let engine = TaskEngine::new(
+        project(config_running("nope:missing")),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("manifest for nope:missing not found"),
+        "{error:#}"
+    );
+    let events = sink.events();
+    let image = || "nope:missing".to_string();
+    assert!(
+        task_event_index(&events, &TaskEvent::ImagePullStarting { image: image() }).is_some(),
+        "{events:?}"
+    );
+    assert!(
+        task_event_index(&events, &TaskEvent::ImagePullCompleted { image: image() }).is_none(),
+        "{events:?}"
+    );
+    let docker_events = docker.events();
+    assert!(
+        !docker_events
+            .iter()
+            .any(|e| e.starts_with("create:app:") || e.starts_with("run:app:")),
+        "{docker_events:?}"
+    );
+}
+
+/// Batect's `ImagePullFailedEventSpec`, an existence check that fails: the
+/// task fails with its cause before any pull is attempted, and the
+/// after-failure cleanup still removes the network.
+#[tokio::test]
+async fn a_failed_local_image_lookup_fails_the_task_without_pulling() {
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default().failing_local_image_lookup();
+    let engine = TaskEngine::new(
+        project(config_running("alpine:3.18")),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("start", &[]).await.unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("image inspect failed"),
+        "{error:#}"
+    );
+    let events = sink.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TaskEvent::ImagePullStarting { .. })),
+        "{events:?}"
+    );
+    let docker_events = docker.events();
+    assert!(
+        docker_events.contains(&"exists:alpine:3.18".to_string()),
+        "{docker_events:?}"
+    );
+    assert!(
+        !docker_events.iter().any(|e| e.starts_with("pull:")),
+        "{docker_events:?}"
+    );
+    assert!(
+        docker_events
+            .iter()
+            .any(|e| e.starts_with("network-remove:")),
+        "{docker_events:?}"
+    );
+}
+
+/// Runs `start` with cleanup after failure on and off, against a fake from
+/// `docker` whose failure lands once `database` has started, and asserts
+/// `database` and the network are removed while it is on and left while it
+/// is off. Returns what the sink saw with it on.
+async fn assert_cleaned_up_only_while_cleanup_after_failure_is_on(
+    config: impl Fn() -> Config,
+    docker: impl Fn() -> FakeContainerRuntime,
+) -> Vec<TaskEvent> {
+    let mut events_with_cleanup = Vec::new();
+    for cleanup_after_failure in [true, false] {
+        let sink = RecordingEventSink::default();
+        let fake = docker();
+        let engine = TaskEngine::new(
+            project(config()),
+            fake.clone(),
+            Arc::new(sink.clone()),
+            crate::interrupt::Interrupt::new(),
+        )
+        .with_settings(TaskEngineSettings {
+            cleanup_after_failure,
+            ..Default::default()
+        })
+        .unwrap();
+
+        engine.run_task("start", &[]).await.unwrap_err();
+
+        let events = fake.events();
+        sidecar_start_index(&events, "database");
+        if cleanup_after_failure {
+            assert_removed_before_network(&events, "database");
+            events_with_cleanup = sink.events();
+        } else {
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| e.starts_with("sidecar-stop:") || e.starts_with("network-remove:")),
+                "everything should be left in place: {events:?}"
+            );
+        }
+    }
+    events_with_cleanup
+}
+
+/// Batect's `TaskStateMachineSpec`: a failed pull of the task container's
+/// image is a task failure, cleaned up per `--no-cleanup-after-failure`.
+/// The pull takes a second to fail, so the dependency has started by then.
+#[tokio::test(start_paused = true)]
+async fn a_failed_pull_cleans_up_only_while_cleanup_after_failure_is_on() {
+    assert_cleaned_up_only_while_cleanup_after_failure_is_on(
+        || config_with_database_dependency(|_| {}),
+        || {
+            FakeContainerRuntime::default()
+                .with_pull_delay("alpine:3.18", std::time::Duration::from_secs(1))
+                .with_failing_pull("alpine:3.18")
+        },
+    )
+    .await;
+}
+
+/// Batect's `ImageBuildFailedEventSpec`: a failed build of the task
+/// container's image is a task failure, cleaned up per
+/// `--no-cleanup-after-failure`, and never reported complete. The build
+/// takes a second to fail, so the dependency has started by then.
+#[tokio::test(start_paused = true)]
+async fn a_failed_build_cleans_up_only_while_cleanup_after_failure_is_on() {
+    let config = || {
+        let mut config = config_with_database_dependency(|_| {});
+        let mut app = container_with_build_directory("./app", None);
+        app.dependencies = Some(vec!["database".to_string()]);
+        config.containers.insert("app".to_string(), app);
+        config
+    };
+    let events = assert_cleaned_up_only_while_cleanup_after_failure_is_on(config, || {
+        FakeContainerRuntime::default()
+            .with_build_delay("demo-app", std::time::Duration::from_secs(1))
+            .failing_image_build()
+    })
+    .await;
+
+    assert!(
+        task_event_index(
+            &events,
+            &TaskEvent::ImageBuildCompleted {
+                container: "app".into(),
+            },
+        )
+        .is_none(),
+        "{events:?}"
+    );
 }
 
 /// The config every pinned-image test below runs: one `alpine:3.18`
