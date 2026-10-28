@@ -28,7 +28,8 @@ fn ratect_command() -> Command {
 /// Since the 0.16.0 output-modes work, stdout also carries milestone lines
 /// (see `ratect-core/src/ui/`): the container's own output sits between the
 /// task container's "Running `<command>` in `<container>`..." line and the
-/// blank line before "Cleaning up...". Tests asserting on exactly what the
+/// blank line before "Cleaning up..." (or "Cleaning up after ...", when the
+/// task failed). Tests asserting on exactly what the
 /// container printed use this instead of raw stdout — deliberately still
 /// exact-match on the extracted chunk, not weakened to `contains`, so they
 /// keep proving the container printed that and nothing else.
@@ -69,7 +70,7 @@ fn task_output(stdout: &str, container: &str) -> String {
         .unwrap_or(0);
     let end = lines[start..]
         .iter()
-        .position(|line| *line == "Cleaning up...")
+        .position(|line| line.starts_with("Cleaning up"))
         .map(|index| start + index)
         .unwrap_or(lines.len());
     lines[start..end].join("\n").trim().to_string()
@@ -138,6 +139,10 @@ fn stream_routing_config_path() -> PathBuf {
 
 fn dependency_output_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dependency-output.yml")
+}
+
+fn multi_line_commands_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/multi-line-commands.yml")
 }
 
 /// A process on a fresh pseudo-terminal, 24 rows by `cols` columns: its
@@ -2157,7 +2162,7 @@ fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
     );
     // The summary line, with the colored exit code.
     assert!(
-        output.contains("finished with exit code \x1b[32m0\x1b[0m"),
+        output.contains("finished with exit code \x1b[1;32m0\x1b[0m"),
         "missing summary line: {output:?}"
     );
 
@@ -2244,6 +2249,15 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
         stdout.contains("database      | Container became healthy."),
         "missing prefixed dependency milestone:\n{stdout}"
     );
+    // A dependency's start is reported; the task container's never is.
+    assert!(
+        stdout.contains("database      | Container started."),
+        "missing dependency start:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("app           | Container started."),
+        "the task container's start was reported:\n{stdout}"
+    );
     // The task container's own output, prefixed.
     assert!(
         stdout.contains("app           | ") && stdout.contains("packets transmitted"),
@@ -2262,6 +2276,38 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
         stdout.contains("ping-sidecars | Cleaning up..."),
         "missing cleanup line:\n{stdout}"
     );
+    // Each container's stop then removal on its own prefix, the network's on
+    // the task's. Independent containers stop concurrently, so only each
+    // pair's own order is fixed.
+    let position = |line: &str| {
+        stdout
+            .lines()
+            .position(|candidate| candidate == line)
+            .unwrap_or_else(|| panic!("missing {line:?}:\n{stdout}"))
+    };
+    for (first, then) in [
+        (
+            "app           | Container stopped.",
+            "app           | Container removed.",
+        ),
+        (
+            "database      | Container stopped.",
+            "database      | Container removed.",
+        ),
+        (
+            "cache         | Container stopped.",
+            "cache         | Container removed.",
+        ),
+        (
+            "ping-sidecars | Removing task network...",
+            "ping-sidecars | Task network removed.",
+        ),
+    ] {
+        assert!(
+            position(first) < position(then),
+            "{first:?} after {then:?}:\n{stdout}"
+        );
+    }
     assert!(
         stdout.contains("ping-sidecars | ping-sidecars finished with exit code 0 in "),
         "missing summary line:\n{stdout}"
@@ -2272,6 +2318,47 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
         assert!(
             line.contains(" | "),
             "unprefixed line in all-mode output: {line:?}\nfull:\n{stdout}"
+        );
+    }
+}
+
+/// Requires a running Docker daemon. Run explicitly with `cargo test --
+/// --ignored`.
+///
+/// A multi-line command or setup command is quoted in its `Running ...`
+/// line, and every line of that quote carries its container's prefix
+/// (ratect#476) — what `all_output_prefixes_every_line_...`'s fixture,
+/// with only one-line messages, can't show.
+#[test]
+#[ignore]
+fn all_output_prefixes_every_line_of_a_multi_line_command_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "all", "-f"])
+        .arg(multi_line_commands_config_path())
+        .arg("multi-line")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in [
+        "dep        | Running setup command echo\n\
+         dep        | setup-ran\n\
+         dep        |  (1 of 1)...\n",
+        "app        | Running echo\n\
+         app        | task-ran\n\
+         app        | ...\n",
+        "app        | task-ran\n",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected:?}:\n{stdout}");
+    }
+    for line in stdout.lines() {
+        assert!(
+            line.contains(" | "),
+            "unprefixed line: {line:?}\nfull:\n{stdout}"
         );
     }
 }

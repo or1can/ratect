@@ -453,7 +453,7 @@ fn a_notice_during_cleanup_is_followed_by_a_fresh_countdown() {
         });
     }
     logger.post(TaskEvent::RunEnded { task: "t".into() });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     let painted = buffer.contents();
 
     logger.post(TaskEvent::Notice {
@@ -493,7 +493,7 @@ fn a_dependency_exit_during_cleanup_is_not_painted_over() {
         container: "app".into(),
     });
     logger.post(TaskEvent::RunEnded { task: "t".into() });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     let painted = buffer.contents();
 
     logger.post(TaskEvent::DependencyExitedUnexpectedly {
@@ -524,7 +524,7 @@ fn the_countdown_is_cleared_when_cleanup_finishes() {
         containers: vec![info("app", Some("app:1"), &[], true)],
     });
     logger.post(TaskEvent::RunEnded { task: "t".into() });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::RemovingNetwork);
     let painted = buffer.contents();
 
@@ -550,7 +550,7 @@ fn the_failed_summary_replaces_a_live_cleanup_line() {
         containers: vec![info("app", Some("app:1"), &[], true)],
     });
     logger.post(TaskEvent::RunEnded { task: "t".into() });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::RemovingNetwork);
     let painted = buffer.contents();
 
@@ -602,7 +602,7 @@ fn nothing_repaints_the_countdown_after_cleanup_finished() {
         container: "app".into(),
     });
     logger.post(TaskEvent::RunEnded { task: "t".into() });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::CleanupFinished);
     let before = buffer.contents();
 
@@ -768,7 +768,7 @@ fn cleanup_starts_on_a_fresh_line_even_after_unterminated_container_output() {
     write!(buffer, "answer: 42").unwrap();
     let before_cleanup = buffer.contents();
 
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     let after_cleanup = buffer.contents();
     assert_eq!(
         after_cleanup,
@@ -813,7 +813,7 @@ fn a_task_container_that_was_never_created_is_not_counted_for_cleanup() {
     });
     // No ContainerCreated — creation failed.
 
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::RemovingNetwork);
 
     assert!(
@@ -847,7 +847,7 @@ fn a_dependency_created_but_never_started_is_counted_for_cleanup() {
         container: "db".into(),
     });
     logger.post(TaskEvent::RunEnded { task: "t".into() });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
 
     assert!(
         buffer
@@ -880,7 +880,7 @@ fn cleanup_line_counts_down_then_summary_replaces_it() {
         container: "app".into(),
         command: None,
     });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     // The task's own container counts too — it is removed during the
     // cleanup stage like any other (see `engine.rs`), so leaving it out
     // would under-report what is still to do. Batect's own
@@ -943,7 +943,7 @@ fn a_terminal_resize_since_the_cleanup_line_was_shown_starts_a_fresh_line() {
     logger.post(TaskEvent::ContainerCreated {
         container: "app".into(),
     });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::ContainerRemoved {
         container: "app".into(),
     });

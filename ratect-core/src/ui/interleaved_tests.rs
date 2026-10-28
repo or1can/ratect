@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::test_support::SharedBuffer;
+use super::super::CleanupCause;
 use super::super::TaskContainerInfo;
 use super::*;
 use std::time::Duration;
@@ -299,6 +300,62 @@ fn build_output_gets_an_inner_image_build_prefix() {
     );
 }
 
+/// Batect's `Building image...`/`Image built.`, under the container's own
+/// prefix and without its inner `Batect | ` (a recorded divergence).
+#[test]
+fn an_image_build_starts_and_completes_under_the_containers_prefix() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("app", None, Some("proj-app"))]);
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::ImageBuildCompleted {
+        container: "app".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+             app  | Building image...\n\
+             app  | Image built.\n"
+    );
+}
+
+/// Batect's `Container started.` — posted for a dependency only, so the
+/// task container never gets one, as in Batect.
+#[test]
+fn a_dependency_starting_says_its_container_started() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("database", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::DependencyStarted {
+        container: "database".into(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test     | Running test...\n\
+             database | Container started.\n"
+    );
+}
+
+/// Silent, as Batect is: `ImagePullProgress` mirrors Batect ignoring
+/// `ImagePullProgressEvent` in `all`; `ImageResolved` has no Batect
+/// counterpart. Creation's silence is `container_creation_prints_nothing`'s;
+/// network creation and the start of a health wait have no event at all, so
+/// their silence is structural — the exhaustive match guards it.
+#[test]
+fn pull_progress_and_image_resolution_print_nothing() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    let before = buffer.contents();
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "postgres:15".into(),
+        message: "Downloading 3/7".into(),
+    });
+    logger.post(TaskEvent::ImageResolved {
+        container: "db".into(),
+    });
+    assert_eq!(buffer.contents(), before);
+}
+
 #[test]
 fn setup_command_output_gets_an_inner_numbered_prefix() {
     let (logger, buffer) = logger();
@@ -369,9 +426,10 @@ fn task_failed_prints_the_failed_summary_on_the_task_prefix() {
 fn task_level_lines_use_the_task_name_prefix() {
     let (logger, buffer) = logger();
     start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
-    logger.post(TaskEvent::CleanupStarting);
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     logger.post(TaskEvent::RemovingNetwork);
+    logger.post(TaskEvent::NetworkRemoved);
     logger.post(TaskEvent::TaskFinished {
         task: "test".into(),
         exit_code: 0,
@@ -382,6 +440,7 @@ fn task_level_lines_use_the_task_name_prefix() {
         "test | Running test...\n\
              test | Cleaning up...\n\
              test | Removing task network...\n\
+             test | Task network removed.\n\
              test | test finished with exit code 0 in 2.1s.\n"
     );
 }
@@ -467,7 +526,7 @@ fn no_prefix_is_ever_white_or_black() {
         container: "unknown".into(),
         line: "hi".into(),
     });
-    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::CleanupStarting { cause: None });
     let everything = format!(
         "{}{}{}",
         buffer.contents(),
@@ -490,9 +549,7 @@ fn no_prefix_is_ever_white_or_black() {
         buffer.contents()
     );
     assert!(
-        buffer
-            .contents()
-            .contains("\x1b[34m\x1b[1mdb  \x1b[0m\x1b[0m | hi\n"),
+        buffer.contents().contains("\x1b[1;36mdb  \x1b[0m | hi\n"),
         "{:?}",
         buffer.contents()
     );
@@ -501,6 +558,27 @@ fn no_prefix_is_ever_white_or_black() {
         "{:?}",
         buffer.contents()
     );
+}
+
+/// A container's prefix is one bold, coloured span with a single reset —
+/// Batect's styling minus the separator, which stays unstyled
+/// (decisions/0017: separators are never emphasised).
+#[test]
+fn a_prefix_is_one_styled_span_and_the_separator_is_plain() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::ContainerOutput {
+        container: "db".into(),
+        line: "hi".into(),
+    });
+    assert!(
+        buffer
+            .contents()
+            .ends_with("\n\x1b[1;36mdb  \x1b[0m | hi\n"),
+        "{:?}",
+        buffer.contents()
+    );
+    assert!(!buffer.contents().contains("\x1b[0m\x1b[0m"));
 }
 
 #[test]
@@ -597,5 +675,337 @@ fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
         buffer.contents(),
         "\x1b[1mall\x1b[0m | The task \x1b[1mall\x1b[0m only defines prerequisite tasks, \
          nothing more to do.\n"
+    );
+}
+
+/// The prefix palette (decisions/0017): cyan, yellow, green, magenta, blue,
+/// by sorted name, wrapping at a sixth — and the task's own prefix bold in
+/// the default foreground.
+#[test]
+fn prefix_colours_cycle_the_palette_in_sorted_name_order() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    let names = ["f", "e", "d", "c", "b", "a"];
+    start_task(
+        &logger,
+        names
+            .iter()
+            .map(|name| info(name, Some("x:1"), None))
+            .collect(),
+    );
+    for name in names.iter().rev() {
+        logger.post(TaskEvent::DependencyStarted {
+            container: (*name).into(),
+        });
+    }
+    assert_eq!(
+        buffer.contents(),
+        "\x1b[1mtest\x1b[0m | Running \x1b[1mtest\x1b[0m...\n\
+         \x1b[1;36ma   \x1b[0m | Container started.\n\
+         \x1b[1;33mb   \x1b[0m | Container started.\n\
+         \x1b[1;32mc   \x1b[0m | Container started.\n\
+         \x1b[1;35md   \x1b[0m | Container started.\n\
+         \x1b[1;34me   \x1b[0m | Container started.\n\
+         \x1b[1;36mf   \x1b[0m | Container started.\n"
+    );
+}
+
+/// A container's colour doesn't depend on the order the graph lists it in.
+#[test]
+fn prefix_colours_dont_depend_on_graph_order() {
+    let render = |containers: Vec<TaskContainerInfo>| {
+        let (logger, buffer, _, _) = logger_with_streams(true);
+        start_task(&logger, containers);
+        for name in ["app", "cache", "db"] {
+            logger.post(TaskEvent::DependencyStarted {
+                container: name.into(),
+            });
+        }
+        buffer.contents()
+    };
+    let app = || TaskContainerInfo {
+        is_task_container: true,
+        ..info("app", Some("app:1"), None)
+    };
+    let cache = || info("cache", Some("redis:7"), None);
+    let db = || info("db", Some("postgres:15"), None);
+    assert_eq!(
+        render(vec![db(), cache(), app()]),
+        render(vec![app(), cache(), db()])
+    );
+}
+
+/// Bold on the user's own names and values in a status line — the command,
+/// the setup command, the image, the task and its exit code — and nowhere
+/// else (decisions/0017).
+#[test]
+fn status_lines_bold_the_users_own_names_and_values() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(
+        &logger,
+        vec![
+            info("a", Some("shared:1"), None),
+            info("b", Some("shared:1"), None),
+        ],
+    );
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "shared:1".into(),
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "shared:1".into(),
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "a".into(),
+        command: "./init.sh".into(),
+        index: 1,
+        total: 2,
+        run_in: Some("b".into()),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "b".into(),
+        command: Some("make".into()),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "b".into(),
+        command: None,
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: "test".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(2100),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: "test".into(),
+        exit_code: 3,
+        duration: Duration::from_millis(2100),
+    });
+    let a = "\x1b[1;36ma   \x1b[0m";
+    let b = "\x1b[1;33mb   \x1b[0m";
+    let task = "\x1b[1mtest\x1b[0m";
+    assert_eq!(
+        &buffer.contents()[before..],
+        format!(
+            "{a} | Pulling \x1b[1mshared:1\x1b[0m...\n\
+             {b} | Pulling \x1b[1mshared:1\x1b[0m...\n\
+             {a} | Pulled \x1b[1mshared:1\x1b[0m.\n\
+             {b} | Pulled \x1b[1mshared:1\x1b[0m.\n\
+             {a} | Running setup command \x1b[1m./init.sh\x1b[0m (1 of 2) in b...\n\
+             {b} | Running \x1b[1mmake\x1b[0m...\n\
+             {b} | Running...\n\
+             {task} | {task} finished with exit code \x1b[1;32m0\x1b[0m in 2.1s.\n\
+             {task} | {task} finished with exit code \x1b[1;31m3\x1b[0m in 2.1s.\n"
+        )
+    );
+}
+
+/// The inner `Setup command N | ` and `Image build | ` labels stay in the
+/// default foreground, where Batect paints them white (decisions/0017).
+#[test]
+fn inner_labels_are_unstyled() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(&logger, vec![info("app", None, Some("proj-app"))]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::SetupCommandOutput {
+        container: "app".into(),
+        index: 1,
+        line: "seeded".into(),
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "proj-app".into(),
+        message: "Step 1/3".into(),
+    });
+    let app = "\x1b[1;36mapp \x1b[0m";
+    assert_eq!(
+        &buffer.contents()[before..],
+        format!(
+            "{app} | Setup command 1 | seeded\n\
+             {app} | Image build | Step 1/3\n"
+        )
+    );
+}
+
+/// Every line of a multi-line build chunk is its own prefixed line, carrying
+/// `Image build | ` as Batect's build sink gives each one — a blank line
+/// included.
+#[test]
+fn every_line_of_a_multi_line_build_message_is_prefixed() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("app", None, Some("proj-app"))]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "proj-app".into(),
+        message: "bk-line-1\nbk-line-2\n\nbk-line-3".into(),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "app  | Image build | bk-line-1\n\
+         app  | Image build | bk-line-2\n\
+         app  | Image build | \n\
+         app  | Image build | bk-line-3\n"
+    );
+}
+
+/// A multi-line command (`command: |`) is split as Batect splits it: each
+/// line prefixed, the text after it joining the last.
+#[test]
+fn every_line_of_a_multi_line_command_is_prefixed() {
+    let (logger, buffer) = logger();
+    start_task(
+        &logger,
+        vec![
+            TaskContainerInfo {
+                is_task_container: true,
+                ..info("app", Some("alpine:3"), None)
+            },
+            info("dep", Some("alpine:3"), None),
+        ],
+    );
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "echo\none\n".into(),
+        index: 1,
+        total: 1,
+        run_in: None,
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "echo\none".into(),
+        index: 1,
+        total: 1,
+        run_in: None,
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("echo\nhello\n".into()),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "dep  | Running setup command echo\n\
+         dep  | one\n\
+         dep  |  (1 of 1)...\n\
+         dep  | Running setup command echo\n\
+         dep  | one (1 of 1)...\n\
+         app  | Running echo\n\
+         app  | hello\n\
+         app  | ...\n"
+    );
+}
+
+/// Each continuation line gets the same styled prefix as the first, and a
+/// bold span split across lines stays bold on each, closed before every
+/// newline so no prefix inherits it.
+#[test]
+fn a_continuation_line_keeps_its_prefix_and_its_styling() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(&logger, vec![info("app", Some("alpine:3"), None)]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("echo\nhello\n".into()),
+    });
+    let app = "\x1b[1;36mapp \x1b[0m";
+    assert_eq!(
+        &buffer.contents()[before..],
+        format!(
+            "{app} | Running \x1b[1mecho\x1b[0m\n\
+             {app} | \x1b[1mhello\x1b[0m\n\
+             {app} | ...\n"
+        )
+    );
+}
+
+/// `split('\n')`, not `lines()`: a message ending in a newline gets a
+/// trailing prefix-only line, as Batect's does. No production path sends
+/// one today; this pins the contract.
+#[test]
+fn a_trailing_newline_is_a_prefix_only_line() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("app", Some("alpine:3"), None)]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::ContainerOutput {
+        container: "app".into(),
+        line: "last\n".into(),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "app  | last\n\
+         app  | \n"
+    );
+}
+
+/// Each cleanup step on the prefix it belongs to (decisions/0017): a
+/// container's stop and removal on its own, the network's on the task's.
+/// Batect prints only `Cleaning up...` and each container's `Container
+/// stopped.`.
+#[test]
+fn cleanup_reports_each_containers_stop_and_removal_and_the_networks() {
+    let (logger, buffer) = logger();
+    start_task(
+        &logger,
+        vec![
+            TaskContainerInfo {
+                is_task_container: true,
+                ..info("app", Some("app:1"), None)
+            },
+            info("cache", Some("redis:7"), None),
+            info("db", Some("postgres:15"), None),
+        ],
+    );
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    for container in ["app", "cache", "db"] {
+        logger.post(TaskEvent::ContainerStopped {
+            container: container.into(),
+        });
+        logger.post(TaskEvent::ContainerRemoved {
+            container: container.into(),
+        });
+    }
+    logger.post(TaskEvent::RemovingNetwork);
+    logger.post(TaskEvent::NetworkRemoved);
+    assert_eq!(
+        &buffer.contents()[before..],
+        "test  | Cleaning up...\n\
+         app   | Container stopped.\n\
+         app   | Container removed.\n\
+         cache | Container stopped.\n\
+         cache | Container removed.\n\
+         db    | Container stopped.\n\
+         db    | Container removed.\n\
+         test  | Removing task network...\n\
+         test  | Task network removed.\n"
+    );
+}
+
+/// The opening cleanup line names the failure it follows, on the task's
+/// prefix, the task and its exit code bold (decisions/0017).
+#[test]
+fn cleanup_names_a_failure_it_follows() {
+    let (colored, buffer, _, _) = logger_with_streams(true);
+    start_task(&colored, vec![info("db", Some("postgres:15"), None)]);
+    let before = buffer.contents().len();
+    colored.post(TaskEvent::CleanupStarting {
+        cause: Some(CleanupCause::Exited {
+            task: "test".into(),
+            exit_code: 3,
+        }),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "\x1b[1mtest\x1b[0m | Cleaning up after \x1b[1mtest\x1b[0m exited with code \x1b[1m3\x1b[0m...\n"
+    );
+
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::CleanupStarting {
+        cause: Some(CleanupCause::Failed {
+            task: "test".into(),
+        }),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "test | Cleaning up after test failed...\n"
     );
 }

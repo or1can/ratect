@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The `all` output mode — a port of Batect's `InterleavedEventLogger`/
-//! `InterleavedOutput`: every line of output, Ratect's own milestones and
-//! *all* containers' stdout/stderr alike, prefixed with the container it
+//! The `all` output mode, modelled on Batect's `InterleavedEventLogger`/
+//! `InterleavedOutput`: every line it prints — Ratect's own milestones and
+//! *all* containers' stdout/stderr alike — prefixed with the container it
 //! belongs to (`name    | `), padded to a common column and colored
-//! round-robin so concurrent containers stay tellable-apart. The only mode
-//! that shows dependency output, setup-command output, and full image-build
-//! output at all. Its I/O policy ([`ContainerIoStreaming::Interleaved`])
-//! means no container gets a TTY or stdin and every container gets
-//! `TERM=dumb`, matching Batect.
+//! round-robin so concurrent containers stay tellable-apart; errors,
+//! warnings and notices are the exception, unprefixed on stderr. The only
+//! mode that shows dependency output, setup-command output, and full
+//! image-build output at all. Its I/O policy
+//! ([`ContainerIoStreaming::Interleaved`]) means no container gets a TTY or
+//! stdin and every container gets `TERM=dumb`, matching Batect.
 //!
-//! Differences from Batect's implementation, all deliberate:
+//! Decided differences from Batect's implementation, each recorded on
+//! `docs/differences-from-batect.md`:
 //! - Batect's own status lines carry a second inner `Batect | ` prefix
 //!   (`build | Batect | Running build...`); Ratect drops that inner prefix —
 //!   the outer one already says whose line it is, and Ratect's milestone
@@ -35,10 +37,22 @@
 //! - A failure is an unprefixed `Error: …` line on stderr, as in every
 //!   style, where Batect prints `<task> ! `/`<container> ! ` lines on
 //!   stdout; and a failed setup command or network check is reported, where
-//!   Batect's `all` prints nothing for either.
+//!   Batect's `all` prints nothing for either. A task that fails to run ends
+//!   with `<task> failed after <duration>.` rather than Batect's footer.
+//! - Cleanup opens by naming the failure it follows, and reports each
+//!   container's stop *and* removal and the network's removal, where Batect
+//!   prints `Cleaning up...` and each container's stop (decisions/0017).
+//! - The inner `Setup command N | ` and `Image build | ` labels are in the
+//!   default foreground, where Batect paints them white, and the ` | `
+//!   separator is unstyled, where Batect bolds and colours it with the name
+//!   (decisions/0017).
+//! - The prefix colours — see `CONTAINER_COLORS`.
 //!
-//! The prefix colours also differ — see `CONTAINER_COLORS`; the palette and
-//! order decided in decisions/0017 land with ratect#489.
+//! Not exhaustive, and some differences are still open parity questions,
+//! neither decided nor fixed: Ratect prints lines Batect doesn't — a
+//! dependency's `Starting container...` where Batect prints its `Running`
+//! line (ratect#498), `Container ran to completion.` for a dependency that
+//! exits on its own, and `exited unexpectedly with exit code N.`
 //!
 //! Streams (decisions/0017): every prefixed line goes to the progress
 //! console — stdout under `ratect-compat` (Batect's placement, kept), stderr
@@ -53,17 +67,19 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
 
-/// The prefix colors assigned to containers, round-robin in (sorted) name
-/// order — deliberately excluding red (errors); the task-level prefix is
-/// bold in the default foreground. Batect also excludes red and cycles
-/// black, paints the task prefix white, and assigns by the containers'
-/// order in its set rather than by name.
+/// The prefix colors assigned to containers, round-robin in sorted name
+/// order, so a container's colour doesn't change between runs — in
+/// `docker compose`'s order, which keeps blue and cyan off neighbouring
+/// containers until the cycle wraps; red is reserved for errors, and the
+/// task-level prefix is bold in the default foreground (decisions/0017).
+/// Batect cycles six, starting at black, assigns by graph order, and paints
+/// the task prefix white.
 const CONTAINER_COLORS: [Color; 5] = [
-    Color::Blue,
     Color::Cyan,
+    Color::Yellow,
     Color::Green,
     Color::Magenta,
-    Color::Yellow,
+    Color::Blue,
 ];
 
 pub struct InterleavedEventLogger {
@@ -116,17 +132,19 @@ impl InterleavedEventLogger {
         }
     }
 
-    /// `line` under `name`'s prefix, padded to the common column and
-    /// styled — bold always, in `color` when there is one, the default
-    /// foreground otherwise (never white: decisions/0017) — written to
-    /// `console`.
+    /// Each `\n`-separated line of `text` under `name`'s prefix, padded to
+    /// the common column and styled — bold always, in `color` when there is
+    /// one, the default foreground otherwise (never white: decisions/0017) —
+    /// written to `console`. Split with `split('\n')`, as Batect's
+    /// `TextRun.lines` does: a blank line, or a trailing newline, is a
+    /// prefix-only line rather than an unprefixed one.
     fn print_prefixed(
         &self,
         console: &Console,
         state: &State,
         name: &str,
         color: Option<Color>,
-        line: &str,
+        text: &str,
     ) {
         // Padded by hand (not `format!("{name:width$}")`, which pads by
         // `char` count) — `prefix_width` is a display-column measurement,
@@ -136,11 +154,15 @@ impl InterleavedEventLogger {
         // and break alignment with every other column.
         let padding = " ".repeat(state.prefix_width.saturating_sub(name.width()));
         let padded = format!("{name}{padding}");
+        // One span, one reset; the separator outside it, unstyled
+        // (decisions/0017) where Batect bolds and colours it too.
         let prefix = match color {
-            Some(color) => console.colored(color, &console.bold(&padded)),
+            Some(color) => console.bold_colored(color, &padded),
             None => console.bold(&padded),
         };
-        console.println(&format!("{prefix} | {line}"));
+        for line in text.split('\n') {
+            console.println(&format!("{prefix} | {line}"));
+        }
     }
 
     /// A milestone line belonging to `container`, on the progress console.
@@ -270,7 +292,11 @@ impl EventSink for InterleavedEventLogger {
             }
             TaskEvent::ImagePullStarting { image } => {
                 for container in Self::containers_for_image(&state, &image) {
-                    self.print_for_container(&state, &container, &format!("Pulling {image}..."));
+                    self.print_for_container(
+                        &state,
+                        &container,
+                        &format!("Pulling {}...", self.console.bold(&image)),
+                    );
                 }
             }
             // Pull progress detail stays off even here, matching Batect
@@ -292,19 +318,27 @@ impl EventSink for InterleavedEventLogger {
             TaskEvent::ContainerCreating { .. } | TaskEvent::ContainerCreated { .. } => {}
             TaskEvent::ImagePullCompleted { image } => {
                 for container in Self::containers_for_image(&state, &image) {
-                    self.print_for_container(&state, &container, &format!("Pulled {image}."));
+                    self.print_for_container(
+                        &state,
+                        &container,
+                        &format!("Pulled {}.", self.console.bold(&image)),
+                    );
                 }
             }
             TaskEvent::ImageBuildStarting { container } => {
                 self.print_for_container(&state, &container, "Building image...");
             }
             TaskEvent::ImageBuildProgress { tag, message } => {
+                // Every line its own `Image build | `, as Batect's build sink
+                // gives each one — not just a chunk's first.
                 if let Some(container) = Self::container_for_build_tag(&state, &tag) {
-                    self.print_for_container(
-                        &state,
-                        &container,
-                        &format!("Image build | {message}"),
-                    );
+                    for line in message.split('\n') {
+                        self.print_for_container(
+                            &state,
+                            &container,
+                            &format!("Image build | {line}"),
+                        );
+                    }
                 }
             }
             TaskEvent::ImageBuildCompleted { container } => {
@@ -336,7 +370,10 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!("Running setup command {command} ({index} of {total}){elsewhere}..."),
+                    &format!(
+                        "Running setup command {} ({index} of {total}){elsewhere}...",
+                        self.console.bold(&command)
+                    ),
                 );
             }
             TaskEvent::SetupCommandOutput {
@@ -369,7 +406,7 @@ impl EventSink for InterleavedEventLogger {
             }
             TaskEvent::RunningTaskContainer { container, command } => {
                 let line = match command {
-                    Some(command) => format!("Running {command}..."),
+                    Some(command) => format!("Running {}...", self.console.bold(&command)),
                     None => "Running...".to_string(),
                 };
                 self.print_for_container(&state, &container, &line);
@@ -385,16 +422,22 @@ impl EventSink for InterleavedEventLogger {
                     self.print_for_container(&state, &container, &line);
                 }
             }
-            TaskEvent::CleanupStarting => {
+            TaskEvent::CleanupStarting { cause } => {
                 if state.started_cleanup.fire_once() {
-                    self.print_for_task(&state, "Cleaning up...");
+                    self.print_for_task(&state, &super::cleaning_up(&self.console, cause.as_ref()));
                 }
+            }
+            TaskEvent::ContainerStopped { container } => {
+                self.print_for_container(&state, &container, "Container stopped.");
             }
             TaskEvent::ContainerRemoved { container } => {
                 self.print_for_container(&state, &container, "Container removed.");
             }
             TaskEvent::RemovingNetwork => {
                 self.print_for_task(&state, "Removing task network...");
+            }
+            TaskEvent::NetworkRemoved => {
+                self.print_for_task(&state, "Task network removed.");
             }
             TaskEvent::TaskFinished {
                 task,
@@ -403,7 +446,12 @@ impl EventSink for InterleavedEventLogger {
             } => {
                 self.print_for_task(
                     &state,
-                    &super::format_task_summary(&self.console, &task, exit_code, duration),
+                    &super::format_task_summary(
+                        &self.console,
+                        &self.console.bold(&task),
+                        exit_code,
+                        duration,
+                    ),
                 );
             }
             // Nothing to show of its own — `all` has no live display to

@@ -19,7 +19,7 @@ use crate::config::{
 };
 use crate::container_spec::BindMount;
 use crate::resources::ResourceInventory;
-use crate::ui::NullEventSink;
+use crate::ui::{CleanupCause, NullEventSink};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -1362,7 +1362,7 @@ impl ContainerRuntime for FakeContainerRuntime {
             "the task container is run by the id its own creation returned"
         );
         if self.failing_run_starts.lock().unwrap().contains(name) {
-            anyhow::bail!("Failed to start container '{name}'");
+            return Err(crate::docker::ContainerStartFailed(name.to_string()).into());
         }
         self.started_containers
             .lock()
@@ -1459,6 +1459,7 @@ impl ResourceInventory for FakeContainerRuntime {
         container_id: &str,
         stop_signal: Option<&str>,
         stop_grace_period: Option<std::time::Duration>,
+        stopped: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()> {
         self.stop_options.lock().unwrap().insert(
             container_id.to_string(),
@@ -1488,6 +1489,9 @@ impl ResourceInventory for FakeContainerRuntime {
             .filter(|(stopping, _, _)| *stopping == name)
         {
             interrupt.record_signal(*signal);
+        }
+        if let Some(stopped) = stopped {
+            let _ = stopped.send(());
         }
         self.refuses_removal_of(container_id)?;
         self.push(format!("sidecar-stop:{container_id}"));
@@ -7397,7 +7401,7 @@ async fn an_infrastructure_failure_is_reported_before_cleanup_and_only_once() {
     );
     let cleanup_at = events
         .iter()
-        .position(|event| *event == TaskEvent::CleanupStarting)
+        .position(|event| matches!(event, TaskEvent::CleanupStarting { .. }))
         .expect("the dependency is cleaned up");
     assert!(error_at < cleanup_at, "reported before cleanup: {events:?}");
     let task_failed_at = events
@@ -10969,7 +10973,7 @@ fn assert_refused_before_the_task_started(events: &[TaskEvent], docker_events: &
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, TaskEvent::CleanupStarting)),
+            .any(|e| matches!(e, TaskEvent::CleanupStarting { .. })),
         "nothing is cleaned up: {events:?}"
     );
     assert!(
@@ -15617,18 +15621,25 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         TaskEvent::RunEnded {
             task: "test".into(),
         },
-        TaskEvent::CleanupStarting,
+        TaskEvent::CleanupStarting { cause: None },
         // The task's own container is removed by the engine like any
         // other, and first — before the dependencies it was using.
         // `run_container` used to remove it silently, which is why this
-        // event didn't exist here before.
+        // event didn't exist here before. Each is stopped, then removed.
+        TaskEvent::ContainerStopped {
+            container: "build-env".into(),
+        },
         TaskEvent::ContainerRemoved {
             container: "build-env".into(),
+        },
+        TaskEvent::ContainerStopped {
+            container: "database".into(),
         },
         TaskEvent::ContainerRemoved {
             container: "database".into(),
         },
         TaskEvent::RemovingNetwork,
+        TaskEvent::NetworkRemoved,
         TaskEvent::CleanupFinished,
     ];
     assert_eq!(
@@ -17209,4 +17220,297 @@ async fn a_prerequisite_that_already_ran_is_not_named_as_skipped() {
         Some("Interrupted; not starting task 'main'."),
         "{notices:?}"
     );
+}
+
+/// What cleanup says it did follows what the daemon did (decisions/0017):
+/// a refused network removal posts no `NetworkRemoved`, a refused container
+/// removal leaves that container `ContainerStopped` but never
+/// `ContainerRemoved`, a container whose stop the escalation rung cut short
+/// posts no `ContainerStopped`, and nor does one created but never started.
+#[tokio::test]
+async fn cleanup_reports_only_the_steps_that_happened() {
+    let cleanup_events = |docker: FakeContainerRuntime, interrupt| async move {
+        let sink = RawEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_database_dependency(|_| {})),
+            docker,
+            Arc::new(sink.clone()),
+            interrupt,
+        );
+        let _ = engine.run_task("start", &[]).await;
+        let events = sink.0.lock().unwrap().clone();
+        events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    TaskEvent::ContainerStopped { .. }
+                        | TaskEvent::ContainerRemoved { .. }
+                        | TaskEvent::NetworkRemoved
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let stopped = |name: &str| TaskEvent::ContainerStopped {
+        container: name.into(),
+    };
+    let removed = |name: &str| TaskEvent::ContainerRemoved {
+        container: name.into(),
+    };
+
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().refusing_network_removal(),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            stopped("app"),
+            removed("app"),
+            stopped("database"),
+            removed("database")
+        ]
+    );
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().refusing_container_removal("sidecar-id-database"),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            stopped("app"),
+            removed("app"),
+            stopped("database"),
+            TaskEvent::NetworkRemoved
+        ]
+    );
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().signalling_on_removal(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+    assert_eq!(
+        cleanup_events(docker, interrupt).await,
+        vec![
+            removed("app"),
+            removed("database"),
+            TaskEvent::NetworkRemoved
+        ]
+    );
+
+    // `database` never becomes healthy, so `app` is created but never
+    // started: it is removed, but was never stopped. `database` was.
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().with_unhealthy_container("database"),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            removed("app"),
+            stopped("database"),
+            removed("database"),
+            TaskEvent::NetworkRemoved
+        ]
+    );
+    // A task container whose start Docker refused was never started either.
+    assert_eq!(
+        cleanup_events(
+            FakeContainerRuntime::default().failing_start_of_run("app"),
+            crate::interrupt::Interrupt::new()
+        )
+        .await,
+        vec![
+            removed("app"),
+            stopped("database"),
+            removed("database"),
+            TaskEvent::NetworkRemoved
+        ]
+    );
+}
+
+/// Cleanup's opening event names what it follows (decisions/0017): a
+/// non-zero exit, or the step that failed and the container it failed for —
+/// never a clean exit, and never a signal, whose notice already said why.
+#[tokio::test]
+async fn cleanup_starting_names_the_failure_it_follows() {
+    let cause_of = |docker: FakeContainerRuntime, config: Config, interrupt| async move {
+        let sink = RawEventSink::default();
+        let engine = TaskEngine::new(project(config), docker, Arc::new(sink.clone()), interrupt);
+        let _ = engine.run_task("start", &[]).await;
+        let events = sink.0.lock().unwrap().clone();
+        events
+            .into_iter()
+            .find_map(|event| match event {
+                TaskEvent::CleanupStarting { cause } => Some(cause),
+                _ => None,
+            })
+            .expect("cleanup started")
+    };
+    let fresh = crate::interrupt::Interrupt::new;
+    let plain: fn(&mut Container) = |_| {};
+    let with_setup_command: fn(&mut Container) = |database| {
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    };
+    let built: fn(&mut Container) = |database| {
+        database.image = None;
+        database.build_directory = Some(".".to_string());
+    };
+    let database = || "database".to_string();
+
+    for (docker, configure, expected) in [
+        (FakeContainerRuntime::default(), plain, None),
+        (
+            FakeContainerRuntime::default().with_run_exit("app", 3),
+            plain,
+            Some(CleanupCause::Exited {
+                task: "start".into(),
+                exit_code: 3,
+            }),
+        ),
+        (
+            FakeContainerRuntime::default().with_failing_pull("postgres:16"),
+            plain,
+            Some(CleanupCause::ImagePullFailed {
+                container: database(),
+            }),
+        ),
+        (
+            FakeContainerRuntime::default().failing_image_build(),
+            built,
+            Some(CleanupCause::ImageBuildFailed {
+                container: database(),
+            }),
+        ),
+        (
+            FakeContainerRuntime::default().failing_creation("database"),
+            plain,
+            Some(CleanupCause::CreateFailed {
+                container: database(),
+            }),
+        ),
+        (
+            FakeContainerRuntime::default().failing_start("database"),
+            plain,
+            Some(CleanupCause::StartFailed {
+                container: database(),
+            }),
+        ),
+        (
+            FakeContainerRuntime::default().with_unhealthy_container("database"),
+            plain,
+            Some(CleanupCause::NotHealthy {
+                container: database(),
+            }),
+        ),
+        (
+            FakeContainerRuntime::default().with_failing_setup_command("./seed.sh"),
+            with_setup_command,
+            Some(CleanupCause::SetupCommandExited {
+                container: database(),
+                index: 1,
+                exit_code: 1,
+            }),
+        ),
+        (
+            FakeContainerRuntime::default().with_unrunnable_setup_command("./seed.sh"),
+            with_setup_command,
+            Some(CleanupCause::SetupCommandNotRun {
+                container: database(),
+                index: 1,
+            }),
+        ),
+    ] {
+        assert_eq!(
+            cause_of(docker, config_with_database_dependency(configure), fresh()).await,
+            expected
+        );
+    }
+
+    // The task's own container failing to start, and a run-to-completion
+    // dependency exiting non-zero.
+    assert_eq!(
+        cause_of(
+            FakeContainerRuntime::default().failing_start_of_run("app"),
+            config_with_database_dependency(plain),
+            fresh()
+        )
+        .await,
+        Some(CleanupCause::StartFailed {
+            container: "app".into()
+        })
+    );
+    assert_eq!(
+        cause_of(
+            FakeContainerRuntime::default().with_dependency_exit(
+                "database",
+                std::time::Duration::ZERO,
+                2
+            ),
+            config_with_database_dependency(|database| database.run_to_completion = Some(true)),
+            fresh()
+        )
+        .await,
+        Some(CleanupCause::DependencyExited {
+            container: database(),
+            exit_code: 2
+        })
+    );
+    // An external health check's companion is never named (ratect#202):
+    // whatever stops it, the container it checks didn't become healthy.
+    for docker in [
+        FakeContainerRuntime::default().with_dependency_exit(
+            COMPANION,
+            std::time::Duration::ZERO,
+            1,
+        ),
+        FakeContainerRuntime::default().with_failing_pull("curlimages/curl"),
+        FakeContainerRuntime::default().failing_start(COMPANION),
+    ] {
+        assert_eq!(
+            cause_of(docker, config_with_an_external_health_check(), fresh()).await,
+            Some(CleanupCause::NotHealthy {
+                container: database()
+            })
+        );
+    }
+
+    let interrupted = fresh();
+    interrupted.record();
+    assert_eq!(
+        cause_of(
+            FakeContainerRuntime::default()
+                .with_run_delay("app", std::time::Duration::from_secs(60)),
+            config_with_database_dependency(plain),
+            interrupted
+        )
+        .await,
+        None
+    );
+}
+
+/// A `Failed` tag changes nothing a report shows: the same message and cause
+/// chain, tagged or not — and it survives `unshare`'s flattening, still
+/// alongside `NotReady`.
+#[test]
+fn a_failed_tag_is_invisible_in_the_report_and_survives_unsharing() {
+    let untagged = || {
+        anyhow::anyhow!("daemon said no")
+            .context(NotReady("Container 'db' did not become healthy".into()))
+    };
+    let cause = CleanupCause::NotHealthy {
+        container: "db".into(),
+    };
+    let tagged = Failed::tag(untagged(), cause.clone());
+    assert_eq!(format!("{tagged:?}"), format!("{:?}", untagged()));
+    assert_eq!(format!("{tagged:#}"), format!("{:#}", untagged()));
+
+    let shared: SharedResult<()> = Err(Arc::new(tagged));
+    let unshared = unshare(&shared).unwrap_err();
+    assert_eq!(failed_step(&unshared), Some(cause));
+    assert!(is_not_ready(&unshared));
 }

@@ -97,7 +97,7 @@ use crate::config::{
 };
 use crate::container_spec::{derive_build_spec, BindMount, BindSource};
 use crate::docker::ContainerRuntime;
-use crate::ui::{EventSink, TaskEvent};
+use crate::ui::{CleanupCause, EventSink, TaskEvent};
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
 use indexmap::IndexMap;
@@ -296,14 +296,100 @@ fn get_or_create_cell<K: Eq + std::hash::Hash, T>(
 /// Flattening drops the error's types, so a [`NotReady`] is rebuilt as one
 /// around the same text: whether its report gets the re-run hint is decided
 /// from its type, at the top of the run, long after this.
+///
+/// A [`Failed`] tag is re-attached the same way, so the step a dependency
+/// failed at still names it for every waiter.
 fn unshare<T: Clone>(result: &SharedResult<T>) -> Result<T> {
     result.clone().map_err(|e| {
-        if e.is::<NotReady>() {
+        let flattened = if is_not_ready(&e) {
             NotReady(format!("{e:?}")).into()
         } else {
             anyhow::anyhow!("{:?}", e)
+        };
+        match failed_step(&e) {
+            Some(cause) => Failed::tag(flattened, cause),
+            None => flattened,
         }
     })
+}
+
+/// An error tagged with the step it failed at and the container it failed
+/// for — what the opening cleanup line names (decisions/0017). Transparent:
+/// it displays as the error it wraps and continues that error's own cause
+/// chain, so the `Error:` report reads exactly as it would untagged.
+/// Attached where each step fails; read back with [`failed_step`].
+struct Failed {
+    cause: CleanupCause,
+    error: anyhow::Error,
+}
+
+impl Failed {
+    /// Never a signal, a closed stdout or the task's own exit: those are
+    /// found by downcasting the run's error, which this would hide.
+    fn tag(error: anyhow::Error, cause: CleanupCause) -> anyhow::Error {
+        debug_assert!(
+            !error.is::<crate::interrupt::TaskInterrupted>()
+                && !error.is::<crate::docker::StdoutClosed>()
+                && !error.is::<crate::docker::ContainerExitedNonZero>(),
+            "tagged a run outcome as a failed step: {error:?}"
+        );
+        anyhow::Error::new(Failed { cause, error })
+    }
+
+    /// `container`'s own step `cause`, unless it is an external health
+    /// check's companion: that is never named (ratect#202), and whatever
+    /// stopped it, the container it checks didn't become healthy.
+    fn of_container(
+        container: &str,
+        reports_readiness_for: Option<&str>,
+        cause: impl FnOnce(String) -> CleanupCause,
+    ) -> CleanupCause {
+        match reports_readiness_for {
+            Some(checked) => CleanupCause::NotHealthy {
+                container: checked.to_string(),
+            },
+            None => cause(container.to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl std::fmt::Debug for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.error, f)
+    }
+}
+
+impl std::error::Error for Failed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.error.source()
+    }
+}
+
+/// The step `error` failed at, if one was tagged — found through any
+/// context added since, and through the [`FailureReported`] a reported
+/// failure is wrapped in before cleanup.
+fn failed_step(error: &anyhow::Error) -> Option<CleanupCause> {
+    match error.downcast_ref::<Failed>() {
+        Some(failed) => Some(failed.cause.clone()),
+        None => error
+            .downcast_ref::<FailureReported>()
+            .and_then(|reported| failed_step(&reported.0)),
+    }
+}
+
+/// Whether `error` is a [`NotReady`] failure, looking through a [`Failed`]
+/// tag, which `anyhow`'s own downcast can't see past.
+fn is_not_ready(error: &anyhow::Error) -> bool {
+    error.is::<NotReady>()
+        || error
+            .downcast_ref::<Failed>()
+            .is_some_and(|failed| is_not_ready(&failed.error))
 }
 
 /// Everything one task execution's container stages share — the graph, the
@@ -333,6 +419,9 @@ struct TaskRunContext<'a, 'p> {
     run_labels: &'a crate::labels::RunLabels,
     resource_names: &'a crate::resource_names::ResourceNames,
     dependency_watchers: &'a Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Every container this run started — what cleanup says `Container
+    /// stopped.` for; one created but never started is only removed.
+    started_containers: &'a Mutex<std::collections::HashSet<String>>,
     /// The task's own container: its name, its `run` (the overlay it is
     /// created with, where a dependency gets `customise`), the
     /// `-- ADDITIONAL_ARGS` only it receives, and whether it is
@@ -1518,6 +1607,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             "Failed to run setup command '{}' in container {}",
                             setup_command.command, target.description
                         ))
+                    })
+                    .map_err(|error| {
+                        Failed::tag(
+                            error,
+                            CleanupCause::SetupCommandNotRun {
+                                container: name.to_string(),
+                                index: setup_command_index + 1,
+                            },
+                        )
                     })?
             };
             // The command's output, line by line — exec output arrives
@@ -1553,11 +1651,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 } else {
                     format!(", with output:\n{}", result.output.trim())
                 };
-                return Err(NotReady(format!(
-                    "Setup command '{}' in container {} exited with code {}{}",
-                    setup_command.command, target.description, result.exit_code, output
-                ))
-                .into());
+                return Err(Failed::tag(
+                    NotReady(format!(
+                        "Setup command '{}' in container {} exited with code {}{}",
+                        setup_command.command, target.description, result.exit_code, output
+                    ))
+                    .into(),
+                    CleanupCause::SetupCommandExited {
+                        container: name.to_string(),
+                        index: setup_command_index + 1,
+                        exit_code: result.exit_code,
+                    },
+                ));
             }
         }
         if !setup_commands.is_empty() {
@@ -1696,7 +1801,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         self.docker
             .wait_for_container_healthy(container_id)
             .await
-            .with_context(|| NotReady(format!("Container '{}' did not become healthy", name)))?;
+            .with_context(|| NotReady(format!("Container '{}' did not become healthy", name)))
+            .map_err(|error| {
+                Failed::tag(
+                    error,
+                    CleanupCause::NotHealthy {
+                        container: name.to_string(),
+                    },
+                )
+            })?;
         self.event_sink.post(TaskEvent::ContainerBecameHealthy {
             container: name.to_string(),
         });
@@ -2145,7 +2258,23 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     let container_config = containers
                         .get(name)
                         .with_context(|| undeclared_container_bug(name))?;
-                    let image = self.resolve_image(name, container_config).await?;
+                    let image =
+                        self.resolve_image(name, container_config)
+                            .await
+                            .map_err(|error| {
+                                let built = container_config.build_directory.is_some();
+                                Failed::tag(
+                                    error,
+                                    Failed::of_container(
+                                        name,
+                                        container_config.reports_readiness_for.as_deref(),
+                                        |container| match built {
+                                            true => CleanupCause::ImageBuildFailed { container },
+                                            false => CleanupCause::ImagePullFailed { container },
+                                        },
+                                    ),
+                                )
+                            })?;
                     if container_config.reports_readiness_for.is_none() {
                         self.event_sink.post(TaskEvent::ImageResolved {
                             container: name.to_string(),
@@ -2481,6 +2610,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // strictly before cleanup ever stops a container, so a deliberate
         // stop is never misreported as one of these.
         let dependency_watchers: Mutex<Vec<tokio::task::JoinHandle<()>>> = Mutex::new(Vec::new());
+        // See `TaskRunContext::started_containers`.
+        let started_containers: Mutex<std::collections::HashSet<String>> = Mutex::default();
         // Memoizes each container's creation and readiness futures for this
         // one task execution — see `ensure_container_created`/
         // `ensure_container_ready`. Reset per task (unlike
@@ -2629,6 +2760,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 run_labels: &run_labels,
                 resource_names: &resource_names,
                 dependency_watchers: &dependency_watchers,
+                started_containers: &started_containers,
                 root: &run.container,
                 run,
                 additional_args,
@@ -2705,9 +2837,42 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 command: command.map(str::to_string),
             });
             let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-            let run_future = self
-                .docker
-                .run_container(&container_id, &spec, Some(started_tx));
+            // `run_container`'s own start signal, recorded as this run's
+            // start of the task container and passed on to the readiness
+            // gate below; polled within `run_future`, so a start that
+            // happened is recorded even when an interrupt then drops it.
+            let (run_started_tx, run_started_rx) = tokio::sync::oneshot::channel();
+            let record_start = async {
+                if run_started_rx.await.is_ok() {
+                    started_containers
+                        .lock()
+                        .unwrap()
+                        .insert(run.container.clone());
+                    let _ = started_tx.send(());
+                }
+            };
+            // A refused start is the task container's own failed step; its
+            // exit, or a failure once it runs, is not.
+            let run_future = async {
+                let (outcome, ()) = futures::future::join(
+                    self.docker
+                        .run_container(&container_id, &spec, Some(run_started_tx)),
+                    record_start,
+                )
+                .await;
+                outcome.map_err(|error| {
+                    if error.is::<crate::docker::ContainerStartFailed>() {
+                        Failed::tag(
+                            error,
+                            CleanupCause::StartFailed {
+                                container: run.container.clone(),
+                            },
+                        )
+                    } else {
+                        error
+                    }
+                })
+            };
             // Batect-compatible dialect only: gate on the container's
             // readiness once it's actually running. The `select!` below is
             // what drives this concurrently with `run_future` — without
@@ -2915,7 +3080,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         let result = match result {
             Err(error) if exit_code.is_none() && !crate::exit_code::already_reported(&error) => {
                 let mut message = format!("{error:?}");
-                if self.cleanup_after_failure && error.is::<NotReady>() {
+                if self.cleanup_after_failure && is_not_ready(&error) {
                     message.push_str("\n\n");
                     message.push_str(RERUN_WITHOUT_CLEANUP_HINT);
                 }
@@ -3090,7 +3255,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             let narrates_cleanup =
                 !created_sidecars.is_empty() || owns_network || task_container_id.is_some();
             if narrates_cleanup {
-                self.event_sink.post(TaskEvent::CleanupStarting);
+                // Named when cleanup follows a failure (decisions/0017); a
+                // signal's or a closed stdout's notice already said why.
+                let cause = match exit_code {
+                    _ if interrupted_by.is_some() || stdout_closed => None,
+                    Some(0) => None,
+                    Some(exit_code) => Some(CleanupCause::Exited {
+                        task: task_name.to_string(),
+                        exit_code,
+                    }),
+                    None => Some(result.as_ref().err().and_then(failed_step).unwrap_or_else(
+                        || CleanupCause::Failed {
+                            task: task_name.to_string(),
+                        },
+                    )),
+                };
+                self.event_sink.post(TaskEvent::CleanupStarting { cause });
             }
             // Every removal below is raced against the next signal rather
             // than merely checked between removals. Checking between them
@@ -3117,6 +3297,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 /// to attach it to (ratect#202) — removed like any other, but
                 /// not narrated.
                 narrate: bool,
+                /// Whether this run started it — only then does its stop
+                /// say `Container stopped.`.
+                started: bool,
                 is_task_container: bool,
             }
             // What cleanup ends by saying is built from these: the ids of
@@ -3170,6 +3353,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             }
             let mut created_names: Vec<&str> = created_ids.keys().copied().collect();
             created_names.sort_by_key(|name| (*name != run.container, *name));
+            let started_containers = started_containers.into_inner().unwrap();
             let removals: Vec<Removal<'_>> = created_names
                 .iter()
                 .filter_map(|name| created_ids.get_key_value(name))
@@ -3179,6 +3363,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         name,
                         container_id,
                         narrate: is_task_container || is_narrated(&containers, name),
+                        started: started_containers.contains(name),
                         is_task_container,
                     }
                 })
@@ -3222,14 +3407,26 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     let stop_signal = container_config.and_then(|c| c.stop_signal.as_deref());
                     let stop_grace_period = container_config.and_then(|c| c.stop_grace_period);
                     stops.push(async move {
-                        let outcome = self
-                            .docker
-                            .stop_and_remove_container(
+                        // Said the moment the stop succeeds, while the
+                        // removal is still under way: a slow or refused
+                        // removal is when that line matters (decisions/0017).
+                        let (stopped, on_stopped) = tokio::sync::oneshot::channel();
+                        let (outcome, ()) = futures::future::join(
+                            self.docker.stop_and_remove_container(
                                 removal.container_id,
                                 stop_signal,
                                 stop_grace_period,
-                            )
-                            .await;
+                                Some(stopped),
+                            ),
+                            async {
+                                if on_stopped.await.is_ok() && removal.narrate && removal.started {
+                                    self.event_sink.post(TaskEvent::ContainerStopped {
+                                        container: removal.name.to_string(),
+                                    });
+                                }
+                            },
+                        )
+                        .await;
                         (removal, outcome)
                     });
                 }
@@ -3310,7 +3507,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     .until_interrupted(abandon_rung(interrupts_at_escalation), removal)
                     .await
                 {
-                    Some(Ok(())) => network_removed = true,
+                    Some(Ok(())) => {
+                        network_removed = true;
+                        self.event_sink.post(TaskEvent::NetworkRemoved);
+                    }
                     Some(Err(e)) => {
                         cleanup_failed.store(true, Ordering::Relaxed);
                         tracing::debug!(network = network_name, error = ?e, "failed to remove network");
@@ -3679,7 +3879,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             .expect("a finished create has left its answer");
                         outcome
                     };
-                    let id = created.map_err(|error| error.error)?;
+                    let id = created.map_err(|error| {
+                        Failed::tag(
+                            error.error,
+                            Failed::of_container(
+                                name,
+                                container_config.reports_readiness_for.as_deref(),
+                                |container| CleanupCause::CreateFailed { container },
+                            ),
+                        )
+                    })?;
                     Ok(CreatedContainer { id, spec })
                 }
                 .await;
@@ -3774,7 +3983,22 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         }
                         self.docker
                             .start_background_container(&container_id, &spec)
-                            .await?;
+                            .await
+                            .map_err(|error| {
+                                Failed::tag(
+                                    error,
+                                    Failed::of_container(
+                                        name,
+                                        reports_readiness_for,
+                                        |container| CleanupCause::StartFailed { container },
+                                    ),
+                                )
+                            })?;
+                        context
+                            .started_containers
+                            .lock()
+                            .unwrap()
+                            .insert(name.to_string());
                     }
                     if reports_readiness_for.is_none() {
                         self.event_sink.post(TaskEvent::DependencyStarted {
@@ -3816,23 +4040,34 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                     .await
                                     .unwrap_or_default();
                                 let detail = detail.trim();
-                                anyhow::bail!(
-                                    "Container '{checked}' did not become healthy: {}. The \
-                                     external check ran in container '{name}' — \
-                                     --no-cleanup-after-failure keeps it for inspection",
-                                    if detail.is_empty() {
-                                        "its external health check failed".to_string()
-                                    } else {
-                                        detail.to_string()
-                                    }
-                                );
+                                return Err(Failed::tag(
+                                    anyhow::anyhow!(
+                                        "Container '{checked}' did not become healthy: {}. The \
+                                         external check ran in container '{name}' — \
+                                         --no-cleanup-after-failure keeps it for inspection",
+                                        if detail.is_empty() {
+                                            "its external health check failed".to_string()
+                                        } else {
+                                            detail.to_string()
+                                        }
+                                    ),
+                                    CleanupCause::NotHealthy {
+                                        container: checked.to_string(),
+                                    },
+                                ));
                             }
-                            anyhow::bail!(
-                                "Container '{}' (a run-to-completion dependency) exited with \
-                                 code {}",
-                                name,
-                                exit_code
-                            );
+                            return Err(Failed::tag(
+                                anyhow::anyhow!(
+                                    "Container '{}' (a run-to-completion dependency) exited with \
+                                     code {}",
+                                    name,
+                                    exit_code
+                                ),
+                                CleanupCause::DependencyExited {
+                                    container: name.to_string(),
+                                    exit_code,
+                                },
+                            ));
                         }
                         // A companion's success *is* the checked container's
                         // readiness, and is reported as such — see
@@ -3871,6 +4106,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             .await
                             .with_context(|| {
                                 NotReady(format!("Container '{}' did not become healthy", name))
+                            })
+                            .map_err(|error| {
+                                Failed::tag(
+                                    error,
+                                    CleanupCause::NotHealthy {
+                                        container: name.to_string(),
+                                    },
+                                )
                             })?;
                         self.event_sink.post(TaskEvent::ContainerBecameHealthy {
                             container: name.to_string(),

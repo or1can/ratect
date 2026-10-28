@@ -1,130 +1,140 @@
 [1mjourney-test[0m | Running [1mjourney-test[0m...
-[36m[1mcache       [0m[0m | Starting container...
-[32m[1mdb          [0m[0m | Starting container...
-[36m[1mcache       [0m[0m | Container started.
-[36m[1mcache       [0m[0m | 1:C 16 Oct 2026 12:29:48.800 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
-[36m[1mcache       [0m[0m | 1:C 16 Oct 2026 12:29:48.800 * Redis version=7.4.11, bits=64, commit=00000000, modified=0, pid=1, just started
-[36m[1mcache       [0m[0m | 1:C 16 Oct 2026 12:29:48.800 # Warning: no config file specified, using the default config. In order to specify a config file use redis-server /path/to/redis.conf
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.800 * monotonic clock: POSIX clock_gettime
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.801 * Running mode=standalone, port=6379.
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.801 * Server initialized
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:48.801 * Ready to accept connections tcp
-[32m[1mdb          [0m[0m | Container started.
-[32m[1mdb          [0m[0m | ********************************************************************************
-[32m[1mdb          [0m[0m | WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
-[32m[1mdb          [0m[0m |          anyone with access to the Postgres port to access your database without
-[32m[1mdb          [0m[0m |          a password, even if POSTGRES_PASSWORD is set. See PostgreSQL
-[32m[1mdb          [0m[0m |          documentation about "trust":
-[32m[1mdb          [0m[0m |          https://www.postgresql.org/docs/current/auth-trust.html
-[32m[1mdb          [0m[0m |          In Docker's default configuration, this is effectively any other
-[32m[1mdb          [0m[0m |          container on the same system.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m |          It is not recommended to use POSTGRES_HOST_AUTH_METHOD=trust. Replace
-[32m[1mdb          [0m[0m |          it with "-e POSTGRES_PASSWORD=password" instead to set a password in
-[32m[1mdb          [0m[0m |          "docker run".
-[32m[1mdb          [0m[0m | ********************************************************************************
-[32m[1mdb          [0m[0m | The files belonging to this database system will be owned by user "postgres".
-[32m[1mdb          [0m[0m | This user must also own the server process.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | The database cluster will be initialized with locale "en_US.utf8".
-[32m[1mdb          [0m[0m | The default database encoding has accordingly been set to "UTF8".
-[32m[1mdb          [0m[0m | The default text search configuration will be set to "english".
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | Data page checksums are disabled.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | fixing permissions on existing directory /var/lib/postgresql/data ... ok
-[32m[1mdb          [0m[0m | creating subdirectories ... ok
-[32m[1mdb          [0m[0m | selecting dynamic shared memory implementation ... posix
-[32m[1mdb          [0m[0m | selecting default max_connections ... 100
-[32m[1mdb          [0m[0m | selecting default shared_buffers ... 128MB
-[32m[1mdb          [0m[0m | selecting default time zone ... Etc/UTC
-[32m[1mdb          [0m[0m | creating configuration files ... ok
-[32m[1mdb          [0m[0m | running bootstrap script ... ok
-[32m[1mdb          [0m[0m | performing post-bootstrap initialization ... ok
-[32m[1mdb          [0m[0m | syncing data to disk ... ok
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | initdb: warning: enabling "trust" authentication for local connections
-[32m[1mdb          [0m[0m | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | Success. You can now start the database server using:
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m |     pg_ctl -D /var/lib/postgresql/data -l logfile start
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | waiting for server to start....2026-10-16 12:29:49.692 UTC [48] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:49.694 UTC [48] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:49.696 UTC [51] LOG:  database system was shut down at 2026-10-16 12:29:49 UTC
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:49.698 UTC [48] LOG:  database system is ready to accept connections
-[32m[1mdb          [0m[0m |  done
-[32m[1mdb          [0m[0m | server started
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/01-schema.sql
-[36m[1mcache       [0m[0m | Container became healthy.
-[32m[1mdb          [0m[0m | CREATE TABLE
-[32m[1mdb          [0m[0m | INSERT 0 1000000
-[32m[1mdb          [0m[0m | CREATE INDEX
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | waiting for server to shut down....2026-10-16 12:29:51.094 UTC [48] LOG:  received fast shutdown request
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.095 UTC [48] LOG:  aborting any active transactions
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.096 UTC [48] LOG:  background worker "logical replication launcher" (PID 54) exited with exit code 1
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.096 UTC [49] LOG:  shutting down
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.098 UTC [49] LOG:  checkpoint starting: shutdown immediate
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.232 UTC [49] LOG:  checkpoint complete: wrote 10152 buffers (62.0%); 0 WAL file(s) added, 0 removed, 10 recycled; write=0.068 s, sync=0.046 s, total=0.136 s; sync files=45, longest=0.023 s, average=0.002 s; distance=174130 kB, estimate=174130 kB; lsn=0/BEFF470, redo lsn=0/BEFF470
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.237 UTC [48] LOG:  database system is shut down
-[32m[1mdb          [0m[0m |  done
-[32m[1mdb          [0m[0m | server stopped
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | PostgreSQL init process complete; ready for start up.
-[32m[1mdb          [0m[0m | 
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.311 UTC [1] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.311 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.311 UTC [1] LOG:  listening on IPv6 address "::", port 5432
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.312 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.314 UTC [77] LOG:  database system was shut down at 2026-10-16 12:29:51 UTC
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:51.316 UTC [1] LOG:  database system is ready to accept connections
-[32m[1mdb          [0m[0m | Container became healthy.
-[32m[1mdb          [0m[0m | Running setup command psql -U postgres -c "ANALYZE visits;" (1 of 1)...
-[32m[1mdb          [0m[0m | Setup command 1 | ANALYZE
-[32m[1mdb          [0m[0m | Container has completed all setup commands.
-[34m[1mapp         [0m[0m | Starting container...
-[34m[1mapp         [0m[0m | Container started.
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | added 99 packages, and audited 100 packages in 2s
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | 18 packages are looking for funding
-[34m[1mapp         [0m[0m |   run `npm fund` for details
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | found 0 vulnerabilities
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | > full-stack-app@1.0.0 start
-[34m[1mapp         [0m[0m | > node server.js
-[34m[1mapp         [0m[0m | 
-[34m[1mapp         [0m[0m | Listening on port 8080
-[34m[1mapp         [0m[0m | Container became healthy.
-[35m[1mjourney-test[0m[0m | Running sh -c 'npm ci && node test.js'...
-[35m[1mjourney-test[0m[0m | 
-[35m[1mjourney-test[0m[0m | added 6 packages, and audited 7 packages in 1s
-[35m[1mjourney-test[0m[0m | 
-[35m[1mjourney-test[0m[0m | found 0 vulnerabilities
-[35m[1mjourney-test[0m[0m | app responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
-[35m[1mjourney-test[0m[0m | cache holds visits:count=1000001, confirming app and this container share the same cache
-[35m[1mjourney-test[0m[0m | journey test passed
+[1;32mdb          [0m | Starting container...
+[1;33mcache       [0m | Starting container...
+[1;32mdb          [0m | Container started.
+[1;33mcache       [0m | Container started.
+[1;32mdb          [0m | ********************************************************************************
+[1;32mdb          [0m | WARNING: POSTGRES_HOST_AUTH_METHOD has been set to "trust". This will allow
+[1;32mdb          [0m |          anyone with access to the Postgres port to access your database without
+[1;32mdb          [0m |          a password, even if POSTGRES_PASSWORD is set. See PostgreSQL
+[1;32mdb          [0m |          documentation about "trust":
+[1;32mdb          [0m |          https://www.postgresql.org/docs/current/auth-trust.html
+[1;32mdb          [0m |          In Docker's default configuration, this is effectively any other
+[1;32mdb          [0m |          container on the same system.
+[1;32mdb          [0m | 
+[1;32mdb          [0m |          It is not recommended to use POSTGRES_HOST_AUTH_METHOD=trust. Replace
+[1;32mdb          [0m |          it with "-e POSTGRES_PASSWORD=password" instead to set a password in
+[1;32mdb          [0m |          "docker run".
+[1;32mdb          [0m | ********************************************************************************
+[1;33mcache       [0m | 1:C 28 Oct 2026 19:12:43.874 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+[1;33mcache       [0m | 1:C 28 Oct 2026 19:12:43.874 * Redis version=7.4.11, bits=64, commit=00000000, modified=0, pid=1, just started
+[1;33mcache       [0m | 1:C 28 Oct 2026 19:12:43.874 # Warning: no config file specified, using the default config. In order to specify a config file use redis-server /path/to/redis.conf
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:43.874 * monotonic clock: POSIX clock_gettime
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:43.874 * Running mode=standalone, port=6379.
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:43.874 * Server initialized
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:43.874 * Ready to accept connections tcp
+[1;32mdb          [0m | The files belonging to this database system will be owned by user "postgres".
+[1;32mdb          [0m | This user must also own the server process.
+[1;32mdb          [0m | 
+[1;32mdb          [0m | The database cluster will be initialized with locale "en_US.utf8".
+[1;32mdb          [0m | The default database encoding has accordingly been set to "UTF8".
+[1;32mdb          [0m | The default text search configuration will be set to "english".
+[1;32mdb          [0m | 
+[1;32mdb          [0m | Data page checksums are disabled.
+[1;32mdb          [0m | 
+[1;32mdb          [0m | fixing permissions on existing directory /var/lib/postgresql/data ... ok
+[1;32mdb          [0m | creating subdirectories ... ok
+[1;32mdb          [0m | selecting dynamic shared memory implementation ... posix
+[1;32mdb          [0m | selecting default max_connections ... 100
+[1;32mdb          [0m | selecting default shared_buffers ... 128MB
+[1;32mdb          [0m | selecting default time zone ... Etc/UTC
+[1;32mdb          [0m | creating configuration files ... ok
+[1;32mdb          [0m | running bootstrap script ... ok
+[1;32mdb          [0m | performing post-bootstrap initialization ... ok
+[1;33mcache       [0m | Container became healthy.
+[1;32mdb          [0m | syncing data to disk ... ok
+[1;32mdb          [0m | 
+[1;32mdb          [0m | 
+[1;32mdb          [0m | Success. You can now start the database server using:
+[1;32mdb          [0m | 
+[1;32mdb          [0m |     pg_ctl -D /var/lib/postgresql/data -l logfile start
+[1;32mdb          [0m | 
+[1;32mdb          [0m | initdb: warning: enabling "trust" authentication for local connections
+[1;32mdb          [0m | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+[1;32mdb          [0m | waiting for server to start....2026-10-28 19:12:44.910 UTC [54] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+[1;32mdb          [0m | 2026-10-28 19:12:44.911 UTC [54] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+[1;32mdb          [0m | 2026-10-28 19:12:44.913 UTC [57] LOG:  database system was shut down at 2026-10-28 19:12:44 UTC
+[1;32mdb          [0m | 2026-10-28 19:12:44.915 UTC [54] LOG:  database system is ready to accept connections
+[1;32mdb          [0m |  done
+[1;32mdb          [0m | server started
+[1;32mdb          [0m | 
+[1;32mdb          [0m | /usr/local/bin/docker-entrypoint.sh: running /docker-entrypoint-initdb.d/01-schema.sql
+[1;32mdb          [0m | CREATE TABLE
+[1;32mdb          [0m | INSERT 0 1000000
+[1;32mdb          [0m | CREATE INDEX
+[1;32mdb          [0m | 
+[1;32mdb          [0m | 
+[1;32mdb          [0m | waiting for server to shut down....2026-10-28 19:12:46.289 UTC [54] LOG:  received fast shutdown request
+[1;32mdb          [0m | 2026-10-28 19:12:46.290 UTC [54] LOG:  aborting any active transactions
+[1;32mdb          [0m | 2026-10-28 19:12:46.291 UTC [54] LOG:  background worker "logical replication launcher" (PID 60) exited with exit code 1
+[1;32mdb          [0m | 2026-10-28 19:12:46.291 UTC [55] LOG:  shutting down
+[1;32mdb          [0m | 2026-10-28 19:12:46.292 UTC [55] LOG:  checkpoint starting: shutdown immediate
+[1;32mdb          [0m | 2026-10-28 19:12:46.435 UTC [55] LOG:  checkpoint complete: wrote 10152 buffers (62.0%); 0 WAL file(s) added, 0 removed, 10 recycled; write=0.057 s, sync=0.071 s, total=0.144 s; sync files=45, longest=0.028 s, average=0.002 s; distance=174130 kB, estimate=174130 kB; lsn=0/BEFF470, redo lsn=0/BEFF470
+[1;32mdb          [0m | 2026-10-28 19:12:46.440 UTC [54] LOG:  database system is shut down
+[1;32mdb          [0m |  done
+[1;32mdb          [0m | server stopped
+[1;32mdb          [0m | 
+[1;32mdb          [0m | PostgreSQL init process complete; ready for start up.
+[1;32mdb          [0m | 
+[1;32mdb          [0m | 2026-10-28 19:12:46.509 UTC [1] LOG:  starting PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+[1;32mdb          [0m | 2026-10-28 19:12:46.510 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+[1;32mdb          [0m | 2026-10-28 19:12:46.510 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+[1;32mdb          [0m | 2026-10-28 19:12:46.513 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+[1;32mdb          [0m | 2026-10-28 19:12:46.517 UTC [77] LOG:  database system was shut down at 2026-10-28 19:12:46 UTC
+[1;32mdb          [0m | 2026-10-28 19:12:46.521 UTC [1] LOG:  database system is ready to accept connections
+[1;32mdb          [0m | Container became healthy.
+[1;32mdb          [0m | Running setup command [1mpsql -U postgres -c "ANALYZE visits;"[0m (1 of 1)...
+[1;32mdb          [0m | Setup command 1 | ANALYZE
+[1;32mdb          [0m | Container has completed all setup commands.
+[1;36mapp         [0m | Starting container...
+[1;36mapp         [0m | Container started.
+[1;36mapp         [0m | 
+[1;36mapp         [0m | added 99 packages, and audited 100 packages in 993ms
+[1;36mapp         [0m | 
+[1;36mapp         [0m | 18 packages are looking for funding
+[1;36mapp         [0m |   run `npm fund` for details
+[1;36mapp         [0m | 
+[1;36mapp         [0m | found 0 vulnerabilities
+[1;36mapp         [0m | npm notice
+[1;36mapp         [0m | npm notice New major version of npm available! 10.9.8 -> 12.2.1
+[1;36mapp         [0m | npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.1
+[1;36mapp         [0m | npm notice To update run: npm install -g npm@12.2.1
+[1;36mapp         [0m | npm notice
+[1;36mapp         [0m | 
+[1;36mapp         [0m | > full-stack-app@1.0.0 start
+[1;36mapp         [0m | > node server.js
+[1;36mapp         [0m | 
+[1;36mapp         [0m | Listening on port 8080
+[1;36mapp         [0m | Container became healthy.
+[1;35mjourney-test[0m | Running [1msh -c 'npm ci && node test.js'[0m...
+[1;35mjourney-test[0m | 
+[1;35mjourney-test[0m | added 6 packages, and audited 7 packages in 906ms
+[1;35mjourney-test[0m | 
+[1;35mjourney-test[0m | found 0 vulnerabilities
+[1;35mjourney-test[0m | app responded: {"message":"Hello from Ratect!","visit_id":1000001,"total_visits":1000001,"count_source":"database"}
+[1;35mjourney-test[0m | cache holds visits:count=1000001, confirming app and this container share the same cache
+[1;35mjourney-test[0m | journey test passed
 [1mjourney-test[0m | Cleaning up...
-[35m[1mjourney-test[0m[0m | Container removed.
-[34m[1mapp         [0m[0m | Container removed.
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.473 UTC [1] LOG:  received fast shutdown request
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.475 UTC [1] LOG:  aborting any active transactions
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.476 UTC [1] LOG:  background worker "logical replication launcher" (PID 80) exited with exit code 1
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.476 UTC [75] LOG:  shutting down
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.478 UTC [75] LOG:  checkpoint starting: shutdown immediate
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.494 UTC [75] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.009 s, total=0.018 s; sync files=12, longest=0.003 s, average=0.001 s; distance=20 kB, estimate=20 kB; lsn=0/BF044A8, redo lsn=0/BF044A8
-[32m[1mdb          [0m[0m | 2026-10-16 12:29:56.495 UTC [1] LOG:  database system is shut down
-[32m[1mdb          [0m[0m | Container removed.
-[36m[1mcache       [0m[0m | 1:signal-handler (1792153796) Received SIGTERM scheduling shutdown...
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.735 * User requested shutdown...
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.735 * Saving the final RDB snapshot before exiting.
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.737 * DB saved on disk
-[36m[1mcache       [0m[0m | 1:M 16 Oct 2026 12:29:56.737 # Redis is now ready to exit, bye bye...
-[36m[1mcache       [0m[0m | Container removed.
+[1;35mjourney-test[0m | Container stopped.
+[1;35mjourney-test[0m | Container removed.
+[1;36mapp         [0m | Container stopped.
+[1;36mapp         [0m | Container removed.
+[1;32mdb          [0m | 2026-10-28 19:12:50.860 UTC [1] LOG:  received fast shutdown request
+[1;33mcache       [0m | 1:signal-handler (1793214770) Received SIGTERM scheduling shutdown...
+[1;32mdb          [0m | 2026-10-28 19:12:50.861 UTC [1] LOG:  aborting any active transactions
+[1;32mdb          [0m | 2026-10-28 19:12:50.862 UTC [1] LOG:  background worker "logical replication launcher" (PID 80) exited with exit code 1
+[1;32mdb          [0m | 2026-10-28 19:12:50.862 UTC [75] LOG:  shutting down
+[1;32mdb          [0m | 2026-10-28 19:12:50.864 UTC [75] LOG:  checkpoint starting: shutdown immediate
+[1;32mdb          [0m | 2026-10-28 19:12:50.883 UTC [75] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.013 s, total=0.021 s; sync files=12, longest=0.002 s, average=0.002 s; distance=20 kB, estimate=20 kB; lsn=0/BF044A8, redo lsn=0/BF044A8
+[1;32mdb          [0m | 2026-10-28 19:12:50.884 UTC [1] LOG:  database system is shut down
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:50.933 * User requested shutdown...
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:50.933 * Saving the final RDB snapshot before exiting.
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:50.936 * DB saved on disk
+[1;33mcache       [0m | 1:M 28 Oct 2026 19:12:50.936 # Redis is now ready to exit, bye bye...
+[1;32mdb          [0m | Container stopped.
+[1;32mdb          [0m | Container removed.
+[1;33mcache       [0m | Container stopped.
+[1;33mcache       [0m | Container removed.
 [1mjourney-test[0m | Removing task network...
-[1mjourney-test[0m | journey-test finished with exit code [32m0[0m in 8.4s.
+[1mjourney-test[0m | Task network removed.
+[1mjourney-test[0m | [1mjourney-test[0m finished with exit code [1;32m0[0m in 7.6s.

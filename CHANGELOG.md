@@ -80,6 +80,10 @@ history, from when it was the only binary.
 - `ratect resources clean` (ratect only) exits `1` when the daemon refuses a removal, after trying every other one, with one `Error:` naming each refusal.
 - A dependency that exits while the task runs is reported as a milestone (`db exited unexpectedly with exit code 137.`), without a `Warning:` marker, in `simple`, `fancy` and `all`.
 - Under `-o all` the task-level prefix is bold in the terminal's default foreground rather than white; no output uses the terminal's white or black.
+- Under `-o all` container prefixes cycle cyan, yellow, green, magenta and blue, in that order, by sorted container name.
+- The exit code in the summary line is bold as well as green or red, in every style. Under `-o all` the image in `Pulling`/`Pulled`, the command in `Running <command>...` and `Running setup command`, and the task name in the summary line are bold.
+- Under `-o all` cleanup reports `Container stopped.` before `Container removed.` for each container the run started, and `Task network removed.` after `Removing task network...`.
+- After a failure, `simple` and `-o all` open cleanup by naming it — `Cleaning up after <task> exited with code <N>...`, or the step and container that failed, such as `Cleaning up after db did not become healthy...` or `Cleaning up after db's image failed to pull...` — instead of `Cleaning up...`.
 - Every container's image — each dependency's and the task's own — is pulled or built as soon as the task's network is ready, concurrently, and each container is created as soon as its own image is — before the containers it depends on are ready, which gate only its start. A pull, build or create that fails ends the run as soon as it fails, not once every dependency is ready and its setup commands have run. `-o all`/`fancy` show image progress from the start, and `fancy`'s cleanup countdown counts every container created, including a dependency that was created but never started.
 - `--max-parallelism` caps a container's create and its start as two separate steps, and no slot is held while a container waits for its dependencies to be ready; the task's own container's create counts against the cap, its run still never does. Under the cap, a dependency's `Starting …` milestone is printed when its start begins rather than while it waits for a slot.
 - A `--tag-image` value that `docker tag` would refuse — `_nonsense`, an uppercase repository name, a digest — is rejected while the arguments are parsed, naming the value and Docker's reason.
@@ -99,6 +103,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `-o all` prefixes every line of a multi-line command, setup command or image-build message, as in Batect, rather than only its first; each build line carries `Image build | `.
 - Under `run_as_current_user`, a `local` mount whose host path contains `:` has that whole path created when it's missing, as in Batect, not the part before the first `:`.
 - Under `run_as_current_user`, a mount point inside a `local` mount (or a directory-type `cache` mount) — another `local` mount, a `cache` mount or a `tmpfs` mount, at any depth — is created in that mount's host directory as the current user, as in Batect. Unlike Batect, a file or socket mounted there gets an empty file rather than a directory, and a mount point reached through a symlink leading out of that directory is left to the daemon.
 - An unknown task's error ends with how to list the project's tasks and get help, as in Batect: `ratect-compat --list-tasks` and `--help` for `ratect-compat`, `ratect tasks list` and `ratect run --help` for `ratect`. A missing prerequisite's error doesn't.

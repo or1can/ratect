@@ -884,7 +884,7 @@ impl EventSink for FancyEventLogger {
             TaskEvent::RunEnded { .. } => {
                 state.keep_updating_startup = false;
             }
-            TaskEvent::CleanupStarting => {
+            TaskEvent::CleanupStarting { .. } => {
                 // The startup block is already frozen: `RunEnded` comes
                 // first, and is the one event that ends it.
                 state.cleanup_live = true;
@@ -902,6 +902,9 @@ impl EventSink for FancyEventLogger {
                     self.repaint_cleanup(&mut state);
                 }
             }
+            // The countdown counts removals, and a removed network ends it
+            // anyway — `CleanupFinished` follows.
+            TaskEvent::ContainerStopped { .. } | TaskEvent::NetworkRemoved => {}
             // Cleanup is over, so the countdown goes now rather than when
             // the summary line replaces it: a line reporting what cleanup
             // left prints in between, and nothing may repaint the countdown

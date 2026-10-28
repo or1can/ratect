@@ -290,16 +290,29 @@ pub enum TaskEvent {
     /// Teardown (stopping dependency containers, removing the task
     /// network) is about to begin. Not posted when there's nothing to tear
     /// down (`--use-network`, no dependencies started, and no task
-    /// container created).
-    CleanupStarting,
+    /// container created). `cause` is what cleanup follows when that isn't
+    /// the task simply finishing — `None` for a clean exit, and for a signal
+    /// or a closed stdout, whose notice already said why.
+    CleanupStarting {
+        cause: Option<CleanupCause>,
+    },
     /// Cleanup has ended, however it went — posted after the last removal
     /// it attempted (or abandoned), and before any line reporting what it
     /// left. Only posted when [`TaskEvent::CleanupStarting`] was. A live
     /// cleanup display stops and clears its countdown here, so nothing
     /// printed afterwards sits under a countdown for work that is over.
     CleanupFinished,
-    /// A container was stopped and removed during cleanup — a dependency,
-    /// or the task's own.
+    /// A container was stopped during cleanup and is about to be removed — a
+    /// dependency, or the task's own, whether it stopped now or had already
+    /// exited, as Batect reports it. Not posted for one created but never
+    /// started, nor for one whose stop the cleanup ladder's escalation rung
+    /// cut short; one whose stop finished just before that has posted it,
+    /// and its removal is then the forced one.
+    ContainerStopped {
+        container: String,
+    },
+    /// A container was removed during cleanup — a dependency, or the task's
+    /// own.
     ContainerRemoved {
         container: String,
     },
@@ -307,6 +320,9 @@ pub enum TaskEvent {
     /// step. Never posted under `--use-network` (Ratect didn't create that
     /// network, so it never removes it).
     RemovingNetwork,
+    /// The task's own network was removed — posted only after a
+    /// [`TaskEvent::RemovingNetwork`] whose removal succeeded.
+    NetworkRemoved,
     /// The task's run has ended — its command finished, a failure stopped
     /// it, or a signal did — and nothing more of its startup will happen.
     /// Posted the moment the run resolves, before cleanup and before any
@@ -840,6 +856,53 @@ impl EventSink for QuietEventLogger {
     }
 }
 
+/// Why cleanup began, when it isn't the task simply finishing — what the
+/// opening cleanup line names (decisions/0017): the task's own non-zero
+/// exit, or the step that failed and the container it failed for. The
+/// `Error:` line before cleanup says how; this says what.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CleanupCause {
+    /// The task's own container exited with a non-zero code.
+    Exited {
+        task: String,
+        exit_code: i64,
+    },
+    ImagePullFailed {
+        container: String,
+    },
+    ImageBuildFailed {
+        container: String,
+    },
+    CreateFailed {
+        container: String,
+    },
+    StartFailed {
+        container: String,
+    },
+    NotHealthy {
+        container: String,
+    },
+    /// `index` is 1-based, as `Running setup command` numbers it.
+    SetupCommandExited {
+        container: String,
+        index: usize,
+        exit_code: i64,
+    },
+    SetupCommandNotRun {
+        container: String,
+        index: usize,
+    },
+    /// A `run_to_completion` dependency exited with a non-zero code.
+    DependencyExited {
+        container: String,
+        exit_code: i64,
+    },
+    /// A failure no step claimed — named by the task it ended.
+    Failed {
+        task: String,
+    },
+}
+
 /// The colors loggers actually use — grown as needed, not a full ANSI
 /// palette up front. Never white or black (SGR 37/30, bright or not): those
 /// are the theme's own foreground and background, light grey on a dark theme
@@ -1015,33 +1078,42 @@ impl Console {
     /// `text` wrapped in `color`'s ANSI escape when color is enabled,
     /// unchanged otherwise.
     pub fn colored(&self, color: Color, text: &str) -> String {
-        if self.color_enabled {
-            format!("\x1b[{}m{}\x1b[0m", color.ansi_code(), text)
-        } else {
-            text.to_string()
-        }
+        self.styled(color.ansi_code(), text)
     }
 
     /// `text` wrapped in the ANSI bold escape when color (SGR styling
     /// generally — `--no-color` suppresses bold too, matching Batect) is
     /// enabled, unchanged otherwise.
     pub fn bold(&self, text: &str) -> String {
-        if self.color_enabled {
-            format!("\x1b[1m{text}\x1b[0m")
-        } else {
-            text.to_string()
-        }
+        self.styled("1", text)
     }
 
     /// `text` both bold and in `color`, as one SGR sequence (`1;31`) rather
     /// than one nested in the other — what the `Error:`/`Warning:` markers
     /// are, and what a test pins byte for byte.
     pub fn bold_colored(&self, color: Color, text: &str) -> String {
-        if self.color_enabled {
-            format!("\x1b[1;{}m{}\x1b[0m", color.ansi_code(), text)
-        } else {
-            text.to_string()
+        self.styled(&format!("1;{}", color.ansi_code()), text)
+    }
+
+    /// `text` in SGR `code` when color is enabled — one span per line, each
+    /// reset before its newline, so `all` can split styled text into
+    /// prefixed lines without a prefix inheriting the style or a line
+    /// losing it (Batect's `TextRun.lines` keeps each piece's style the
+    /// same way). An empty line gets no escape.
+    fn styled(&self, code: &str, text: &str) -> String {
+        if !self.color_enabled {
+            return text.to_string();
         }
+        text.split('\n')
+            .map(|line| {
+                if line.is_empty() {
+                    String::new()
+                } else {
+                    format!("\x1b[{code}m{line}\x1b[0m")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Writes `text` exactly as given (no trailing newline appended),
@@ -1083,6 +1155,61 @@ impl OnceFlag {
     }
 }
 
+/// The opening cleanup line `simple` and `all` print: `Cleaning up...`, or
+/// `Cleaning up after <what failed>...` when cleanup follows a failure,
+/// subject first and the user's own names and values bold (decisions/0017).
+pub(crate) fn cleaning_up(console: &Console, cause: Option<&CleanupCause>) -> String {
+    let bold = |text: &str| console.bold(text);
+    let after = match cause {
+        None => return "Cleaning up...".to_string(),
+        Some(CleanupCause::Exited { task, exit_code }) => format!(
+            "{} exited with code {}",
+            bold(task),
+            bold(&exit_code.to_string())
+        ),
+        Some(CleanupCause::ImagePullFailed { container }) => {
+            format!("{}'s image failed to pull", bold(container))
+        }
+        Some(CleanupCause::ImageBuildFailed { container }) => {
+            format!("{}'s image failed to build", bold(container))
+        }
+        Some(CleanupCause::CreateFailed { container }) => {
+            format!("{} failed to be created", bold(container))
+        }
+        Some(CleanupCause::StartFailed { container }) => {
+            format!("{} failed to start", bold(container))
+        }
+        Some(CleanupCause::NotHealthy { container }) => {
+            format!("{} did not become healthy", bold(container))
+        }
+        Some(CleanupCause::SetupCommandExited {
+            container,
+            index,
+            exit_code,
+        }) => format!(
+            "{}'s setup command {index} exited with code {}",
+            bold(container),
+            bold(&exit_code.to_string())
+        ),
+        Some(CleanupCause::SetupCommandNotRun { container, index }) => {
+            format!(
+                "{}'s setup command {index} could not be run",
+                bold(container)
+            )
+        }
+        Some(CleanupCause::DependencyExited {
+            container,
+            exit_code,
+        }) => format!(
+            "{} exited with code {}",
+            bold(container),
+            bold(&exit_code.to_string())
+        ),
+        Some(CleanupCause::Failed { task }) => format!("{} failed", bold(task)),
+    };
+    format!("Cleaning up after {after}...")
+}
+
 /// What every non-quiet style prints for [`TaskEvent::PrerequisitesOnly`]:
 /// Batect's own sentence, the task's name in bold.
 pub(crate) fn nothing_more_to_do(console: &Console, task: &str) -> String {
@@ -1111,10 +1238,10 @@ pub(crate) fn format_task_failed_summary(
 
 /// The task summary line every output mode ends a task with —
 /// `<task_label> finished with exit code <n> in <duration>.`, the exit code
-/// colored green for `0` or red otherwise. `task_label` is the already-
-/// formatted task name (fancy passes a bolded one; simple/interleaved pass
-/// it plain) rather than a bare `&str`, so this stays agnostic to which
-/// styling, if any, the caller wants around the name itself.
+/// bold, and green for `0` or red otherwise. `task_label` is the already-
+/// formatted task name (fancy and interleaved pass a bolded one; simple
+/// passes it plain) rather than a bare `&str`, so this stays agnostic to
+/// which styling, if any, the caller wants around the name itself.
 pub(crate) fn format_task_summary(
     console: &Console,
     task_label: &str,
@@ -1126,7 +1253,7 @@ pub(crate) fn format_task_summary(
     } else {
         Color::Red
     };
-    let exit_code = console.colored(color, &exit_code.to_string());
+    let exit_code = console.bold_colored(color, &exit_code.to_string());
     format!(
         "{task_label} finished with exit code {exit_code} in {}.",
         format_duration(duration)

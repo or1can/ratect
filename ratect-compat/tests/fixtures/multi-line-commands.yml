@@ -1,0 +1,26 @@
+# Proves `-o all` prefixes every line of a multi-line message (ratect#476):
+# the task's command and the dependency's setup command are YAML block
+# scalars, so the `Running ...` lines that quote them span several lines,
+# and each of those lines must still carry its container's prefix.
+project_name: ratect-multi-line-commands-test
+containers:
+  dep:
+    image: alpine:3.18.2
+    command: sleep 300
+    # `sleep` as PID 1 ignores the stop signal, which would cost the test
+    # Docker's whole grace period in cleanup.
+    enable_init_process: true
+    setup_commands:
+      - command: |
+          echo
+          setup-ran
+  app:
+    image: alpine:3.18.2
+    dependencies: [dep]
+tasks:
+  multi-line:
+    run:
+      container: app
+      command: |
+        echo
+        task-ran

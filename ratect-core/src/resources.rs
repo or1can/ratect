@@ -91,11 +91,17 @@ pub trait ResourceInventory {
     /// signal/timeout — `None` for either leaves that half of Docker's own
     /// default behavior alone (see `config::Container::stop_signal`/
     /// `stop_grace_period`, ratect#112).
+    ///
+    /// `stopped`, given, is signaled once the stop has succeeded — the
+    /// container is stopped, by this request or already — and before the
+    /// removal is asked for, never if the stop fails, so cleanup can say a
+    /// container stopped while its removal is still under way.
     async fn stop_and_remove_container(
         &self,
         container_id: &str,
         stop_signal: Option<&str>,
         stop_grace_period: Option<std::time::Duration>,
+        stopped: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<()>;
 }
 
@@ -222,7 +228,7 @@ where
             // always uses Docker's own default stop behavior, same as
             // before ratect#112 added the two fields.
             docker
-                .stop_and_remove_container(&leftover.resource.id, None, None)
+                .stop_and_remove_container(&leftover.resource.id, None, None, None)
                 .await
         };
         if result.is_ok() {
