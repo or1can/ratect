@@ -89,11 +89,13 @@ What the recording can't tell you: there is no spinner — the animation is
 purely rewriting the block's lines in place, as Batect's is — and lines are
 clipped to the terminal's current width. After that width changes, the block is
 drawn afresh below the old one rather than over it, since the terminal has
-re-wrapped the old lines. Because it repaints, it requires an interactive
-console: an explicit `-o fancy` without one, or with `TERM=dumb`, fails up front
-with a clear error naming the stream it checked (Batect instead accepts it,
-then crashes on the first repaint when stdout isn't a terminal, or garbles a
-`TERM=dumb` terminal with cursor movements it can't perform). Works with
+re-wrapped the old lines. Because it repaints, it needs a terminal: an explicit
+`-o fancy` asks less than auto-selection does — `TERM` may be unset, but not
+`dumb` — and fails up front, with an error naming the reason, when the stream it
+checked isn't a terminal, `TERM` is `dumb`, or the terminal size can't be
+determined (Batect instead accepts it, then crashes on the first repaint when
+stdout isn't a terminal, or garbles a `TERM=dumb` terminal with cursor movements
+it can't perform). Works with
 [`--no-color`](#colour) — the repaint stays; bold/color go — a combination
 Batect rejects.
 

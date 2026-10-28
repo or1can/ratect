@@ -1021,6 +1021,92 @@ fn requesting_fancy_output_without_an_interactive_console_fails_clearly() {
     );
 }
 
+/// Runs `-o fancy test-task` on a pty whose `TERM` is `term` (removed when
+/// `None`) against a daemon nothing answers for, returning the exit status
+/// and everything written to the terminal. Needs no Docker: the refusal is
+/// decided before connecting, and an accepted run fails on connecting.
+fn explicit_fancy_on_a_pty(term: Option<&str>) -> (portable_pty::ExitStatus, String) {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
+    cmd.args(["-o", "fancy", "--docker-host", "tcp://127.0.0.1:1", "-f"]);
+    cmd.arg(sample_config_path());
+    cmd.arg("test-task");
+    match term {
+        Some(term) => cmd.env("TERM", term),
+        None => cmd.env_remove("TERM"),
+    }
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n @ 1..) = reader.read(&mut buf) {
+            if tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("ratect did not exit")
+        .expect("failed to wait for ratect");
+    // The child has exited, so whatever it wrote is already buffered.
+    let mut output = Vec::new();
+    while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(500)) {
+        output.extend_from_slice(&chunk);
+    }
+    (status, String::from_utf8_lossy(&output).into_owned())
+}
+
+/// A dumb terminal can't move the cursor, so an explicit `-o fancy` is
+/// refused there even on a real terminal — a deliberate divergence from
+/// Batect, which writes the escapes anyway (ratect#480).
+#[test]
+fn requesting_fancy_output_on_a_dumb_terminal_fails_clearly() {
+    let (status, output) = explicit_fancy_on_a_pty(Some("dumb"));
+    assert!(!status.success(), "{output}");
+    assert!(
+        output.contains("requires an interactive console (TERM is 'dumb')"),
+        "{output}"
+    );
+}
+
+/// On a real terminal with `TERM` unset, an explicit `-o fancy` is
+/// honoured, as Batect honours it (ratect#480): the run gets past building
+/// the logger and fails only on reaching the absent daemon.
+#[test]
+fn requesting_fancy_output_on_a_terminal_with_term_unset_is_honoured() {
+    let (status, output) = explicit_fancy_on_a_pty(None);
+    assert!(!status.success(), "{output}");
+    assert!(
+        !output.contains("requires an interactive console"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Couldn't reach the Docker daemon"),
+        "{output}"
+    );
+}
+
 #[test]
 fn missing_config_file_reports_error() {
     let output = ratect_command()

@@ -593,16 +593,14 @@ pub fn select_output_style(
 }
 
 /// Whether the progress console can support a live-repainting display — the
-/// shared half of [`select_output_style`]'s auto-selection rule, also used
-/// to validate an *explicit* `--output fancy` up front (with a clear error).
+/// shared half of [`select_output_style`]'s auto-selection rule, Batect's
+/// `ConsoleInfo.supportsInteractivity`: everything an *explicit* `--output
+/// fancy` needs (see `explicit_fancy_refusal`), and `TERM` set as well.
 /// Asked of `progress`'s stream, not stdout regardless: under `ratect` the
 /// block repaints on stderr, so `ratect run x > out.txt` on a terminal is
 /// as interactive as it ever was (decisions/0017).
-/// Batect never checks an explicit `fancy`: it crashes on the first repaint
-/// when stdout isn't a terminal, and with `TERM=dumb` writes cursor
-/// movements the terminal can't perform. Deliberately excludes
-/// `--no-color`: that only influences the *default*, since colorless fancy
-/// works fine (see [`Console`]).
+/// Deliberately excludes `--no-color`: that only influences the *default*,
+/// since colorless fancy works fine (see [`Console`]).
 ///
 /// **Staying with this heuristic rather than a terminfo lookup, deliberately**
 /// (Batect's own roadmap wanted the latter, and this ported the approach it
@@ -623,9 +621,28 @@ pub fn select_output_style(
 /// *are* honoured (see [`resolve_no_color`]/[`resolve_color_mode`]) — that
 /// was the genuinely useful gap, not a terminfo integration.
 pub fn supports_interactivity(terminal: &TerminalFacts, progress: ProgressStream) -> bool {
-    terminal.is_terminal(progress)
-        && terminal.term.as_deref().is_some_and(|term| term != "dumb")
-        && terminal.console_dimensions_available
+    terminal.term.is_some() && explicit_fancy_refusal(terminal, progress).is_none()
+}
+
+/// Why an explicit `--output fancy` can't run on `progress`'s console, if
+/// it can't. Less than [`supports_interactivity`] asks: `TERM` may be unset,
+/// since a real terminal without it is very likely capable and Batect, which
+/// never reads `TERM` for an explicit style, renders fancy there. Everything
+/// refused here is a documented divergence (docs/differences-from-batect.md):
+/// Batect accepts an explicit `fancy` unconditionally, then crashes on the
+/// first repaint when stdout isn't a terminal, or garbles a `TERM=dumb` one
+/// with cursor movements it can't perform. An unqueryable terminal size
+/// crashes Batect too.
+fn explicit_fancy_refusal(terminal: &TerminalFacts, progress: ProgressStream) -> Option<String> {
+    if !terminal.is_terminal(progress) {
+        Some(format!("{} isn't a terminal", progress.name()))
+    } else if terminal.term.as_deref() == Some("dumb") {
+        Some("TERM is 'dumb'".to_string())
+    } else if !terminal.console_dimensions_available {
+        Some("the terminal size can't be determined".to_string())
+    } else {
+        None
+    }
 }
 
 /// Whether the terminal's dimensions are actually queryable — the
@@ -651,11 +668,9 @@ pub fn console_dimensions_available() -> bool {
 /// gathering them again on top of that.
 ///
 /// Errors only for an explicit `fancy` on a console that can't support live
-/// repainting — Batect instead accepts it, crashing on the first repaint
-/// when stdout isn't a terminal and garbling a `TERM=dumb` one (a
-/// documented divergence, see docs/differences-from-batect.md).
-/// Auto-selected fancy already implies an interactive console, so this can
-/// only actually fire for an explicit `-o fancy`.
+/// repainting — see `explicit_fancy_refusal` for what that means and how
+/// Batect differs. Auto-selected fancy already implies an interactive
+/// console, so this can only actually fire for an explicit `-o fancy`.
 ///
 /// `progress` is which stream the binary's progress console is (see
 /// [`ProgressStream`]); every logger gets that console plus a stderr one for
@@ -677,12 +692,10 @@ pub fn create_event_sink(
         OutputStyle::Simple => Arc::new(simple::SimpleEventLogger::new(progress_console, stderr)),
         OutputStyle::Quiet => Arc::new(QuietEventLogger::new(stderr)),
         OutputStyle::Fancy => {
-            if !supports_interactivity(terminal, progress) {
+            if let Some(reason) = explicit_fancy_refusal(terminal, progress) {
                 anyhow::bail!(
-                    "Fancy output requires an interactive console ({} isn't a \
-                     terminal, TERM is unset or 'dumb', or the terminal size can't \
-                     be determined) — use --output simple instead.",
-                    progress.name()
+                    "Fancy output requires an interactive console ({reason}) — use \
+                     --output simple instead."
                 );
             }
             Arc::new(fancy::FancyEventLogger::new(

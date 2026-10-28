@@ -316,6 +316,73 @@ fn an_explicit_fancy_refusal_names_the_progress_consoles_stream() {
     }
 }
 
+/// `create_event_sink(Some(Fancy), …)` on a stdout console with these facts
+/// (stderr not a terminal), as `ratect-compat` builds it.
+fn explicit_fancy(
+    tty: bool,
+    term: Option<&str>,
+    dimensions: bool,
+) -> anyhow::Result<Arc<dyn EventSink>> {
+    let terminal = TerminalFacts {
+        term: term.map(str::to_string),
+        stdout_is_terminal: tty,
+        stderr_is_terminal: false,
+        console_dimensions_available: dimensions,
+    };
+    create_event_sink(
+        Some(OutputStyle::Fancy),
+        ColorMode::Off,
+        &terminal,
+        ProgressStream::Stdout,
+    )
+}
+
+/// An explicit `fancy` asks less of the console than auto-selection does:
+/// a terminal with `TERM` unset is very likely capable, and Batect renders
+/// fancy there too (ratect#480).
+#[test]
+fn an_explicit_fancy_is_honoured_on_a_terminal_with_term_unset() {
+    assert!(explicit_fancy(true, None, true).is_ok());
+}
+
+/// `TERM=dumb` says the terminal can't move the cursor, so an explicit
+/// `fancy` is still refused there — a recorded divergence, since Batect
+/// writes the escapes anyway — and the refusal says that's why.
+#[test]
+fn an_explicit_fancy_is_refused_on_a_dumb_terminal_naming_term() {
+    let error = explicit_fancy(true, Some("dumb"), true)
+        .err()
+        .expect("TERM=dumb is refused");
+    let message = error.to_string();
+    assert!(message.contains("TERM is 'dumb'"), "{message}");
+    assert!(message.contains("use --output simple"), "{message}");
+    assert!(!message.contains("TERM is unset"), "{message}");
+}
+
+#[test]
+fn an_explicit_fancy_is_refused_when_stdout_is_not_a_terminal() {
+    let error = explicit_fancy(false, Some("xterm"), true)
+        .err()
+        .expect("a non-terminal stdout is refused");
+    assert!(
+        error.to_string().contains("stdout isn't a terminal"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_explicit_fancy_is_refused_when_the_terminal_size_is_unknown() {
+    let error = explicit_fancy(true, Some("xterm"), false)
+        .err()
+        .expect("unqueryable dimensions are refused");
+    assert!(
+        error
+            .to_string()
+            .contains("terminal size can't be determined"),
+        "{error}"
+    );
+}
+
 /// Picking the style picks the container I/O policy, as Batect's
 /// `EventLoggerProvider` does: only `all` follows dependency output; every
 /// other style streams the task container alone.
