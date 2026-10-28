@@ -242,7 +242,9 @@ did the task's own container run to an exit code of its own?
    *second* signal does. A signal that arrives only during the cleanup of a run that
    had already finished ended nothing, so rule 1 applies: a passing run whose cleanup
    then completes still exits `0`. One that arrives during a prerequisite's cleanup
-   ends the run before the next task starts, and exits 128 + its number. A run whose
+   ends the run before the next task starts, and exits 128 + its number. One that
+   arrives while the run is still connecting to Docker ends it at once, with nothing
+   yet to clean up, however long the connection would have taken. A run whose
    **stdout** reader goes away — `ratect-compat test | head -n 1`, once `head` has its
    line — ends the same way, as though `SIGPIPE` had ended it: it exits `141`, after the
    same cleanup, with a notice on stderr saying the stdout closed. A closed stderr

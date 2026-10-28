@@ -1013,14 +1013,26 @@ async fn run(
     // initiative — and armed immediately, since (unlike
     // `engine_settings`, kept synchronous so the flag-mapping tests
     // can call it directly) this whole function already is async.
-    // From this point Ctrl+C, `SIGTERM` or `SIGHUP` abandons the run
-    // and cleans up instead of killing the process where it stands.
+    // From this point Ctrl+C, `SIGTERM` or `SIGHUP` ends the run instead
+    // of killing the process where it stands: while connecting, at once,
+    // since nothing exists yet to clean up; once the engine runs, after
+    // cleaning up what it started.
     let interrupt = ratect_core::interrupt::Interrupt::new();
     interrupt.listen();
-    let docker = DockerClient::new(&args.docker_connection(), |message| {
-        event_sink.post(TaskEvent::Warning { message })
-    })
-    .await?
+    let docker = match interrupt
+        .unless_signalled(DockerClient::new(&args.docker_connection(), |message| {
+            event_sink.post(TaskEvent::Warning { message })
+        }))
+        .await
+    {
+        Ok(connected) => connected?,
+        Err(interrupted) => {
+            event_sink.post(TaskEvent::Notice {
+                message: interrupted.signal.not_starting(task_name),
+            });
+            return Err(interrupted.into());
+        }
+    }
     .with_event_sink(Arc::clone(&event_sink))
     .with_enable_buildkit(args.enable_buildkit);
     let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;

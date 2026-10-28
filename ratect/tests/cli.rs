@@ -4084,3 +4084,106 @@ fn run_checks_the_docker_directory_options_before_reading_the_config() {
         "{stderr}"
     );
 }
+
+/// Polls `condition` every 50 ms until it holds or `timeout` passes.
+#[cfg(unix)]
+fn poll_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// Runs the native fixture's `build` against a Docker host that accepts the
+/// connection and never answers, sends `signal` (`kill`'s name for it) once
+/// the run is connecting, and with `close` then drops the connection, as a
+/// failed connect would. Returns the exit code, how long after the signal
+/// the run ended, and stderr. No daemon involved. Quiet, with `RUST_LOG=off`,
+/// since the notice must show even then (decisions/0017).
+#[cfg(unix)]
+fn signal_while_connecting(signal: &str, close: bool) -> (Option<i32>, Duration, String) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let host = format!("tcp://{}", listener.local_addr().unwrap());
+    let mut child = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .args(["-o", "quiet", "run", "--docker-host", &host, "build"])
+        .env("RUST_LOG", "off")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    let mut connection = None;
+    if !poll_until(Duration::from_secs(30), || {
+        connection = listener.accept().ok();
+        connection.is_some()
+    }) {
+        let _ = child.kill();
+        panic!("ratect never connected to the stub Docker host");
+    }
+    let signalled = Command::new("kill")
+        .args([&format!("-{signal}"), &child.id().to_string()])
+        .status()
+        .expect("failed to run kill");
+    assert!(signalled.success(), "could not send SIG{signal} to ratect");
+    let sent = Instant::now();
+    if close {
+        std::thread::sleep(Duration::from_millis(50));
+        drop(connection.take());
+    }
+
+    let mut status = None;
+    if !poll_until(Duration::from_secs(5), || {
+        status = child.try_wait().expect("failed to poll ratect");
+        status.is_some()
+    }) {
+        let _ = child.kill();
+    }
+    let ended = sent.elapsed();
+    let output = child.wait_with_output().expect("failed to wait on ratect");
+    (
+        status.and_then(|s| s.code()),
+        ended,
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A signal while the run is still connecting to Docker ends it promptly,
+/// with the signal's exit code and the notice saying so, rather than being
+/// held until the connect finishes (ratect#319).
+#[test]
+#[cfg(unix)]
+fn a_signal_while_connecting_ends_the_run_promptly() {
+    for (signal, code, notice) in [
+        ("INT", 130, "Interrupted; not starting task 'build'."),
+        (
+            "TERM",
+            143,
+            "Terminated by SIGTERM; not starting task 'build'.",
+        ),
+    ] {
+        let (exit, ended, stderr) = signal_while_connecting(signal, false);
+
+        assert_eq!(exit, Some(code), "SIG{signal}, stderr:\n{stderr}");
+        assert!(ended < Duration::from_secs(2), "SIG{signal} took {ended:?}");
+        assert!(stderr.contains(notice), "SIG{signal}, stderr:\n{stderr}");
+        assert!(!stderr.contains("Error:"), "SIG{signal}, stderr:\n{stderr}");
+    }
+}
+
+/// The signal wins over the connect failure it raced: the run still exits
+/// with the signal's code, not `1` (ratect#319).
+#[test]
+#[cfg(unix)]
+fn a_signal_while_connecting_wins_over_the_failed_connect() {
+    let (exit, _, stderr) = signal_while_connecting("INT", true);
+
+    assert_eq!(exit, Some(130), "stderr:\n{stderr}");
+    assert!(!stderr.contains("Error:"), "stderr:\n{stderr}");
+}

@@ -1783,10 +1783,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             return Ok(());
         }
         let signal = self.interrupt.last_signal();
-        self.post_notice(format!(
-            "{}; not starting task '{next}'.",
-            signal.ended_run()
-        ));
+        self.post_notice(signal.not_starting(next));
         Err(crate::interrupt::TaskInterrupted::new(signal).into())
     }
 

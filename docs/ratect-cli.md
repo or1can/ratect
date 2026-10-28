@@ -529,8 +529,10 @@ container run to an exit code of its own?
    whatever is left, a Ctrl+C after that stops the cleanup, and `ratect resources list`
    finds whatever that leaves. A signal that arrives only during the cleanup of a run
    that had already finished doesn't change its exit code; one during a prerequisite's
-   cleanup ends the run before the next task starts. A run whose **stdout** reader goes
-   away — `ratect run test | head -n 1`, once `head` has its line — ends the same way,
+   cleanup ends the run before the next task starts; one while the run is still
+   connecting to Docker ends it at once, with nothing yet to clean up. A run whose
+   **stdout** reader goes away — `ratect run test | head -n 1`, once `head` has its
+   line — ends the same way,
    as though `SIGPIPE` had ended it: `141`, after the same cleanup. A closed stderr never
    ends a run.
 3. **It never ran, or never finished, for any other reason: `125`** — an unknown or
