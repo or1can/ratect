@@ -103,6 +103,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `fancy` output: a dependency with setup commands shows `running setup commands...` when it becomes healthy, and `ready` only once they have all run — until then, the containers depending on it still show it as one they are waiting for.
 - `fancy` output: a container's "waiting for dependencies" list no longer names dependencies that are already ready.
 - `fancy` output lists a task's containers in dependency order — each after the containers it depends on, in the order they were declared, the task's own last — as Batect does, rather than alphabetically.
 - `fancy` output draws a multi-line command, setup command or build-output line on one row, each line break a space, so the live display no longer leaves stale rows behind.

@@ -56,6 +56,7 @@ fn the_result_reader_is_gone_only_when_the_result_console_refused_a_write() {
     let working = || Console::new(Box::new(SharedBuffer::default()), false);
     let task_container = TaskContainerInfo {
         is_task_container: true,
+        has_setup_commands: false,
         ..info("app", Some("alpine"), None)
     };
     let output = || TaskEvent::ContainerOutput {
@@ -90,6 +91,7 @@ fn info(name: &str, image: Option<&str>, build_tag: Option<&str>) -> TaskContain
         build_tag: build_tag.map(str::to_string),
         dependencies: Vec::new(),
         is_task_container: false,
+        has_setup_commands: false,
     }
 }
 
@@ -125,6 +127,7 @@ fn readiness_milestones_are_reported_for_the_tasks_own_container_too() {
         vec![
             TaskContainerInfo {
                 is_task_container: true,
+                has_setup_commands: false,
                 ..info("app", Some("alpine:3"), None)
             },
             info("db", Some("redis:7"), None),
@@ -163,6 +166,7 @@ fn a_run_in_setup_command_names_the_container_it_runs_in() {
         vec![
             TaskContainerInfo {
                 is_task_container: true,
+                has_setup_commands: false,
                 ..info("app", Some("alpine:3"), None)
             },
             info("db", Some("postgres:16"), None),
@@ -724,6 +728,7 @@ fn prefix_colours_dont_depend_on_graph_order() {
     };
     let app = || TaskContainerInfo {
         is_task_container: true,
+        has_setup_commands: false,
         ..info("app", Some("app:1"), None)
     };
     let cache = || info("cache", Some("redis:7"), None);
@@ -855,6 +860,7 @@ fn every_line_of_a_multi_line_command_is_prefixed() {
         vec![
             TaskContainerInfo {
                 is_task_container: true,
+                has_setup_commands: false,
                 ..info("app", Some("alpine:3"), None)
             },
             info("dep", Some("alpine:3"), None),
@@ -946,6 +952,7 @@ fn cleanup_reports_each_containers_stop_and_removal_and_the_networks() {
         vec![
             TaskContainerInfo {
                 is_task_container: true,
+                has_setup_commands: false,
                 ..info("app", Some("app:1"), None)
             },
             info("cache", Some("redis:7"), None),

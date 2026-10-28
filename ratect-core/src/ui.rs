@@ -417,6 +417,11 @@ pub struct TaskContainerInfo {
     /// shows a container waiting for. (Sorted instead for a container the
     /// configuration doesn't declare, which a loaded one never has.)
     pub dependencies: Vec<String>,
+    /// Whether the container has `setup_commands` to run once it is
+    /// healthy — so whether becoming healthy makes it ready, or only
+    /// starts its setup commands, which then end in
+    /// [`TaskEvent::SetupCommandsCompleted`].
+    pub has_setup_commands: bool,
     /// `true` for the task's own container (the one
     /// [`TaskEvent::RunningTaskContainer`] is about, whose output streams
     /// to stdout).

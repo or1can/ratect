@@ -48,6 +48,7 @@ fn info(name: &str, image: Option<&str>, deps: &[&str], is_task: bool) -> TaskCo
         build_tag: None,
         dependencies: deps.iter().map(|d| d.to_string()).collect(),
         is_task_container: is_task,
+        has_setup_commands: false,
     }
 }
 
@@ -1596,5 +1597,85 @@ fn readiness_does_not_carry_over_to_the_next_task() {
     assert_eq!(
         last_frame(&buffer, 1),
         ["app: waiting for dependency db to be ready..."]
+    );
+}
+
+/// CSPLB-4: a dependency with setup commands is not ready when it becomes
+/// healthy — it shows it is about to run them, and is still waited on —
+/// and is shown ready once, after the last of them.
+#[test]
+fn a_dependency_with_setup_commands_is_ready_only_after_them() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["dep"], true),
+            TaskContainerInfo {
+                has_setup_commands: true,
+                ..info("dep", Some("dep:1"), &[], false)
+            },
+        ],
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    logger.post(healthy("dep"));
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "dep: running setup commands...",
+            "app: waiting for dependency dep to be ready...",
+        ]
+    );
+
+    for index in [1, 2] {
+        logger.post(TaskEvent::RunningSetupCommand {
+            container: "dep".into(),
+            command: format!("seed {index}"),
+            index,
+            total: 2,
+            run_in: None,
+        });
+    }
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "dep: running setup command seed 2 (2 of 2)...",
+            "app: waiting for dependency dep to be ready...",
+        ]
+    );
+
+    logger.post(TaskEvent::SetupCommandsCompleted {
+        container: "dep".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        ["dep: ready", "app: waiting to start..."]
+    );
+    assert_eq!(buffer.contents().matches("dep: ready\n").count(), 1);
+}
+
+/// A container whose health an `external_health_check` reports: its
+/// companion's `ContainerBecameHealthy` names the checked container, which
+/// is then treated like any other. The loader refuses setup commands on such
+/// a container today, but nothing here depends on that.
+#[test]
+fn an_externally_checked_container_with_setup_commands_runs_them_first() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            TaskContainerInfo {
+                has_setup_commands: true,
+                ..info("checked", Some("db:1"), &[], false)
+            },
+            info("app", Some("app:1"), &["checked"], true),
+        ],
+    });
+    logger.post(TaskEvent::DependencyStarted {
+        container: "checked".into(),
+    });
+    logger.post(healthy("checked"));
+    assert_eq!(
+        last_frame(&buffer, 2)[0],
+        "checked: running setup commands..."
     );
 }

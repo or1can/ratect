@@ -10955,6 +10955,49 @@ async fn the_graph_carries_dependencies_in_declaration_order() {
     );
 }
 
+/// The graph event says which containers have setup commands, so a display
+/// can tell a container that is ready from one that is only healthy.
+#[tokio::test]
+async fn the_graph_says_which_containers_have_setup_commands() {
+    let mut config = config_with_containers(&["a", "b"], &[("a", &[]), ("b", &[])]);
+    config.containers.get_mut("a").unwrap().setup_commands =
+        Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    config.containers.get_mut("b").unwrap().setup_commands = Some(vec![]);
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+    engine.run_task("start", &[]).await.unwrap();
+
+    let mut graph: Vec<(String, bool)> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("the graph is posted")
+        .into_iter()
+        .map(|info| (info.name, info.has_setup_commands))
+        .collect();
+    graph.sort();
+    assert_eq!(
+        graph,
+        vec![
+            ("a".to_string(), true),
+            ("app".to_string(), false),
+            ("b".to_string(), false),
+        ]
+    );
+}
+
 /// Refuses `config`'s `start` task, naming `offender`, with no container
 /// started. The wording is Ratect's own (docs/differences-from-batect.md,
 /// "Failure messages are Ratect's own"), so only the outcome is pinned.

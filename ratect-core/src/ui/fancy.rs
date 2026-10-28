@@ -204,6 +204,9 @@ enum Stage {
     StartingContainer,
     /// `DependencyStarted` — waiting for the health verdict.
     WaitingToBecomeHealthy,
+    /// Healthy, with setup commands still to run — Batect's `running setup
+    /// commands...`, until the first `RunningSetupCommand`.
+    AboutToRunSetupCommands,
     /// `RunningSetupCommand`.
     RunningSetupCommand {
         command: String,
@@ -263,6 +266,7 @@ impl ContainerLine {
             Stage::WaitingToBecomeHealthy => {
                 "container started, waiting for it to become healthy...".to_string()
             }
+            Stage::AboutToRunSetupCommands => "running setup commands...".to_string(),
             Stage::RunningSetupCommand {
                 command,
                 index,
@@ -838,7 +842,14 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                state.mark_ready(&container);
+                // Ready now only if there are no setup commands to run;
+                // otherwise `SetupCommandsCompleted` is what makes it so.
+                match Self::line_mut(&mut state, &container) {
+                    Some(line) if line.info.has_setup_commands => {
+                        line.stage = Stage::AboutToRunSetupCommands;
+                    }
+                    _ => state.mark_ready(&container),
+                }
                 self.repaint_startup(&mut state);
             }
             // A `run_to_completion` dependency reaches readiness by
@@ -874,9 +885,7 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::Ready;
-                }
+                state.mark_ready(&container);
                 self.repaint_startup(&mut state);
             }
             TaskEvent::DependencyExitedUnexpectedly {

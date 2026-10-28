@@ -2763,6 +2763,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             .filter(|dependency| narrated(dependency))
                             .collect(),
                         is_task_container: name == &run.container,
+                        has_setup_commands: container_config.is_some_and(|config| {
+                            config
+                                .setup_commands
+                                .as_ref()
+                                .is_some_and(|commands| !commands.is_empty())
+                        }),
                     }
                 })
                 .collect();
