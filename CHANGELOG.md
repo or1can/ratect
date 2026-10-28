@@ -103,6 +103,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `fancy` output: a container's "waiting for dependencies" list no longer names dependencies that are already ready.
 - `fancy` output lists a task's containers in dependency order — each after the containers it depends on, in the order they were declared, the task's own last — as Batect does, rather than alphabetically.
 - `fancy` output draws a multi-line command, setup command or build-output line on one row, each line break a space, so the live display no longer leaves stale rows behind.
 - `fancy` output: on a 1- or 2-column terminal a clipped line is cut to fit instead of wrapping, and a name cut short stays bold up to its `...`, as in Batect.

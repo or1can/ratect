@@ -802,10 +802,10 @@ fn dependency_becoming_healthy_unblocks_waiting_lines() {
 #[test]
 fn image_resolved_advances_a_stalled_line_when_no_pull_or_build_ever_fired() {
     // Without a pull or build actually happening this task (an
-    // already-local image, or a resolution reused from an earlier
-    // task), a line would otherwise sit at "ready to pull image X" for
-    // its entire dependency wait — ImageResolved is the fallback signal
-    // that advances it anyway.
+    // already-local image, or a resolution reused from an earlier task), a
+    // line would otherwise sit at "ready to pull image X" until its
+    // container starts — ImageResolved is the fallback signal that advances
+    // it anyway.
     let (logger, buffer) = logger_with_width(120);
     logger.post(TaskEvent::TaskGraphResolved {
         containers: vec![info("app", Some("app:1"), &["db"], true)],
@@ -1497,4 +1497,104 @@ fn every_row_is_flattened_before_it_is_clipped() {
         message: "a\nb\nc\nd\ne\nf\ng\nh".into(),
     });
     assert_eq!(last_frame(&buffer, 1), ["app: building image: ..."]);
+}
+
+/// Three dependencies and the task container waiting on them, in an order
+/// alphabetical and post-order agree on.
+fn three_dependencies(app: TaskContainerInfo) -> (FancyEventLogger, SharedBuffer) {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("dep-a", Some("dep:1"), &[], false),
+            info("dep-b", Some("dep:1"), &[], false),
+            info("dep-c", Some("dep:1"), &[], false),
+            app,
+        ],
+    });
+    (logger, buffer)
+}
+
+fn healthy(container: &str) -> TaskEvent {
+    TaskEvent::ContainerBecameHealthy {
+        container: container.into(),
+    }
+}
+
+/// CSPLA-18/-20: a dependency that was ready before the dependant began
+/// waiting is not waited for — readiness is remembered, whichever order the
+/// events come in.
+#[test]
+fn a_dependant_never_waits_for_a_dependency_already_ready() {
+    let app = || info("z-app", Some("app:1"), &["dep-a", "dep-b", "dep-c"], true);
+
+    let (logger, buffer) = three_dependencies(app());
+    for dep in ["dep-a", "dep-b", "dep-c"] {
+        logger.post(healthy(dep));
+    }
+    logger.post(TaskEvent::ImageResolved {
+        container: "z-app".into(),
+    });
+    assert_eq!(last_frame(&buffer, 1), ["z-app: waiting to start..."]);
+
+    let (logger, buffer) = three_dependencies(app());
+    logger.post(healthy("dep-b"));
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["z-app: waiting for dependencies dep-a, dep-c to be ready..."]
+    );
+
+    let (logger, buffer) = three_dependencies(built(
+        "z-app",
+        "p-z-app",
+        &["dep-a", "dep-b", "dep-c"],
+        true,
+    ));
+    logger.post(healthy("dep-a"));
+    logger.post(TaskEvent::ImageBuildCompleted {
+        container: "z-app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["z-app: waiting for dependencies dep-b, dep-c to be ready..."]
+    );
+
+    let (logger, buffer) = three_dependencies(app());
+    logger.post(TaskEvent::DependencyCompleted {
+        container: "dep-c".into(),
+    });
+    logger.post(TaskEvent::ImageResolved {
+        container: "z-app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["z-app: waiting for dependencies dep-a, dep-b to be ready..."]
+    );
+}
+
+/// Readiness belongs to one task: the next task's containers, even under the
+/// same names, are waited for again.
+#[test]
+fn readiness_does_not_carry_over_to_the_next_task() {
+    let (logger, buffer) = logger_with_width(120);
+    let graph = || TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("db:1"), &[], false),
+        ],
+    };
+    logger.post(TaskEvent::TaskStarting { task: "one".into() });
+    logger.post(graph());
+    logger.post(healthy("db"));
+    logger.post(TaskEvent::TaskStarting { task: "two".into() });
+    logger.post(graph());
+    logger.post(TaskEvent::ImageResolved {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: waiting for dependency db to be ready..."]
+    );
 }

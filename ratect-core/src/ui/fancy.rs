@@ -107,6 +107,12 @@ struct State {
     /// counts `containersCreated - containersRemoved` with no special case
     /// for it. `BTreeSet` so the rendered list is stable.
     created_containers: BTreeSet<String>,
+    /// Every container in this task that has reached readiness so far,
+    /// whether or not anything was waiting on it yet — Batect's
+    /// `readyContainers`. What a line starting to wait leaves out (see
+    /// [`State::waiting_for`]), since a dependency can be ready before the
+    /// container depending on it has even resolved its image.
+    ready: BTreeSet<String>,
     /// The task's own network is being removed (the last cleanup step).
     removing_network: bool,
     /// The cleanup countdown is the line directly above the cursor, so the
@@ -129,6 +135,49 @@ struct State {
     printed_a_task: bool,
 }
 
+impl State {
+    /// What `info`'s line waits on once its image is ready: its
+    /// dependencies, less every one already ready — possibly none.
+    fn waiting_for(&self, info: &TaskContainerInfo) -> Stage {
+        Stage::WaitingForDependencies(
+            info.dependencies
+                .iter()
+                .filter(|dependency| !self.ready.contains(*dependency))
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// Moves every line `starts_waiting` picks on to waiting for its
+    /// dependencies.
+    fn start_waiting(&mut self, starts_waiting: impl Fn(&ContainerLine) -> bool) {
+        for index in 0..self.lines.len() {
+            if starts_waiting(&self.lines[index]) {
+                self.lines[index].stage = self.waiting_for(&self.lines[index].info);
+            }
+        }
+    }
+
+    /// `container` has reached readiness: its line shows it, it is no
+    /// longer waited on by any line, and none that starts waiting later
+    /// will wait on it.
+    fn mark_ready(&mut self, container: &str) {
+        if let Some(line) = self
+            .lines
+            .iter_mut()
+            .find(|line| line.info.name == container)
+        {
+            line.stage = Stage::Ready;
+        }
+        for line in &mut self.lines {
+            if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
+                remaining.remove(container);
+            }
+        }
+        self.ready.insert(container.to_string());
+    }
+}
+
 /// One container's progress line: `<bold name>: <stage description>`.
 struct ContainerLine {
     info: TaskContainerInfo,
@@ -146,10 +195,10 @@ enum Stage {
     Pulling(Option<String>),
     /// `ImageBuildStarting`/`ImageBuildProgress` — the latest build line.
     Building(Option<String>),
-    /// Image resolved; waiting on the named dependencies (drained as their
-    /// `ContainerBecameHealthy` events arrive — an approximation of full
-    /// readiness that at worst under-reports the wait by a dependency's own
-    /// setup-command time).
+    /// Image resolved; waiting on the named dependencies — those not yet
+    /// ready when the line started waiting, drained as each becomes ready
+    /// (see [`State::mark_ready`]). Empty once nothing is left, which it
+    /// may be from the start.
     WaitingForDependencies(BTreeSet<String>),
     /// `DependencyStarting`.
     StartingContainer,
@@ -718,13 +767,7 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                for line in &mut state.lines {
-                    if line.info.image.as_deref() == Some(image.as_str()) {
-                        line.stage = Stage::WaitingForDependencies(
-                            line.info.dependencies.iter().cloned().collect(),
-                        );
-                    }
-                }
+                state.start_waiting(|line| line.info.image.as_deref() == Some(image.as_str()));
                 self.repaint_startup(&mut state);
             }
             TaskEvent::ImageBuildStarting { container } => {
@@ -751,36 +794,26 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::WaitingForDependencies(
-                        line.info.dependencies.iter().cloned().collect(),
-                    );
-                }
+                state.start_waiting(|line| line.info.name == container);
                 self.repaint_startup(&mut state);
             }
             TaskEvent::ImageResolved { container } => {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    // Only advance a line still sitting at `Pending` — a
-                    // pull/build that actually happened this task already
-                    // moved it on via `ImagePullCompleted`/
-                    // `ImageBuildCompleted` (posted before this event, since
-                    // `resolve_image` awaits them first). This is purely the
-                    // fallback for when neither ever fired at all — an
-                    // already-local image under the default
-                    // `IfNotPresent` policy, or an image/build this
-                    // invocation already resolved for an earlier task —
-                    // without it the line would otherwise sit at "ready to
-                    // pull/build" for the container's entire dependency
-                    // wait, never showing what it's actually waiting on.
-                    if matches!(line.stage, Stage::Pending) {
-                        line.stage = Stage::WaitingForDependencies(
-                            line.info.dependencies.iter().cloned().collect(),
-                        );
-                    }
-                }
+                // Only advance a line still sitting at `Pending` — a
+                // pull/build that actually happened this task already moved
+                // it on via `ImagePullCompleted`/`ImageBuildCompleted`
+                // (posted before this event, since `resolve_image` awaits
+                // them first). This is purely the fallback for when neither
+                // ever fired at all — an already-local image under the
+                // default `IfNotPresent` policy, or an image/build this
+                // invocation already resolved for an earlier task — without
+                // it the line would sit at "ready to pull/build" until the
+                // container starts, never showing what it waits on.
+                state.start_waiting(|line| {
+                    line.info.name == container && matches!(line.stage, Stage::Pending)
+                });
                 self.repaint_startup(&mut state);
             }
             TaskEvent::DependencyStarting { container } => {
@@ -805,35 +838,16 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::Ready;
-                }
-                // The now-healthy container stops being waited on by
-                // anything else in the graph (see `WaitingForDependencies`'
-                // approximation note).
-                for line in &mut state.lines {
-                    if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
-                        remaining.remove(&container);
-                    }
-                }
+                state.mark_ready(&container);
                 self.repaint_startup(&mut state);
             }
-            // A `run_to_completion` dependency's own terminal state — same
-            // treatment as `ContainerBecameHealthy` above (`Ready`, cleared
-            // from any other line's `WaitingForDependencies`), since it
-            // reaches "ready" by exiting rather than by a health check.
+            // A `run_to_completion` dependency reaches readiness by
+            // exiting rather than by a health check.
             TaskEvent::DependencyCompleted { container } => {
                 if !state.keep_updating_startup {
                     return;
                 }
-                if let Some(line) = Self::line_mut(&mut state, &container) {
-                    line.stage = Stage::Ready;
-                }
-                for line in &mut state.lines {
-                    if let Stage::WaitingForDependencies(remaining) = &mut line.stage {
-                        remaining.remove(&container);
-                    }
-                }
+                state.mark_ready(&container);
                 self.repaint_startup(&mut state);
             }
             TaskEvent::RunningSetupCommand {
