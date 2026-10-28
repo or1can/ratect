@@ -9850,6 +9850,188 @@ async fn max_parallelism_does_not_gate_health_check_waits() {
     );
 }
 
+/// Where in `events` the first entry starting with `prefix` was recorded.
+fn event_index(events: &[String], prefix: &str) -> usize {
+    events
+        .iter()
+        .position(|e| e.starts_with(prefix))
+        .unwrap_or_else(|| panic!("expected an event starting '{prefix}': {events:?}"))
+}
+
+/// Gives each of `containers` one setup command of its own, named
+/// `setup-<container>`, so its `exec:` entry says whose it is.
+fn with_own_setup_commands(mut config: Config, containers: &[&str]) -> Config {
+    for name in containers {
+        config.containers.get_mut(*name).unwrap().setup_commands =
+            Some(vec![crate::config::SetupCommand {
+                command: format!("setup-{name}"),
+                working_directory: None,
+                run_in: None,
+            }]);
+    }
+    config
+}
+
+/// The task's own container depends on `fast` directly and on `slow`
+/// through the task, so its root dependencies are the union of the two, as
+/// in Batect. Each has a setup command; `slow` takes a second to become
+/// healthy. Every dependency's health wait is made whether or not it
+/// declares a health check, so none is configured.
+fn config_with_a_slow_and_a_fast_dependency() -> Config {
+    with_own_setup_commands(
+        config_with_task_dependencies(&["fast"], &["slow"], &[("fast", &[]), ("slow", &[])]),
+        &["fast", "slow"],
+    )
+}
+
+/// Batect's `RunContainerStepRuleSpec`, RRC-5 ("some of the dependencies
+/// have reported as ready → NotReady"): the task container starts only
+/// once *every* root dependency is ready — started, healthy, and through
+/// its setup commands — not once the first one is. Asserted on the start
+/// (`run:`), never the create, which happens ahead of the gate.
+#[tokio::test(start_paused = true)]
+async fn the_task_container_starts_only_once_every_dependency_is_ready() {
+    let docker = FakeContainerRuntime::default()
+        .with_health_check_delay("slow", std::time::Duration::from_secs(1));
+    engine(config_with_a_slow_and_a_fast_dependency(), docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    let run = event_index(&events, "run:app:");
+    for dependency in ["fast", "slow"] {
+        assert!(
+            event_index(
+                &events,
+                &format!("exec:sidecar-id-{dependency}:setup-{dependency}")
+            ) < run,
+            "'app' must start only after '{dependency}' is ready: {events:?}"
+        );
+    }
+}
+
+/// RRC-5 one level down: a dependency with two dependencies of its own,
+/// ready at different times, starts only once both are.
+#[tokio::test(start_paused = true)]
+async fn a_dependency_starts_only_once_every_one_of_its_own_dependencies_is_ready() {
+    let config = with_own_setup_commands(
+        config_with_containers(
+            &["middle"],
+            &[("fast", &[]), ("slow", &[]), ("middle", &["fast", "slow"])],
+        ),
+        &["fast", "slow"],
+    );
+    let docker = FakeContainerRuntime::default()
+        .with_health_check_delay("slow", std::time::Duration::from_secs(1));
+    engine(config, docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    let start = sidecar_start_index(&events, "middle");
+    for dependency in ["fast", "slow"] {
+        assert!(
+            event_index(
+                &events,
+                &format!("exec:sidecar-id-{dependency}:setup-{dependency}")
+            ) < start,
+            "'middle' must start only after '{dependency}' is ready: {events:?}"
+        );
+    }
+}
+
+/// Batect's `RunContainerSetupCommandsStepRuleSpec`, RSC-2 ("another
+/// container has become healthy → NotReady"), for dependencies: each
+/// dependency's setup command runs in its own container once *its own*
+/// health wait returns — `fast`'s is not held back until `slow` is healthy,
+/// and `slow`'s is not released by `fast` becoming healthy.
+#[tokio::test(start_paused = true)]
+async fn a_dependencys_setup_commands_wait_for_its_own_health_alone() {
+    let docker = FakeContainerRuntime::default()
+        .with_health_check_delay("slow", std::time::Duration::from_secs(1));
+    engine(config_with_a_slow_and_a_fast_dependency(), docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    for dependency in ["fast", "slow"] {
+        assert!(
+            event_index(&events, &format!("wait-healthy:sidecar-id-{dependency}"))
+                < event_index(
+                    &events,
+                    &format!("exec:sidecar-id-{dependency}:setup-{dependency}")
+                ),
+            "'{dependency}''s setup command must follow its own health wait: {events:?}"
+        );
+    }
+    assert!(
+        event_index(&events, "exec:sidecar-id-fast:setup-fast")
+            < event_index(&events, "wait-healthy:sidecar-id-slow"),
+        "'fast''s setup command must not wait for 'slow' to become healthy: {events:?}"
+    );
+}
+
+/// RSC-2 at the task container's own site, `run_task_container_readiness`,
+/// which Batect's rule covers too: the task container's setup command
+/// follows its own health result, which arrives a second after its
+/// dependency's — so the dependency's does not release it. Its own test
+/// rather than left to the dependency one above, because the two gates are
+/// separate code.
+#[tokio::test(start_paused = true)]
+async fn the_task_containers_setup_commands_wait_for_its_own_health_not_a_dependencys() {
+    let config =
+        with_own_setup_commands(config_with_containers(&["dep"], &[("dep", &[])]), &["app"]);
+    // The gate runs alongside the main command and is dropped when it
+    // exits (decisions/0012), so the command outlasts the health wait.
+    let docker = FakeContainerRuntime::default()
+        .with_run_delay("app", std::time::Duration::from_secs(10))
+        .with_health_check_delay("app", std::time::Duration::from_secs(1));
+    engine(config, docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    let own_health = event_index(&events, "wait-healthy:sidecar-id-app");
+    assert!(
+        event_index(&events, "wait-healthy:sidecar-id-dep") < own_health,
+        "the dependency's health result must arrive first for this test to mean \
+         anything: {events:?}"
+    );
+    assert!(
+        own_health < event_index(&events, "exec:sidecar-id-app:setup-app"),
+        "the task container's setup command must follow its own health wait: {events:?}"
+    );
+}
+
+/// Batect's `WaitForContainerToBecomeHealthyStepRuleSpec`, RWH-2
+/// ("another container has started → NotReady"): a dependency's health
+/// wait follows its own start, not a sibling's. `late` has no health delay
+/// of its own, so a wait released by `early`'s start would show at once.
+#[tokio::test(start_paused = true)]
+async fn a_dependencys_health_wait_follows_its_own_start_not_a_siblings() {
+    let config = config_with_containers(&["early", "late"], &[("early", &[]), ("late", &[])]);
+    let docker =
+        FakeContainerRuntime::default().with_start_delay("late", std::time::Duration::from_secs(1));
+    engine(config, docker.clone())
+        .run_task("start", &[])
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    assert!(
+        sidecar_start_index(&events, "early") < sidecar_start_index(&events, "late"),
+        "'early' must start first for this test to mean anything: {events:?}"
+    );
+    assert!(
+        sidecar_start_index(&events, "late") < event_index(&events, "wait-healthy:sidecar-id-late"),
+        "'late''s health wait must follow its own start: {events:?}"
+    );
+}
+
 #[tokio::test]
 async fn shared_nested_dependency_started_once_per_task() {
     let mut containers = IndexMap::new();
