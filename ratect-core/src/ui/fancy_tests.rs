@@ -797,7 +797,7 @@ fn dependency_becoming_healthy_unblocks_waiting_lines() {
     });
     let contents = buffer.contents();
     assert!(contents.contains("db: ready"), "{contents}");
-    assert!(contents.contains("app: waiting to start..."), "{contents}");
+    assert!(contents.contains("app: ready to start"), "{contents}");
 }
 
 #[test]
@@ -844,7 +844,7 @@ fn image_resolved_does_not_undo_progress_from_a_real_pull() {
     logger.post(TaskEvent::ContainerBecameHealthy {
         container: "db".into(),
     });
-    assert!(buffer.contents().contains("app: waiting to start..."));
+    assert!(buffer.contents().contains("app: ready to start"));
     let before = buffer.contents();
 
     // ImageResolved changes nothing visible here (app's line is
@@ -872,7 +872,7 @@ fn image_resolved_does_not_undo_progress_from_a_real_pull() {
     });
     let added = &buffer.contents()[before.len()..];
     assert!(
-        added.contains("app: waiting to start..."),
+        added.contains("app: ready to start"),
         "ImageResolved must not have reset app's already-satisfied dependencies: {added:?}"
     );
     assert!(
@@ -1535,7 +1535,7 @@ fn a_dependant_never_waits_for_a_dependency_already_ready() {
     logger.post(TaskEvent::ImageResolved {
         container: "z-app".into(),
     });
-    assert_eq!(last_frame(&buffer, 1), ["z-app: waiting to start..."]);
+    assert_eq!(last_frame(&buffer, 1), ["z-app: ready to start"]);
 
     let (logger, buffer) = three_dependencies(app());
     logger.post(healthy("dep-b"));
@@ -1649,7 +1649,7 @@ fn a_dependency_with_setup_commands_is_ready_only_after_them() {
     });
     assert_eq!(
         last_frame(&buffer, 2),
-        ["dep: ready", "app: waiting to start..."]
+        ["dep: ready", "app: ready to start"]
     );
     assert_eq!(buffer.contents().matches("dep: ready\n").count(), 1);
 }
@@ -1743,10 +1743,7 @@ fn a_dependency_is_created_too_and_readiness_survives_creation() {
     logger.post(TaskEvent::ContainerCreated {
         container: "app".into(),
     });
-    assert_eq!(
-        last_frame(&buffer, 2),
-        ["db: ready", "app: waiting to start..."]
-    );
+    assert_eq!(last_frame(&buffer, 2), ["db: ready", "app: ready to start"]);
 }
 
 /// Given the override the engine now reports as the line's image, the line
@@ -1913,4 +1910,45 @@ fn a_clipped_line_of_bold_names_closes_its_style() {
         );
         assert!(display_width(&clipped) <= width as usize);
     }
+}
+
+/// The setup command is bold, as in Batect, and so is the container it runs
+/// in when that isn't the row's own.
+#[test]
+fn a_setup_command_is_bold() {
+    let (logger, buffer) = colored_logger(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("dep", None, &[], false)],
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "./seed.sh".into(),
+        index: 1,
+        total: 2,
+        run_in: None,
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: running setup command {} (1 of 2)...",
+            bold("dep"),
+            bold("./seed.sh")
+        )]
+    );
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "./seed.sh".into(),
+        index: 2,
+        total: 2,
+        run_in: Some("db".into()),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: running setup command {} (2 of 2) in {}...",
+            bold("dep"),
+            bold("./seed.sh"),
+            bold("db")
+        )]
+    );
 }

@@ -35,6 +35,9 @@
 //!   the wrong place (ratect#73).
 //! - A reported width of 0 counts as unknown, so lines print unclipped;
 //!   Batect clips every line to nothing.
+//! - A pull line names the image (`ready to pull image <image>`, `pulling
+//!   image <image>...`), and a dependency past its readiness gate reads
+//!   `ready` where Batect's reads `running`.
 //! - A multi-line setup command is drawn on one row, each line break a
 //!   space, like the task's own command; Batect fails the task instead.
 
@@ -256,7 +259,7 @@ impl ContainerLine {
             Stage::ImageBuilt => "image built, ready to create container".to_string(),
             Stage::Creating => "creating container...".to_string(),
             Stage::WaitingForDependencies(remaining) if remaining.is_empty() => {
-                "waiting to start...".to_string()
+                "ready to start".to_string()
             }
             Stage::WaitingForDependencies(remaining) => format!(
                 "waiting for {} {} to be ready...",
@@ -280,10 +283,13 @@ impl ContainerLine {
             } => {
                 // This row already names the declaring container, so only
                 // a command running somewhere else names anything more.
-                let elsewhere = run_in
-                    .as_ref()
-                    .map_or(String::new(), |run_in| format!(" in {run_in}"));
-                format!("running setup command {command} ({index} of {total}){elsewhere}...")
+                let elsewhere = run_in.as_ref().map_or(String::new(), |run_in| {
+                    format!(" in {}", console.bold(run_in))
+                });
+                format!(
+                    "running setup command {} ({index} of {total}){elsewhere}...",
+                    console.bold(command)
+                )
             }
             Stage::Ready => "ready".to_string(),
             Stage::RunningCommand(Some(command)) => format!("running {command}"),

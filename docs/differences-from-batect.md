@@ -535,6 +535,13 @@ tables above:
   place on common terminals and corrupts the display. Ratect leaves the old
   block where it is and draws the new one below it, at the cost of that
   leftover block.
+- **`fancy` mode names the image it pulls, and calls a ready dependency
+  `ready`.** A container's line reads `ready to pull image <image>` and then
+  `pulling image <image>...`, where Batect's reads `ready to pull image` and
+  `pulling <image>...`. A dependency that has passed its readiness gate —
+  healthy, and its setup commands done — reads `ready`, where Batect's reads
+  `running`, which would fit a container that has started but isn't yet
+  healthy just as well.
 - **`fancy` mode draws a multi-line setup command on one row.** Each line
   break in it is shown as a space, and the command runs as usual. Batect
   can't draw it, and fails the task with an unexpected-exception error and

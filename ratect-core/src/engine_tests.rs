@@ -10147,6 +10147,43 @@ async fn max_parallelism_of_one_serializes_independent_container_starts() {
     );
 }
 
+/// Under the cap, a dependency is announced as starting only once it holds a
+/// slot, so a queued one never says so while it waits: the second
+/// `DependencyStarting` follows the first `DependencyStarted`, as Batect
+/// announces a container only when its run step starts.
+#[tokio::test(start_paused = true)]
+async fn max_parallelism_announces_a_start_only_once_it_holds_a_slot() {
+    let delay = std::time::Duration::from_millis(100);
+    let docker = FakeContainerRuntime::default()
+        .with_start_delay("dep-a", delay)
+        .with_start_delay("dep-b", delay);
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_two_independent_dependencies()),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        max_parallelism: Some(1),
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let starts: Vec<&'static str> = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            TaskEvent::DependencyStarting { .. } => Some("starting"),
+            TaskEvent::DependencyStarted { .. } => Some("started"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts, ["starting", "started", "starting", "started"]);
+}
+
 #[tokio::test(start_paused = true)]
 async fn max_parallelism_of_one_serializes_independent_setup_command_execution() {
     let mut config = config_with_two_independent_dependencies();
