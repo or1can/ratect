@@ -140,6 +140,100 @@ fn dependency_output_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dependency-output.yml")
 }
 
+/// A process on a fresh pseudo-terminal, 24 rows by `cols` columns: its
+/// stdin, stdout and stderr are the one terminal unless its command
+/// redirects one, so `IsTerminal` is genuinely true for it. What it writes
+/// is read on a background thread, since `Read::read` blocks; the test
+/// thread polls that with a bounded timeout instead, so a hang fails the
+/// test rather than stalling it. `master` is the terminal's other side, to
+/// type into (`take_writer`) or resize.
+struct OnTerminal {
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    output: mpsc::Receiver<Vec<u8>>,
+    read: Vec<u8>,
+}
+
+impl OnTerminal {
+    fn spawn(cmd: CommandBuilder, cols: u16) -> Self {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("failed to open pty");
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .expect("failed to spawn ratect in the pty");
+        // Drop our side of the slave now that the child has its own —
+        // otherwise the master's reader never sees EOF, since the pty only
+        // closes once every writer to it (including ours) is gone.
+        drop(pair.slave);
+        let mut reader = pair
+            .master
+            .try_clone_reader()
+            .expect("failed to clone pty reader");
+        let (tx, output) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n @ 1..) = reader.read(&mut buf) {
+                if tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            master: pair.master,
+            output,
+            read: Vec::new(),
+        }
+    }
+
+    /// Reads until everything read so far contains `needle`, or `timeout`
+    /// has passed, and returns everything read so far.
+    fn read_until(&mut self, needle: &str, timeout: Duration) -> String {
+        let deadline = Instant::now() + timeout;
+        while !String::from_utf8_lossy(&self.read).contains(needle) && Instant::now() < deadline {
+            if let Ok(chunk) = self.output.recv_timeout(Duration::from_millis(200)) {
+                self.read.extend_from_slice(&chunk);
+            }
+        }
+        String::from_utf8_lossy(&self.read).into_owned()
+    }
+
+    /// Waits up to `timeout` for the process to exit, then reads what is
+    /// left, returning its exit status and everything it wrote.
+    fn wait(self, timeout: Duration) -> (portable_pty::ExitStatus, String) {
+        let Self {
+            mut child,
+            master,
+            output,
+            mut read,
+        } = self;
+        let (wait_tx, wait_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = wait_tx.send(child.wait());
+        });
+        let status = wait_rx
+            .recv_timeout(timeout)
+            .expect("ratect did not exit")
+            .expect("failed to wait for ratect");
+        // The child has exited, so whatever it wrote is already buffered;
+        // closing our side lets the reader reach the end of it, so the
+        // generous per-chunk wait only bites on a runner too loaded to
+        // schedule the reader thread promptly.
+        drop(master);
+        while let Ok(chunk) = output.recv_timeout(Duration::from_secs(5)) {
+            read.extend_from_slice(&chunk);
+        }
+        (status, String::from_utf8_lossy(&read).into_owned())
+    }
+}
+
 /// #324: Batect reads a config-variables file's values as strings, so an
 /// unquoted number in one — named by `--config-vars-file` or the default
 /// `batect.local.yml` — loads rather than failing the run. No daemon: the
@@ -1026,14 +1120,6 @@ fn requesting_fancy_output_without_an_interactive_console_fails_clearly() {
 /// and everything written to the terminal. Needs no Docker: the refusal is
 /// decided before connecting, and an accepted run fails on connecting.
 fn explicit_fancy_on_a_pty(term: Option<&str>) -> (portable_pty::ExitStatus, String) {
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.args(["-o", "fancy", "--docker-host", "tcp://127.0.0.1:1", "-f"]);
     cmd.arg(sample_config_path());
@@ -1042,39 +1128,7 @@ fn explicit_fancy_on_a_pty(term: Option<&str>) -> (portable_pty::ExitStatus, Str
         Some(term) => cmd.env("TERM", term),
         None => cmd.env_remove("TERM"),
     }
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        while let Ok(n @ 1..) = reader.read(&mut buf) {
-            if tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(30))
-        .expect("ratect did not exit")
-        .expect("failed to wait for ratect");
-    // The child has exited, so whatever it wrote is already buffered.
-    let mut output = Vec::new();
-    while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(500)) {
-        output.extend_from_slice(&chunk);
-    }
-    (status, String::from_utf8_lossy(&output).into_owned())
+    OnTerminal::spawn(cmd, 120).wait(Duration::from_secs(30))
 }
 
 /// A dumb terminal can't move the cursor, so an explicit `-o fancy` is
@@ -2074,57 +2128,15 @@ fn quiet_output_is_exactly_the_tasks_own_output_via_docker() {
 #[test]
 #[ignore]
 fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
-
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(sample_config_path());
     cmd.arg("shared-prereq");
     cmd.env("TERM", "xterm-256color");
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    let mut output = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !String::from_utf8_lossy(&output).contains("finished with exit code")
-        && Instant::now() < deadline
-    {
-        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-            output.extend_from_slice(&chunk);
-        }
-    }
-    let output = String::from_utf8_lossy(&output);
+    let mut terminal = OnTerminal::spawn(cmd, 120);
+    terminal.read_until("finished with exit code", Duration::from_secs(60));
+    let (status, output) = terminal.wait(Duration::from_secs(15));
 
     // The task preamble (bold task name — auto-selected fancy implies
     // color on a terminal).
@@ -2149,14 +2161,6 @@ fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
         "missing summary line: {output:?}"
     );
 
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(15))
-        .expect("ratect did not exit after the task finished")
-        .expect("failed to wait for ratect");
     assert!(status.success(), "ratect should exit cleanly: {status:?}");
 }
 
@@ -2175,15 +2179,6 @@ fn fancy_output_keeps_task_container_stderr_off_process_stderr_via_docker() {
         "ratect-stream-routing-stderr-{}",
         std::process::id()
     ));
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
-
     let mut cmd = CommandBuilder::new("sh");
     cmd.arg("-c");
     cmd.arg(r#"exec "$0" "$@" 2>"$RATECT_TEST_STDERR""#);
@@ -2194,43 +2189,9 @@ fn fancy_output_keeps_task_container_stderr_off_process_stderr_via_docker() {
     cmd.env("TERM", "xterm-256color");
     cmd.env("RATECT_TEST_STDERR", &stderr_path);
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        while let Ok(n @ 1..) = reader.read(&mut buf) {
-            if tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-    let mut output = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !String::from_utf8_lossy(&output).contains("finished with exit code")
-        && Instant::now() < deadline
-    {
-        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-            output.extend_from_slice(&chunk);
-        }
-    }
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(15))
-        .expect("ratect did not exit after the task finished")
-        .expect("failed to wait for ratect");
-    let output = String::from_utf8_lossy(&output);
+    let mut terminal = OnTerminal::spawn(cmd, 120);
+    terminal.read_until("finished with exit code", Duration::from_secs(60));
+    let (status, output) = terminal.wait(Duration::from_secs(15));
     let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
     let _ = std::fs::remove_file(&stderr_path);
 
@@ -2407,15 +2368,6 @@ fn fancy_output_shows_no_dependency_output_via_docker() {
         "ratect-dependency-output-stderr-{}",
         std::process::id()
     ));
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
-
     let mut cmd = CommandBuilder::new("sh");
     cmd.arg("-c");
     cmd.arg(r#"exec "$0" "$@" 2>"$RATECT_TEST_STDERR""#);
@@ -2426,43 +2378,9 @@ fn fancy_output_shows_no_dependency_output_via_docker() {
     cmd.env("TERM", "xterm-256color");
     cmd.env("RATECT_TEST_STDERR", &stderr_path);
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        while let Ok(n @ 1..) = reader.read(&mut buf) {
-            if tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-    let mut output = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !String::from_utf8_lossy(&output).contains("finished with exit code")
-        && Instant::now() < deadline
-    {
-        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-            output.extend_from_slice(&chunk);
-        }
-    }
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(15))
-        .expect("ratect did not exit after the task finished")
-        .expect("failed to wait for ratect");
-    let output = String::from_utf8_lossy(&output);
+    let mut terminal = OnTerminal::spawn(cmd, 120);
+    terminal.read_until("finished with exit code", Duration::from_secs(60));
+    let (status, output) = terminal.wait(Duration::from_secs(15));
     let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
     let _ = std::fs::remove_file(&stderr_path);
 
@@ -6481,56 +6399,16 @@ fn build_ssh_errors_clearly_when_the_classic_builder_is_forced() {
 #[test]
 #[ignore]
 fn interactive_session_forwards_stdin_and_stdout() {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
-
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(interactive_config_path());
     cmd.arg("shell");
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    // Drop our side of the slave now that the child has its own — otherwise
-    // the master's reader never sees EOF, since the pty only closes once
-    // every writer to it (including ours) is gone.
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let mut writer = pair
+    let mut terminal = OnTerminal::spawn(cmd, 80);
+    let mut writer = terminal
         .master
         .take_writer()
         .expect("failed to take pty writer");
-
-    // Reads in a background thread since `Read::read` blocks; the main
-    // thread polls the accumulated output with a bounded timeout instead of
-    // blocking indefinitely if something hangs.
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
 
     // Safe to write immediately, before the shell has necessarily started
     // reading: the pty's own kernel-level buffer holds unread input until
@@ -6539,29 +6417,13 @@ fn interactive_session_forwards_stdin_and_stdout() {
     writeln!(writer, "echo {marker}").expect("failed to write to pty");
     writeln!(writer, "exit").expect("failed to write to pty");
 
-    let mut output = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !String::from_utf8_lossy(&output).contains(marker) && Instant::now() < deadline {
-        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-            output.extend_from_slice(&chunk);
-        }
-    }
-
-    let output_str = String::from_utf8_lossy(&output);
+    let output_str = terminal.read_until(marker, Duration::from_secs(30));
     assert!(
         output_str.contains(marker),
         "expected the echoed marker to round-trip through stdin -> container -> stdout: {output_str:?}"
     );
 
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(15))
-        .expect("ratect did not exit after the interactive session ended")
-        .expect("failed to wait for ratect");
-
+    let (status, _) = terminal.wait(Duration::from_secs(15));
     assert!(
         status.success(),
         "ratect should exit successfully once the shell session ends: {status:?}"
@@ -6587,65 +6449,14 @@ fn interactive_session_forwards_stdin_and_stdout() {
 #[test]
 #[ignore]
 fn instantly_exiting_interactive_task_does_not_warn_about_tty_resize() {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
-
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(interactive_config_path());
     cmd.arg("instant");
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-
-    // Drain everything the child writes (stdout and stderr both arrive via
-    // the pty) until EOF, in a background thread — the child exits on its
-    // own, no input needed.
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(30))
-        .expect("ratect did not exit")
-        .expect("failed to wait for ratect");
+    // The child exits on its own, no input needed.
+    let (status, output_str) = OnTerminal::spawn(cmd, 80).wait(Duration::from_secs(30));
     assert!(status.success(), "the task should succeed: {status:?}");
-
-    let mut output = Vec::new();
-    while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(500)) {
-        output.extend_from_slice(&chunk);
-    }
-    let output_str = String::from_utf8_lossy(&output);
     assert!(
         !output_str.contains("Failed to resize container TTY"),
         "an instantly-exiting task should not warn about TTY resizing: {output_str:?}"
@@ -6669,70 +6480,29 @@ fn instantly_exiting_interactive_task_does_not_warn_about_tty_resize() {
 #[test]
 #[ignore]
 fn interactive_session_forwards_live_terminal_resizes() {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
-
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(interactive_config_path());
     cmd.arg("shell");
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let mut writer = pair
+    let mut terminal = OnTerminal::spawn(cmd, 80);
+    let mut writer = terminal
         .master
         .take_writer()
         .expect("failed to take pty writer");
-
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    let mut output = Vec::new();
 
     // Confirm the shell starts out reporting the pty's initial size before
     // touching resize at all — otherwise a later "40 120" match wouldn't
     // prove anything actually changed.
     writeln!(writer, "stty size").expect("failed to write to pty");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !String::from_utf8_lossy(&output).contains("24 80") && Instant::now() < deadline {
-        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-            output.extend_from_slice(&chunk);
-        }
-    }
-    let initial = String::from_utf8_lossy(&output).to_string();
+    let initial = terminal.read_until("24 80", Duration::from_secs(30));
     assert!(
         initial.contains("24 80"),
         "expected the shell to initially report the pty's opened size (24 rows, 80 cols): {initial:?}"
     );
 
-    pair.master
+    terminal
+        .master
         .resize(PtySize {
             rows: 40,
             cols: 120,
@@ -6747,16 +6517,11 @@ fn interactive_session_forwards_live_terminal_resizes() {
     // container-side shell actually reports the new geometry, or the
     // bounded timeout gives up.
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !String::from_utf8_lossy(&output).contains("40 120") && Instant::now() < deadline {
+    let mut resized = String::new();
+    while !resized.contains("40 120") && Instant::now() < deadline {
         writeln!(writer, "stty size").expect("failed to write to pty");
-        let poll_deadline = Instant::now() + Duration::from_millis(500);
-        while Instant::now() < poll_deadline {
-            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-                output.extend_from_slice(&chunk);
-            }
-        }
+        resized = terminal.read_until("40 120", Duration::from_millis(500));
     }
-    let resized = String::from_utf8_lossy(&output).to_string();
     assert!(
         resized.contains("40 120"),
         "expected the container's shell to report the resized pty's new size (40 rows, \
@@ -6765,15 +6530,7 @@ fn interactive_session_forwards_live_terminal_resizes() {
 
     writeln!(writer, "exit").expect("failed to write to pty");
 
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(15))
-        .expect("ratect did not exit after the interactive session ended")
-        .expect("failed to wait for ratect");
-
+    let (status, _) = terminal.wait(Duration::from_secs(15));
     assert!(
         status.success(),
         "ratect should exit successfully once the shell session ends: {status:?}"
@@ -6930,16 +6687,6 @@ fn piped_stdin_reaches_a_prerequisite_tasks_container() {
 #[test]
 #[ignore]
 fn a_prerequisite_tasks_container_gets_a_tty() {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
-
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.arg("-f");
     cmd.arg(prerequisite_task_container_config_path());
@@ -6947,73 +6694,32 @@ fn a_prerequisite_tasks_container_gets_a_tty() {
     cmd.arg("quiet");
     cmd.arg("main");
 
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let mut writer = pair
+    let mut terminal = OnTerminal::spawn(cmd, 80);
+    let mut writer = terminal
         .master
         .take_writer()
         .expect("failed to take pty writer");
-
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
-    let mut output = Vec::new();
-    let mut read_until = |marker: &str| {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !String::from_utf8_lossy(&output).contains(marker) && Instant::now() < deadline {
-            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
-                output.extend_from_slice(&chunk);
-            }
-        }
-        String::from_utf8_lossy(&output).into_owned()
-    };
+    let timeout = Duration::from_secs(30);
 
     // The prerequisite reads one line before it exits; the pty buffers it
     // until then.
     writeln!(writer, "pre-line").expect("failed to write to pty");
-    let output_str = read_until("PRE-READ=");
+    let output_str = terminal.read_until("PRE-READ=", timeout);
     assert!(output_str.contains("PRE-OUT-TTY"), "{output_str:?}");
     assert!(output_str.contains("PRE-READ=[pre-line]"), "{output_str:?}");
 
     // Typed only once the named task's container is running, so it can
     // only reach that container — unless something left over from the
     // prerequisite's session reads it first.
-    read_until("MAIN-READY");
+    terminal.read_until("MAIN-READY", timeout);
     writeln!(writer, "main-line").expect("failed to write to pty");
-    let output_str = read_until("main-done");
+    let output_str = terminal.read_until("main-done", timeout);
     assert!(
         output_str.contains("MAIN-READ=[main-line]"),
         "{output_str:?}"
     );
 
-    let (wait_tx, wait_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = wait_tx.send(child.wait());
-    });
-    let status = wait_rx
-        .recv_timeout(Duration::from_secs(15))
-        .expect("ratect did not exit")
-        .expect("failed to wait for ratect");
+    let (status, _) = terminal.wait(Duration::from_secs(15));
     assert!(status.success(), "{status:?}");
 }
 
@@ -8465,51 +8171,13 @@ fn a_run_that_fails_exits_125_and_list_tasks_1() {
 /// returns everything it wrote (stdout and stderr are the one terminal),
 /// once it has exited.
 fn run_on_a_terminal(args: &[&str], env: &[(&str, &str)]) -> String {
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.args(args);
     cmd.env("TERM", "xterm-256color");
     for (name, value) in env {
         cmd.env(name, value);
     }
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-    });
-    child.wait().expect("failed to wait for ratect");
-    drop(pair.master);
-    let mut output = Vec::new();
-    while let Ok(chunk) = rx.recv_timeout(Duration::from_secs(5)) {
-        output.extend_from_slice(&chunk);
-    }
-    String::from_utf8_lossy(&output).into_owned()
+    OnTerminal::spawn(cmd, 120).wait(Duration::from_secs(60)).1
 }
 
 /// The `Error:` and `Warning:` markers are bold red and bold yellow, each
@@ -9632,14 +9300,6 @@ fn the_log_file_leaves_stderr_alone_and_holds_no_ansi() {
 fn the_log_file_stays_plain_while_a_terminals_stderr_keeps_its_colour() {
     let project = std::env::temp_dir().join(format!("ratect-log-tty-{}", std::process::id()));
     std::fs::create_dir_all(&project).unwrap();
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 200,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open pty");
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ratect-compat"));
     cmd.cwd(&project);
     cmd.env("TERM", "xterm-256color");
@@ -9649,26 +9309,7 @@ fn the_log_file_stays_plain_while_a_terminals_stderr_keeps_its_colour() {
     cmd.arg("-f");
     cmd.arg(sample_config_path());
     cmd.args(["--log-file", "out.log", "test-task"]);
-    let mut child = pair
-        .slave
-        .spawn_command(cmd)
-        .expect("failed to spawn ratect in the pty");
-    drop(pair.slave);
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .expect("failed to clone pty reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = reader.read_to_end(&mut output);
-        let _ = tx.send(output);
-    });
-
-    child.wait().expect("failed to wait on ratect");
-    drop(pair.master);
-    let terminal = rx.recv_timeout(Duration::from_secs(10)).unwrap_or_default();
-    let terminal = String::from_utf8_lossy(&terminal);
+    let (_, terminal) = OnTerminal::spawn(cmd, 200).wait(Duration::from_secs(60));
     let log = std::fs::read_to_string(project.join("out.log")).unwrap_or_default();
     std::fs::remove_dir_all(&project).ok();
 
