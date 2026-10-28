@@ -96,19 +96,22 @@
 //! explicitly dropped *after* the build stream is drained, since dropping one
 //! stops the agent that every `RUN --mount=type=ssh` in the build depends on.
 //! `ensure_host_volume_directories_exist` (the `run_as_current_user` host-dir
-//! pre-creation step) only `mkdir -p`s a bind's source when it's *absolute*
-//! (a bare non-absolute source is a `CacheType::Volume` name, 0.18.0, not a
-//! host path), *doesn't already exist* (an existing directory Docker reuses,
-//! or a single file/socket the config bind-mounts like `~/.gitconfig` or an
-//! SSH agent socket — `mkdir` over a non-directory both fails and is wrong),
-//! and *isn't a special Docker Desktop path* (`/run/host-services`/
-//! `/run/guest-services`, which Docker injects into its own VM and don't
-//! exist on a macOS host — the SSH agent socket lives at
-//! `/run/host-services/ssh-auth.sock`). The latter two guards are a
-//! straight port of Batect's `!Files.exists && !isSpecialDockerDesktopPath`;
-//! 0.10.0's `52e8d59` dropped the exists-check as "TOCTOU-prone" and the
-//! special-path one was never ported, which together broke mounting the SSH
-//! agent under `run_as_current_user` — don't re-simplify them away. `list_volumes`/`remove_volume` (0.18.0, `--clean`/
+//! pre-creation step) only `mkdir -p`s a bind's source when it's a *host*
+//! source (`BindSource::Host` — a `CacheType::Volume` cache is a
+//! `BindSource::Volume` name, 0.18.0, not a host path), *doesn't already
+//! exist* (an existing directory Docker reuses, or a single file/socket the
+//! config bind-mounts like `~/.gitconfig` or an SSH agent socket — `mkdir`
+//! over a non-directory both fails and is wrong), and *isn't a special
+//! Docker Desktop path* (`/run/host-services`/`/run/guest-services`, which
+//! Docker injects into its own VM and don't exist on a macOS host — the SSH
+//! agent socket lives at `/run/host-services/ssh-auth.sock`). The latter two
+//! guards are a straight port of Batect's `!Files.exists &&
+//! !isSpecialDockerDesktopPath`; 0.10.0's `52e8d59` dropped the exists-check
+//! as "TOCTOU-prone" and the special-path one was never ported, which
+//! together broke mounting the SSH agent under `run_as_current_user` — don't
+//! re-simplify them away. Its nested-mount-point half keeps the same two
+//! guards for the same reason, and gives a file or socket source an empty
+//! file rather than a directory (ratect#321). `list_volumes`/`remove_volume` (0.18.0, `--clean`/
 //! `--clean-cache`) are thin wrappers over bollard's own volume API — see
 //! `cache.rs` for the actual removal-decision logic built on top of them.
 //! `list_containers`/`list_networks` (0.2.0-dev) are the equivalent pair for
@@ -643,7 +646,8 @@ pub struct LabelledResource {
 }
 
 pub use crate::container_spec::{
-    ContainerNetwork, ContainerOptions, ContainerSpec, HealthCheckOptions, NetworkOptions,
+    BindMount, BindSource, ContainerNetwork, ContainerOptions, ContainerSpec, HealthCheckOptions,
+    NetworkOptions,
 };
 
 /// Configures BuildKit-only build features — `build_image` receives one
@@ -1469,44 +1473,37 @@ fn owned_directory_parent(path: &str) -> String {
         .into_owned()
 }
 
-/// Creates any host-side bind-mount directories in `volumes` (already
-/// resolved `"host:container"` strings) that don't exist yet — as the
-/// current host user, before the container is created. Otherwise Docker's
-/// daemon (running as root) would auto-create them as `root:root` on first
-/// use, defeating the point of `run_as_current_user` for the common "mount
-/// my code directory, get build artifacts back with sane ownership" case.
-/// Pure filesystem logic, no Docker involved. Ported from Batect's
-/// `createMissingMountDirectories`.
-fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result<()> {
-    let Some(volumes) = volumes else {
-        return Ok(());
-    };
+/// Creates what a container running as the host user needs on the host and
+/// doesn't have yet — as that user, before the container is created.
+/// Otherwise Docker's daemon (running as root) would auto-create it as
+/// `root:root` on first use, defeating the point of `run_as_current_user`
+/// for the common "mount my code directory, get build artifacts back with
+/// sane ownership" case. Ported from Batect's
+/// `createMissingMountDirectories`, whose two loops are
+/// [`create_missing_host_sources`] and [`create_nested_mount_points`] — with
+/// two divergences: a nested mount point is created with the type its source
+/// needs, where Batect always creates a directory, and a symlink on the way
+/// to one is followed only while it stays inside the enclosing mount.
+///
+/// A nested mount point is created only where ratect is sure of the host
+/// path and may write there; anything else is left for the daemon, which
+/// creates it as root, as it did before that loop existed. Creating in the
+/// wrong place is the worse of the two ways to get that wrong. (A missing
+/// host source still fails the run when it can't be created, as in Batect.)
+///
+/// Pure filesystem logic, no Docker involved.
+fn ensure_host_volume_directories_exist(
+    binds: &[BindMount],
+    tmpfs: &[(String, String)],
+) -> Result<()> {
+    create_missing_host_sources(binds)?;
+    create_nested_mount_points(binds, tmpfs)
+}
 
-    for volume in volumes {
-        let Some((host_path, _)) = volume.split_once(':') else {
-            continue;
-        };
-        let path = Path::new(host_path);
-        // A non-absolute source is a Docker named volume, not a host path —
-        // a `cache` mount under `CacheType::Volume` resolves to exactly
-        // this (e.g. `"batect-cache-<key>-<name>"`). Every *local* mount's
-        // host path is already made absolute by `LoadedProject::evaluate`
-        // before it ever reaches here, so this only ever skips a named
-        // volume, never a genuine (if unusual) relative local path.
-        // Without this guard, `create_dir_all` would `mkdir -p` a directory
-        // named after the volume, relative to the current working
-        // directory — not what anyone wants.
-        if !path.is_absolute() {
-            continue;
-        }
-        // Docker Desktop injects a few paths into its own Linux VM that
-        // don't exist on the host at all — most notably the SSH agent
-        // socket at `/run/host-services/ssh-auth.sock`. `mkdir -p` on one
-        // fails (there's no `/run` on a macOS host to create under), so
-        // skip them and let Docker provide them. Component-wise prefix
-        // match, so `/run/host-services-something` isn't caught. Ported
-        // from Batect's own `isSpecialDockerDesktopPath`.
-        if path.starts_with("/run/host-services") || path.starts_with("/run/guest-services") {
+/// Each host mount's own source, as a directory, when it's missing.
+fn create_missing_host_sources(binds: &[BindMount]) -> Result<()> {
+    for path in binds.iter().filter_map(BindMount::host_path) {
+        if is_special_docker_desktop_path(path) {
             continue;
         }
         // Only a *missing* source is pre-created. The whole reason to do so
@@ -1528,6 +1525,181 @@ fn ensure_host_volume_directories_exist(volumes: Option<&Vec<String>>) -> Result
     }
 
     Ok(())
+}
+
+/// One mount's container path, for [`create_nested_mount_points`].
+struct MountPoint<'a> {
+    container: &'a str,
+    segments: Vec<String>,
+    /// `Some` for a host mount; `None` for a volume or a `tmpfs`.
+    host_source: Option<&'a Path>,
+}
+
+/// Each mount point that falls inside a host mount's container path — of a
+/// host mount, a volume or a `tmpfs` — created inside that host mount's
+/// source, with every directory above it, when it's missing. Only the
+/// *closest* enclosing mount (Batect's rule: the longest other container
+/// path that is a strict segment prefix, both cleaned as Docker cleans
+/// them) counts, and only when it is a host mount of a directory: one inside
+/// a volume is the volume's to hold, and a file, a socket or a Docker
+/// Desktop special path has nowhere to put one.
+///
+/// The mount point is an empty regular file when its source is an existing
+/// non-directory (a file, a socket, a device), since Linux binds a
+/// non-directory onto a file; otherwise a directory. Batect always creates a
+/// directory, which fails a nested file or socket mount at container start.
+/// A host mount of a Docker Desktop special path gets nothing (its type
+/// can't be known on the host), and an existing mount point is never
+/// touched, whatever its type — a dangling symlink included. Nor is a
+/// symlink on the way to one followed ([`missing_mount_point`]).
+fn create_nested_mount_points(binds: &[BindMount], tmpfs: &[(String, String)]) -> Result<()> {
+    let mounts: Vec<MountPoint> = binds
+        .iter()
+        .map(|bind| (bind.container.as_str(), bind.host_path()))
+        .chain(
+            tmpfs
+                .iter()
+                .map(|(container, _)| (container.as_str(), None)),
+        )
+        .map(|(container, host_source)| MountPoint {
+            container,
+            segments: container_path_segments(container),
+            host_source,
+        })
+        .collect();
+
+    for mount in &mounts {
+        let closest_parent = mounts
+            .iter()
+            .filter(|parent| {
+                parent.segments.len() < mount.segments.len()
+                    && mount.segments.starts_with(&parent.segments)
+            })
+            .max_by_key(|parent| parent.segments.len());
+        let Some(parent) = closest_parent else {
+            continue;
+        };
+        let Some(parent_source) = parent.host_source.filter(|source| source.is_dir()) else {
+            continue;
+        };
+        if mount
+            .host_source
+            .is_some_and(is_special_docker_desktop_path)
+        {
+            continue;
+        }
+        let Some(path) =
+            missing_mount_point(parent_source, &mount.segments[parent.segments.len()..])
+        else {
+            continue;
+        };
+        let source_is_a_file = mount
+            .host_source
+            .is_some_and(|source| source.exists() && !source.is_dir());
+        let created = if source_is_a_file {
+            path.parent()
+                .map_or(Ok(()), fs::create_dir_all)
+                .and_then(|()| {
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .map(drop)
+                })
+        } else {
+            fs::create_dir_all(&path)
+        };
+        match created {
+            // Somewhere the host user may not write — a directory a root
+            // daemon created on an earlier run, say — is the daemon's to
+            // create in, as root, as it was before this step existed.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
+            created => created.with_context(|| {
+                format!(
+                    "Failed to create the mount point for {} at {:?}",
+                    mount.container, path
+                )
+            })?,
+        }
+    }
+
+    Ok(())
+}
+
+/// Where a mount point `relative` to `parent_source` should be created on
+/// the host — `None` when ratect should create nothing and leave it to the
+/// daemon. Each component that already exists is followed on the host, but
+/// only while it resolves to a directory still inside `parent_source`
+/// (itself resolved, so that the mount's own source counts as written): a
+/// symlink leading out of it would otherwise send the creation wherever it
+/// points on the host, outside the mount the daemon resolves the same path
+/// in (ratect#703). `None`, too, when the mount point already exists, or
+/// when something on the way can't be resolved — a dangling symlink, a loop,
+/// a directory the host user can't search — since the daemon, running as
+/// root, may see what this process can't.
+///
+/// That agrees with the daemon for a relative link that stays below
+/// `parent_source`. The daemon resolves an absolute link, or one climbing
+/// above the mount, against the container's own filesystem instead, so for
+/// one that still lands inside `parent_source` on the host, the entry created
+/// here is one nothing mounts over: a stray, but inside the mount, never
+/// outside it. Matching the daemon exactly would mean modelling its
+/// in-container resolution.
+///
+/// The path returned is fully resolved, so only components that were missing
+/// when it was checked are left to create.
+fn missing_mount_point(parent_source: &Path, relative: &[String]) -> Option<PathBuf> {
+    let root = parent_source.canonicalize().ok()?;
+    let mut resolved = root.clone();
+    for (index, segment) in relative.iter().enumerate() {
+        let next = resolved.join(segment);
+        match fs::symlink_metadata(&next) {
+            Ok(_) if index + 1 == relative.len() => return None,
+            Ok(_) => {
+                let real = next.canonicalize().ok()?;
+                if !real.starts_with(&root) || !real.is_dir() {
+                    return None;
+                }
+                resolved = real;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Some(
+                    relative[index..]
+                        .iter()
+                        .fold(resolved, |path, segment| path.join(segment)),
+                );
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// `path`'s segments once cleaned, as Docker cleans a mount's destination —
+/// so `/code/` and `/code` are the same mount point (as in Batect's
+/// `splitToPathSegments`), and `/code/../scratch` is `/scratch`, not a path
+/// inside `/code` (where Batect would say it is).
+fn container_path_segments(path: &str) -> Vec<String> {
+    use path_clean::PathClean;
+    Path::new(path)
+        .clean()
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(segment) => Some(segment.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Docker Desktop injects a few paths into its own Linux VM that don't
+/// exist on the host at all — most notably the SSH agent socket at
+/// `/run/host-services/ssh-auth.sock`. `mkdir -p` on one fails (there's no
+/// `/run` on a macOS host to create under), so they're skipped and left for
+/// Docker to provide. Component-wise prefix match, so
+/// `/run/host-services-something` isn't caught. Ported from Batect's own
+/// `isSpecialDockerDesktopPath`.
+fn is_special_docker_desktop_path(path: &Path) -> bool {
+    path.starts_with("/run/host-services") || path.starts_with("/run/guest-services")
 }
 
 /// Abstracts the container operations the task engine needs, so tests can
@@ -2541,14 +2713,17 @@ impl DockerClient {
     /// in at creation: its stdout/stderr attached and its stdin flags
     /// (`stdin_flags`), neither of which a dependency sets. Fails without
     /// touching the daemon when the spec can't be turned into a request (an
-    /// untokenizable `command`/`entrypoint`), or when a host directory a
-    /// user-mapped bind mount needs can't be created
+    /// untokenizable `command`/`entrypoint`), or when something a container
+    /// running as the host user needs on the host can't be created
     /// (`ensure_host_volume_directories_exist`).
     fn container_config(&self, spec: &ContainerSpec) -> Result<Config> {
         let shared = &spec.shared;
         let options = &shared.options;
-        if shared.user_mapping.is_some() {
-            ensure_host_volume_directories_exist(shared.volumes.as_ref())?;
+        if shared.runs_as_host_user {
+            ensure_host_volume_directories_exist(
+                shared.volumes.as_deref().unwrap_or_default(),
+                options.tmpfs.as_deref().unwrap_or_default(),
+            )?;
         }
         let cmd = build_cmd(shared.command.as_deref(), &spec.additional_args)?;
         let entrypoint = options
@@ -2562,7 +2737,10 @@ impl DockerClient {
         let stdin = stdin_flags(interactive, use_tty);
 
         let host_config = HostConfig {
-            binds: shared.volumes.clone(),
+            binds: shared
+                .volumes
+                .as_ref()
+                .map(|binds| binds.iter().map(BindMount::to_bind_string).collect()),
             extra_hosts: build_extra_hosts(
                 shared.network_options.additional_hosts.as_ref(),
                 shared.network_options.proxy_host_gateway,

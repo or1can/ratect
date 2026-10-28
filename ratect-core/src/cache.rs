@@ -62,6 +62,7 @@
 //! `VolumeStore`.
 
 use crate::config::{CacheScope, CacheVolumeMount};
+use crate::container_spec::{BindMount, BindSource};
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs;
@@ -248,13 +249,11 @@ pub fn shared_cache_root() -> Result<PathBuf> {
         .join("caches"))
 }
 
-/// Resolves `mount` to a Docker bind-mount string (`"source:container[:options]"`,
-/// the same shape `docker.rs`'s `HostConfig.binds` already expects) —
-/// `source` is a bare Docker volume name under `CacheType::Volume` (Docker
-/// itself auto-creates a named volume on first use), or an absolute host
-/// directory under `.batect/caches/<name>/` under `CacheType::Directory`
-/// (created here if missing, matching Batect's own
-/// `Files.createDirectories`).
+/// Resolves `mount` to a [`BindMount`] — its source a bare Docker volume
+/// name under `CacheType::Volume` (Docker itself auto-creates a named volume
+/// on first use), or an absolute host directory under
+/// `.batect/caches/<name>/` under `CacheType::Directory` (created here if
+/// missing, matching Batect's own `Files.createDirectories`).
 ///
 /// `project_cache_key` is called only for a project-scoped mount under
 /// `CacheType::Volume`, the one source named after the key: Batect reads
@@ -265,11 +264,13 @@ pub fn resolve_cache_mount(
     options: &CacheOptions,
     project_cache_key: impl FnOnce() -> Result<String>,
     mount: &CacheVolumeMount,
-) -> Result<String> {
+) -> Result<BindMount> {
     let shared = mount.scope() == crate::config::CacheScope::Shared;
     let source = match options.cache_type {
-        CacheType::Volume if shared => shared_cache_volume_name(&mount.name),
-        CacheType::Volume => cache_volume_name(&project_cache_key()?, &mount.name),
+        CacheType::Volume if shared => BindSource::Volume(shared_cache_volume_name(&mount.name)),
+        CacheType::Volume => {
+            BindSource::Volume(cache_volume_name(&project_cache_key()?, &mount.name))
+        }
         CacheType::Directory => {
             let dir = if shared {
                 shared_cache_directory(&mount.name)?
@@ -278,13 +279,14 @@ pub fn resolve_cache_mount(
             };
             fs::create_dir_all(&dir)
                 .with_context(|| format!("Failed to create cache directory {dir:?}"))?;
-            dir.display().to_string()
+            BindSource::Host(dir.display().to_string())
         }
     };
 
-    Ok(match &mount.options {
-        Some(mount_options) => format!("{source}:{}:{mount_options}", mount.container),
-        None => format!("{source}:{}", mount.container),
+    Ok(BindMount {
+        source,
+        container: mount.container.clone(),
+        options: mount.options.clone(),
     })
 }
 

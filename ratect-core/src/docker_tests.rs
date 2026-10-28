@@ -2562,14 +2562,87 @@ fn owned_directory_parent_is_root_for_a_top_level_home_directory() {
     assert_eq!(owned_directory_parent("/ratect"), "/");
 }
 
+/// A trailing `/` names the same directory, as Batect's
+/// `splitToPathSegments` trims it: a home or cache path's leaf is uploaded
+/// unchanged, owned as any other.
+#[test]
+fn build_owned_directory_tar_ignores_a_trailing_slash() {
+    for (path, leaf) in [
+        ("/home/some-user/", "some-user/"),
+        ("/caches/first-cache/", "first-cache/"),
+    ] {
+        let tar_bytes = build_owned_directory_tar(path, 123, 456).unwrap();
+        let mut archive = tar::Archive::new(tar_bytes.as_slice());
+        let mut entries = archive.entries().unwrap().map(|e| e.unwrap());
+        let entry = entries.next().unwrap();
+
+        assert_eq!(entry.path().unwrap().to_string_lossy(), leaf);
+        assert_eq!(entry.header().entry_type(), tar::EntryType::Directory);
+        assert_eq!(entry.header().uid().unwrap(), 123);
+        assert_eq!(entry.header().gid().unwrap(), 456);
+        assert_eq!(entry.header().mode().unwrap(), 0o755);
+        assert!(entries.next().is_none());
+    }
+}
+
+/// The parent a trailing-slash path's leaf is uploaded into, as Batect's
+/// `splitToPathSegments` gives it.
+#[test]
+fn owned_directory_parent_ignores_a_trailing_slash() {
+    assert_eq!(owned_directory_parent("/home/some-user/"), "/home");
+    assert_eq!(owned_directory_parent("/caches/first-cache/"), "/caches");
+}
+
+/// A root host user is passed through as `0:0`, as in Batect's
+/// `uploadDirectory`/`determineUserAndGroup`: its directories are owned by
+/// `0:0`, still mode `0755`, and the container runs as `0:0`.
+#[tokio::test]
+async fn a_root_host_user_owns_its_directories_and_runs_the_container_as_root() {
+    let tar_bytes = build_owned_directory_tar("/home/root", 0, 0).unwrap();
+    let mut archive = tar::Archive::new(tar_bytes.as_slice());
+    let entry = archive.entries().unwrap().next().unwrap().unwrap();
+    assert_eq!(entry.header().uid().unwrap(), 0);
+    assert_eq!(entry.header().gid().unwrap(), 0);
+    assert_eq!(entry.header().mode().unwrap(), 0o755);
+
+    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let mut spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+    let mut mapping = user_mapping_fixture();
+    mapping.user.uid = 0;
+    mapping.user.gid = 0;
+    spec.shared.user_mapping = Some(mapping);
+    let config = client.container_config(&spec).unwrap();
+    assert_eq!(config.user.as_deref(), Some("0:0"));
+}
+
+/// A `local` (or directory-type `cache`) mount of `source` at `container`.
+fn host_bind(source: &Path, container: &str) -> BindMount {
+    BindMount {
+        source: BindSource::Host(source.display().to_string()),
+        container: container.to_string(),
+        options: None,
+    }
+}
+
+/// A named-volume `cache` mount at `container`.
+fn volume_bind(name: &str, container: &str) -> BindMount {
+    BindMount {
+        source: BindSource::Volume(name.to_string()),
+        container: container.to_string(),
+        options: None,
+    }
+}
+
 #[test]
 fn ensure_host_volume_directories_exist_creates_a_missing_directory() {
     let dir = unique_temp_dir();
     let host_path = dir.join("missing");
-    let volumes = vec![format!("{}:/code", host_path.display())];
 
     assert!(!host_path.exists());
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&[host_bind(&host_path, "/code")], &[]).unwrap();
     assert!(host_path.is_dir());
 
     fs::remove_dir_all(&dir).unwrap();
@@ -2578,9 +2651,8 @@ fn ensure_host_volume_directories_exist_creates_a_missing_directory() {
 #[test]
 fn ensure_host_volume_directories_exist_leaves_an_existing_directory_alone() {
     let dir = unique_temp_dir();
-    let volumes = vec![format!("{}:/code", dir.display())];
 
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&[host_bind(&dir, "/code")], &[]).unwrap();
     assert!(dir.is_dir());
 
     fs::remove_dir_all(&dir).unwrap();
@@ -2588,21 +2660,20 @@ fn ensure_host_volume_directories_exist_leaves_an_existing_directory_alone() {
 
 #[test]
 fn ensure_host_volume_directories_exist_does_nothing_when_there_are_no_volumes() {
-    ensure_host_volume_directories_exist(None).unwrap();
+    ensure_host_volume_directories_exist(&[], &[]).unwrap();
 }
 
 #[test]
 fn ensure_host_volume_directories_exist_skips_a_named_docker_volume() {
     // A `cache` mount under `CacheType::Volume` resolves to a bare
-    // volume name (non-absolute), not a host path — this must not be
-    // `mkdir -p`'d relative to the current directory. Deliberately
-    // doesn't mutate the process's real current directory to prove
-    // this (unsafe under `cargo test`'s default parallel execution —
-    // other tests, e.g. in config.rs, read the real current directory
-    // too); instead uses a name specific enough that no other test
-    // could plausibly create a same-named directory in the real
-    // current directory, and cleans it up regardless in case a
-    // regression here ever did create it.
+    // volume name, not a host path — this must not be `mkdir -p`'d
+    // relative to the current directory. Deliberately doesn't mutate the
+    // process's real current directory to prove this (unsafe under `cargo
+    // test`'s default parallel execution — other tests, e.g. in
+    // config.rs, read the real current directory too); instead uses a
+    // name specific enough that no other test could plausibly create a
+    // same-named directory in the real current directory, and cleans it
+    // up regardless in case a regression here ever did create it.
     let unlikely_relative_name =
         "ratect-test-ensure-host-volume-directories-exist-skips-a-named-docker-volume";
     let would_be_created_here = std::env::current_dir()
@@ -2610,8 +2681,11 @@ fn ensure_host_volume_directories_exist_skips_a_named_docker_volume() {
         .join(unlikely_relative_name);
     assert!(!would_be_created_here.exists());
 
-    let volumes = vec![format!("{unlikely_relative_name}:/root/.gradle")];
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(
+        &[volume_bind(unlikely_relative_name, "/root/.gradle")],
+        &[],
+    )
+    .unwrap();
 
     let created = would_be_created_here.exists();
     if created {
@@ -2630,9 +2704,9 @@ fn ensure_host_volume_directories_exist_leaves_an_existing_file_alone() {
     fs::create_dir_all(&dir).unwrap();
     let host_path = dir.join("gitconfig");
     fs::write(&host_path, "[user]\n  name = someone\n").unwrap();
-    let volumes = vec![format!("{}:/root/.gitconfig", host_path.display())];
 
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&[host_bind(&host_path, "/root/.gitconfig")], &[])
+        .unwrap();
 
     assert!(host_path.is_file(), "the file must be left untouched");
 
@@ -2646,13 +2720,635 @@ fn ensure_host_volume_directories_exist_leaves_an_existing_file_alone() {
 /// created. See Batect's `isSpecialDockerDesktopPath`.
 #[test]
 fn ensure_host_volume_directories_exist_skips_special_docker_desktop_paths() {
-    let volumes = vec![
-        "/run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock".to_string(),
-        "/run/guest-services/something:/something".to_string(),
+    let binds = [
+        host_bind(
+            Path::new("/run/host-services/ssh-auth.sock"),
+            "/run/host-services/ssh-auth.sock",
+        ),
+        host_bind(Path::new("/run/guest-services/something"), "/something"),
     ];
 
     // The bug was this returning an error; that it's `Ok` is the fix.
-    ensure_host_volume_directories_exist(Some(&volumes)).unwrap();
+    ensure_host_volume_directories_exist(&binds, &[]).unwrap();
+}
+
+/// A host path can contain `:` (an object-form `local`, or `.` under a
+/// project directory like `my:proj`); the whole path is what's created,
+/// never the text before its first `:` (ratect#452).
+#[test]
+fn ensure_host_volume_directories_exist_creates_a_host_path_containing_a_colon_whole() {
+    let dir = unique_temp_dir();
+    let host_path = dir.join("a:b");
+
+    ensure_host_volume_directories_exist(&[host_bind(&host_path, "/code")], &[]).unwrap();
+
+    assert!(host_path.is_dir());
+    assert!(
+        !dir.join("a").exists(),
+        "the prefix before ':' must not be created"
+    );
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A host mount inside another host mount's container path has its mount
+/// point created inside the outer host path, as the current user — not left
+/// for the daemon to create as root in the user's project (ratect#321).
+#[test]
+fn ensure_host_volume_directories_exist_creates_a_nested_host_mount_point() {
+    let dir = unique_temp_dir();
+    let (outer, inner) = (dir.join("outer"), dir.join("inner"));
+
+    ensure_host_volume_directories_exist(
+        &[host_bind(&outer, "/code"), host_bind(&inner, "/code/path")],
+        &[],
+    )
+    .unwrap();
+
+    assert!(outer.is_dir());
+    assert!(inner.is_dir());
+    assert!(outer.join("path").is_dir());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ensure_host_volume_directories_exist_creates_a_nested_volume_mount_point() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            volume_bind("some-volume", "/code/path"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert!(local.join("path").is_dir());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ensure_host_volume_directories_exist_creates_a_nested_tmpfs_mount_point() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[host_bind(&local, "/code")],
+        &[("/code/path".to_string(), String::new())],
+    )
+    .unwrap();
+
+    assert!(local.join("path").is_dir());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ensure_host_volume_directories_exist_creates_every_intermediate_directory_of_a_deep_mount_point()
+{
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            volume_bind("some-volume", "/code/path/to/volume"),
+        ],
+        &[("/code/path/to/tmpfs".to_string(), String::new())],
+    )
+    .unwrap();
+
+    assert!(local.join("path/to/volume").is_dir());
+    assert!(local.join("path/to/tmpfs").is_dir());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The mount point goes in the *closest* enclosing mount — the longest
+/// container-path prefix — so a volume under two nested host mounts lands
+/// in the inner one's host path, not the outer one's.
+#[test]
+fn ensure_host_volume_directories_exist_creates_a_mount_point_in_the_closest_host_mount() {
+    let dir = unique_temp_dir();
+    let (outer, inner) = (dir.join("outer"), dir.join("inner"));
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&outer, "/code"),
+            host_bind(&inner, "/code/path"),
+            volume_bind("some-volume", "/code/path/to/volume"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert!(outer.join("path").is_dir());
+    assert!(inner.join("to/volume").is_dir());
+    assert!(!outer.join("path/to").exists());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Only a host mount gets anything created in it: a volume inside a
+/// volume inside a host mount creates the outer volume's mount point and
+/// nothing for the inner one, which is the outer volume's to hold.
+#[test]
+fn ensure_host_volume_directories_exist_creates_nothing_for_a_mount_whose_closest_parent_is_a_volume(
+) {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            volume_bind("volume-1", "/code/volume-1"),
+            volume_bind("volume-2", "/code/volume-1/volume-2"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert!(local.join("volume-1").is_dir());
+    assert!(!local.join("volume-1/volume-2").exists());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ensure_host_volume_directories_exist_uses_a_host_mount_nested_in_a_volume_as_the_closest_parent()
+{
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[
+            volume_bind("volume-1", "/code"),
+            host_bind(&local, "/code/path"),
+            volume_bind("volume-2", "/code/path/volume-2"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_dir(&local)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        vec![std::ffi::OsString::from("volume-2")]
+    );
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn ensure_host_volume_directories_exist_creates_nothing_inside_a_host_mount_with_no_nested_mounts()
+{
+    let dir = unique_temp_dir();
+    let (inside_volume, beside_volume) = (dir.join("inside-volume"), dir.join("beside-volume"));
+
+    ensure_host_volume_directories_exist(
+        &[
+            volume_bind("volume-1", "/volume"),
+            host_bind(&inside_volume, "/volume/code"),
+            host_bind(&beside_volume, "/code"),
+        ],
+        &[("/tmp".to_string(), String::new())],
+    )
+    .unwrap();
+
+    assert_eq!(fs::read_dir(&inside_volume).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&beside_volume).unwrap().count(), 0);
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Container paths are compared segment by segment, trailing `/` aside, so
+/// `/code/` encloses `/code/path` and `/codebase` isn't inside `/code`.
+#[test]
+fn ensure_host_volume_directories_exist_compares_container_paths_by_segment() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code/"),
+            volume_bind("volume-1", "/code/path/"),
+            volume_bind("volume-2", "/codebase"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_dir(&local)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        vec![std::ffi::OsString::from("path")]
+    );
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A file or socket bind-mounted inside a host mount — `./config.json` over
+/// `/code/config.json` — gets an empty regular file at its mount point, with
+/// the directories above it: Linux binds a non-directory onto a file, so a
+/// directory there (Batect's) would fail the container at start.
+#[test]
+fn ensure_host_volume_directories_exist_creates_a_file_at_a_nested_file_or_socket_mount_point() {
+    let mut scratch = ScratchPaths::new();
+    let local = scratch.directory.join("local");
+    let file = scratch.file("config.json");
+    let socket_path = scratch.socket("agent.sock");
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            host_bind(&file, "/code/nested/config.json"),
+            host_bind(&socket_path, "/code/agent.sock"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    for mount_point in [local.join("nested/config.json"), local.join("agent.sock")] {
+        let metadata = fs::symlink_metadata(&mount_point).unwrap();
+        assert!(metadata.is_file(), "{mount_point:?} is not a regular file");
+        assert_eq!(metadata.len(), 0);
+    }
+
+    fs::remove_dir_all(&scratch.directory).unwrap();
+}
+
+/// A Docker Desktop special path's type can't be known on the host — it
+/// doesn't exist there — so nothing is created for one nested in a host
+/// mount; the daemon provides it.
+#[test]
+fn ensure_host_volume_directories_exist_creates_nothing_for_a_nested_special_docker_desktop_path() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            host_bind(
+                Path::new("/run/host-services/ssh-auth.sock"),
+                "/code/ssh-auth.sock",
+            ),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(fs::read_dir(&local).unwrap().count(), 0);
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// An existing mount point is never touched, whatever its type and whatever
+/// the mount's source — a type mismatch is left for Docker to report.
+#[test]
+fn ensure_host_volume_directories_exist_leaves_an_existing_mount_point_of_either_type_alone() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+    fs::create_dir_all(local.join("a-directory")).unwrap();
+    fs::write(local.join("a-directory/kept"), "kept").unwrap();
+    fs::write(local.join("a-file"), "kept").unwrap();
+    let file = dir.join("config.json");
+    fs::write(&file, "{}").unwrap();
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            host_bind(&file, "/code/a-directory"),
+            volume_bind("some-volume", "/code/a-file"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(local.join("a-directory/kept")).unwrap(),
+        "kept"
+    );
+    assert_eq!(fs::read_to_string(local.join("a-file")).unwrap(), "kept");
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Three host mounts nested in one another: each mount point goes in the
+/// one directly enclosing it, never further out.
+#[test]
+fn ensure_host_volume_directories_exist_uses_the_closest_of_three_nested_host_mounts() {
+    let dir = unique_temp_dir();
+    let (first, second, third) = (dir.join("first"), dir.join("second"), dir.join("third"));
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&first, "/code"),
+            host_bind(&second, "/code/a"),
+            host_bind(&third, "/code/a/b"),
+            volume_bind("some-volume", "/code/a/b/c"),
+        ],
+        &[],
+    )
+    .unwrap();
+
+    assert!(first.join("a").is_dir());
+    assert!(second.join("b").is_dir());
+    assert!(third.join("c").is_dir());
+    assert!(!first.join("a/b").exists());
+    assert!(!second.join("b/c").exists());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Container paths are compared as Docker cleans them, so a `..` can't
+/// carry a mount point out of the host mount it appears to be under.
+#[test]
+fn ensure_host_volume_directories_exist_compares_container_paths_as_cleaned() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+
+    ensure_host_volume_directories_exist(
+        &[host_bind(&local, "/code")],
+        &[
+            ("/code/../scratch".to_string(), String::new()),
+            ("/code/./a/../b".to_string(), String::new()),
+        ],
+    )
+    .unwrap();
+
+    assert!(!dir.join("scratch").exists());
+    assert_eq!(
+        fs::read_dir(&local)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        vec![std::ffi::OsString::from("b")]
+    );
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A dangling symlink at a mount point is something already there, left for
+/// Docker like any other existing entry, not a missing path to create.
+#[test]
+fn ensure_host_volume_directories_exist_leaves_a_dangling_symlink_mount_point_alone() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+    fs::create_dir_all(&local).unwrap();
+    std::os::unix::fs::symlink(dir.join("nowhere"), local.join("tmp")).unwrap();
+
+    ensure_host_volume_directories_exist(
+        &[host_bind(&local, "/code")],
+        &[("/code/tmp".to_string(), String::new())],
+    )
+    .unwrap();
+
+    assert!(fs::symlink_metadata(local.join("tmp"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A symlink leading out of a host mount's source, or nowhere, isn't
+/// followed to a mount point: it's left for the daemon, which resolves it
+/// inside the container, rather than created wherever the link points on the
+/// host — possibly outside the project (ratect#703).
+#[test]
+fn ensure_host_volume_directories_exist_follows_no_symlink_out_of_the_host_mount() {
+    let dir = unique_temp_dir();
+    let (local, outside) = (dir.join("local"), dir.join("outside"));
+    fs::create_dir_all(&local).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, local.join("build")).unwrap();
+    std::os::unix::fs::symlink(dir.join("nowhere"), local.join("dangling")).unwrap();
+    let file = dir.join("config.json");
+    fs::write(&file, "{}").unwrap();
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            host_bind(&file, "/code/build/config.json"),
+            volume_bind("some-volume", "/code/dangling/volume"),
+        ],
+        &[("/code/build/deep/scratch".to_string(), String::new())],
+    )
+    .unwrap();
+
+    assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    assert!(!dir.join("nowhere").exists());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A relative symlink that stays inside the host mount's source leads the
+/// daemon to the same place it leads the host, so it is followed: the mount
+/// point is created where the link leads, as the host user, rather than left
+/// for the daemon to create as root.
+#[test]
+fn ensure_host_volume_directories_exist_follows_a_symlink_that_stays_inside_the_host_mount() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+    fs::create_dir_all(local.join("target")).unwrap();
+    std::os::unix::fs::symlink("target", local.join("build")).unwrap();
+
+    ensure_host_volume_directories_exist(
+        &[host_bind(&local, "/code")],
+        &[("/code/build/scratch".to_string(), String::new())],
+    )
+    .unwrap();
+
+    assert!(local.join("target/scratch").is_dir());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// What the host user can't see into is the daemon's to resolve, as root: it
+/// fails no run here.
+#[test]
+fn ensure_host_volume_directories_exist_leaves_a_mount_point_it_cant_see_to_the_daemon() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+    let sealed = local.join("sealed");
+    fs::create_dir_all(sealed.join("inside")).unwrap();
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root sees through any mode, so there is nothing to test as root.
+    let sees_through = fs::read_dir(&sealed).is_ok();
+
+    let result = ensure_host_volume_directories_exist(
+        &[host_bind(&local, "/code")],
+        &[("/code/sealed/inside/scratch".to_string(), String::new())],
+    );
+
+    fs::set_permissions(&sealed, fs::Permissions::from_mode(0o755)).unwrap();
+    if !sees_through {
+        result.unwrap();
+        assert!(!sealed.join("inside/scratch").exists());
+    }
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A directory the host user can search but not write — a root-owned one a
+/// run before ratect#321 left behind — is the daemon's to create in, as
+/// root: it fails no run here.
+#[test]
+fn ensure_host_volume_directories_exist_leaves_a_mount_point_it_cant_create_to_the_daemon() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+    let read_only = local.join("build");
+    fs::create_dir_all(&read_only).unwrap();
+    fs::write(dir.join("config.json"), "{}").unwrap();
+    fs::set_permissions(&read_only, fs::Permissions::from_mode(0o555)).unwrap();
+    // Root writes through any mode, so there is nothing to test as root.
+    let writes_through = fs::create_dir(read_only.join("probe")).is_ok();
+
+    let result = ensure_host_volume_directories_exist(
+        &[
+            host_bind(&local, "/code"),
+            host_bind(&dir.join("config.json"), "/code/build/config.json"),
+        ],
+        &[("/code/build/deep/scratch".to_string(), String::new())],
+    );
+
+    fs::set_permissions(&read_only, fs::Permissions::from_mode(0o755)).unwrap();
+    if !writes_through {
+        result.unwrap();
+        assert_eq!(fs::read_dir(&read_only).unwrap().count(), 0);
+    }
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// An existing non-directory part-way to a mount point has nothing to create
+/// inside, so the mount point is left for Docker to report rather than
+/// failing the run here.
+#[test]
+fn ensure_host_volume_directories_exist_creates_nothing_past_an_existing_file() {
+    let dir = unique_temp_dir();
+    let local = dir.join("local");
+    fs::create_dir_all(&local).unwrap();
+    fs::write(local.join("tmp"), "a file").unwrap();
+
+    ensure_host_volume_directories_exist(
+        &[host_bind(&local, "/code")],
+        &[("/code/tmp/scratch".to_string(), String::new())],
+    )
+    .unwrap();
+
+    assert_eq!(fs::read_to_string(local.join("tmp")).unwrap(), "a file");
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A host mount that isn't a directory — a file, a socket, or a Docker
+/// Desktop special path that doesn't exist on the host — has nowhere to put
+/// a mount point, so nothing is created for one nested under it.
+#[test]
+fn ensure_host_volume_directories_exist_creates_nothing_under_a_host_mount_that_isnt_a_directory() {
+    let dir = unique_temp_dir();
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("config.json");
+    fs::write(&file, "{}").unwrap();
+
+    ensure_host_volume_directories_exist(
+        &[
+            host_bind(&file, "/config"),
+            host_bind(Path::new("/run/host-services/ssh-auth.sock"), "/ssh"),
+        ],
+        &[
+            ("/config/x".to_string(), String::new()),
+            ("/ssh/x".to_string(), String::new()),
+        ],
+    )
+    .unwrap();
+
+    assert!(file.is_file());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A `cache` under `--cache-type=directory`, in a project directory whose
+/// path contains `:`, is still only created at its full path — the route
+/// to the stray `:`-prefix ratect#452's triage found besides `local`.
+#[test]
+fn a_directory_cache_in_a_project_path_containing_a_colon_creates_no_stray_prefix() {
+    let dir = unique_temp_dir();
+    let project = dir.join("my:proj");
+    let options = crate::cache::CacheOptions {
+        cache_type: crate::cache::CacheType::Directory,
+        project_directory: project.clone(),
+    };
+    let mount = crate::config::CacheVolumeMount {
+        name: "gradle-cache".to_string(),
+        container: "/root/.gradle".to_string(),
+        options: None,
+        scope: Default::default(),
+    };
+
+    let bind =
+        crate::cache::resolve_cache_mount(&options, || Ok("key".to_string()), &mount).unwrap();
+    ensure_host_volume_directories_exist(&[bind], &[]).unwrap();
+
+    assert!(crate::cache::cache_directory(&project)
+        .join("gradle-cache")
+        .is_dir());
+    assert!(!dir.join("my").exists());
+
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Component-wise, as Java's `Path.startsWith` is in Batect's own
+/// `isSpecialDockerDesktopPath`.
+#[test]
+fn only_paths_under_docker_desktops_own_directories_are_special() {
+    assert!(is_special_docker_desktop_path(Path::new(
+        "/run/host-services/ssh-auth.sock"
+    )));
+    assert!(is_special_docker_desktop_path(Path::new(
+        "/run/guest-services/something"
+    )));
+    assert!(!is_special_docker_desktop_path(Path::new(
+        "/run/host-services-not/something"
+    )));
+    assert!(!is_special_docker_desktop_path(Path::new(
+        "/run/guest-services-not/something"
+    )));
+}
+
+/// Pre-creation is for a container running as the host user only:
+/// otherwise a missing host path is left for Docker, as Batect's early
+/// return leaves it.
+#[tokio::test]
+async fn container_config_creates_host_directories_only_for_a_container_running_as_the_host_user() {
+    let dir = unique_temp_dir();
+    let missing = dir.join("missing");
+    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let mut spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+    spec.shared.volumes = Some(vec![host_bind(&missing, "/code")]);
+
+    client.container_config(&spec).unwrap();
+    assert!(!missing.exists());
+
+    spec.shared.runs_as_host_user = true;
+    client.container_config(&spec).unwrap();
+    assert!(missing.is_dir());
+
+    fs::remove_dir_all(&dir).unwrap();
 }
 
 fn build_spec_with(

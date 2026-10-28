@@ -6653,6 +6653,142 @@ tasks:
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 ///
+/// Under `run_as_current_user`, the mount points nested inside a `local`
+/// mount — a file, a directory and a `tmpfs` under `.` at `/code` — are
+/// created in the project by Ratect, as the host user, with the type each
+/// source needs: the nested file mount works (the task reads it), and every
+/// mount point left in the project is the host user's, not root's
+/// (ratect#321). Only a rootful Linux daemon would leave them root-owned
+/// otherwise, so that is where the ownership assertion proves anything —
+/// Docker Desktop and OrbStack map ownership to the host user regardless.
+/// Run twice: the second run meets every mount point already there and must
+/// leave it as it is. Writes its own temporary project, since the run
+/// creates state inside it.
+#[test]
+#[ignore]
+fn run_as_current_user_creates_nested_mount_points_as_the_host_user() {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let test_id = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let scratch_dir = std::env::temp_dir().join(format!("ratect-nested-mounts-test-{test_id}"));
+    /// Removes the scratch project however the test ends.
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveOnDrop(scratch_dir.clone());
+    let project = scratch_dir.join("project");
+    let sources = scratch_dir.join("sources");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(sources.join("directory")).unwrap();
+    std::fs::write(sources.join("file.txt"), "nested-file-ok").unwrap();
+    std::fs::write(
+        project.join("batect.yml"),
+        r#"
+project_name: ratect-nested-mounts-test
+containers:
+  app:
+    image: alpine:3.18.2
+    volumes:
+      - local: .
+        container: /code
+      - local: ../sources/file.txt
+        container: /code/config/file.txt
+      - local: ../sources/directory
+        container: /code/nested/directory
+      - type: tmpfs
+        container: /code/tmp/scratch
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/container-user
+tasks:
+  check:
+    run:
+      container: app
+      command: cat /code/config/file.txt
+"#,
+    )
+    .unwrap();
+
+    let host_uid: u32 = String::from_utf8(
+        Command::new("id")
+            .arg("-u")
+            .output()
+            .expect("failed to run id -u")
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .parse()
+    .unwrap();
+
+    let mut first_run_inodes = std::collections::HashMap::new();
+    for run in 1..=2 {
+        let output = ratect_command()
+            .current_dir(&project)
+            .arg("check")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            task_output(&stdout, "app"),
+            "nested-file-ok",
+            "run {run}: the nested file mount should be readable:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+
+        use std::os::unix::fs::MetadataExt;
+        for (mount_point, is_file) in [
+            ("config", false),
+            ("config/file.txt", true),
+            ("nested", false),
+            ("nested/directory", false),
+            ("tmp", false),
+            ("tmp/scratch", false),
+        ] {
+            let metadata = std::fs::symlink_metadata(project.join(mount_point))
+                .unwrap_or_else(|e| panic!("run {run}: {mount_point}: {e}"));
+            assert_eq!(
+                metadata.is_file(),
+                is_file,
+                "run {run}: {mount_point} has the wrong type"
+            );
+            assert_eq!(
+                metadata.uid(),
+                host_uid,
+                "run {run}: {mount_point} should be the host user's, not root's"
+            );
+            if is_file {
+                assert_eq!(
+                    metadata.len(),
+                    0,
+                    "run {run}: {mount_point} should be empty"
+                );
+            }
+            let first_inode = *first_run_inodes
+                .entry(mount_point)
+                .or_insert(metadata.ino());
+            assert_eq!(
+                metadata.ino(),
+                first_inode,
+                "run {run}: {mount_point} should be the entry the first run created"
+            );
+        }
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
 /// Mounting Docker Desktop's SSH-agent socket under `run_as_current_user`
 /// — see `tests/fixtures/ssh-agent-socket.yml` for what makes the mount
 /// path special and why the pre-creation step must skip it. A static
