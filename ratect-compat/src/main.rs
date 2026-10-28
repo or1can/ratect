@@ -35,7 +35,6 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -557,16 +556,32 @@ fn parse_tag_image(s: &str) -> std::result::Result<(String, String), String> {
     Ok((container, tag))
 }
 
-/// `log_file`, when given (`--log-file`), tees the same log output into
-/// that file *in addition to* stderr — matching Batect's own `--log-file`
-/// content, though not its silent-by-default behavior (Ratect always logs
-/// to stderr regardless; Batect's own default with no `--log-file` is a
-/// `NullLogSink`, nothing anywhere). `stderr_color` is stderr's own colour
-/// decision (a terminal, and no `--no-color`/`NO_COLOR`), the same one every
-/// other line on stderr follows (decisions/0017; ratect#479).
+/// Logs to stderr, filtered by `RUST_LOG` (default `info`), in colour when
+/// `stderr_color` — stderr's own colour decision (a terminal, and no
+/// `--no-color`/`NO_COLOR`), the same one every other line on stderr
+/// follows (decisions/0017; ratect#479).
+///
+/// `log_file`, when given (`--log-file`), gets the same records as a
+/// debugging artifact of its own: plain text, one record per line, never
+/// coloured, filtered by `RUST_LOG` when that is set and otherwise at
+/// `debug` for Ratect's own targets, so a run with no `RUST_LOG` still
+/// leaves something to read — including why it failed, which `main`
+/// records at `debug` (ratect#326). Other crates stay at `info` there:
+/// bollard's `debug` records carry each request's body, a container's
+/// environment included, and a file is kept and shared in a way a terminal
+/// isn't, so writing those takes asking for them.
+/// The records are Ratect's own, not Batect's JSON ones; Batect's default
+/// with no `--log-file` is a `NullLogSink`, nothing anywhere, where Ratect
+/// always logs to stderr.
 fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let writer = match log_file {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::Layer;
+
+    let filter_or = |default: &str| {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
+    };
+    let file = match log_file {
         Some(path) => {
             // The checks on the value itself (decisions/0016): a log file is
             // created, so only its directory has to exist already, and be
@@ -594,26 +609,29 @@ fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
                     .into());
                 }
             }
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .with_context(|| format!("Failed to open log file '{}'", path.display()))?;
-            tracing_subscriber::fmt::writer::BoxMakeWriter::new(
-                std::io::stderr.and(std::sync::Mutex::new(file)),
+            Some(
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                    .with_context(|| format!("Failed to open log file '{}'", path.display()))?,
             )
         }
-        None => tracing_subscriber::fmt::writer::BoxMakeWriter::new(std::io::stderr),
+        None => None,
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        // ANSI color codes have no business ending up in a log *file* meant
-        // for later grepping/processing, but this builder has no
-        // per-writer ANSI control, so it's an all-or-nothing choice shared
-        // with stderr's own output: with `--log-file`, stderr goes plain
-        // too, trading its colour for a greppable file.
-        .with_ansi(log_file.is_none() && stderr_color)
-        .with_writer(writer)
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_ansi(stderr_color)
+                .with_filter(filter_or("info")),
+        )
+        .with(file.map(|file| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(file))
+                .with_ansi(false)
+                .with_filter(filter_or("info,ratect_core=debug,ratect_compat=debug"))
+        }))
         .init();
     Ok(())
 }
@@ -806,6 +824,11 @@ async fn async_main() {
     let exit_code = match run(args, color_mode, &stdout, &stderr, sweep_git_include_cache).await {
         Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(err) => {
+            // Recorded for `--log-file`, which otherwise never says why the
+            // run failed — at `debug`, so stderr's default filter keeps it
+            // off the line printed below, and an event is never both
+            // printed and logged above `debug` (decisions/0017).
+            tracing::debug!("The run failed: {err:#}");
             // Printed directly to stderr, not through `tracing::error!` —
             // `RUST_LOG` can suppress that entirely (e.g. `RUST_LOG=off`,
             // or any filter that excludes `ratect`'s own target), which

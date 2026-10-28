@@ -58,9 +58,10 @@ If you do want a blanket `debug` sweep across everything (including `bollard`) b
 silence one specific dependency, add it as its own `=off` directive instead:
 `RUST_LOG=debug,bollard=off`.
 
-The same variable and syntax apply to `ratect-compat`, which can also tee
-the same output into a file with
-[`--log-file`](ratect-compat-cli.md#output).
+The same variable and syntax apply to `ratect-compat`, which can also write
+its logs to a file with [`--log-file`](ratect-compat-cli.md#output) — at
+`debug` there for Ratect's own targets unless `RUST_LOG` is set, so the file
+has something to read even when stderr was quiet.
 
 **Before pasting a `debug` log anywhere**, remember that a `setup_commands`
 exec's output is whatever the command itself printed — so if a setup
@@ -76,5 +77,6 @@ reporting](ratect-compat-cli.md#exit-codes-and-error-reporting).
 
 ## Coming from Batect?
 
-One deliberate difference in where the logs go, `--log-file` or not — listed
-under [Differences from Batect](differences-from-batect.md#cli-flags).
+Ratect's logs differ from Batect's on purpose — where they go, `--log-file`
+or not, and what `--log-file` writes — as listed under
+[Differences from Batect](differences-from-batect.md#cli-flags).

@@ -68,6 +68,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- `ratect-compat`: `--log-file` logs Ratect's own `debug` records unless `RUST_LOG` is set, including why the run failed. With `--log-file`, stderr keeps its colour.
 - Containers and the task network are created under Batect's Docker names, `<project>-<container>-<suffix>` and `<project>-network-<suffix>`, with one random six-character suffix per task run.
 - With `RUST_LOG=debug`, a run whose `-- ADDITIONAL_ARGS` replace the image's default `CMD`, because neither the task nor its container sets a `command`, logs the `CMD` replaced.
 - `ratect config convert` (ratect only) escapes each `\` in an `image`, string-form `volumes` host path or `run_as_current_user.home_directory` (`foo\bar` becomes `foo\\bar`), and each `$` and `<` too in an `image`, or when the value would otherwise be no valid expression (`img$` becomes `img\$`). A `batect.yml` uses these as written, so the converted file loads and keeps the value; a reference in a volume host path or `home_directory` is still carried across and listed.
