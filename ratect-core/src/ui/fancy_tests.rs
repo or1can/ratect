@@ -1044,3 +1044,225 @@ fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
         "The task \x1b[1mall\x1b[0m only defines prerequisite tasks, nothing more to do.\n"
     );
 }
+
+/// A `build_directory` container: no image to pull, a tag its build output
+/// is reported under.
+fn built(name: &str, tag: &str, deps: &[&str], is_task: bool) -> TaskContainerInfo {
+    TaskContainerInfo {
+        image: None,
+        build_tag: Some(tag.to_string()),
+        ..info(name, None, deps, is_task)
+    }
+}
+
+/// The text of the last `rows` rows painted — each row's whole content, with
+/// its clear-line prefix (and any cursor-up before it) stripped — so a test
+/// can assert every line of the current frame, not only the one an event
+/// was meant to change.
+fn last_frame(buffer: &SharedBuffer, rows: usize) -> Vec<String> {
+    let contents = buffer.contents();
+    let painted: Vec<&str> = contents.trim_end_matches('\n').split('\n').collect();
+    painted[painted.len() - rows..]
+        .iter()
+        .map(|row| match row.rfind("\x1b[2K") {
+            Some(at) => row[at + "\x1b[2K".len()..].to_string(),
+            None => row.to_string(),
+        })
+        .collect()
+}
+
+/// Two build containers and the task container that depends on both —
+/// alphabetical order and dependency order agree, task container last.
+fn two_builds_and_a_task() -> (FancyEventLogger, SharedBuffer) {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            built("build-a", "p-build-a", &[], false),
+            built("build-b", "p-build-b", &[], false),
+            info("task", Some("task:1"), &["build-a", "build-b"], true),
+        ],
+    });
+    (logger, buffer)
+}
+
+/// CSPLA-2, CSPLA-3, CSPLA-6: a build line is matched by its container's
+/// name when the build starts and by its tag for build output, and no other
+/// line moves.
+#[test]
+fn a_build_line_tracks_its_own_build_and_no_other() {
+    let (logger, buffer) = two_builds_and_a_task();
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "build-a: ready to build image",
+            "build-b: ready to build image",
+            "task: ready to pull image task:1",
+        ]
+    );
+
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "build-a".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "build-a: building image...",
+            "build-b: ready to build image",
+            "task: ready to pull image task:1",
+        ]
+    );
+
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-build-a".into(),
+        message: "Step 1/3 : FROM alpine".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "build-a: building image: Step 1/3 : FROM alpine",
+            "build-b: ready to build image",
+            "task: ready to pull image task:1",
+        ]
+    );
+}
+
+/// CSPLA-7, -10, -11, -16, -21, CSPLB-3, -6, -8, -10: every event about
+/// another container leaves a still-pending build line as it was.
+#[test]
+fn a_pending_build_line_ignores_every_other_containers_events() {
+    let (logger, buffer) = two_builds_and_a_task();
+    let other = || "build-b".to_string();
+    for event in [
+        TaskEvent::ImagePullStarting {
+            image: "task:1".into(),
+        },
+        TaskEvent::ImagePullCompleted {
+            image: "task:1".into(),
+        },
+        TaskEvent::ImageBuildCompleted { container: other() },
+        TaskEvent::ImageResolved { container: other() },
+        TaskEvent::DependencyStarting { container: other() },
+        TaskEvent::DependencyStarted { container: other() },
+        TaskEvent::ContainerBecameHealthy { container: other() },
+        TaskEvent::RunningSetupCommand {
+            container: other(),
+            command: "true".into(),
+            index: 1,
+            total: 1,
+            run_in: None,
+        },
+        TaskEvent::SetupCommandsCompleted { container: other() },
+    ] {
+        let description = format!("{event:?}");
+        logger.post(event);
+        assert_eq!(
+            last_frame(&buffer, 3)[0],
+            "build-a: ready to build image",
+            "after {description}"
+        );
+    }
+}
+
+/// CSPLB-14, CSPLB-2: a dependency's start, then the wait for its health.
+#[test]
+fn a_dependency_shows_its_start_then_its_health_wait() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    logger.post(TaskEvent::DependencyStarting {
+        container: "db".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "db: starting container...",
+            "app: ready to pull image app:1"
+        ]
+    );
+    logger.post(TaskEvent::DependencyStarted {
+        container: "db".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        [
+            "db: container started, waiting for it to become healthy...",
+            "app: ready to pull image app:1"
+        ]
+    );
+}
+
+/// CSPLB-11: a task container with no command configured.
+#[test]
+fn a_task_container_with_no_command_shows_a_bare_running() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    assert!(
+        buffer.contents().ends_with("\r\x1b[2Kapp: running\n\n"),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
+/// FEL-7, FEL-8: a dependency starting repaints the block and adds nothing
+/// else — no blank line, no cleanup line.
+#[test]
+fn a_dependency_starting_adds_only_one_repaint() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    let before = buffer.contents();
+    logger.post(TaskEvent::DependencyStarting {
+        container: "db".into(),
+    });
+    assert_eq!(
+        &buffer.contents()[before.len()..],
+        "\x1b[2A\
+         \r\x1b[2Kdb: starting container...\n\
+         \r\x1b[2Kapp: ready to pull image app:1\n"
+    );
+}
+
+/// CSPLB-20, CSPLB-23: a pull line is matched by its own image only.
+#[test]
+fn a_pull_line_ignores_another_images_pull() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("a-dep", Some("image-a"), &[], false),
+            info("b-dep", Some("image-c"), &[], false),
+            info("task", Some("task:1"), &["a-dep", "b-dep"], true),
+        ],
+    });
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "image-a".into(),
+    });
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "image-b".into(),
+        message: "Downloading".into(),
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "image-b".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "a-dep: pulling image image-a...",
+            "b-dep: ready to pull image image-c",
+            "task: ready to pull image task:1",
+        ]
+    );
+}
