@@ -11350,6 +11350,204 @@ async fn a_cache_volume_listed_twice_is_bound_once() {
     assert!(binds[0].ends_with(":/deps"), "{binds:?}");
 }
 
+fn cache_mount(name: &str, scope: Option<crate::config::CacheScope>) -> crate::config::VolumeMount {
+    crate::config::VolumeMount::Cache(crate::config::CacheVolumeMount {
+        name: name.to_string(),
+        container: format!("/{name}"),
+        options: None,
+        scope,
+    })
+}
+
+/// A fresh temporary project directory for the project cache key tests.
+fn cache_key_project() -> std::path::PathBuf {
+    let project = std::env::temp_dir().join(format!("ratect-cache-key-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&project).unwrap();
+    project
+}
+
+/// Runs a task whose container and its one dependency both have `volumes`,
+/// under `cache_type` with `project` as the project directory, returning
+/// the run's result and each container's binds.
+async fn run_with_cache_mounts(
+    cache_type: crate::cache::CacheType,
+    project: &std::path::Path,
+    volumes: Vec<crate::config::VolumeMount>,
+) -> (Result<()>, Option<Vec<String>>, Option<Vec<String>>) {
+    let mut app = container("alpine:3.18", Some(vec!["dependency".to_string()]));
+    app.volumes = Some(volumes.clone());
+    let mut dependency = container("alpine:3.18", None);
+    dependency.volumes = Some(volumes);
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), app);
+    containers.insert("dependency".to_string(), dependency);
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cache: Some((cache_type, project.to_path_buf())),
+            ..Default::default()
+        })
+        .unwrap();
+    let result = engine.run_task("run", &[]).await;
+    (
+        result,
+        docker.volumes_for("app"),
+        docker.volumes_for("dependency"),
+    )
+}
+
+/// Batect reads the project cache key only to name a volume, so a
+/// `--cache-type=directory` run never creates the key file (ratect#325).
+#[tokio::test]
+async fn a_directory_cache_never_creates_the_project_cache_key_file() {
+    let project = cache_key_project();
+
+    let (result, _, _) = run_with_cache_mounts(
+        crate::cache::CacheType::Directory,
+        &project,
+        vec![cache_mount("deps", None)],
+    )
+    .await;
+
+    let caches = crate::cache::cache_directory(&project);
+    let deps_is_dir = caches.join("deps").is_dir();
+    let key_exists = caches.join("key").exists();
+    std::fs::remove_dir_all(&project).ok();
+    result.unwrap();
+    assert!(deps_is_dir);
+    assert!(!key_exists);
+}
+
+/// Nor does it rewrite one it can't take a key from.
+#[tokio::test]
+async fn a_directory_cache_leaves_an_existing_key_file_untouched() {
+    let project = cache_key_project();
+    let caches = crate::cache::cache_directory(&project);
+    std::fs::create_dir_all(&caches).unwrap();
+    std::fs::write(caches.join("key"), "# only a comment\n").unwrap();
+
+    let (result, _, _) = run_with_cache_mounts(
+        crate::cache::CacheType::Directory,
+        &project,
+        vec![cache_mount("deps", None)],
+    )
+    .await;
+
+    let contents = std::fs::read_to_string(caches.join("key")).unwrap();
+    std::fs::remove_dir_all(&project).ok();
+    result.unwrap();
+    assert_eq!(contents, "# only a comment\n");
+}
+
+/// A cache named `key` is a directory where the key file would go, and
+/// with no key file written first nothing collides with it.
+#[tokio::test]
+async fn a_directory_cache_named_key_is_bound() {
+    let project = cache_key_project();
+
+    let (result, binds, _) = run_with_cache_mounts(
+        crate::cache::CacheType::Directory,
+        &project,
+        vec![cache_mount("key", None)],
+    )
+    .await;
+
+    let key_dir = crate::cache::cache_directory(&project).join("key");
+    let key_is_dir = key_dir.is_dir();
+    std::fs::remove_dir_all(&project).ok();
+    result.unwrap();
+    assert!(key_is_dir);
+    assert_eq!(binds, Some(vec![format!("{}:/key", key_dir.display())]));
+}
+
+/// The file isn't even opened, so one the run can't read doesn't fail it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_cache_ignores_an_unreadable_key_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project = cache_key_project();
+    let caches = crate::cache::cache_directory(&project);
+    std::fs::create_dir_all(&caches).unwrap();
+    let key_file = caches.join("key");
+    std::fs::write(&key_file, "abc123\n").unwrap();
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it whatever its mode says, so the case doesn't exist there.
+    let unreadable = std::fs::read(&key_file).is_err();
+
+    let (result, _, _) = run_with_cache_mounts(
+        crate::cache::CacheType::Directory,
+        &project,
+        vec![cache_mount("deps", None)],
+    )
+    .await;
+
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::remove_dir_all(&project).ok();
+    if unreadable {
+        result.unwrap();
+    }
+}
+
+/// A shared cache's volume carries no project key, so it needs none.
+#[tokio::test]
+async fn a_shared_volume_cache_never_creates_the_project_cache_key_file() {
+    let project = cache_key_project();
+
+    let (result, binds, _) = run_with_cache_mounts(
+        crate::cache::CacheType::Volume,
+        &project,
+        vec![cache_mount("deps", Some(crate::config::CacheScope::Shared))],
+    )
+    .await;
+
+    let key_exists = crate::cache::cache_directory(&project).join("key").exists();
+    std::fs::remove_dir_all(&project).ok();
+    result.unwrap();
+    assert_eq!(
+        binds,
+        Some(vec!["ratect-shared-cache-deps:/deps".to_string()])
+    );
+    assert!(!key_exists);
+}
+
+/// A project-scoped volume cache still creates the key on first use, and
+/// every mount in every container of the run is named after that one key.
+#[tokio::test]
+async fn a_project_volume_cache_creates_the_key_and_names_every_volume_after_it() {
+    let project = cache_key_project();
+
+    let (result, binds, dependency_binds) = run_with_cache_mounts(
+        crate::cache::CacheType::Volume,
+        &project,
+        vec![cache_mount("one", None), cache_mount("two", None)],
+    )
+    .await;
+
+    let key_file = crate::cache::cache_directory(&project).join("key");
+    let contents = std::fs::read_to_string(&key_file);
+    std::fs::remove_dir_all(&project).ok();
+    result.unwrap();
+    let contents = contents.expect("the run should have created the key file");
+    let key = contents.lines().last().unwrap();
+    let expected = Some(vec![
+        format!("batect-cache-{key}-one:/one"),
+        format!("batect-cache-{key}-two:/two"),
+    ]);
+    assert_eq!(binds, expected);
+    assert_eq!(dependency_binds, expected);
+}
+
 #[tokio::test]
 async fn deduplicated_binds_keep_the_order_each_was_first_listed_in() {
     let binds = binds_for_volumes(vec![

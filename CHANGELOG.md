@@ -173,6 +173,8 @@ history, from when it was the only binary.
 - An image build sends the credentials for every registry Docker's default `credsStore` holds, as in Batect, not only those `config.json` names under `auths` or `credHelpers`. A store whose helper can't list them is a warning naming the store.
 - An `image` with neither a tag nor a digest pulls only `latest`, as in Batect, instead of every tag in the repository.
 - A container whose image is pulled, or found locally, is created from that image's ID rather than its tag, as in Batect.
+- A `--cache-type=directory` run no longer creates, reads or rewrites `.batect/caches/key`, as in Batect, so a cache named `key` works in that mode and an unreadable key file no longer fails the run. Nor does a run whose only caches under `--cache-type=volume` have `scope = "shared"`.
+- An existing `.batect/caches/key` is never overwritten. One with no key line or more than one, or that can't be read, is an error naming the file, as in Batect, instead of being replaced with a new key or having its first key used. Bytes in it that aren't UTF-8 no longer count as unreadable. A key path that is a symbolic link to nothing is an error too, instead of a new key file being created wherever it points.
 
 ### Security
 

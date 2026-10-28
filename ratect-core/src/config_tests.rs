@@ -3786,7 +3786,7 @@ fn evaluate_path_cleans_dot_components_from_the_joined_path() {
 }
 
 #[test]
-fn evaluate_path_leaves_absolute_path_unchanged() {
+fn evaluate_path_does_not_join_an_absolute_path_onto_the_base() {
     let resolved = evaluate_path(
         "/already/absolute",
         Path::new("/base"),
@@ -3796,6 +3796,36 @@ fn evaluate_path_leaves_absolute_path_unchanged() {
     )
     .unwrap();
     assert_eq!(resolved, "/already/absolute");
+}
+
+/// An absolute path is cleaned lexically like a relative one, with no
+/// containment boundary involved: Batect's `PathResolver` runs
+/// `normalize()` on every path, absolute or not (ratect#327).
+#[test]
+fn evaluate_path_cleans_an_absolute_path() {
+    let resolved = evaluate_path(
+        "/a/../b/./",
+        Path::new("/base"),
+        &no_host_env,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved, "/b");
+}
+
+#[test]
+fn evaluate_path_cleans_an_absolute_path_an_expression_resolves_to() {
+    let config_vars = HashMap::from([("root".to_string(), Some("/abs/../root/".to_string()))]);
+    let resolved = evaluate_path(
+        "<root",
+        Path::new("/base"),
+        &no_host_env,
+        &config_vars,
+        None,
+    )
+    .unwrap();
+    assert_eq!(resolved, "/root");
 }
 
 #[test]

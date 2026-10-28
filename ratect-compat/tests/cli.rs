@@ -6724,7 +6724,7 @@ fn ssh_agent_socket_mounts_under_run_as_current_user() {
 fn cache_mount_persists_and_clean_cache_removes_it(
     cache_name: &str,
     extra_args: &[&str],
-    assert_storage_gone: impl Fn(&Path, &str),
+    assert_storage_gone: impl Fn(&Path, Option<&str>),
     verify_fresh_restart: bool,
 ) {
     // Called by both #[ignore]d tests below, which `cargo test`'s default
@@ -6818,13 +6818,20 @@ tasks:
          persisted across invocations"
     );
 
-    let project_cache_key = std::fs::read_to_string(project_dir.join(".batect/caches/key"))
-        .expect("the first run should have created a project cache key file")
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('#'))
-        .expect("the project cache key file should have a non-comment line")
-        .to_string();
+    // Only a volume-mode run creates the key file; `assert_storage_gone`
+    // says which of the two it expects.
+    let project_cache_key = match std::fs::read_to_string(project_dir.join(".batect/caches/key")) {
+        Ok(contents) => Some(
+            contents
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && !line.starts_with('#'))
+                .expect("the project cache key file should have a non-comment line")
+                .to_string(),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => panic!("failed to read the project cache key file: {error}"),
+    };
 
     let clean_output = ratect_command()
         .arg("-f")
@@ -6848,7 +6855,7 @@ tasks:
         "--clean-cache should report exactly one deletion: {clean_stdout}"
     );
 
-    assert_storage_gone(&project_dir, &project_cache_key);
+    assert_storage_gone(&project_dir, project_cache_key.as_deref());
 
     if verify_fresh_restart {
         let third_run = run_task();
@@ -6877,6 +6884,8 @@ fn cache_volume_type_persists_and_clean_cache_removes_it() {
         "test-cache-volume",
         &[],
         |_project_dir, project_cache_key| {
+            let project_cache_key = project_cache_key
+                .expect("the first run should have created a project cache key file");
             let volume_name = format!("batect-cache-{project_cache_key}-test-cache-volume");
             let inspect = Command::new("docker")
                 .args(["volume", "inspect", &volume_name])
@@ -6896,15 +6905,20 @@ fn cache_volume_type_persists_and_clean_cache_removes_it() {
 ///
 /// Proves `--cache-type=directory` end to end: a `cache` mount resolves to
 /// a host directory under `.batect/caches/<name>/` that survives between
-/// separate `ratect` invocations, and `--clean-cache` actually removes that
-/// directory.
+/// separate `ratect` invocations, `--clean-cache` actually removes that
+/// directory, and the run never creates the project cache key file, which
+/// only a volume's name needs.
 #[test]
 #[ignore]
 fn cache_directory_type_persists_and_clean_cache_removes_it() {
     cache_mount_persists_and_clean_cache_removes_it(
         "test-cache-directory",
         &["--cache-type", "directory"],
-        |project_dir, _project_cache_key| {
+        |project_dir, project_cache_key| {
+            assert_eq!(
+                project_cache_key, None,
+                "a directory-mode run should never create the project cache key file"
+            );
             let cache_dir = project_dir.join(".batect/caches/test-cache-directory");
             assert!(
                 !cache_dir.exists(),

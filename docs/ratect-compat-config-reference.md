@@ -433,7 +433,7 @@ For a `local` mount, `local` (the host path) is resolved:
 
 - In the object form, the path is interpolated first (see
   [Expressions](#expressions)) — so a config variable that itself resolves to an
-  absolute path is used as-is, not treated as a literal relative fragment. The
+  absolute path is taken as absolute, not treated as a literal relative fragment. The
   string form's host path is used as written, as in Batect: a `$` or `<` in
   `$HOME/.m2:/root/.m2` is just part of a relative path, so a host path that needs
   an expression is written as an object. (`ratect.toml` interpolates both forms.)
@@ -445,7 +445,10 @@ For a `local` mount, `local` (the host path) is resolved:
 - *After* any interpolation, if the result is relative, it's resolved to an absolute path
   **relative to the directory containing the config file** (not the current working
   directory). If it's already absolute (whether literally written that way, expanded
-  from `~`, or because that's what an expression resolved to), it's left unchanged.
+  from `~`, or because that's what an expression resolved to), it isn't joined onto
+  anything. Either way, its `.` and `..` components and any trailing `/` are then
+  collapsed lexically, as in Batect — without following symbolic links, so
+  `/a/link/..` is `/a` wherever `link` points.
 - This all happens when a task is run, with CLI-supplied config variable overrides
   (`--config-var`/`--config-vars-file`) applied — not when the file loads.
 - `build_directory` is resolved the same way (it has no `:container_path` part to split
@@ -506,15 +509,21 @@ containers:
   reasoning as above — this is where an existing Batect project already keeps its own
   directory-type caches.
 - `<project-key>` is a value unique to this project, generated once and persisted at
-  `<project_directory>/.batect/caches/key` (created lazily — only the first time a
-  `cache` volume is actually resolved, never eagerly) — without it, two unrelated
+  `<project_directory>/.batect/caches/key` (created lazily — the first time a run
+  resolves a `cache` mount, or `--clean` looks for cache volumes, under
+  `--cache-type=volume`, never eagerly; a `--cache-type=directory` run never reads,
+  creates or changes it) — without it, two unrelated
   projects that happen to declare a same-named cache (e.g. `gradle-cache`) would
   collide on the exact same Docker volume, since Docker volumes live in one flat,
   global namespace, not scoped by directory. If that file already exists (e.g. from a
-  prior real-`batect` run), its existing key is read and reused as-is rather than
+  prior real-`batect` run), its existing key is read and reused as-is, never
   regenerated — even though Ratect's own generated keys look different (a full UUID,
   rather than Batect's own shorter id): nothing depends on matching that format, only
-  on reusing whatever key is already on record for this project.
+  on reusing whatever key is already on record for this project. The file must hold
+  exactly one line that isn't blank or a comment (`#`), the key; one with none or
+  more than one, or that can't be read, fails the run or `--clean`, as in Batect,
+  and is left as it is — replacing it would orphan every cache volume named after
+  the key it held.
 `--clean` removes every one of this project's own cache volumes/directories (per
 `--cache-type` or `BATECT_CACHE_TYPE`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
 restricts this to the named cache(s) instead of all of them — see

@@ -79,13 +79,14 @@
 //! resolved by `LoadedProject::evaluate` when its task is reached, nothing
 //! left to do but reassemble the string; a `Cache` mount goes through
 //! `cache::resolve_cache_mount`, memoizing the project's own cache key in a
-//! `tokio::sync::OnceCell` field (computed at most once per invocation, and only if a `cache` mount is actually
-//! resolved — never eagerly). `--cache-type` + the project directory reach
-//! `TaskEngineSettings::cache` via `main.rs`'s own `with_settings` call,
+//! `Mutex` field (computed at most once per invocation, and only if a
+//! project-scoped `cache` mount is resolved under `CacheType::Volume` —
+//! never eagerly, and never in directory mode). `--cache-type` + the project
+//! directory reach `TaskEngineSettings::cache` via `main.rs`'s own `with_settings` call,
 //! always made in practice despite being optional here. `Tmpfs` mounts are
 //! deliberately *not* resolved by `resolve_volumes` at all (0.21.0) — a
 //! tmpfs mount can't be expressed as a
-//! bind string, and needs no async cache-key lookup either, so a separate,
+//! bind string, and needs no cache-key lookup either, so a separate,
 //! synchronous `container_spec::tmpfs_mounts` helper (alongside
 //! `capability_names`/`device_triples` there) pulls them out into a
 //! `ContainerOptions.tmpfs` field instead, mapped onto Docker's own
@@ -1107,10 +1108,14 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// `--version` (see `ROADMAP.md`'s versioning section).
     ratect_version: Option<String>,
     /// Memoizes `crate::cache::project_cache_key` for the life of this
-    /// `TaskEngine` — computed at most once per invocation, and only if a
-    /// `cache` volume is actually resolved (never eagerly), matching
-    /// Batect's own `CacheManager.projectCacheKey`'s `by lazy` behavior.
-    cache_key: OnceCell<String>,
+    /// `TaskEngine` — computed at most once per invocation, and only when a
+    /// project-scoped `cache` mount is resolved under `CacheType::Volume`
+    /// (never eagerly, and never for a directory or shared cache), matching
+    /// where Batect reads its own `by lazy` `CacheManager.projectCacheKey`.
+    /// A `Mutex` rather than a `OnceCell` because `resolve_cache_mount`
+    /// asks for the key synchronously; held across the read so two
+    /// containers resolving at once can't each generate a different key.
+    cache_key: std::sync::Mutex<Option<String>>,
 }
 
 /// Refuses a container named by both `--tag-image` and `--override-image`,
@@ -1262,7 +1267,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             max_parallelism: None,
             cache_options: None,
             ratect_version: None,
-            cache_key: OnceCell::new(),
+            cache_key: std::sync::Mutex::new(None),
             interrupt,
             task_container_readiness_gate: task_container_readiness_gate(
                 crate::config::Dialect::default(),
@@ -1338,8 +1343,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// string. `Cache` mounts are resolved here instead, since that needs
     /// `--cache-type` (see `with_settings`) and the project's own cache
     /// key, neither available to `config.rs`. `cache_key` is only ever
-    /// computed the first time this actually encounters a `Cache` mount —
-    /// a config with none never touches the filesystem for this at all.
+    /// computed the first time a `Cache` mount needs it — a project-scoped
+    /// one under `CacheType::Volume` — so a config with none, or a
+    /// directory-mode run, never touches the key file at all.
     /// `Tmpfs` mounts are skipped entirely here — they can't be expressed as
     /// a bind string at all, and need no async resolution, so they're pulled
     /// out separately (and synchronously) by `container_spec::tmpfs_mounts`
@@ -1373,12 +1379,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         "a config with a 'cache' volume mount requires with_settings to have \
                          been called with `cache: Some(..)` first",
                     );
-                    let cache_key = self
-                        .cache_key
-                        .get_or_try_init(|| async {
-                            crate::cache::project_cache_key(&cache_options.project_directory)
-                        })
-                        .await?;
+                    let cache_key = || {
+                        let mut memo = self.cache_key.lock().unwrap();
+                        if let Some(key) = memo.as_ref() {
+                            return Ok(key.clone());
+                        }
+                        let key =
+                            crate::cache::project_cache_key(&cache_options.project_directory)?;
+                        *memo = Some(key.clone());
+                        Ok(key)
+                    };
                     crate::cache::resolve_cache_mount(cache_options, cache_key, cache)?
                 }
                 crate::config::VolumeMount::Tmpfs(_) => continue,
