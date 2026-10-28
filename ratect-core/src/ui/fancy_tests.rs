@@ -514,9 +514,9 @@ fn a_dependency_exit_during_cleanup_is_not_painted_over() {
     );
 }
 
-/// When cleanup finishes, the countdown is cleared: on an infrastructure
-/// failure no summary follows to replace it, and left on screen it would
-/// say cleanup was still under way.
+/// When cleanup finishes, the countdown is cleared — left on screen under
+/// a line reporting what cleanup left, it would say cleanup was still under
+/// way — and the failed summary line then prints in its place (ratect#473).
 #[test]
 fn the_countdown_is_cleared_when_cleanup_finishes() {
     let (logger, buffer, _) = logger_with_width_and_stderr(120);
@@ -529,9 +529,64 @@ fn the_countdown_is_cleared_when_cleanup_finishes() {
     let painted = buffer.contents();
 
     logger.post(TaskEvent::CleanupFinished);
-    logger.post(TaskEvent::TaskFailed { task: "t".into() });
-
     assert_eq!(&buffer.contents()[painted.len()..], CURSOR_UP_ONE_AND_CLEAR);
+
+    logger.post(TaskEvent::TaskFailed {
+        task: "t".into(),
+        duration: Duration::from_millis(3200),
+    });
+    assert_eq!(
+        &buffer.contents()[painted.len()..],
+        format!("{CURSOR_UP_ONE_AND_CLEAR}t failed after 3.2s.\n")
+    );
+}
+
+/// The failed summary replaces a still-live cleanup line in place, exactly
+/// as the finished summary does (ratect#473).
+#[test]
+fn the_failed_summary_replaces_a_live_cleanup_line() {
+    let (logger, buffer, _) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    logger.post(TaskEvent::CleanupStarting);
+    logger.post(TaskEvent::RemovingNetwork);
+    let painted = buffer.contents();
+
+    logger.post(TaskEvent::TaskFailed {
+        task: "t".into(),
+        duration: Duration::from_millis(3200),
+    });
+    assert_eq!(
+        &buffer.contents()[painted.len()..],
+        format!("{CURSOR_UP_ONE_AND_CLEAR}t failed after 3.2s.\n")
+    );
+}
+
+/// `TaskFailed` neither repaints nor touches the startup block, and leaves
+/// it frozen for any later event (FEL-30/31/32/46): it only adds its line.
+#[test]
+fn task_failed_leaves_the_startup_block_alone() {
+    let (logger, buffer, _) = logger_with_width_and_stderr(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunEnded { task: "t".into() });
+    let painted = buffer.contents();
+
+    logger.post(TaskEvent::TaskFailed {
+        task: "t".into(),
+        duration: Duration::from_millis(3200),
+    });
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+
+    assert_eq!(
+        &buffer.contents()[painted.len()..],
+        "t failed after 3.2s.\n"
+    );
 }
 
 /// Once cleanup has finished, a line reporting what it left (the
@@ -557,9 +612,13 @@ fn nothing_repaints_the_countdown_after_cleanup_finished() {
     logger.post(TaskEvent::ContainerRemoved {
         container: "app".into(),
     });
-    logger.post(TaskEvent::TaskFailed { task: "t".into() });
-
     assert_eq!(buffer.contents(), before);
+
+    logger.post(TaskEvent::TaskFailed {
+        task: "t".into(),
+        duration: Duration::from_millis(3200),
+    });
+    assert_eq!(&buffer.contents()[before.len()..], "t failed after 3.2s.\n");
 }
 
 /// Under `ratect-compat` with stderr redirected, a stderr line never reaches

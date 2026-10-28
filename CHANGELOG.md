@@ -62,6 +62,7 @@ history, from when it was the only binary.
 
 ### Added
 
+- A task that fails to run once started — an image that won't pull, a dependency that never becomes healthy, a failing setup command — ends with a summary line, `<task> failed after <duration>.`, where a finished task's `finished with exit code N` goes, in every style but `quiet`.
 - `ratect doctor` and `ratect config validate` (ratect only) warn when a container's `dependencies`, a task's `dependencies` or a task's `prerequisites` gives the same entry more than once, naming the container or task, the field and the entry. The project still loads, and the entry still starts or runs once.
 - `ratect doctor` (ratect only) reports a `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` that is neither true nor false as a problem, naming the variable and its value.
 - After a `--no-cleanup*` run, a line per kept container says how to see its output (`docker logs`) and run a command in it (`docker exec -it`, after `docker start` for a container that isn't running).

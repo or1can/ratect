@@ -4518,6 +4518,37 @@ fn a_container_that_cannot_be_created_or_started_is_named_via_docker() {
 /// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
 /// `cargo test -- --ignored`.
 ///
+/// A task that fails to run once started ends, under `simple`, with the
+/// failed summary line on stdout — where a finished task's goes — and its
+/// error is printed once, on stderr (ratect#473).
+#[test]
+#[ignore]
+fn a_task_that_fails_to_run_ends_with_the_failed_summary_line_via_docker() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(failing_setup_command_config_path())
+        .args(["-o", "simple", "check"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(125), "stderr:\n{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("check failed after ")),
+        "the last line on stdout:\n{stdout}"
+    );
+    assert_eq!(stderr.matches("Error:").count(), 1, "stderr:\n{stderr}");
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+///
 /// A container that doesn't become ready — a setup command that fails, a
 /// health check that never passes — ends its error with the hint to re-run
 /// with `--no-cleanup-after-failure`, as Batect's does, but only while that

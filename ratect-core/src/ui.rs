@@ -316,15 +316,21 @@ pub enum TaskEvent {
     RunEnded {
         task: String,
     },
-    /// The task failed for an infrastructure reason (image build failed, a
-    /// dependency never became healthy, ...) — the counterpart of
+    /// The task failed to run for an infrastructure reason (image build
+    /// failed, a dependency never became healthy, ...) — the counterpart of
     /// [`TaskEvent::TaskFinished`], which covers the task's own command
-    /// completing (with any exit code). Posted after cleanup, like
-    /// `TaskFinished`. It carries no error: that was reported when it
-    /// happened, before cleanup, as a [`TaskEvent::Error`] (or, for a
-    /// signal, by the interrupt notice).
+    /// completing (with any exit code), and what every style but `quiet`
+    /// renders the failed summary line from (`<task> failed after <t>.`).
+    /// Posted after cleanup, like `TaskFinished`, with `duration` measured
+    /// the same way: from `TaskStarting` to the end of cleanup. It carries
+    /// no error: that was reported when it happened, before cleanup, as a
+    /// [`TaskEvent::Error`]. Never posted for a run a termination signal or
+    /// stdout's reader going ended — its notice says so instead — nor for a
+    /// task that never reached `TaskStarting`, such as one whose
+    /// prerequisite failed.
     TaskFailed {
         task: String,
+        duration: Duration,
     },
     /// One line of a container's own stdout/stderr — only posted under
     /// [`ContainerIoStreaming::Interleaved`] (see that type: in every other
@@ -1083,6 +1089,23 @@ pub(crate) fn nothing_more_to_do(console: &Console, task: &str) -> String {
     format!(
         "The task {} only defines prerequisite tasks, nothing more to do.",
         console.bold(task)
+    )
+}
+
+/// The summary line every non-quiet style ends a task that failed to run
+/// with — `<task> failed after <duration>.`, the name bold and nothing
+/// coloured. It says the run ended, never why: the error already said that,
+/// wherever it was printed. One phrase, here, so a test pins the wording
+/// once for all three styles.
+pub(crate) fn format_task_failed_summary(
+    console: &Console,
+    task: &str,
+    duration: Duration,
+) -> String {
+    format!(
+        "{} failed after {}.",
+        console.bold(task),
+        format_duration(duration)
     )
 }
 

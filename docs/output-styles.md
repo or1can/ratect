@@ -52,9 +52,12 @@ complete.` (or the error saying what cleanup left behind) rather than a
 trailing `Error: Interrupted`. `Error:` is reserved for Ratect's own failures: it could
 not run the task, or could not clean up after it. A failure to run a task that
 has started — an image that won't pull, a dependency that never becomes
-healthy — is reported when it happens, before any cleanup line; a failure
-before any task starts, such as a config that doesn't load, is printed as the
-run exits.
+healthy — is reported when it happens, before any cleanup line, and outside
+`quiet` the run then ends with the summary line's other form, `<task> failed
+after <duration>.`, where `finished with exit code N` would have gone. A
+failure before any task starts, such as a config that doesn't load, is printed
+as the run exits, with no summary line, as is a prerequisite's failure for the
+task waiting on it: the prerequisite's own line is the one printed.
 
 Each style is shown below from the *same* real run — `ratect run journey-test`
 against

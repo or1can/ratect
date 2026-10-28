@@ -331,11 +331,38 @@ fn a_run_ending_before_the_graph_resolves_still_flushes_the_preamble() {
     });
     assert_eq!(buffer.contents(), "test | Running test...\n");
 
-    // TaskFailed after it must not print it again.
+    // TaskFailed after it must not print it again, only its summary line.
     logger.post(TaskEvent::TaskFailed {
         task: "test".into(),
+        duration: Duration::from_millis(3200),
     });
-    assert_eq!(buffer.contents(), "test | Running test...\n");
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+         test | test failed after 3.2s.\n"
+    );
+}
+
+/// The failed summary goes where the finished one does: on the task's own
+/// prefix, on the progress console (ratect#473).
+#[test]
+fn task_failed_prints_the_failed_summary_on_the_task_prefix() {
+    let (logger, buffer, stderr, result) = logger_with_streams(false);
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::RunEnded {
+        task: "test".into(),
+    });
+    let before = buffer.contents();
+    logger.post(TaskEvent::TaskFailed {
+        task: "test".into(),
+        duration: Duration::from_millis(3200),
+    });
+    assert_eq!(
+        &buffer.contents()[before.len()..],
+        "test | test failed after 3.2s.\n"
+    );
+    assert_eq!(stderr.contents(), "");
+    assert_eq!(result.contents(), "");
 }
 
 #[test]

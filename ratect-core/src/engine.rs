@@ -2853,6 +2853,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             .err()
             .and_then(|error| error.downcast_ref::<crate::interrupt::TaskInterrupted>())
             .map(|interrupted| interrupted.signal);
+        // The other way a run ends without a failure of its own: stdout's
+        // reader went (ratect#670). Like a signal, its notice below says so,
+        // and no summary line follows.
+        let stdout_closed = result
+            .as_ref()
+            .is_err_and(|error| error.is::<crate::docker::StdoutClosed>());
         // Stop watching before cleanup below ever stops a container — see
         // `dependency_watchers`' own doc comment for why the ordering
         // matters, not just that it happens. `abort()` only takes effect at
@@ -3008,10 +3014,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             } else {
                 format!("{}; not cleaning up.", signal.ended_run())
             });
-        } else if result
-            .as_ref()
-            .is_err_and(|error| error.is::<crate::docker::StdoutClosed>())
-        {
+        } else if stdout_closed {
             // A reader that has gone ends the run as a signal would
             // (ratect#670), and says so the same way: nothing else reports
             // it, and the same ladder applies — but no signal arrived, so
@@ -3454,8 +3457,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // "Finished" means the task's own command ran to completion and
         // reported an exit code — zero (`Ok`) or not (the
         // `ContainerExitedNonZero` error, which still propagates to become
-        // ratect's own exit code). An infrastructure failure posts nothing.
-        // Posted after cleanup, matching Batect's `onTaskFinished` (called
+        // ratect's own exit code); an infrastructure failure posts
+        // `TaskFailed` instead. Both are posted after cleanup, matching Batect's `onTaskFinished` (called
         // once `ParallelExecutionManager.run()` — cleanup included — has
         // returned).
         if let Some(exit_code) = exit_code {
@@ -3464,11 +3467,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 exit_code,
                 duration: task_started_at.elapsed(),
             });
-        } else {
+        } else if interrupted_by.is_none() && !stdout_closed {
             // Infrastructure failure — the error itself was reported before
-            // cleanup, above; this ends the task, as `TaskFinished` would.
+            // cleanup, above; this ends the task, as `TaskFinished` would. A
+            // signal or a gone reader posts nothing: its notice already said
+            // how the run ended (decisions/0017's interrupt sequence).
             self.event_sink.post(TaskEvent::TaskFailed {
                 task: task_name.to_string(),
+                duration: task_started_at.elapsed(),
             });
         }
 

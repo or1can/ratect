@@ -397,6 +397,14 @@ tables above:
   and `all` reports a failed setup command or network check, two failures
   Batect's `all` doesn't print at all. A setup command's output is trimmed, so
   output that is only whitespace counts as none.
+- **A failed task ends with a summary line, not Batect's footer.** Where Batect
+  ends a task that failed to run with a red `The task X failed. See above for
+  details.` (on stderr, or on stdout as a `<task> ! ` line under `all`), Ratect
+  ends it with `<task> failed after <duration>.`, the counterpart of `finished
+  with exit code N`, in the same place: the progress console, on the task's
+  prefix under `all`, and not at all under `quiet`. Nor does Ratect print
+  Batect's blank line before the error: the bold red `Error:` marker separates
+  it, and under `quiet` a leading newline would be the first byte on stderr.
 - **No white text.** Batect paints its `simple` status lines, and `all`'s
   task-level prefix, in the terminal palette's white (SGR 37) — light grey on a
   dark theme, near-invisible on a light one. Ratect's own lines are the

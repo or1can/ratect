@@ -168,6 +168,11 @@ fn the_quiet_logger_prints_the_stderr_classes_and_no_progress() {
         exit_code: 0,
         duration: Duration::from_secs(1),
     });
+    // `quiet` has no summary line of either form (ratect#473).
+    logger.post(TaskEvent::TaskFailed {
+        task: "build".into(),
+        duration: Duration::from_secs(1),
+    });
     assert_eq!(
         buffer.contents(),
         "Left in place (--no-cleanup): app (abc)\n"
@@ -235,6 +240,23 @@ fn format_task_summary_colors_exit_code_by_outcome() {
     assert_eq!(
         format_task_summary(&console, "lint", 3, Duration::from_secs(61)),
         "lint finished with exit code \x1b[31m3\x1b[0m in 1m 1.0s."
+    );
+}
+
+/// The summary line a task that failed to run ends with: the name bold, as
+/// every user-supplied name is (decisions/0017), and no colour — it says
+/// the run ended, never why (ratect#473).
+#[test]
+fn format_task_failed_summary_bolds_the_name_and_colours_nothing() {
+    let console = Console::new(Box::new(std::io::sink()), true);
+    assert_eq!(
+        format_task_failed_summary(&console, "build", Duration::from_millis(2300)),
+        "\x1b[1mbuild\x1b[0m failed after 2.3s."
+    );
+    let plain = Console::new(Box::new(std::io::sink()), false);
+    assert_eq!(
+        format_task_failed_summary(&plain, "lint", Duration::from_secs(61)),
+        "lint failed after 1m 1.0s."
     );
 }
 

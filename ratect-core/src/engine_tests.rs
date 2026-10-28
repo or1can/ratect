@@ -3826,12 +3826,7 @@ async fn a_failed_build_starts_and_never_completes() {
         )),
         "{events:?}"
     );
-    assert!(
-        events.contains(&TaskEvent::TaskFailed {
-            task: "build".into(),
-        }),
-        "{events:?}"
-    );
+    assert!(events.contains(&task_failed("build")), "{events:?}");
 }
 
 /// A `build` task whose one container, `build-env`, is built from
@@ -4421,9 +4416,7 @@ async fn a_missing_network_still_posts_task_failed() {
             TaskEvent::Error {
                 message: format!("{error:?}")
             },
-            TaskEvent::TaskFailed {
-                task: "build".into()
-            },
+            task_failed("build"),
         ]
     );
 }
@@ -6775,6 +6768,29 @@ async fn a_closed_stdout_ends_the_run_and_cleans_up() {
     );
 }
 
+/// Like a signal's, a run a closed stdout ended has no failed summary line:
+/// its own notice says how it ended (ratect#473).
+#[tokio::test]
+async fn a_closed_stdout_posts_no_task_failed() {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        FakeContainerRuntime::default().with_stdout_closed_during_run("app"),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = sink.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TaskEvent::TaskFailed { .. })),
+        "{events:?}"
+    );
+}
+
 /// Like a signal, a closed stdout is a failure, so
 /// `--no-cleanup-after-failure` governs it.
 #[tokio::test]
@@ -7478,9 +7494,7 @@ async fn a_failure_reported_elsewhere_posts_no_second_error_event() {
     assert_eq!(errors, 1, "the prerequisite's own report only: {events:?}");
     assert_eq!(
         failed,
-        vec![&TaskEvent::TaskFailed {
-            task: "broken".to_string()
-        }],
+        vec![&task_failed("broken")],
         "the task depending on it never started: {events:?}"
     );
     assert!(crate::exit_code::already_reported(&error));
@@ -9957,7 +9971,7 @@ fn failed_before_anything_was_created(task: &str, error: &anyhow::Error) -> Vec<
         TaskEvent::Error {
             message: format!("{error:?}"),
         },
-        TaskEvent::TaskFailed { task: task.into() },
+        task_failed(task),
     ]
 }
 
@@ -10948,7 +10962,7 @@ fn assert_refused_before_the_task_started(events: &[TaskEvent], docker_events: &
     assert!(
         !events.iter().any(|e| matches!(
             e,
-            TaskEvent::TaskStarting { task } | TaskEvent::TaskFailed { task } if task == "start"
+            TaskEvent::TaskStarting { task } | TaskEvent::TaskFailed { task, .. } if task == "start"
         )),
         "the task never starts, so never fails either: {events:?}"
     );
@@ -15206,7 +15220,10 @@ async fn dependency_container_log_driver_reaches_the_sidecar() {
 
 /// Records every posted [`TaskEvent`] in order, so tests can assert on
 /// the user-facing event stream the same way `FakeContainerRuntime`
-/// asserts on Docker calls.
+/// asserts on Docker calls. A `TaskFailed`'s wall-clock duration is
+/// recorded as zero, so a whole stream compares by value — see
+/// [`task_failed`]; `a_failed_task_reports_how_long_it_ran` checks the real
+/// one.
 #[derive(Clone, Default)]
 struct RecordingEventSink {
     events: Arc<Mutex<Vec<TaskEvent>>>,
@@ -15220,7 +15237,27 @@ impl RecordingEventSink {
 
 impl EventSink for RecordingEventSink {
     fn post(&self, event: TaskEvent) {
-        self.events.lock().unwrap().push(event);
+        self.events
+            .lock()
+            .unwrap()
+            .push(without_failed_duration(event));
+    }
+}
+
+/// `event`, with a `TaskFailed`'s duration zeroed — see
+/// [`RecordingEventSink`].
+fn without_failed_duration(event: TaskEvent) -> TaskEvent {
+    match event {
+        TaskEvent::TaskFailed { task, .. } => task_failed(&task),
+        event => event,
+    }
+}
+
+/// The `TaskFailed` a recording sink holds for `task`.
+fn task_failed(task: &str) -> TaskEvent {
+    TaskEvent::TaskFailed {
+        task: task.to_string(),
+        duration: std::time::Duration::ZERO,
     }
 }
 
@@ -15242,7 +15279,10 @@ struct SequencingEventSink {
 
 impl EventSink for SequencingEventSink {
     fn post(&self, event: TaskEvent) {
-        self.sequence.lock().unwrap().push(Sequenced::Event(event));
+        self.sequence
+            .lock()
+            .unwrap()
+            .push(Sequenced::Event(without_failed_duration(event)));
     }
 }
 
@@ -15901,6 +15941,124 @@ fn error_line(event: &TaskEvent) -> Option<&String> {
         TaskEvent::Error { message } => Some(message),
         _ => None,
     }
+}
+
+/// Records every posted [`TaskEvent`] as posted, durations included — for
+/// the one test about a `TaskFailed`'s own duration, which
+/// [`RecordingEventSink`] zeroes.
+#[derive(Clone, Default)]
+struct RawEventSink(Arc<Mutex<Vec<TaskEvent>>>);
+
+impl EventSink for RawEventSink {
+    fn post(&self, event: TaskEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+/// A task that fails to run once it has started ends with exactly one
+/// `TaskFailed`, after everything cleanup posted, carrying how long the run
+/// took up to then — what the failed summary line is rendered from
+/// (ratect#473).
+#[tokio::test]
+async fn a_failed_task_reports_how_long_it_ran() {
+    // Spent after `TaskStarting`, so the duration has to include it.
+    const CREATE_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+    let sink = RawEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        FakeContainerRuntime::default()
+            .with_create_delay("database", CREATE_DELAY)
+            .failing_start("database"),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let started = std::time::Instant::now();
+    engine.run_task("start", &[]).await.unwrap_err();
+    let elapsed = started.elapsed();
+
+    let events = sink.0.lock().unwrap().clone();
+    let failed: Vec<&TaskEvent> = events
+        .iter()
+        .filter(|event| matches!(event, TaskEvent::TaskFailed { .. }))
+        .collect();
+    assert_eq!(failed.len(), 1, "{events:?}");
+    assert!(
+        matches!(events.last(), Some(TaskEvent::TaskFailed { task, .. }) if task == "start"),
+        "after the last cleanup event: {events:?}"
+    );
+    assert!(
+        events.contains(&TaskEvent::CleanupFinished),
+        "cleanup ran first: {events:?}"
+    );
+    let Some(TaskEvent::TaskFailed { duration, .. }) = events.last() else {
+        unreachable!()
+    };
+    assert!(*duration >= CREATE_DELAY, "{duration:?}");
+    assert!(*duration <= elapsed, "{duration:?} > {elapsed:?}");
+}
+
+/// A run a signal ended has no failed summary line: its interrupt notice
+/// and `Cleanup complete.` say how it ended (decisions/0017, ratect#473).
+#[tokio::test]
+async fn an_interrupted_run_posts_no_task_failed() {
+    let docker =
+        FakeContainerRuntime::default().with_run_delay("app", std::time::Duration::from_secs(60));
+    let interrupt = crate::interrupt::Interrupt::new();
+    interrupt.record();
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        interrupt,
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = sink.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TaskEvent::TaskFailed { .. })),
+        "{events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, TaskEvent::RunEnded { .. })),
+        "the run still ends, for `all`'s preamble flush: {events:?}"
+    );
+}
+
+/// A task whose own command exits non-zero finished, it didn't fail to
+/// run: `TaskFinished` with its code, and no `TaskFailed`.
+#[tokio::test]
+async fn a_non_zero_exit_posts_task_finished_and_no_task_failed() {
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        FakeContainerRuntime::default().failing_run(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    let events = sink.events();
+    assert!(
+        matches!(
+            events.last(),
+            Some(TaskEvent::TaskFinished { task, exit_code, .. }) if task == "start" && *exit_code != 0
+        ),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TaskEvent::TaskFailed { .. })),
+        "{events:?}"
+    );
 }
 
 /// The interrupt notice — the one line a person at the keyboard must read —

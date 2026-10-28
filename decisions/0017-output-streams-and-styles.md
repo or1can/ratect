@@ -1,7 +1,9 @@
 # 0017 — Output: what each stream is for, and how a style shapes it
 
 **Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
-[#535](https://github.com/or1can/ratect/issues/535)).
+[#535](https://github.com/or1can/ratect/issues/535)). Refined by
+[#473](https://github.com/or1can/ratect/issues/473): a task that fails to run
+once started ends with a summary line of its own, so that route is listed below.
 
 ## Context
 
@@ -153,6 +155,11 @@ it is fixed by the event, not by the style:
 - A task's own non-zero exit is reported by the exit code, and in the
   non-quiet styles by the summary line. It is never an `Error:` line
   ([#454](https://github.com/or1can/ratect/issues/454)).
+- A task that fails to run once it has started — an image that won't pull, a
+  dependency that never becomes ready — is reported by the `Error:` line when
+  it happens, and in the non-quiet styles by the summary line's other form,
+  `<task> failed after <duration>.`, which says the run ended and never why
+  ([#473](https://github.com/or1can/ratect/issues/473)).
 - A termination signal is reported by the notice when it arrives, the cleanup
   outcome when cleanup ends, and the exit code. It is never a trailing `Error:
   Interrupted`.
