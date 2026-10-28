@@ -405,11 +405,13 @@ pub enum TaskEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskContainerInfo {
     pub name: String,
-    /// `Some` for an `image` container — the reference
-    /// [`TaskEvent::ImagePullProgress`] events carry.
+    /// `Some` for a container whose image is pulled — the reference
+    /// [`TaskEvent::ImagePullProgress`] events carry: its `image`, or the
+    /// `--override-image` that replaces it (or its `build_directory`).
     pub image: Option<String>,
-    /// `Some` for a `build_directory` container — the tag
+    /// `Some` for a `build_directory` container that is built — the tag
     /// (`<project>-<name>`) [`TaskEvent::ImageBuildProgress`] events carry.
+    /// `None` under `--override-image`, which pulls instead.
     pub build_tag: Option<String>,
     /// The container's own direct dependencies, in the order they were
     /// declared — for the task's own container, the task's `dependencies`

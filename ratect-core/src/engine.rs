@@ -2743,11 +2743,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 .filter(|(name, _)| narrated(name))
                 .map(|(name, dependencies)| {
                     let container_config = containers.get(name);
+                    // The source `resolve_image` will actually use: an
+                    // override replaces the whole of it with a pull, a
+                    // `build_directory` included, as Batect's does.
+                    let image_override = self.image_overrides.get(name);
                     crate::ui::TaskContainerInfo {
                         name: name.clone(),
-                        image: container_config.and_then(|c| c.image.clone()),
+                        image: image_override
+                            .cloned()
+                            .or_else(|| container_config.and_then(|c| c.image.clone())),
                         build_tag: container_config
                             .and_then(|c| c.build_directory.as_ref())
+                            .filter(|_| image_override.is_none())
                             .map(|_| format!("{}-{}", self.project.config.project_name, name)),
                         dependencies: container_config
                             .map_or_else(

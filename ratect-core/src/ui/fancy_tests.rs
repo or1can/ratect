@@ -1748,3 +1748,32 @@ fn a_dependency_is_created_too_and_readiness_survives_creation() {
         ["db: ready", "app: waiting to start..."]
     );
 }
+
+/// Given the override the engine now reports as the line's image, the line
+/// names it and follows its pull.
+#[test]
+fn an_overridden_image_is_the_one_named_and_tracked() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("alpine:3.19"), &[], true)],
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: ready to pull image alpine:3.19"]
+    );
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "alpine:3.19".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: pulling image alpine:3.19..."]
+    );
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "alpine:3.19".into(),
+        message: "Downloading".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: pulling alpine:3.19: Downloading"]
+    );
+}

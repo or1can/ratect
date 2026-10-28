@@ -13012,6 +13012,77 @@ async fn image_override_pulls_the_override_instead_of_the_configured_image() {
     );
 }
 
+/// The graph event describes the image an overridden container will actually
+/// use — the override, pulled, even in place of a `build_directory` — so a
+/// display names and tracks that image; a container with no override keeps
+/// its own.
+#[tokio::test]
+async fn image_overrides_are_what_the_graph_reports() {
+    let mut built = container("unused-if-overridden", None);
+    built.image = None;
+    built.build_directory = Some(".".to_string());
+    let mut kept = container("postgres:15", None);
+    kept.image = None;
+    kept.build_directory = Some(".".to_string());
+    let mut containers = IndexMap::new();
+    containers.insert("built".to_string(), built);
+    containers.insert("kept".to_string(), kept);
+    containers.insert("pulled".to_string(), container("alpine:3.18", None));
+    containers.insert(
+        "app".to_string(),
+        container("alpine:3.18", Some(names(&["built", "kept", "pulled"]))),
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("test".to_string(), task("app", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        FakeContainerRuntime::default(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    )
+    .with_settings(TaskEngineSettings {
+        image_overrides: HashMap::from([
+            ("built".to_string(), "busybox:1".to_string()),
+            ("pulled".to_string(), "alpine:3.19".to_string()),
+        ]),
+        ..Default::default()
+    })
+    .unwrap();
+
+    engine.run_task("test", &[]).await.unwrap();
+
+    let mut graph: Vec<(String, Option<String>, Option<String>)> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("the graph is posted")
+        .into_iter()
+        .map(|info| (info.name, info.image, info.build_tag))
+        .collect();
+    graph.sort();
+    let some = |text: &str| Some(text.to_string());
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), some("alpine:3.18"), None),
+            ("built".to_string(), some("busybox:1"), None),
+            ("kept".to_string(), None, some("demo-kept")),
+            ("pulled".to_string(), some("alpine:3.19"), None),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn image_override_ignores_the_containers_configured_pull_policy() {
     // `Always` on the original container must not leak onto the
