@@ -820,3 +820,113 @@ fn inner_labels_are_unstyled() {
         )
     );
 }
+
+/// Every line of a multi-line build chunk is its own prefixed line, carrying
+/// `Image build | ` as Batect's build sink gives each one — a blank line
+/// included.
+#[test]
+fn every_line_of_a_multi_line_build_message_is_prefixed() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("app", None, Some("proj-app"))]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "proj-app".into(),
+        message: "bk-line-1\nbk-line-2\n\nbk-line-3".into(),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "app  | Image build | bk-line-1\n\
+         app  | Image build | bk-line-2\n\
+         app  | Image build | \n\
+         app  | Image build | bk-line-3\n"
+    );
+}
+
+/// A multi-line command (`command: |`) is split as Batect splits it: each
+/// line prefixed, the text after it joining the last.
+#[test]
+fn every_line_of_a_multi_line_command_is_prefixed() {
+    let (logger, buffer) = logger();
+    start_task(
+        &logger,
+        vec![
+            TaskContainerInfo {
+                is_task_container: true,
+                ..info("app", Some("alpine:3"), None)
+            },
+            info("dep", Some("alpine:3"), None),
+        ],
+    );
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "echo\none\n".into(),
+        index: 1,
+        total: 1,
+        run_in: None,
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "dep".into(),
+        command: "echo\none".into(),
+        index: 1,
+        total: 1,
+        run_in: None,
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("echo\nhello\n".into()),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "dep  | Running setup command echo\n\
+         dep  | one\n\
+         dep  |  (1 of 1)...\n\
+         dep  | Running setup command echo\n\
+         dep  | one (1 of 1)...\n\
+         app  | Running echo\n\
+         app  | hello\n\
+         app  | ...\n"
+    );
+}
+
+/// Each continuation line gets the same styled prefix as the first, and a
+/// bold span split across lines stays bold on each, closed before every
+/// newline so no prefix inherits it.
+#[test]
+fn a_continuation_line_keeps_its_prefix_and_its_styling() {
+    let (logger, buffer, _, _) = logger_with_streams(true);
+    start_task(&logger, vec![info("app", Some("alpine:3"), None)]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("echo\nhello\n".into()),
+    });
+    let app = "\x1b[1;36mapp \x1b[0m";
+    assert_eq!(
+        &buffer.contents()[before..],
+        format!(
+            "{app} | Running \x1b[1mecho\x1b[0m\n\
+             {app} | \x1b[1mhello\x1b[0m\n\
+             {app} | ...\n"
+        )
+    );
+}
+
+/// `split('\n')`, not `lines()`: a message ending in a newline gets a
+/// trailing prefix-only line, as Batect's does. No production path sends
+/// one today; this pins the contract.
+#[test]
+fn a_trailing_newline_is_a_prefix_only_line() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("app", Some("alpine:3"), None)]);
+    let before = buffer.contents().len();
+    logger.post(TaskEvent::ContainerOutput {
+        container: "app".into(),
+        line: "last\n".into(),
+    });
+    assert_eq!(
+        &buffer.contents()[before..],
+        "app  | last\n\
+         app  | \n"
+    );
+}

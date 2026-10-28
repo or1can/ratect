@@ -101,6 +101,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- `-o all` prefixes every line of a multi-line command, setup command or image-build message, as in Batect, rather than only its first; each build line carries `Image build | `.
 - Under `run_as_current_user`, a `local` mount whose host path contains `:` has that whole path created when it's missing, as in Batect, not the part before the first `:`.
 - Under `run_as_current_user`, a mount point inside a `local` mount (or a directory-type `cache` mount) — another `local` mount, a `cache` mount or a `tmpfs` mount, at any depth — is created in that mount's host directory as the current user, as in Batect. Unlike Batect, a file or socket mounted there gets an empty file rather than a directory, and a mount point reached through a symlink leading out of that directory is left to the daemon.
 - An unknown task's error ends with how to list the project's tasks and get help, as in Batect: `ratect-compat --list-tasks` and `--help` for `ratect-compat`, `ratect tasks list` and `ratect run --help` for `ratect`. A missing prerequisite's error doesn't.

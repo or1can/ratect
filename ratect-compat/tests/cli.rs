@@ -140,6 +140,10 @@ fn dependency_output_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dependency-output.yml")
 }
 
+fn multi_line_commands_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/multi-line-commands.yml")
+}
+
 /// A process on a fresh pseudo-terminal, 24 rows by `cols` columns: its
 /// stdin, stdout and stderr are the one terminal unless its command
 /// redirects one, so `IsTerminal` is genuinely true for it. What it writes
@@ -2281,6 +2285,47 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
         assert!(
             line.contains(" | "),
             "unprefixed line in all-mode output: {line:?}\nfull:\n{stdout}"
+        );
+    }
+}
+
+/// Requires a running Docker daemon. Run explicitly with `cargo test --
+/// --ignored`.
+///
+/// A multi-line command or setup command is quoted in its `Running ...`
+/// line, and every line of that quote carries its container's prefix
+/// (ratect#476) — what `all_output_prefixes_every_line_...`'s fixture,
+/// with only one-line messages, can't show.
+#[test]
+#[ignore]
+fn all_output_prefixes_every_line_of_a_multi_line_command_via_docker() {
+    let output = ratect_command()
+        .args(["-o", "all", "-f"])
+        .arg(multi_line_commands_config_path())
+        .arg("multi-line")
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected in [
+        "dep        | Running setup command echo\n\
+         dep        | setup-ran\n\
+         dep        |  (1 of 1)...\n",
+        "app        | Running echo\n\
+         app        | task-ran\n\
+         app        | ...\n",
+        "app        | task-ran\n",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected:?}:\n{stdout}");
+    }
+    for line in stdout.lines() {
+        assert!(
+            line.contains(" | "),
+            "unprefixed line: {line:?}\nfull:\n{stdout}"
         );
     }
 }

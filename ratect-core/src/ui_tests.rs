@@ -72,6 +72,26 @@ fn console_bold_wraps_text_in_the_bold_sgr_only_when_enabled() {
     assert_eq!(plain.bold("x"), "x");
 }
 
+/// Styled text spanning lines is styled line by line, each span closed
+/// before its newline, so a line printed after a prefix (`all`) still
+/// carries its styling and the prefix doesn't inherit it. An empty line
+/// gets no escape at all.
+#[test]
+fn console_styles_multi_line_text_one_line_at_a_time() {
+    let console = Console::new(Box::new(std::io::sink()), true);
+    assert_eq!(console.bold("a\n\nb"), "\x1b[1ma\x1b[0m\n\n\x1b[1mb\x1b[0m");
+    assert_eq!(
+        console.colored(Color::Red, "a\nb\n"),
+        "\x1b[31ma\x1b[0m\n\x1b[31mb\x1b[0m\n"
+    );
+    assert_eq!(
+        console.bold_colored(Color::Red, "a\nb"),
+        "\x1b[1;31ma\x1b[0m\n\x1b[1;31mb\x1b[0m"
+    );
+    let plain = Console::new(Box::new(std::io::sink()), false);
+    assert_eq!(plain.bold("a\n\nb"), "a\n\nb");
+}
+
 #[test]
 fn console_stdout_forced_on_colors_even_though_the_test_harness_captures_stdout() {
     // `cargo test`'s own stdout capture means `std::io::stdout().is_terminal()`

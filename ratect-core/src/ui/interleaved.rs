@@ -119,17 +119,19 @@ impl InterleavedEventLogger {
         }
     }
 
-    /// `line` under `name`'s prefix, padded to the common column and
-    /// styled — bold always, in `color` when there is one, the default
-    /// foreground otherwise (never white: decisions/0017) — written to
-    /// `console`.
+    /// Each `\n`-separated line of `text` under `name`'s prefix, padded to
+    /// the common column and styled — bold always, in `color` when there is
+    /// one, the default foreground otherwise (never white: decisions/0017) —
+    /// written to `console`. Split with `split('\n')`, as Batect's
+    /// `TextRun.lines` does: a blank line, or a trailing newline, is a
+    /// prefix-only line rather than an unprefixed one.
     fn print_prefixed(
         &self,
         console: &Console,
         state: &State,
         name: &str,
         color: Option<Color>,
-        line: &str,
+        text: &str,
     ) {
         // Padded by hand (not `format!("{name:width$}")`, which pads by
         // `char` count) — `prefix_width` is a display-column measurement,
@@ -145,7 +147,9 @@ impl InterleavedEventLogger {
             Some(color) => console.bold_colored(color, &padded),
             None => console.bold(&padded),
         };
-        console.println(&format!("{prefix} | {line}"));
+        for line in text.split('\n') {
+            console.println(&format!("{prefix} | {line}"));
+        }
     }
 
     /// A milestone line belonging to `container`, on the progress console.
@@ -312,12 +316,16 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(&state, &container, "Building image...");
             }
             TaskEvent::ImageBuildProgress { tag, message } => {
+                // Every line its own `Image build | `, as Batect's build sink
+                // gives each one — not just a chunk's first.
                 if let Some(container) = Self::container_for_build_tag(&state, &tag) {
-                    self.print_for_container(
-                        &state,
-                        &container,
-                        &format!("Image build | {message}"),
-                    );
+                    for line in message.split('\n') {
+                        self.print_for_container(
+                            &state,
+                            &container,
+                            &format!("Image build | {line}"),
+                        );
+                    }
                 }
             }
             TaskEvent::ImageBuildCompleted { container } => {

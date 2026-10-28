@@ -1015,33 +1015,42 @@ impl Console {
     /// `text` wrapped in `color`'s ANSI escape when color is enabled,
     /// unchanged otherwise.
     pub fn colored(&self, color: Color, text: &str) -> String {
-        if self.color_enabled {
-            format!("\x1b[{}m{}\x1b[0m", color.ansi_code(), text)
-        } else {
-            text.to_string()
-        }
+        self.styled(color.ansi_code(), text)
     }
 
     /// `text` wrapped in the ANSI bold escape when color (SGR styling
     /// generally — `--no-color` suppresses bold too, matching Batect) is
     /// enabled, unchanged otherwise.
     pub fn bold(&self, text: &str) -> String {
-        if self.color_enabled {
-            format!("\x1b[1m{text}\x1b[0m")
-        } else {
-            text.to_string()
-        }
+        self.styled("1", text)
     }
 
     /// `text` both bold and in `color`, as one SGR sequence (`1;31`) rather
     /// than one nested in the other — what the `Error:`/`Warning:` markers
     /// are, and what a test pins byte for byte.
     pub fn bold_colored(&self, color: Color, text: &str) -> String {
-        if self.color_enabled {
-            format!("\x1b[1;{}m{}\x1b[0m", color.ansi_code(), text)
-        } else {
-            text.to_string()
+        self.styled(&format!("1;{}", color.ansi_code()), text)
+    }
+
+    /// `text` in SGR `code` when color is enabled — one span per line, each
+    /// reset before its newline, so `all` can split styled text into
+    /// prefixed lines without a prefix inheriting the style or a line
+    /// losing it (Batect's `TextRun.lines` keeps each piece's style the
+    /// same way). An empty line gets no escape.
+    fn styled(&self, code: &str, text: &str) -> String {
+        if !self.color_enabled {
+            return text.to_string();
         }
+        text.split('\n')
+            .map(|line| {
+                if line.is_empty() {
+                    String::new()
+                } else {
+                    format!("\x1b[{code}m{line}\x1b[0m")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Writes `text` exactly as given (no trailing newline appended),
