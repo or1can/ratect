@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The `all` output mode — a port of Batect's `InterleavedEventLogger`/
-//! `InterleavedOutput`: every line of output, Ratect's own milestones and
-//! *all* containers' stdout/stderr alike, prefixed with the container it
+//! The `all` output mode, modelled on Batect's `InterleavedEventLogger`/
+//! `InterleavedOutput`: every line it prints — Ratect's own milestones and
+//! *all* containers' stdout/stderr alike — prefixed with the container it
 //! belongs to (`name    | `), padded to a common column and colored
-//! round-robin so concurrent containers stay tellable-apart. The only mode
-//! that shows dependency output, setup-command output, and full image-build
-//! output at all. Its I/O policy ([`ContainerIoStreaming::Interleaved`])
-//! means no container gets a TTY or stdin and every container gets
-//! `TERM=dumb`, matching Batect.
+//! round-robin so concurrent containers stay tellable-apart; errors,
+//! warnings and notices are the exception, unprefixed on stderr. The only
+//! mode that shows dependency output, setup-command output, and full
+//! image-build output at all. Its I/O policy
+//! ([`ContainerIoStreaming::Interleaved`]) means no container gets a TTY or
+//! stdin and every container gets `TERM=dumb`, matching Batect.
 //!
-//! Differences from Batect's implementation, all deliberate:
+//! Decided differences from Batect's implementation, each recorded on
+//! `docs/differences-from-batect.md`:
 //! - Batect's own status lines carry a second inner `Batect | ` prefix
 //!   (`build | Batect | Running build...`); Ratect drops that inner prefix —
 //!   the outer one already says whose line it is, and Ratect's milestone
@@ -35,11 +37,22 @@
 //! - A failure is an unprefixed `Error: …` line on stderr, as in every
 //!   style, where Batect prints `<task> ! `/`<container> ! ` lines on
 //!   stdout; and a failed setup command or network check is reported, where
-//!   Batect's `all` prints nothing for either.
+//!   Batect's `all` prints nothing for either. A task that fails to run ends
+//!   with `<task> failed after <duration>.` rather than Batect's footer.
+//! - Cleanup opens by naming the failure it follows, and reports each
+//!   container's stop *and* removal and the network's removal, where Batect
+//!   prints `Cleaning up...` and each container's stop (decisions/0017).
 //! - The inner `Setup command N | ` and `Image build | ` labels are in the
-//!   default foreground, where Batect paints them white (decisions/0017).
+//!   default foreground, where Batect paints them white, and the ` | `
+//!   separator is unstyled, where Batect bolds and colours it with the name
+//!   (decisions/0017).
+//! - The prefix colours — see `CONTAINER_COLORS`.
 //!
-//! The prefix colours also differ — see `CONTAINER_COLORS`.
+//! Not exhaustive, and some differences are still open parity questions,
+//! neither decided nor fixed: Ratect prints lines Batect doesn't — a
+//! dependency's `Starting container...` where Batect prints its `Running`
+//! line (ratect#498), `Container ran to completion.` for a dependency that
+//! exits on its own, and `exited unexpectedly with exit code N.`
 //!
 //! Streams (decisions/0017): every prefixed line goes to the progress
 //! console — stdout under `ratect-compat` (Batect's placement, kept), stderr
