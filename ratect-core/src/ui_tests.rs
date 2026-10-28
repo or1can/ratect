@@ -32,12 +32,44 @@ fn allows_interactive_is_true_only_for_task_container_only() {
     assert!(!ContainerIoStreaming::Interleaved.allows_interactive());
 }
 
+/// Every `Color`'s SGR code, the same as Batect's `ConsoleColor` for each.
+/// The `match` has no wildcard, so a new variant fails to compile until it
+/// has a row here.
 #[test]
-fn console_colors_only_when_enabled() {
+fn console_colored_wraps_text_in_each_colors_sgr_code_only_when_enabled() {
+    let expected_code = |color: Color| match color {
+        Color::Red => "31",
+        Color::Green => "32",
+        Color::Yellow => "33",
+        Color::Blue => "34",
+        Color::Magenta => "35",
+        Color::Cyan => "36",
+    };
     let colored = Console::new(Box::new(std::io::sink()), true);
-    assert_eq!(colored.colored(Color::Green, "0"), "\x1b[32m0\x1b[0m");
     let plain = Console::new(Box::new(std::io::sink()), false);
-    assert_eq!(plain.colored(Color::Red, "1"), "1");
+    for color in [
+        Color::Red,
+        Color::Green,
+        Color::Yellow,
+        Color::Blue,
+        Color::Magenta,
+        Color::Cyan,
+    ] {
+        assert_eq!(
+            colored.colored(color, "x"),
+            format!("\x1b[{}mx\x1b[0m", expected_code(color)),
+            "{color:?}"
+        );
+        assert_eq!(plain.colored(color, "x"), "x", "{color:?}");
+    }
+}
+
+#[test]
+fn console_bold_wraps_text_in_the_bold_sgr_only_when_enabled() {
+    let colored = Console::new(Box::new(std::io::sink()), true);
+    assert_eq!(colored.bold("x"), "\x1b[1mx\x1b[0m");
+    let plain = Console::new(Box::new(std::io::sink()), false);
+    assert_eq!(plain.bold("x"), "x");
 }
 
 #[test]
