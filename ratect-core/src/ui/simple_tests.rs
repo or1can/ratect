@@ -306,6 +306,28 @@ fn task_finished_colors_exit_code_by_outcome() {
     );
 }
 
+/// A task that failed to run ends with its own summary line on the
+/// progress console, where a finished one's goes, and nothing on stderr:
+/// the error was reported when it happened (ratect#473).
+#[test]
+fn task_failed_prints_the_failed_summary_line() {
+    let buffer = SharedBuffer::default();
+    let stderr = SharedBuffer::default();
+    let logger = SimpleEventLogger::new(
+        Console::new(Box::new(buffer.clone()), true),
+        Console::new(Box::new(stderr.clone()), true),
+    );
+    logger.post(TaskEvent::TaskFailed {
+        task: "build".into(),
+        duration: Duration::from_millis(3200),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "\x1b[1mbuild\x1b[0m failed after 3.2s.\n"
+    );
+    assert_eq!(stderr.contents(), "");
+}
+
 /// A prerequisites-only task's line, Batect's words with its name in bold,
 /// separated from the task before it as a task's own `Running` line is
 /// (ratect#364).

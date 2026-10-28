@@ -32,12 +32,44 @@ fn allows_interactive_is_true_only_for_task_container_only() {
     assert!(!ContainerIoStreaming::Interleaved.allows_interactive());
 }
 
+/// Every `Color`'s SGR code, the same as Batect's `ConsoleColor` for each.
+/// The `match` has no wildcard, so a new variant fails to compile until it
+/// has a row here.
 #[test]
-fn console_colors_only_when_enabled() {
+fn console_colored_wraps_text_in_each_colors_sgr_code_only_when_enabled() {
+    let expected_code = |color: Color| match color {
+        Color::Red => "31",
+        Color::Green => "32",
+        Color::Yellow => "33",
+        Color::Blue => "34",
+        Color::Magenta => "35",
+        Color::Cyan => "36",
+    };
     let colored = Console::new(Box::new(std::io::sink()), true);
-    assert_eq!(colored.colored(Color::Green, "0"), "\x1b[32m0\x1b[0m");
     let plain = Console::new(Box::new(std::io::sink()), false);
-    assert_eq!(plain.colored(Color::Red, "1"), "1");
+    for color in [
+        Color::Red,
+        Color::Green,
+        Color::Yellow,
+        Color::Blue,
+        Color::Magenta,
+        Color::Cyan,
+    ] {
+        assert_eq!(
+            colored.colored(color, "x"),
+            format!("\x1b[{}mx\x1b[0m", expected_code(color)),
+            "{color:?}"
+        );
+        assert_eq!(plain.colored(color, "x"), "x", "{color:?}");
+    }
+}
+
+#[test]
+fn console_bold_wraps_text_in_the_bold_sgr_only_when_enabled() {
+    let colored = Console::new(Box::new(std::io::sink()), true);
+    assert_eq!(colored.bold("x"), "\x1b[1mx\x1b[0m");
+    let plain = Console::new(Box::new(std::io::sink()), false);
+    assert_eq!(plain.bold("x"), "x");
 }
 
 #[test]
@@ -136,6 +168,11 @@ fn the_quiet_logger_prints_the_stderr_classes_and_no_progress() {
         exit_code: 0,
         duration: Duration::from_secs(1),
     });
+    // `quiet` has no summary line of either form (ratect#473).
+    logger.post(TaskEvent::TaskFailed {
+        task: "build".into(),
+        duration: Duration::from_secs(1),
+    });
     assert_eq!(
         buffer.contents(),
         "Left in place (--no-cleanup): app (abc)\n"
@@ -203,6 +240,23 @@ fn format_task_summary_colors_exit_code_by_outcome() {
     assert_eq!(
         format_task_summary(&console, "lint", 3, Duration::from_secs(61)),
         "lint finished with exit code \x1b[31m3\x1b[0m in 1m 1.0s."
+    );
+}
+
+/// The summary line a task that failed to run ends with: the name bold, as
+/// every user-supplied name is (decisions/0017), and no colour — it says
+/// the run ended, never why (ratect#473).
+#[test]
+fn format_task_failed_summary_bolds_the_name_and_colours_nothing() {
+    let console = Console::new(Box::new(std::io::sink()), true);
+    assert_eq!(
+        format_task_failed_summary(&console, "build", Duration::from_millis(2300)),
+        "\x1b[1mbuild\x1b[0m failed after 2.3s."
+    );
+    let plain = Console::new(Box::new(std::io::sink()), false);
+    assert_eq!(
+        format_task_failed_summary(&plain, "lint", Duration::from_secs(61)),
+        "lint failed after 1m 1.0s."
     );
 }
 
@@ -281,6 +335,101 @@ fn an_explicit_fancy_refusal_names_the_progress_consoles_stream() {
             )),
             "{error}"
         );
+    }
+}
+
+/// `create_event_sink(Some(Fancy), …)` on a stdout console with these facts
+/// (stderr not a terminal), as `ratect-compat` builds it.
+fn explicit_fancy(
+    tty: bool,
+    term: Option<&str>,
+    dimensions: bool,
+) -> anyhow::Result<Arc<dyn EventSink>> {
+    let terminal = TerminalFacts {
+        term: term.map(str::to_string),
+        stdout_is_terminal: tty,
+        stderr_is_terminal: false,
+        console_dimensions_available: dimensions,
+    };
+    create_event_sink(
+        Some(OutputStyle::Fancy),
+        ColorMode::Off,
+        &terminal,
+        ProgressStream::Stdout,
+    )
+}
+
+/// An explicit `fancy` asks less of the console than auto-selection does:
+/// a terminal with `TERM` unset is very likely capable, and Batect renders
+/// fancy there too (ratect#480).
+#[test]
+fn an_explicit_fancy_is_honoured_on_a_terminal_with_term_unset() {
+    assert!(explicit_fancy(true, None, true).is_ok());
+}
+
+/// `TERM=dumb` says the terminal can't move the cursor, so an explicit
+/// `fancy` is still refused there — a recorded divergence, since Batect
+/// writes the escapes anyway — and the refusal says that's why.
+#[test]
+fn an_explicit_fancy_is_refused_on_a_dumb_terminal_naming_term() {
+    let error = explicit_fancy(true, Some("dumb"), true)
+        .err()
+        .expect("TERM=dumb is refused");
+    let message = error.to_string();
+    assert!(message.contains("TERM is 'dumb'"), "{message}");
+    assert!(message.contains("use --output simple"), "{message}");
+    assert!(!message.contains("TERM is unset"), "{message}");
+}
+
+#[test]
+fn an_explicit_fancy_is_refused_when_stdout_is_not_a_terminal() {
+    let error = explicit_fancy(false, Some("xterm"), true)
+        .err()
+        .expect("a non-terminal stdout is refused");
+    assert!(
+        error.to_string().contains("stdout isn't a terminal"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_explicit_fancy_is_refused_when_the_terminal_size_is_unknown() {
+    let error = explicit_fancy(true, Some("xterm"), false)
+        .err()
+        .expect("unqueryable dimensions are refused");
+    assert!(
+        error
+            .to_string()
+            .contains("terminal size can't be determined"),
+        "{error}"
+    );
+}
+
+/// Picking the style picks the container I/O policy, as Batect's
+/// `EventLoggerProvider` does: only `all` follows dependency output; every
+/// other style streams the task container alone.
+#[test]
+fn only_all_output_streams_more_than_the_task_container() {
+    let terminal = TerminalFacts {
+        term: Some("xterm".to_string()),
+        stdout_is_terminal: true,
+        stderr_is_terminal: true,
+        console_dimensions_available: true,
+    };
+    for (style, policy) in [
+        (OutputStyle::Simple, ContainerIoStreaming::TaskContainerOnly),
+        (OutputStyle::Quiet, ContainerIoStreaming::TaskContainerOnly),
+        (OutputStyle::Fancy, ContainerIoStreaming::TaskContainerOnly),
+        (OutputStyle::All, ContainerIoStreaming::Interleaved),
+    ] {
+        let sink = create_event_sink(
+            Some(style),
+            ColorMode::Off,
+            &terminal,
+            ProgressStream::Stdout,
+        )
+        .expect("every style can be built on an interactive console");
+        assert_eq!(sink.container_io_streaming(), policy, "{style:?}");
     }
 }
 

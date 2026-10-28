@@ -2587,6 +2587,37 @@ fn a_tasks_own_exit_code_prints_no_error_line_but_ratects_own_failure_does_via_d
     );
 }
 
+/// Requires a running Docker daemon. Run explicitly with
+/// `cargo test -- --ignored`.
+///
+/// A task that fails to run once started ends, under `simple`, with the
+/// failed summary line on `ratect`'s progress console, stderr — after its
+/// one `Error:` line, which nothing repeats (ratect#473).
+#[test]
+#[ignore]
+fn a_task_that_fails_to_run_ends_with_the_failed_summary_line_via_docker() {
+    let _guard = serial_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(exit_code_fixture_path())
+        .args(["run", "unpullable", "-o", "simple"])
+        .env("RUST_LOG", "off")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(125), "stderr:\n{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .last()
+            .is_some_and(|line| line.starts_with("unpullable failed after ")),
+        "the last line on stderr:\n{stderr}"
+    );
+    assert_eq!(stderr.matches("Error:").count(), 1, "stderr:\n{stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+}
+
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
 /// Unix-only because it sends a signal.

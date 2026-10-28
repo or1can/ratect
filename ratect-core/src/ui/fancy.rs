@@ -902,9 +902,10 @@ impl EventSink for FancyEventLogger {
                     self.repaint_cleanup(&mut state);
                 }
             }
-            // Cleanup is over, so the countdown goes: no summary follows an
-            // infrastructure failure to replace it, and nothing may repaint
-            // it under a line reporting what cleanup left.
+            // Cleanup is over, so the countdown goes now rather than when
+            // the summary line replaces it: a line reporting what cleanup
+            // left prints in between, and nothing may repaint the countdown
+            // under it.
             TaskEvent::CleanupFinished => {
                 state.cleanup_live = false;
                 self.clear_cleanup_line(&mut state);
@@ -928,10 +929,16 @@ impl EventSink for FancyEventLogger {
                     duration,
                 ));
             }
-            // Nothing left live by now: `RunEnded` froze the startup block
-            // and `CleanupFinished` cleared the countdown. The error itself
-            // was an `Error` event, before cleanup.
-            TaskEvent::TaskFailed { .. } => {}
+            // The failed counterpart of the summary above, in the same
+            // place. The error itself was an `Error` event, before cleanup.
+            TaskEvent::TaskFailed { task, duration } => {
+                self.clear_cleanup_line(&mut state);
+                self.console.println(&super::format_task_failed_summary(
+                    &self.console,
+                    &task,
+                    duration,
+                ));
+            }
             // Interleaved-mode events — never posted under this logger's
             // (default) TaskContainerOnly streaming policy, and setup
             // command output has no place in the live block regardless.

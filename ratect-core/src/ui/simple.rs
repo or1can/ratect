@@ -107,6 +107,13 @@ impl EventSink for SimpleEventLogger {
                     duration,
                 ));
             }
+            TaskEvent::TaskFailed { task, duration } => {
+                self.console.println(&super::format_task_failed_summary(
+                    &self.console,
+                    &task,
+                    duration,
+                ));
+            }
             TaskEvent::ImagePullStarting { image } => {
                 self.console.println(&format!("Pulling {image}..."));
             }
@@ -211,7 +218,6 @@ impl EventSink for SimpleEventLogger {
             | TaskEvent::ContainerCreated { .. }
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork
-            | TaskEvent::TaskFailed { .. }
             | TaskEvent::RunEnded { .. }
             | TaskEvent::CleanupFinished
             | TaskEvent::ContainerOutput { .. }

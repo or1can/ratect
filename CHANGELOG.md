@@ -62,6 +62,7 @@ history, from when it was the only binary.
 
 ### Added
 
+- A task that fails to run once started — an image that won't pull, a dependency that never becomes healthy, a failing setup command — ends with a summary line, `<task> failed after <duration>.`, where a finished task's `finished with exit code N` goes, in every style but `quiet`.
 - `ratect doctor` and `ratect config validate` (ratect only) warn when a container's `dependencies`, a task's `dependencies` or a task's `prerequisites` gives the same entry more than once, naming the container or task, the field and the entry. The project still loads, and the entry still starts or runs once.
 - `ratect doctor` (ratect only) reports a `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` that is neither true nor false as a problem, naming the variable and its value.
 - After a `--no-cleanup*` run, a line per kept container says how to see its output (`docker logs`) and run a command in it (`docker exec -it`, after `docker start` for a container that isn't running).
@@ -181,6 +182,7 @@ history, from when it was the only binary.
 - An existing `.batect/caches/key` is never overwritten. One with no key line or more than one, or that can't be read, is an error naming the file, as in Batect, instead of being replaced with a new key or having its first key used. Bytes in it that aren't UTF-8 no longer count as unreadable. A key path that is a symbolic link to nothing is an error too, instead of a new key file being created wherever it points.
 - `image_pull_policy: Always` is honoured even when another container already used the same image under `IfNotPresent`, including through `--override-image`.
 - A Ctrl+C, `SIGTERM` or `SIGHUP` while a run is still connecting to Docker ends it promptly with the signal's exit code, instead of waiting for the connection to finish or fail.
+- An explicit `-o fancy` on a terminal with `TERM` unset is honoured, as in Batect, instead of refused. `TERM=dumb` is still refused, and the refusal now names the one reason that applies.
 
 ### Security
 

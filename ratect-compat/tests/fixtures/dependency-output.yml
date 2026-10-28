@@ -1,0 +1,27 @@
+# Proves a dependency's own output is shown only under `all`: the
+# dependency writes one marker to stdout and another to stderr, and under
+# `simple`, `quiet` and `fancy` neither reaches either of Ratect's streams,
+# as Batect's TaskContainerOnlyIOStreamingOptions never attaches to it
+# (ratect#512). The health check passes only once both markers are written,
+# so the task — and the run — can't finish before the dependency has
+# printed them, and their absence means something.
+project_name: ratect-dependency-output-test
+containers:
+  dep:
+    image: alpine:3.18.2
+    command: sh -c "echo dependency-stdout-marker; echo dependency-stderr-marker >&2; touch /tmp/printed; sleep 300"
+    # `sh` as PID 1 ignores the stop signal, which would cost every test
+    # Docker's whole grace period in cleanup.
+    enable_init_process: true
+    health_check:
+      command: test -f /tmp/printed
+      interval: 200ms
+      retries: 50
+  app:
+    image: alpine:3.18.2
+    dependencies: [dep]
+tasks:
+  with-dependency:
+    run:
+      container: app
+      command: echo task-stdout-marker

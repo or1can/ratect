@@ -420,9 +420,15 @@ impl EventSink for InterleavedEventLogger {
             TaskEvent::RunEnded { .. } => {
                 self.flush_preamble_if_pending(&mut state);
             }
-            // The error was an `Error` event, before cleanup; and
+            // The error itself was an `Error` event, before cleanup.
+            TaskEvent::TaskFailed { task, duration } => {
+                self.print_for_task(
+                    &state,
+                    &super::format_task_failed_summary(&self.console, &task, duration),
+                );
+            }
             // `CleanupStarting`'s line already said cleanup began.
-            TaskEvent::TaskFailed { .. } | TaskEvent::CleanupFinished => {}
+            TaskEvent::CleanupFinished => {}
             // Printed on stderr before the match (`print_stderr_class`).
             TaskEvent::Error { .. } | TaskEvent::Warning { .. } | TaskEvent::Notice { .. } => {}
         }

@@ -52,9 +52,12 @@ complete.` (or the error saying what cleanup left behind) rather than a
 trailing `Error: Interrupted`. `Error:` is reserved for Ratect's own failures: it could
 not run the task, or could not clean up after it. A failure to run a task that
 has started — an image that won't pull, a dependency that never becomes
-healthy — is reported when it happens, before any cleanup line; a failure
-before any task starts, such as a config that doesn't load, is printed as the
-run exits.
+healthy — is reported when it happens, before any cleanup line, and outside
+`quiet` the run then ends with the summary line's other form, `<task> failed
+after <duration>.`, where `finished with exit code N` would have gone. A
+failure before any task starts, such as a config that doesn't load, is printed
+as the run exits, with no summary line, as is a prerequisite's failure for the
+task waiting on it: the prerequisite's own line is the one printed.
 
 Each style is shown below from the *same* real run — `ratect run journey-test`
 against
@@ -89,11 +92,13 @@ What the recording can't tell you: there is no spinner — the animation is
 purely rewriting the block's lines in place, as Batect's is — and lines are
 clipped to the terminal's current width. After that width changes, the block is
 drawn afresh below the old one rather than over it, since the terminal has
-re-wrapped the old lines. Because it repaints, it requires an interactive
-console: an explicit `-o fancy` without one, or with `TERM=dumb`, fails up front
-with a clear error naming the stream it checked (Batect instead accepts it,
-then crashes on the first repaint when stdout isn't a terminal, or garbles a
-`TERM=dumb` terminal with cursor movements it can't perform). Works with
+re-wrapped the old lines. Because it repaints, it needs a terminal: an explicit
+`-o fancy` asks less than auto-selection does — `TERM` may be unset, but not
+`dumb` — and fails up front, with an error naming the reason, when the stream it
+checked isn't a terminal, `TERM` is `dumb`, or the terminal size can't be
+determined (Batect instead accepts it, then crashes on the first repaint when
+stdout isn't a terminal, or garbles a `TERM=dumb` terminal with cursor movements
+it can't perform). Works with
 [`--no-color`](#colour) — the repaint stays; bold/color go — a combination
 Batect rejects.
 
