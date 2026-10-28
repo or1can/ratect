@@ -512,6 +512,25 @@ fn build_dependency_graph(
     Ok(graph)
 }
 
+/// `container`'s direct dependencies in the order they were declared, each
+/// once at its first position — for the task's own container, `task`'s
+/// `dependencies` first, then its own. What a display orders by, as Batect's
+/// insertion-ordered graph does; `build_dependency_graph`'s sorted lists are
+/// what startup walks, and are unaffected.
+fn declared_dependencies(container: &Container, task: Option<&[String]>) -> Vec<String> {
+    let mut declared: Vec<String> = Vec::new();
+    for name in task
+        .into_iter()
+        .flatten()
+        .chain(container.dependencies.iter().flatten())
+    {
+        if !declared.contains(name) {
+            declared.push(name.clone());
+        }
+    }
+    declared
+}
+
 /// Whether `name` gets lines of its own — progress, a removal, a hint — in
 /// what a run prints: every container but one whose readiness is reported
 /// as another's, an `external_health_check`'s companion, which is an
@@ -2730,10 +2749,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         build_tag: container_config
                             .and_then(|c| c.build_directory.as_ref())
                             .map(|_| format!("{}-{}", self.project.config.project_name, name)),
-                        dependencies: dependencies
-                            .iter()
+                        dependencies: container_config
+                            .map_or_else(
+                                || dependencies.clone(),
+                                |config| {
+                                    let task_dependencies = (name == &run.container)
+                                        .then_some(task.dependencies.as_deref())
+                                        .flatten();
+                                    declared_dependencies(config, task_dependencies)
+                                },
+                            )
+                            .into_iter()
                             .filter(|dependency| narrated(dependency))
-                            .cloned()
                             .collect(),
                         is_task_container: name == &run.container,
                     }

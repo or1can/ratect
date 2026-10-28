@@ -5985,6 +5985,46 @@ async fn an_external_health_checks_companion_reports_the_checked_containers_read
     }
 }
 
+/// An external health check's companion gets no line of its own, and the
+/// container depending on it waits only for the container it checks.
+#[tokio::test]
+async fn an_external_health_checks_companion_is_left_out_of_the_graph() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        COMPANION,
+        std::time::Duration::ZERO,
+        0,
+    );
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_an_external_health_check()),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let mut graph: Vec<(String, Vec<String>)> = sink
+        .events()
+        .into_iter()
+        .find_map(|event| match event {
+            TaskEvent::TaskGraphResolved { containers } => Some(containers),
+            _ => None,
+        })
+        .expect("the graph is posted")
+        .into_iter()
+        .map(|info| (info.name, info.dependencies))
+        .collect();
+    graph.sort();
+    assert_eq!(
+        graph,
+        vec![
+            ("app".to_string(), names(&["database"])),
+            ("database".to_string(), vec![]),
+        ]
+    );
+}
+
 /// A failed external check is a failure of the container it checks, in that
 /// container's name — carrying what the check actually saw, which only the
 /// companion's own output knows, and naming the companion so it can still be
@@ -10886,6 +10926,32 @@ async fn a_task_level_dependency_brings_its_own_dependencies() {
     assert!(
         sidecar_start_index(&events, "c") < sidecar_start_index(&events, "b"),
         "'b' waits for 'c': {events:?}"
+    );
+}
+
+/// The graph event carries each container's dependencies in the order they
+/// were declared — for the task's own container, the task-level ones first,
+/// each name once at its first position — for a display to order by, as
+/// Batect's insertion-ordered graph does. What starts, and when, is
+/// unaffected.
+#[tokio::test]
+async fn the_graph_carries_dependencies_in_declaration_order() {
+    let config = config_with_task_dependencies(
+        &["c", "a"],
+        &["b", "a"],
+        &[("a", &[]), ("b", &["c", "a"]), ("c", &[])],
+    );
+
+    let (graph, _) = resolved_graph(config).await;
+
+    assert_eq!(
+        graph,
+        vec![
+            ("a".to_string(), vec![], false),
+            ("app".to_string(), names(&["b", "a", "c"]), true),
+            ("b".to_string(), names(&["c", "a"]), false),
+            ("c".to_string(), vec![], false),
+        ]
     );
 }
 

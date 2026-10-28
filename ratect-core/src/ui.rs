@@ -411,8 +411,11 @@ pub struct TaskContainerInfo {
     /// `Some` for a `build_directory` container — the tag
     /// (`<project>-<name>`) [`TaskEvent::ImageBuildProgress`] events carry.
     pub build_tag: Option<String>,
-    /// The container's own direct dependencies, for "waiting for X to be
-    /// ready" descriptions.
+    /// The container's own direct dependencies, in the order they were
+    /// declared — for the task's own container, the task's `dependencies`
+    /// first — each once: what a display orders its lines by, and what it
+    /// shows a container waiting for. (Sorted instead for a container the
+    /// configuration doesn't declare, which a loaded one never has.)
     pub dependencies: Vec<String>,
     /// `true` for the task's own container (the one
     /// [`TaskEvent::RunningTaskContainer`] is about, whose output streams

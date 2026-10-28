@@ -39,7 +39,7 @@
 //!   space, like the task's own command; Batect fails the task instead.
 
 use super::{Console, EventSink, TaskContainerInfo, TaskEvent};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthChar;
@@ -71,9 +71,8 @@ pub struct FancyEventLogger {
 
 #[derive(Default)]
 struct State {
-    /// One display line per container in the current task's graph —
-    /// alphabetical, task container last (a deterministic Ratect choice;
-    /// Batect's own order falls out of its graph's node set).
+    /// One display line per container in the current task's graph, in
+    /// Batect's order — see [`dependency_post_order`].
     lines: Vec<ContainerLine>,
     /// How many block lines are currently painted on screen (0 = nothing
     /// painted yet, so the first paint doesn't cursor-up) — exact only
@@ -337,6 +336,43 @@ fn display_width(text: &str) -> usize {
         }
     }
     width
+}
+
+/// `containers` in Batect's startup-block order, which falls out of its
+/// graph's insertion-ordered node map: depth first from the task container,
+/// each container's dependencies in the order they were declared, every
+/// container after what it depends on — so the task container comes last,
+/// and a shared dependency once, where it is first reached. A container the
+/// walk can't reach (none, from the engine) follows, by name.
+fn dependency_post_order(containers: Vec<TaskContainerInfo>) -> Vec<TaskContainerInfo> {
+    fn visit(
+        name: &str,
+        by_name: &mut BTreeMap<String, TaskContainerInfo>,
+        ordered: &mut Vec<TaskContainerInfo>,
+    ) {
+        let Some(info) = by_name.remove(name) else {
+            return;
+        };
+        for dependency in &info.dependencies {
+            visit(dependency, by_name, ordered);
+        }
+        ordered.push(info);
+    }
+
+    let root = containers
+        .iter()
+        .find(|info| info.is_task_container)
+        .map(|info| info.name.clone());
+    let mut by_name: BTreeMap<String, TaskContainerInfo> = containers
+        .into_iter()
+        .map(|info| (info.name.clone(), info))
+        .collect();
+    let mut ordered = Vec::with_capacity(by_name.len());
+    if let Some(root) = root {
+        visit(&root, &mut by_name, &mut ordered);
+    }
+    ordered.extend(by_name.into_values());
+    ordered
 }
 
 const CURSOR_UP_ONE_AND_CLEAR: &str = "\x1b[1A\r\x1b[2K";
@@ -631,13 +667,7 @@ impl EventSink for FancyEventLogger {
                     .println(&super::nothing_more_to_do(&self.console, &task));
             }
             TaskEvent::TaskGraphResolved { containers } => {
-                let mut containers = containers;
-                // Alphabetical, task container last — its line is the one
-                // the eye follows into the streamed output below the block.
-                containers.sort_by(|a, b| {
-                    (a.is_task_container, &a.name).cmp(&(b.is_task_container, &b.name))
-                });
-                state.lines = containers
+                state.lines = dependency_post_order(containers)
                     .into_iter()
                     .map(|info| ContainerLine {
                         info,

@@ -161,8 +161,22 @@ fn clip_to_width_uses_real_display_width_not_char_count() {
     assert_eq!(clip_to_width(wide, Some(8)), "数据...");
 }
 
+/// The block's lines in Batect's order: a depth-first post-order of the
+/// graph from the task container, each container's dependencies visited in
+/// the order they were declared — so every container comes after what it
+/// depends on, and the task container last.
+fn painted_order(containers: Vec<TaskContainerInfo>) -> Vec<String> {
+    let rows = containers.len();
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved { containers });
+    last_frame(&buffer, rows)
+        .into_iter()
+        .map(|row| row.split(':').next().unwrap().to_string())
+        .collect()
+}
+
 #[test]
-fn graph_resolution_paints_one_line_per_container_task_container_last() {
+fn graph_resolution_paints_one_line_per_container() {
     let (logger, buffer) = logger_with_width(120);
     logger.post(TaskEvent::TaskStarting {
         task: "test".into(),
@@ -178,6 +192,43 @@ fn graph_resolution_paints_one_line_per_container_task_container_last() {
         "Running test...\n\
              \r\x1b[2Kdb: ready to pull image postgres:15\n\
              \r\x1b[2Kapp: ready to pull image app:1\n"
+    );
+}
+
+#[test]
+fn the_block_follows_the_declared_order_of_dependencies() {
+    assert_eq!(
+        painted_order(vec![
+            info("alpha", None, &[], false),
+            info("app", None, &["zeta", "alpha"], true),
+            info("zeta", None, &[], false),
+        ]),
+        ["zeta", "alpha", "app"]
+    );
+}
+
+#[test]
+fn the_block_puts_each_container_after_what_it_depends_on() {
+    assert_eq!(
+        painted_order(vec![
+            info("alpha", None, &["zeta"], false),
+            info("app", None, &["alpha"], true),
+            info("zeta", None, &[], false),
+        ]),
+        ["zeta", "alpha", "app"]
+    );
+}
+
+#[test]
+fn the_block_paints_a_shared_dependency_once_where_first_reached() {
+    assert_eq!(
+        painted_order(vec![
+            info("app", None, &["b", "c"], true),
+            info("b", None, &["d"], false),
+            info("c", None, &["d"], false),
+            info("d", None, &[], false),
+        ]),
+        ["d", "b", "c", "app"]
     );
 }
 
