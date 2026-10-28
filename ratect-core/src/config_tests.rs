@@ -13080,13 +13080,19 @@ fn evaluate_errors_on_undeclared_config_variable_reference() {
         forbid_telemetry: None,
     };
 
-    let result = config.check_and_evaluate_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        |_| None,
+    let err = config
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+            None
+        })
+        .unwrap_err();
+    // The other side of `evaluate_errors_on_declared_config_variable_with_no_value`:
+    // absent from the map is "not declared", never "has no value".
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("Config variable 'missing' is not declared"),
+        "{chain}"
     );
-    assert!(result.is_err());
+    assert!(!chain.contains("has no value"), "{chain}");
 }
 
 #[test]
@@ -13112,13 +13118,54 @@ fn evaluate_errors_on_declared_config_variable_with_no_value() {
         forbid_telemetry: None,
     };
 
-    let result = config.check_and_evaluate_with(
-        Path::new("/base"),
-        &HashMap::new(),
-        &HashMap::new(),
-        |_| None,
+    let err = config
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &HashMap::new(), |_| {
+            None
+        })
+        .unwrap_err();
+    // Declared with no default and no override is present-with-no-value
+    // (Batect's `ConfigVariablesProvider` maps it to null, XCV-2), so it
+    // must not be reported as undeclared.
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("Config variable 'env_name' has no value"),
+        "{chain}"
     );
-    assert!(result.is_err());
+    assert!(!chain.contains("not declared"), "{chain}");
+}
+
+#[test]
+fn evaluate_fills_a_declared_defaultless_config_variable_from_an_override() {
+    let mut environment = HashMap::new();
+    environment.insert("FOO".to_string(), "<env_name".to_string());
+    let mut config_variables = IndexMap::new();
+    config_variables.insert(
+        "env_name".to_string(),
+        ConfigVariable {
+            default: None,
+            description: None,
+        },
+    );
+    let mut config = Config {
+        project_name: "demo".to_string(),
+        containers: IndexMap::from([(
+            "build-env".to_string(),
+            container_with_environment(environment),
+        )]),
+        tasks: IndexMap::new(),
+        config_variables: Some(config_variables),
+        forbid_telemetry: None,
+    };
+
+    let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
+    config
+        .check_and_evaluate_with(Path::new("/base"), &HashMap::new(), &overrides, |_| None)
+        .unwrap();
+
+    assert_eq!(
+        config.containers["build-env"].environment.as_ref().unwrap()["FOO"],
+        "prod"
+    );
 }
 
 #[test]
