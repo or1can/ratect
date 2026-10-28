@@ -1952,3 +1952,150 @@ fn a_setup_command_is_bold() {
         )]
     );
 }
+
+/// What Batect's fancy bolds beyond names: the task's command and the image
+/// while it is pulled — and the image before that too, since it is the
+/// user's value (decisions/0017) — and never anything in the palette's
+/// white.
+#[test]
+fn the_command_and_a_pulling_image_are_bold() {
+    let (logger, buffer) = colored_logger(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: ready to pull image {}",
+            bold("app"),
+            bold("app:1")
+        )]
+    );
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "app:1".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: pulling image {}...",
+            bold("app"),
+            bold("app:1")
+        )]
+    );
+    logger.post(TaskEvent::ImagePullProgress {
+        image: "app:1".into(),
+        message: "Downloading".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        [format!(
+            "{}: pulling {}: Downloading",
+            bold("app"),
+            bold("app:1")
+        )]
+    );
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test".into()),
+    });
+    assert!(
+        buffer.contents().ends_with(&format!(
+            "\r\x1b[2K{}: running {}\n\n",
+            bold("app"),
+            bold("cargo test")
+        )),
+        "{:?}",
+        buffer.contents()
+    );
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(100),
+    });
+    assert!(
+        !buffer.contents().contains("\x1b[37m"),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
+/// A cut inside the bold command still closes its style, within the width.
+#[test]
+fn a_line_clipped_inside_a_bold_command_ends_its_style() {
+    let (logger, buffer) = colored_logger(20);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test --workspace".into()),
+    });
+    let row = &last_frame(&buffer, 1)[0];
+    assert_eq!(
+        row,
+        &format!("{}: running {}", bold("app"), "\x1b[1mcarg...\x1b[0m")
+    );
+    assert!(display_width(row) <= 20);
+}
+
+/// With colour off, the lines that bold a command, an image or names carry
+/// no styling at all — the same text, byte for byte.
+#[test]
+fn with_colour_off_the_bold_lines_are_plain_text() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("dep", Some("dep:1"), &[], false),
+            info("db", None, &[], false),
+            info("app", Some("app:1"), &["dep", "db"], true),
+        ],
+    });
+    assert_eq!(last_frame(&buffer, 3)[0], "dep: ready to pull image dep:1");
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "dep:1".into(),
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "app:1".into(),
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "db".into(),
+        command: "./seed.sh".into(),
+        index: 1,
+        total: 1,
+        run_in: Some("dep".into()),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3),
+        [
+            "dep: pulling image dep:1...",
+            "db: running setup command ./seed.sh (1 of 1) in dep...",
+            "app: waiting for dependencies dep and db to be ready...",
+        ]
+    );
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test".into()),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: "t".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(100),
+    });
+    let contents = buffer.contents();
+    assert!(
+        contents.contains("\r\x1b[2Kapp: running cargo test\n"),
+        "{contents:?}"
+    );
+    assert!(
+        contents.ends_with("t finished with exit code 0 in 0.1s.\n"),
+        "{contents:?}"
+    );
+    assert!(
+        !contents.contains("\x1b[1m") && !contents.contains("\x1b[0m"),
+        "{contents:?}"
+    );
+}

@@ -406,8 +406,10 @@ tables above:
   Batect's blank line before the error: the bold red `Error:` marker separates
   it, and under `quiet` a leading newline would be the first byte on stderr.
 - **No white text.** Batect paints its `simple` status lines, `all`'s
-  task-level prefix, and `all`'s inner `Setup command N | ` and
-  `Image build | ` labels, in the terminal palette's white (SGR 37) — light
+  task-level prefix, `all`'s inner `Setup command N | ` and
+  `Image build | ` labels, and every line `fancy` draws (the startup block,
+  the cleanup line, `Running <task>...` and the summary), in the terminal
+  palette's white (SGR 37) — light
   grey on a dark theme, near-invisible on a light one. Ratect's own lines are the
   terminal's default foreground, with bold for emphasis, and it never sets the
   palette's white or black

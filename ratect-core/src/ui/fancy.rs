@@ -38,6 +38,9 @@
 //! - A pull line names the image (`ready to pull image <image>`, `pulling
 //!   image <image>...`), and a dependency past its readiness gate reads
 //!   `ready` where Batect's reads `running`.
+//! - Nothing is in the palette's white: Batect paints every line of the
+//!   block, the cleanup line and the summary white (SGR 37), which isn't
+//!   legible on every theme (decisions/0017).
 //! - A multi-line setup command is drawn on one row, each line break a
 //!   space, like the task's own command; Batect fails the task instead.
 
@@ -242,16 +245,16 @@ impl ContainerLine {
     fn description(&self, console: &Console) -> String {
         match &self.stage {
             Stage::Pending => match (&self.info.image, &self.info.build_tag) {
-                (Some(image), _) => format!("ready to pull image {image}"),
+                (Some(image), _) => format!("ready to pull image {}", console.bold(image)),
                 (None, Some(_)) => "ready to build image".to_string(),
                 (None, None) => "ready".to_string(),
             },
             Stage::Pulling(None) => match &self.info.image {
-                Some(image) => format!("pulling image {image}..."),
+                Some(image) => format!("pulling image {}...", console.bold(image)),
                 None => "pulling image...".to_string(),
             },
             Stage::Pulling(Some(status)) => match &self.info.image {
-                Some(image) => format!("pulling {image}: {status}"),
+                Some(image) => format!("pulling {}: {status}", console.bold(image)),
                 None => format!("pulling image: {status}"),
             },
             Stage::Building(None) => "building image...".to_string(),
@@ -292,7 +295,7 @@ impl ContainerLine {
                 )
             }
             Stage::Ready => "ready".to_string(),
-            Stage::RunningCommand(Some(command)) => format!("running {command}"),
+            Stage::RunningCommand(Some(command)) => format!("running {}", console.bold(command)),
             Stage::RunningCommand(None) => "running".to_string(),
             Stage::ExitedUnexpectedly(exit_code) => super::exited_unexpectedly(*exit_code),
         }
