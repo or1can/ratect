@@ -598,6 +598,21 @@ A few things happen automatically to make this actually work, not just set `--us
   common "mount my code directory, get build artifacts back with sane ownership" case.
   Doesn't apply to a `cache` mount under the default `--cache-type=volume` — there's no
   host path at all there, just a Docker volume name.
+- A mount point that falls inside a `local` mount (or a directory-type `cache`
+  mount) — another `local` mount, a `cache` mount, or a `tmpfs` mount, at any
+  depth — is created inside that mount's host directory the same way, with every
+  directory above it, so the daemon doesn't create those as `root:root` in your
+  project either. It's an empty file when what's mounted there is a file or socket,
+  and a directory otherwise (see [Differences from
+  Batect](differences-from-batect.md#runtime-behavior-gaps)). Only the closest
+  enclosing mount counts, and only when it mounts a directory: nothing is created for
+  a mount point inside a Docker volume, or inside a file or socket mount. A mount point
+  that already exists is left alone, and so is one for Docker Desktop's own
+  `/run/host-services`/`/run/guest-services` paths, one past a file in the host
+  directory, and one in a directory you can't write to (one the daemon created as
+  root on an earlier run, say) — those are left for the daemon to create. A symlink on the way is followed only while it leads to a directory
+  still inside that mount's host directory; one leading out of it, or nowhere, leaves
+  the mount point to the daemon.
 - The container's own image has no `/etc/passwd`/`/etc/group` entry for an arbitrary
   host uid/gid — many programs misbehave or refuse to run at all without one (no
   `$HOME`, no username resolution). Minimal synthetic `/etc/passwd`, `/etc/shadow`,

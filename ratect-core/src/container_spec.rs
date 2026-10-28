@@ -279,11 +279,16 @@ pub struct SharedContainerSpec {
     /// existing network, when given) — unless the container's own
     /// `network_mode` takes it off it. See [`ContainerNetwork`].
     pub network: ContainerNetwork,
+    /// Whether this container runs as the host's own user. When it does,
+    /// the host directories its mounts need are created first, as that user,
+    /// so Docker's daemon doesn't auto-create them as `root:root`
+    /// (`docker.rs`'s `ensure_host_volume_directories_exist`). The one value
+    /// that decision consults, whatever made the container run as the host
+    /// user.
+    pub runs_as_host_user: bool,
     /// `Some` when this container's own `run_as_current_user` is enabled.
-    /// When present: any of `volumes`' host paths that don't exist yet are
-    /// created first (as the current host user, so Docker's daemon doesn't
-    /// auto-create them as `root:root`); the container's `User` is set to
-    /// the mapped `uid:gid`; and, after creation but before starting,
+    /// When present: the container's `User` is set to the mapped `uid:gid`;
+    /// and, after creation but before starting,
     /// minimal `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and the
     /// declared home directory (owned by that `uid:gid`) are uploaded into
     /// it — an arbitrary host uid/gid otherwise has no corresponding entry
@@ -596,6 +601,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
             volumes: volumes.cloned(),
             environment,
             network,
+            runs_as_host_user: user_mapping.is_some(),
             user_mapping: user_mapping.cloned(),
             network_options,
             health_check: health_check_options(container_config),

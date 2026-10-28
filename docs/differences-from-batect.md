@@ -513,6 +513,16 @@ tables above:
 - **`fancy` mode treats a reported terminal width of 0 as unknown.** Some
   pseudo-terminals report it (`script`'s, some CI runners'), and lines are
   then printed unclipped; Batect clips every line to nothing.
+- **Under `run_as_current_user`, a mount point nested inside a `local` mount is
+  created with the type its source needs.** For a file or socket mounted inside a
+  `local` mount — `./config.json`<!-- example --> at `/code/config.json` under `.` at `/code` —
+  Ratect creates an empty file at the mount point, and the mount works. Batect
+  always creates a directory there, which fails the run: a file or socket can't be
+  mounted over a directory, and an existing file at the mount point fails the
+  creation itself. Ratect also follows a symlink on the way to a mount point only
+  while it stays inside the enclosing mount's host directory, leaving the mount point
+  to the daemon otherwise; Batect follows it even out of that directory, creating
+  the mount point outside the project. See [User mapping](ratect-compat-config-reference.md#user-mapping).
 
 ## Next steps
 
