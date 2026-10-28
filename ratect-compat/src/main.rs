@@ -190,9 +190,9 @@ struct Args {
     #[arg(long = "docker-tls-key", value_parser = path_option(), help_heading = "Docker connection")]
     docker_tls_key: Option<PathBuf>,
 
-    /// Maximum number of image pulls/builds, dependency container starts and
-    /// setup commands to run in parallel when running a task, from 1 to
-    /// 2147483647. Unset means unbounded.
+    /// Maximum number of image pulls/builds, container creates, dependency
+    /// container starts and setup commands to run in parallel when running a
+    /// task, from 1 to 2147483647. Unset means unbounded.
     #[arg(long = "max-parallelism", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64), help_heading = "Task execution")]
     max_parallelism: Option<u32>,
 

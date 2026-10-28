@@ -1080,18 +1080,21 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// slow down convergence for no resource-saving benefit) or to
     /// `stop_and_remove_container` (cleanup teardown isn't resource-
     /// intensive in practice). Also never applied to the task's own
-    /// container's `run_container` call — matching Batect's own
-    /// `RunContainerStep` exemption (`countsAgainstParallelismCap = false`):
-    /// it's the actual task work, not setup, and is often long-running by
-    /// design (an interactive shell, a dev server), so it must never
-    /// compete for or be blocked by this cap. Its *creation* counts, as
-    /// Batect's `CreateContainerStep` does.
+    /// container's `run_container` call, which starts it and waits for its
+    /// main command: that command is often long-running by design (an
+    /// interactive shell, a dev server), so it must never hold or wait on a
+    /// slot. That is Ratect's own reason. Its *creation* counts.
     ///
-    /// Still narrower than Batect's own flag, which schedules *every*
-    /// setup/cleanup step (including the ones excluded here) through a
-    /// dedicated step-scheduling model (`ParallelExecutionManager`) Ratect
-    /// doesn't have — see [Differences from
-    /// Batect](../../docs/differences-from-batect.md#cli-flags). A single
+    /// Batect draws the line elsewhere. Its one step with
+    /// `countsAgainstParallelismCap = false` is `RunContainerStep` — every
+    /// container's start and run, dependencies included — because that step
+    /// lasts the container's whole lifetime; every container's
+    /// `CreateContainerStep` counts. So Ratect caps a dependency's start
+    /// where Batect doesn't, and otherwise covers less: Batect's flag
+    /// schedules every other setup/cleanup step (the ones excluded here
+    /// among them) through a step-scheduling model
+    /// (`ParallelExecutionManager`) Ratect doesn't have — see [Differences
+    /// from Batect](../../docs/differences-from-batect.md#cli-flags). A single
     /// shared semaphore (rather than one per image/container) is what makes
     /// this an invocation-wide cap rather than a per-resource one.
     max_parallelism: Option<Arc<tokio::sync::Semaphore>>,
@@ -3472,8 +3475,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         result
     }
 
-    /// Ensures `name`'s container is *created* — Docker has it, user mapping
-    /// applied and network joined, ready to be started — memoized per this
+    /// Ensures `name`'s container is *created* — Docker has it on its
+    /// network, user mapping applied, ready to be started — memoized per this
     /// one task execution via `context.created_cells`, and returns its id
     /// and the spec it was created from. Waits for exactly what creation
     /// needs and nothing else (decisions/0019, Batect's

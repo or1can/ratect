@@ -149,6 +149,86 @@ async fn drain_interleaved_output_flushes_a_buffered_partial_line_before_a_strea
     );
 }
 
+/// Under `-o all` the container's stderr is a `ContainerOutput` line like
+/// its stdout, in the order the two arrived — never set aside for the
+/// process's own stderr, as Batect's single stdout sink for both streams
+/// does (ratect#349, NRC-1).
+#[tokio::test]
+async fn drain_interleaved_output_posts_stderr_and_stdout_in_arrival_order() {
+    let chunks = vec![
+        Ok(bollard::container::LogOutput::StdErr {
+            message: bytes::Bytes::from_static(b"err 1\n"),
+        }),
+        Ok(bollard::container::LogOutput::StdOut {
+            message: bytes::Bytes::from_static(b"out 1\n"),
+        }),
+        Ok(bollard::container::LogOutput::StdErr {
+            message: bytes::Bytes::from_static(b"err 2\n"),
+        }),
+    ];
+    let sink = std::sync::Arc::new(RecordingEventSink::default());
+    let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+
+    drain_interleaved_output(futures::stream::iter(chunks), &dyn_sink, "app")
+        .await
+        .unwrap();
+
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["err 1", "out 1", "err 2"]);
+}
+
+/// A line is posted as soon as its newline arrives, not when the stream
+/// ends: polled once after each send, the sink already holds every
+/// completed line, one event apiece (ratect#349, U28).
+#[tokio::test]
+async fn drain_interleaved_output_posts_each_line_as_it_arrives() {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let sink = std::sync::Arc::new(RecordingEventSink::default());
+    let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+    let mut drain = std::pin::pin!(drain_interleaved_output(rx, &dyn_sink, "app"));
+
+    tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 1\n"),
+    }))
+    .unwrap();
+    assert!(futures::poll!(drain.as_mut()).is_pending());
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["Line 1"]);
+
+    tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 2\n"),
+    }))
+    .unwrap();
+    assert!(futures::poll!(drain.as_mut()).is_pending());
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["Line 1", "Line 2"]);
+
+    drop(tx);
+    drain.await.unwrap();
+}
+
+/// An interrupt drops the run future, and with it this one: what was
+/// posted before the drop stays posted, and nothing sent afterwards is
+/// (ratect#349, U33).
+#[tokio::test]
+async fn drain_interleaved_output_dropped_mid_stream_keeps_only_earlier_lines() {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let sink = std::sync::Arc::new(RecordingEventSink::default());
+    let dyn_sink: std::sync::Arc<dyn EventSink> = sink.clone();
+    let mut drain = Box::pin(drain_interleaved_output(rx, &dyn_sink, "app"));
+
+    tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 1\n"),
+    }))
+    .unwrap();
+    assert!(futures::poll!(drain.as_mut()).is_pending());
+    drop(drain);
+    // The receiver went with the dropped future, so this send has nowhere
+    // to go — which is the point.
+    let _ = tx.unbounded_send(Ok(bollard::container::LogOutput::StdOut {
+        message: bytes::Bytes::from_static(b"Line 2\n"),
+    }));
+
+    assert_eq!(*sink.lines.lock().unwrap(), vec!["Line 1"]);
+}
+
 #[tokio::test]
 async fn await_log_follower_waits_for_the_spawned_task_to_finish() {
     let followers = LogFollowers::default();
@@ -1514,10 +1594,10 @@ fn check_daemon_os_refuses_windows_in_any_case_naming_what_was_reported() {
 
 #[tokio::test]
 async fn docker_client_new_refuses_a_daemon_running_windows_containers() {
-    let options = stub_daemon(
-        serde_json::json!({ "ApiVersion": "1.41", "Version": "27.3.1", "Os": "windows" }),
-        None,
-    )
+    let options = stub_daemon(StubDaemon {
+        version_body: serde_json::json!({ "ApiVersion": "1.41", "Version": "27.3.1", "Os": "windows" }),
+        ..Default::default()
+    })
     .await;
     let Err(err) = DockerClient::new(&options, |_| {}).await else {
         panic!("a Windows-containers daemon should be refused");
@@ -1534,7 +1614,12 @@ async fn docker_client_new_refuses_a_daemon_running_windows_containers() {
 /// tried, not as a failure to read its operating system.
 #[tokio::test]
 async fn docker_client_new_reports_a_daemon_gone_before_its_second_request_as_unreachable() {
-    let options = stub_daemon_for(1, stub_version_body(Some("27.3.1")), None).await;
+    let options = stub_daemon(StubDaemon {
+        version_body: stub_version_body(Some("27.3.1")),
+        connections: 1,
+        ..Default::default()
+    })
+    .await;
     let Err(err) = DockerClient::new(&options, |_| {}).await else {
         panic!("the second request should find nothing listening");
     };
@@ -1550,79 +1635,6 @@ async fn docker_client_new_reports_a_daemon_gone_before_its_second_request_as_un
     );
 }
 
-/// A stand-in Docker daemon on a local TCP port, answering the two
-/// daemon-information requests `DockerClient` makes: `/version` with
-/// `version_body`, and `/_ping` with `builder_version` as its
-/// `Builder-Version` header when there is one. Any other path gets a 404.
-/// It answers one request per connection, any number of them, until the
-/// test's runtime ends; the returned options connect to it in plain HTTP.
-async fn stub_daemon(
-    version_body: serde_json::Value,
-    builder_version: Option<&'static str>,
-) -> DockerConnectionOptions {
-    stub_daemon_for(usize::MAX, version_body, builder_version).await
-}
-
-/// [`stub_daemon`], but answering only its first `connections` requests:
-/// after that it stops listening, so the next connection is refused.
-async fn stub_daemon_for(
-    connections: usize,
-    version_body: serde_json::Value,
-    builder_version: Option<&'static str>,
-) -> DockerConnectionOptions {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let version_body = version_body.to_string();
-    tokio::spawn(async move {
-        for _ in 0..connections {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let version_body = version_body.clone();
-            tokio::spawn(async move {
-                let mut request = Vec::new();
-                let mut buf = [0u8; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let read = stream.read(&mut buf).await.unwrap();
-                    if read == 0 {
-                        return;
-                    }
-                    request.extend_from_slice(&buf[..read]);
-                }
-                let request = String::from_utf8_lossy(&request);
-                let mut request_line = request.split_whitespace();
-                let method = request_line.next().unwrap_or_default();
-                let path = request_line.next().unwrap_or_default();
-                let (status, headers, body) = if path.ends_with("/version") {
-                    (
-                        "200 OK",
-                        "Content-Type: application/json\r\n".to_string(),
-                        version_body,
-                    )
-                } else if path.ends_with("/_ping") {
-                    let header = builder_version
-                        .map(|version| format!("Builder-Version: {version}\r\n"))
-                        .unwrap_or_default();
-                    ("200 OK", header, "OK".to_string())
-                } else {
-                    ("404 Not Found", String::new(), String::new())
-                };
-                let body = if method == "HEAD" { "" } else { &body };
-                let response = format!(
-                    "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n\
-                     {body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes()).await;
-                let _ = stream.shutdown().await;
-            });
-        }
-    });
-    DockerConnectionOptions {
-        host: Some(format!("tcp://127.0.0.1:{port}")),
-        ..Default::default()
-    }
-}
-
 /// Batect's `DockerClientConfigurationFactorySpec`: the Docker config
 /// directory connecting chose is the one the client reads `config.json`
 /// from, for a build's proxies and the registries it authenticates to.
@@ -1631,7 +1643,11 @@ async fn docker_client_new_reads_config_json_from_the_chosen_config_directory() 
     let config_directory = unique_temp_dir();
     let options = DockerConnectionOptions {
         config_directory: Some(config_directory.clone()),
-        ..stub_daemon(stub_version_body(Some("27.3.1")), None).await
+        ..stub_daemon(StubDaemon {
+            version_body: stub_version_body(Some("27.3.1")),
+            ..Default::default()
+        })
+        .await
     };
 
     let client = DockerClient::new(&options, |_| {}).await.unwrap();
@@ -1643,7 +1659,7 @@ async fn docker_client_new_reads_config_json_from_the_chosen_config_directory() 
     std::fs::remove_dir_all(&config_directory).unwrap();
 }
 
-/// `stub_daemon`'s `/version` body, reporting `version` as the daemon's
+/// A [`StubDaemon`]'s `/version` body, reporting `version` as the daemon's
 /// own version (none when `None`) and an API version at Ratect's floor.
 fn stub_version_body(version: Option<&str>) -> serde_json::Value {
     let mut body = serde_json::json!({ "ApiVersion": "1.41" });
@@ -1653,13 +1669,24 @@ fn stub_version_body(version: Option<&str>) -> serde_json::Value {
     body
 }
 
-/// A `DockerClient` connected to a `stub_daemon` serving `version_body`
+/// The options connecting to `daemon`, answering only the
+/// daemon-information requests it answers itself: anything else is a 404.
+async fn stub_daemon(daemon: StubDaemon) -> DockerConnectionOptions {
+    daemon.serve(|_, _| (404, String::new())).await.0
+}
+
+/// A `DockerClient` connected to a [`StubDaemon`] serving `version_body`
 /// and `builder_version`.
 async fn client_for_stub_daemon(
     version_body: serde_json::Value,
     builder_version: Option<&'static str>,
 ) -> DockerClient {
-    let options = stub_daemon(version_body, builder_version).await;
+    let options = stub_daemon(StubDaemon {
+        version_body,
+        builder_version,
+        ..Default::default()
+    })
+    .await;
     DockerClient::new(&options, |_| {})
         .await
         .expect("the stub daemon should be connectable")
@@ -1724,16 +1751,16 @@ async fn builder_version_is_classic_when_the_daemon_ping_advertises_it_or_nothin
     }
 }
 
-/// One request a [`recording_daemon`] received: its method, its path with
-/// the `/vX.Y` API-version prefix stripped (so `/containers/abc/stop`, not
+/// One request a [`StubDaemon`] received: its method, its path with the
+/// `/vX.Y` API-version prefix stripped (so `/containers/abc/stop`, not
 /// `/v1.41/containers/abc/stop`), its raw query string, empty when it
-/// had none, and its body, empty when it had none.
+/// had none, and its body, read in full and empty when it had none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RecordedRequest {
     method: String,
     path: String,
     query: String,
-    body: String,
+    body: Vec<u8>,
 }
 
 impl RecordedRequest {
@@ -1758,110 +1785,360 @@ impl RecordedRequest {
     }
 }
 
-/// A stand-in Docker daemon that records every request and answers each
-/// with whatever `route` returns for its method and (version-stripped)
-/// path: an HTTP status and a JSON body. It answers `DockerClient::new`'s
-/// own `/version` requests itself, at Ratect's API floor on Linux, so the
-/// route only has to cover what the test is about; those are recorded too.
+/// A scripted, recording stand-in Docker daemon on a local TCP port, for
+/// testing `DockerClient` at the HTTP level: a real `DockerClient`, and
+/// real bollard, talk to it in plain HTTP, so a test sees exactly the
+/// requests the client sends.
 ///
-/// Returns the options connecting to it and the shared request log. Built
-/// for any `DockerClient` method whose request sequence is the contract
-/// under test, not only `stop_and_remove_container`'s.
+/// What it emulates:
+/// - the two daemon-information endpoints, answered by the daemon itself so
+///   `DockerClient::new` connects: `/version` with `version_body`, and
+///   `/_ping` with `builder_version` as its `Builder-Version` header when
+///   there is one;
+/// - every other request, answered by the test's route from its method and
+///   path: an HTTP status and a JSON body. An error goes back the way
+///   Docker sends one — a status and `{"message": "..."}` — which bollard
+///   surfaces as `DockerResponseServerError`. Every route here answers
+///   anything it doesn't script with a 404, which is still recorded, so a
+///   test can assert nothing else was asked for;
+/// - recording: each request's method, version-stripped path, query and
+///   body, in arrival order, `/version` and `/_ping` included. Bodies are
+///   read in full, sent with `Content-Length` or chunked. A request it
+///   can't read — malformed, or a bug in this harness — is recorded with
+///   the method `UNREADABLE` and the reason as its path, so a test that
+///   asserts what was sent fails naming it, rather than the client seeing
+///   only a dropped connection;
+///
+/// What it doesn't: state (a route sees one request at a time and keeps
+/// its own counters if it needs them), keep-alive (one request per
+/// connection, then `Connection: close`), a held-open stream (each response
+/// is written whole, so an event or progress stream ends where its body
+/// does), or a protocol upgrade (an attach's `101` is answered, then the
+/// connection is closed — a container that printed nothing).
+struct StubDaemon {
+    version_body: serde_json::Value,
+    builder_version: Option<&'static str>,
+    /// How many connections it accepts before it stops listening, so the
+    /// next one is refused.
+    connections: usize,
+}
+
+impl Default for StubDaemon {
+    /// A Linux daemon at Ratect's API floor, advertising no builder,
+    /// answering any number of requests.
+    fn default() -> Self {
+        Self {
+            version_body: serde_json::json!({ "ApiVersion": "1.41", "Os": "linux" }),
+            builder_version: None,
+            connections: usize::MAX,
+        }
+    }
+}
+
+/// What a [`StubDaemon`] hands each request that isn't `/version` or
+/// `/_ping`: its method and version-stripped path in, a status and a JSON
+/// body out.
+type StubRoute = dyn Fn(&str, &str) -> (u16, String) + Send + Sync;
+
+/// A [`StubDaemon`]'s shared request log.
+type RequestLog = std::sync::Arc<std::sync::Mutex<Vec<RecordedRequest>>>;
+
+impl StubDaemon {
+    /// Starts listening, answering with `route`, until the test's runtime
+    /// ends; returns the options connecting to it and its request log.
+    async fn serve(
+        self,
+        route: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
+    ) -> (DockerConnectionOptions, RequestLog) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let route: std::sync::Arc<StubRoute> = std::sync::Arc::new(route);
+        let log = RequestLog::default();
+        let recorded = log.clone();
+        let daemon = std::sync::Arc::new(self);
+        tokio::spawn(async move {
+            for _ in 0..daemon.connections {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (daemon, route, recorded) = (daemon.clone(), route.clone(), recorded.clone());
+                tokio::spawn(async move { daemon.answer(stream, &*route, &recorded).await });
+            }
+        });
+        (
+            DockerConnectionOptions {
+                host: Some(format!("tcp://127.0.0.1:{port}")),
+                ..Default::default()
+            },
+            log,
+        )
+    }
+
+    /// Reads, records and answers the one request `stream` carries.
+    async fn answer(
+        &self,
+        mut stream: tokio::net::TcpStream,
+        route: &StubRoute,
+        recorded: &std::sync::Mutex<Vec<RecordedRequest>>,
+    ) {
+        use futures::FutureExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let read = std::panic::AssertUnwindSafe(read_stub_request(&mut stream))
+            .catch_unwind()
+            .await;
+        let request = match read {
+            Ok(Some(request)) => request,
+            Ok(None) => return,
+            Err(panic) => {
+                let reason = panic
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                recorded.lock().unwrap().push(RecordedRequest {
+                    method: "UNREADABLE".to_string(),
+                    path: reason,
+                    query: String::new(),
+                    body: Vec::new(),
+                });
+                return;
+            }
+        };
+        recorded.lock().unwrap().push(request.clone());
+        let (status, headers, body) = match request.path.as_str() {
+            "/version" => (
+                200,
+                "Content-Type: application/json\r\n".to_string(),
+                self.version_body.to_string(),
+            ),
+            "/_ping" => (
+                200,
+                self.builder_version
+                    .map(|version| format!("Builder-Version: {version}\r\n"))
+                    .unwrap_or_default(),
+                "OK".to_string(),
+            ),
+            path => {
+                let (status, body) = route(&request.method, path);
+                (
+                    status,
+                    "Content-Type: application/json\r\n".to_string(),
+                    body,
+                )
+            }
+        };
+        let body = if request.method == "HEAD" { "" } else { &body };
+        let response = format!(
+            "HTTP/1.1 {status} Stub\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n\
+             {body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        // Read whatever the client still sends — stdin, down an attach —
+        // until it hangs up: closing a socket with unread input resets the
+        // connection, and the client would see that reset instead of the
+        // response it has already been sent.
+        let mut buf = [0u8; 4096];
+        while matches!(stream.read(&mut buf).await, Ok(read) if read > 0) {}
+    }
+}
+
+/// Reads one HTTP request from `stream` — its body in full, whether sent
+/// with `Content-Length` or chunked — or `None` if the connection closed
+/// before its headers ended.
+async fn read_stub_request(stream: &mut tokio::net::TcpStream) -> Option<RecordedRequest> {
+    let mut data = Vec::new();
+    let headers_end = loop {
+        if let Some(end) = find_bytes(&data, b"\r\n\r\n") {
+            break end + 4;
+        }
+        if !read_more(stream, &mut data).await {
+            return None;
+        }
+    };
+    let head = String::from_utf8_lossy(&data[..headers_end]).into_owned();
+    let header = |wanted: &str| {
+        head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case(wanted)
+                .then(|| value.trim().to_string())
+        })
+    };
+    let body = if header("transfer-encoding").is_some_and(|value| value.contains("chunked")) {
+        read_chunked_body(stream, &mut data, headers_end).await
+    } else {
+        let content_length = header("content-length").map_or(0, |value| {
+            value.parse::<usize>().expect("a numeric Content-Length")
+        });
+        fill_to(stream, &mut data, headers_end + content_length).await;
+        data[headers_end..headers_end + content_length].to_vec()
+    };
+    let mut request_line = head.split_whitespace();
+    let method = request_line.next().unwrap_or_default().to_string();
+    let target = request_line.next().unwrap_or_default();
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let path = match path.strip_prefix("/v") {
+        Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => {
+            rest.find('/').map_or(path, |slash| &rest[slash..])
+        }
+        _ => path,
+    };
+    Some(RecordedRequest {
+        method,
+        path: path.to_string(),
+        query: query.to_string(),
+        body,
+    })
+}
+
+/// A chunked body starting at `data[start..]`, decoded, reading from
+/// `stream` as needed through its terminating zero-length chunk and the
+/// (ignored) trailers after it.
+async fn read_chunked_body(
+    stream: &mut tokio::net::TcpStream,
+    data: &mut Vec<u8>,
+    start: usize,
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    let mut position = start;
+    loop {
+        let line_end = read_line_end(stream, data, position).await;
+        let size_line = std::str::from_utf8(&data[position..line_end]).unwrap();
+        let size_field = size_line.split(';').next().unwrap_or_default().trim();
+        let size = usize::from_str_radix(size_field, 16).expect("a hexadecimal chunk size");
+        position = line_end + 2;
+        if size == 0 {
+            break;
+        }
+        fill_to(stream, data, position + size + 2).await;
+        body.extend_from_slice(&data[position..position + size]);
+        position += size + 2;
+    }
+    // Trailers, if any, up to the blank line that ends the request.
+    loop {
+        let line_end = read_line_end(stream, data, position).await;
+        if line_end == position {
+            return body;
+        }
+        position = line_end + 2;
+    }
+}
+
+/// The index of the first `\r\n` at or after `from`, reading from `stream`
+/// until there is one.
+async fn read_line_end(
+    stream: &mut tokio::net::TcpStream,
+    data: &mut Vec<u8>,
+    from: usize,
+) -> usize {
+    loop {
+        if let Some(end) = find_bytes(&data[from..], b"\r\n") {
+            return from + end;
+        }
+        assert!(
+            read_more(stream, data).await,
+            "the request body ended mid-chunk"
+        );
+    }
+}
+
+/// Reads from `stream` until `data` holds at least `length` bytes.
+async fn fill_to(stream: &mut tokio::net::TcpStream, data: &mut Vec<u8>, length: usize) {
+    while data.len() < length {
+        assert!(
+            read_more(stream, data).await,
+            "the request body ended before its declared length"
+        );
+    }
+}
+
+/// Appends what `stream` has next to `data`; `false` once it has closed.
+async fn read_more(stream: &mut tokio::net::TcpStream, data: &mut Vec<u8>) -> bool {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 4096];
+    let read = stream.read(&mut buf).await.unwrap();
+    data.extend_from_slice(&buf[..read]);
+    read > 0
+}
+
+/// Where `needle` first occurs in `haystack`.
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// The harness's own contract, which no `DockerClient` call exercises:
+/// bollard sends its bodies with a `Content-Length`, so a chunked one is
+/// only ever sent here, by hand.
+#[tokio::test]
+async fn the_stub_daemon_records_a_chunked_request_body_in_full() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (options, log) = recording_daemon(|_, _| (204, String::new())).await;
+    let address = options.host.unwrap().replace("tcp://", "");
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(
+            b"POST /v1.41/containers/abc/archive?path=%2Fetc HTTP/1.1\r\n\
+              Host: stub\r\nTransfer-Encoding: chunked\r\n\r\n\
+              5\r\nhello\r\n7;ext=1\r\n, world\r\n0\r\nX-Trailer: yes\r\n\r\n",
+        )
+        .await
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 204"), "{response}");
+    assert_eq!(
+        log.lock().unwrap().clone(),
+        vec![RecordedRequest {
+            method: "POST".to_string(),
+            path: "/containers/abc/archive".to_string(),
+            query: "path=%2Fetc".to_string(),
+            body: b"hello, world".to_vec(),
+        }]
+    );
+}
+
+/// The harness's own contract: a request it can't read is recorded as
+/// `UNREADABLE`, naming why, instead of vanishing with the connection.
+#[tokio::test]
+async fn the_stub_daemon_records_a_request_it_cannot_read_naming_why() {
+    use tokio::io::AsyncWriteExt;
+    let (options, log) = recording_daemon(|_, _| (204, String::new())).await;
+    let address = options.host.unwrap().replace("tcp://", "");
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream
+        .write_all(
+            b"POST /v1.41/containers/abc/archive HTTP/1.1\r\n\
+              Host: stub\r\nTransfer-Encoding: chunked\r\n\r\nnot-hex\r\n",
+        )
+        .await
+        .unwrap();
+    stream.shutdown().await.unwrap();
+
+    let recorded = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(request) = log.lock().unwrap().first().cloned() {
+                return request;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the unreadable request should be recorded");
+
+    assert_eq!(recorded.method, "UNREADABLE");
+    assert!(
+        recorded.path.contains("a hexadecimal chunk size"),
+        "{recorded:?}"
+    );
+}
+
+/// A [`StubDaemon`] at its defaults, answering with `route`.
 async fn recording_daemon(
     route: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
-) -> (
-    DockerConnectionOptions,
-    std::sync::Arc<std::sync::Mutex<Vec<RecordedRequest>>>,
-) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let route = std::sync::Arc::new(route);
-    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let recorded = log.clone();
-    tokio::spawn(async move {
-        loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let route = route.clone();
-            let recorded = recorded.clone();
-            tokio::spawn(async move {
-                let mut request = Vec::new();
-                let mut buf = [0u8; 1024];
-                let headers_end = loop {
-                    if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
-                        break end + 4;
-                    }
-                    let read = stream.read(&mut buf).await.unwrap();
-                    if read == 0 {
-                        return;
-                    }
-                    request.extend_from_slice(&buf[..read]);
-                };
-                // A body is read to its `Content-Length`, which is how
-                // bollard sends one; a chunked body would be recorded
-                // truncated, so it fails here rather than at whatever
-                // asserts on it.
-                let headers = String::from_utf8_lossy(&request[..headers_end]).into_owned();
-                let header = |wanted: &str| {
-                    headers.lines().find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.eq_ignore_ascii_case(wanted)
-                            .then(|| value.trim().to_string())
-                    })
-                };
-                assert!(
-                    header("transfer-encoding").is_none(),
-                    "the recording daemon can't read a chunked body:\n{headers}"
-                );
-                let content_length = header("content-length").map_or(0, |value| {
-                    value.parse::<usize>().expect("a numeric Content-Length")
-                });
-                while request.len() < headers_end + content_length {
-                    let read = stream.read(&mut buf).await.unwrap();
-                    assert!(read > 0, "the request body ended before its Content-Length");
-                    request.extend_from_slice(&buf[..read]);
-                }
-                let body = String::from_utf8_lossy(&request[headers_end..]).into_owned();
-                let request = String::from_utf8_lossy(&request[..headers_end]);
-                let mut request_line = request.split_whitespace();
-                let method = request_line.next().unwrap_or_default().to_string();
-                let target = request_line.next().unwrap_or_default();
-                let (path, query) = target.split_once('?').unwrap_or((target, ""));
-                let path = match path.strip_prefix("/v") {
-                    Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => {
-                        rest.find('/').map_or(path, |slash| &rest[slash..])
-                    }
-                    _ => path,
-                }
-                .to_string();
-                recorded.lock().unwrap().push(RecordedRequest {
-                    method: method.clone(),
-                    path: path.clone(),
-                    query: query.to_string(),
-                    body,
-                });
-                let (status, body) = if path == "/version" {
-                    (200, r#"{"ApiVersion":"1.41","Os":"linux"}"#.to_string())
-                } else {
-                    route(&method, &path)
-                };
-                let response = format!(
-                    "HTTP/1.1 {status} Stub\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes()).await;
-                let _ = stream.shutdown().await;
-            });
-        }
-    });
-    (
-        DockerConnectionOptions {
-            host: Some(format!("tcp://127.0.0.1:{port}")),
-            ..Default::default()
-        },
-        log,
-    )
+) -> (DockerConnectionOptions, RequestLog) {
+    StubDaemon::default().serve(route).await
 }
 
 /// A `DockerClient` connected to a [`recording_daemon`] answering with
@@ -1909,8 +2186,12 @@ fn cleanup_route(
 
 /// The `(method, path)` of every request in `log`, in the order received.
 fn requests_sent(log: &std::sync::Mutex<Vec<RecordedRequest>>) -> Vec<(String, String)> {
-    log.lock()
-        .unwrap()
+    method_and_path(&log.lock().unwrap())
+}
+
+/// The `(method, path)` of each of `requests`, in order.
+fn method_and_path(requests: &[RecordedRequest]) -> Vec<(String, String)> {
+    requests
         .iter()
         .map(|request| (request.method.clone(), request.path.clone()))
         .collect()
@@ -1964,7 +2245,7 @@ async fn create_request(network: ContainerNetwork) -> (Option<String>, serde_jso
     };
     (
         create.query_value("name"),
-        serde_json::from_str(&create.body).unwrap(),
+        serde_json::from_slice(&create.body).unwrap(),
     )
 }
 
@@ -3918,6 +4199,214 @@ async fn a_directory_ownership_upload_the_daemon_refuses_fails_the_create_naming
     );
 }
 
+/// `create_container`'s requests for a dependency `app` under
+/// `run_as_current_user` — home directory `/home/ratect`, cache mounts at
+/// `/caches/cargo` and `/workspace/target` — against a daemon answering its
+/// create with `create_status` (as `new-id` when that's a 201) and its
+/// uploads with `upload`, given each upload's position (0 for `/etc`'s,
+/// then one per directory): what the call returned, and every request it
+/// sent, in order.
+async fn create_requests_under_user_mapping(
+    create_status: u16,
+    upload: impl Fn(usize) -> (u16, String) + Send + Sync + 'static,
+) -> (
+    std::result::Result<String, CreateContainerError>,
+    Vec<RecordedRequest>,
+) {
+    let uploads = std::sync::atomic::AtomicUsize::new(0);
+    let (client, log) = client_for_recording_daemon(move |method, path| match (method, path) {
+        ("POST", "/containers/create") if create_status == 201 => {
+            (201, r#"{"Id":"new-id","Warnings":[]}"#.to_string())
+        }
+        ("POST", "/containers/create") => (
+            create_status,
+            r#"{"message":"stub daemon refused the create"}"#.to_string(),
+        ),
+        ("PUT", "/containers/new-id/archive") => {
+            upload(uploads.fetch_add(1, std::sync::atomic::Ordering::SeqCst))
+        }
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    })
+    .await;
+    let mut spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Dependency,
+    );
+    spec.shared.user_mapping = Some(UserMapping {
+        cache_directories: vec!["/caches/cargo".to_string(), "/workspace/target".to_string()],
+        ..user_mapping_fixture()
+    });
+
+    let result = client.create_container(&spec).await;
+
+    let requests = log.lock().unwrap().clone();
+    (result, requests)
+}
+
+/// An upload's `path` query parameter, decoded: the container directory
+/// its archive is extracted into.
+fn upload_path(request: &RecordedRequest) -> Option<String> {
+    url::form_urlencoded::parse(request.query.as_bytes())
+        .find(|(key, _)| key == "path")
+        .map(|(_, value)| value.into_owned())
+}
+
+/// Each request in `requests` as `(method, path, upload path, tar entry
+/// names)` — the last two only for an archive upload.
+fn create_sequence(
+    requests: &[RecordedRequest],
+) -> Vec<(String, String, Option<String>, Vec<String>)> {
+    requests
+        .iter()
+        .map(|request| {
+            let is_upload = request.path.ends_with("/archive");
+            (
+                request.method.clone(),
+                request.path.clone(),
+                upload_path(request).filter(|_| is_upload),
+                if is_upload {
+                    tar_entry_paths(&request.body)
+                } else {
+                    Vec::new()
+                },
+            )
+        })
+        .collect()
+}
+
+/// Batect's NCC-4 and NCC-5 (ratect#340): under `run_as_current_user`, a
+/// created container gets the user-mapping archive — `passwd`, `shadow` and
+/// `group`, whose contents have their own tests — extracted into `/etc`,
+/// then one ownership archive for the home directory and one per cache
+/// mount, each extracted into its parent; and that is everything
+/// `create_container` sends. Docker's create comes first, since every
+/// upload needs its id; nothing is started; and there is no network connect
+/// to order, since the container joins the task's network in the create
+/// request itself (ratect#303 — pinned by
+/// `create_container_names_the_container_and_creates_it_on_the_task_network`).
+#[tokio::test]
+async fn a_user_mapped_create_uploads_etc_then_each_owned_directory_and_starts_nothing() {
+    let (result, requests) =
+        create_requests_under_user_mapping(201, |_| (200, String::new())).await;
+
+    assert_eq!(result.unwrap(), "new-id");
+    let upload = |path: &str, entries: &[&str]| {
+        (
+            "PUT".to_string(),
+            "/containers/new-id/archive".to_string(),
+            Some(path.to_string()),
+            entries.iter().map(|entry| entry.to_string()).collect(),
+        )
+    };
+    assert_eq!(
+        create_sequence(&requests),
+        vec![
+            (
+                "POST".to_string(),
+                "/containers/create".to_string(),
+                None,
+                Vec::new()
+            ),
+            upload("/etc", &["passwd", "shadow", "group"]),
+            upload("/home", &["ratect/"]),
+            upload("/caches", &["cargo/"]),
+            upload("/workspace", &["target/"]),
+        ]
+    );
+}
+
+/// Batect's NCC-9, the Docker half (ratect#340): an `/etc` upload the
+/// daemon refuses ends the create there — no ownership upload, no start —
+/// and hands back the id Docker's create returned, since that container
+/// exists and is the caller's to remove.
+#[tokio::test]
+async fn a_refused_etc_upload_ends_the_create_carrying_the_created_id() {
+    let (result, requests) = create_requests_under_user_mapping(201, |_| {
+        (
+            500,
+            r#"{"message":"stub daemon refused the upload"}"#.to_string(),
+        )
+    })
+    .await;
+
+    assert_eq!(result.unwrap_err().created.as_deref(), Some("new-id"));
+    let sent: Vec<_> = create_sequence(&requests)
+        .into_iter()
+        .map(|(method, path, upload_path, _)| (method, path, upload_path))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            ("POST".to_string(), "/containers/create".to_string(), None),
+            (
+                "PUT".to_string(),
+                "/containers/new-id/archive".to_string(),
+                Some("/etc".to_string())
+            ),
+        ]
+    );
+}
+
+/// Batect's RRC-3/RRC-7, the Docker half (ratect#340): a create the daemon
+/// refuses leaves nothing created — `created` is `None` — and nothing
+/// follows it: no upload, though the container is user-mapped, and no
+/// start.
+#[tokio::test]
+async fn a_refused_create_carries_no_id_and_sends_nothing_after_it() {
+    let (result, requests) =
+        create_requests_under_user_mapping(500, |_| (200, String::new())).await;
+
+    assert_eq!(result.unwrap_err().created, None);
+    assert_eq!(
+        method_and_path(&requests),
+        vec![("POST".to_string(), "/containers/create".to_string())]
+    );
+}
+
+/// A sink whose output style streams container I/O as `streaming` says.
+struct StreamingSink(ContainerIoStreaming);
+
+impl EventSink for StreamingSink {
+    fn post(&self, _: TaskEvent) {}
+
+    fn container_io_streaming(&self) -> ContainerIoStreaming {
+        self.0
+    }
+}
+
+/// Batect's TCIO-25 to TCIO-33 (ratect#340), Docker's half: a dependency's
+/// spec is never interactive, so it is created with no TTY and no stdin —
+/// `Tty`, `OpenStdin`, `AttachStdin` and `StdinOnce` all unset — whatever
+/// the output style. The engine's half, that a dependency's spec is never
+/// made interactive, is `a_prerequisites_dependency_is_never_interactive`'s.
+#[tokio::test]
+async fn a_dependency_is_created_with_no_tty_or_stdin_under_any_output_style() {
+    for streaming in [
+        ContainerIoStreaming::TaskContainerOnly,
+        ContainerIoStreaming::Interleaved,
+    ] {
+        let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+        let client = client.with_event_sink(std::sync::Arc::new(StreamingSink(streaming)));
+        let spec = spec_from(
+            &crate::config::Container::default(),
+            crate::labels::ContainerRole::Dependency,
+        );
+
+        let config = client.container_config(&spec).unwrap();
+
+        assert_eq!(
+            (
+                config.tty,
+                config.open_stdin,
+                config.attach_stdin,
+                config.stdin_once
+            ),
+            (None, None, None, None),
+            "{streaming:?}"
+        );
+    }
+}
+
 /// Batect's `DockerClientContainerManagementSpec`, starting a container
 /// that doesn't exist: a dependency's start fails naming it as configured,
 /// with the daemon's reason in the chain.
@@ -4187,4 +4676,357 @@ async fn remove_volume_fails_for_a_missing_volume() {
         format!("{err:#}").contains("get gone: no such volume"),
         "{err:#}"
     );
+}
+
+/// `unhealthy_message`'s fixed verdict sentence, which every unhealthy
+/// message starts with.
+const UNHEALTHY_VERDICT: &str = "The configured health check did not indicate that the container \
+                                 was healthy within the timeout period.";
+
+/// A health-check run that exited `exit_code` having printed `output`.
+fn health_check_run(exit_code: i64, output: &str) -> bollard::models::HealthcheckResult {
+    bollard::models::HealthcheckResult {
+        exit_code: Some(exit_code),
+        output: Some(output.to_string()),
+        ..Default::default()
+    }
+}
+
+/// Batect's U35 (ratect#348): with no health-check run to explain it, the
+/// message is the verdict alone — the fallback ratect#328 recorded as a
+/// divergence.
+#[test]
+fn unhealthy_message_is_the_verdict_alone_without_a_health_check_run() {
+    assert_eq!(unhealthy_message(None), UNHEALTHY_VERDICT);
+}
+
+/// Batect's U35: a last run that exited 0 means the container turned
+/// healthy just too late, whatever it printed — nothing included.
+#[test]
+fn unhealthy_message_explains_a_last_run_that_exited_0_as_just_too_late() {
+    for output in ["ok", ""] {
+        assert_eq!(
+            unhealthy_message(Some(health_check_run(0, output))),
+            format!(
+                "{UNHEALTHY_VERDICT} The most recent health check exited with code 0, which \
+                 usually indicates that the container became healthy just after the timeout \
+                 period expired."
+            ),
+            "output: {output:?}"
+        );
+    }
+}
+
+/// Batect's U35: a failing last run that printed nothing says so.
+#[test]
+fn unhealthy_message_says_a_failing_last_run_produced_no_output() {
+    assert_eq!(
+        unhealthy_message(Some(health_check_run(1, ""))),
+        format!(
+            "{UNHEALTHY_VERDICT} The last health check exited with code 1 but did not produce \
+             any output."
+        )
+    );
+}
+
+/// Batect's U35: a failing last run's output follows its exit code,
+/// trimmed of surrounding whitespace.
+#[test]
+fn unhealthy_message_gives_a_failing_last_runs_output_trimmed() {
+    assert_eq!(
+        unhealthy_message(Some(health_check_run(7, "\n  connection refused\n\n"))),
+        format!(
+            "{UNHEALTHY_VERDICT} The last health check exited with code 7 and output:\n\
+             connection refused"
+        )
+    );
+}
+
+/// An inspect of a container whose config declares a health check.
+const INSPECT_WITH_HEALTH_CHECK: &str =
+    r#"{"Config":{"Healthcheck":{"Test":["CMD-SHELL","exit 1"]}}}"#;
+
+/// One Docker event with `action`, as a line of the `/events` stream.
+fn event_line(action: &str) -> String {
+    format!(
+        "{}\n",
+        serde_json::json!({
+            "Type": "container",
+            "Action": action,
+            "Actor": {"ID": "db-id", "Attributes": {}},
+            "time": 1,
+        })
+    )
+}
+
+/// `wait_for_container_healthy("db-id")` against a [`StubDaemon`] answering
+/// the container's inspects with `inspects` in turn (the last repeated)
+/// and `/events` with `events`: what it returned, and every request it
+/// sent.
+async fn wait_healthy_against(
+    inspects: Vec<(u16, String)>,
+    events: (u16, String),
+) -> (Result<()>, Vec<RecordedRequest>) {
+    let inspected = std::sync::atomic::AtomicUsize::new(0);
+    let (client, log) = client_for_recording_daemon(move |method, path| match (method, path) {
+        ("GET", "/containers/db-id/json") => {
+            let turn = inspected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            inspects[turn.min(inspects.len() - 1)].clone()
+        }
+        ("GET", "/events") => events.clone(),
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    })
+    .await;
+
+    let result = client.wait_for_container_healthy("db-id").await;
+
+    let requests = log.lock().unwrap().clone();
+    (result, requests)
+}
+
+/// [`wait_healthy_against`] for a container with a health check, whose
+/// `/events` stream answers `events` with a 200.
+async fn wait_healthy_through_events(events: String) -> (Result<()>, Vec<RecordedRequest>) {
+    wait_healthy_against(
+        vec![(200, INSPECT_WITH_HEALTH_CHECK.to_string())],
+        (200, events),
+    )
+    .await
+}
+
+/// Whether `requests` include a request for Docker's event stream.
+fn requested_events(requests: &[RecordedRequest]) -> bool {
+    requests.iter().any(|request| request.path == "/events")
+}
+
+/// Batect's U34 (ratect#348): an inspect the daemon refuses fails the wait
+/// naming the container, the daemon's own words beneath it, before any
+/// event is asked for.
+#[tokio::test]
+async fn wait_for_container_healthy_fails_on_a_refused_inspect_before_asking_for_events() {
+    let (result, requests) = wait_healthy_against(
+        vec![(404, r#"{"message":"No such container: db-id"}"#.to_string())],
+        (200, event_line("health_status: healthy")),
+    )
+    .await;
+
+    let err = result.unwrap_err();
+    assert_eq!(err.to_string(), "Failed to inspect container 'db-id'");
+    assert!(
+        format!("{err:#}").contains("No such container: db-id"),
+        "{err:#}"
+    );
+    assert!(!requested_events(&requests), "{requests:?}");
+}
+
+/// Batect's U34, for `container_is_running`, which inspects the same way.
+#[tokio::test]
+async fn container_is_running_fails_on_a_refused_inspect_naming_the_container() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "GET",
+        "/containers/db-id/json",
+        404,
+        r#"{"message":"No such container: db-id"}"#,
+    ))
+    .await;
+
+    let err = client.container_is_running("db-id").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to inspect container 'db-id'");
+    assert!(
+        format!("{err:#}").contains("No such container: db-id"),
+        "{err:#}"
+    );
+}
+
+/// Batect's U35 shortcut (ratect#348): a container with no health check —
+/// no config, no `Healthcheck`, or an empty `Test` — is healthy at once,
+/// without asking for a single event.
+#[tokio::test]
+async fn a_container_without_a_health_check_is_healthy_without_asking_for_events() {
+    for inspect in [
+        r#"{}"#,
+        r#"{"Config":{}}"#,
+        r#"{"Config":{"Healthcheck":{}}}"#,
+        r#"{"Config":{"Healthcheck":{"Test":[]}}}"#,
+    ] {
+        let (result, requests) = wait_healthy_against(
+            vec![(200, inspect.to_string())],
+            (200, event_line("health_status: unhealthy")),
+        )
+        .await;
+
+        assert!(result.is_ok(), "{inspect}: {result:?}");
+        assert!(!requested_events(&requests), "{inspect}: {requests:?}");
+    }
+}
+
+/// Batect's U50 and U51 (ratect#348): the event stream is asked for this
+/// container's `die` and `health_status` events only — the daemon ANDs
+/// the two filters — replayed from the beginning of time (`since=0`) with
+/// no end (`until`), so a verdict Docker reached before the stream opened
+/// still arrives.
+#[tokio::test]
+async fn the_health_wait_asks_for_this_containers_verdicts_since_the_beginning_of_time() {
+    let (result, requests) =
+        wait_healthy_through_events(event_line("health_status: healthy")).await;
+
+    result.unwrap();
+    let events: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path == "/events")
+        .collect();
+    let [events] = events[..] else {
+        panic!("one events request: {requests:?}");
+    };
+    let query: HashMap<String, String> = url::form_urlencoded::parse(events.query.as_bytes())
+        .into_owned()
+        .collect();
+    assert_eq!(
+        query.get("since").map(String::as_str),
+        Some("0"),
+        "{query:?}"
+    );
+    assert!(!query.contains_key("until"), "{query:?}");
+    let filters: HashMap<String, Vec<String>> =
+        serde_json::from_str(query.get("filters").expect("a filters parameter")).unwrap();
+    assert_eq!(
+        filters,
+        HashMap::from([
+            ("container".to_string(), vec!["db-id".to_string()]),
+            (
+                "event".to_string(),
+                vec!["die".to_string(), "health_status".to_string()]
+            ),
+        ])
+    );
+}
+
+/// Batect's U51 and U49 (ratect#348): a verdict waiting in the stream the
+/// moment it opens — as a replayed one is — decides the wait, and only the
+/// first event counts: a contrary verdict after it is never read.
+#[tokio::test]
+async fn only_the_first_event_in_the_stream_decides_the_health_wait() {
+    let (result, _) = wait_healthy_through_events(format!(
+        "{}{}",
+        event_line("health_status: healthy"),
+        event_line("health_status: unhealthy")
+    ))
+    .await;
+    assert!(result.is_ok(), "healthy, then unhealthy: {result:?}");
+
+    let (result, _) = wait_healthy_through_events(format!(
+        "{}{}",
+        event_line("health_status: unhealthy"),
+        event_line("health_status: healthy")
+    ))
+    .await;
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().starts_with(UNHEALTHY_VERDICT),
+        "unhealthy, then healthy: {err:#}"
+    );
+}
+
+/// Batect's U49: a container that exits before a verdict fails the wait
+/// saying so.
+#[tokio::test]
+async fn a_container_that_dies_before_a_verdict_fails_the_health_wait() {
+    let (result, _) = wait_healthy_through_events(event_line("die")).await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "The container exited before becoming healthy."
+    );
+}
+
+/// Batect's U49: any other event fails the wait, naming it.
+#[tokio::test]
+async fn an_unexpected_event_fails_the_health_wait_naming_it() {
+    let (result, _) = wait_healthy_through_events(event_line("health_status: starting")).await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Unexpected event 'health_status: starting' received while waiting for the container to \
+         become healthy"
+    );
+}
+
+/// Batect's U52 (ratect#348): a stream that fails fails the wait saying
+/// what it was doing, the stream's own error beneath it.
+#[tokio::test]
+async fn a_failed_event_stream_fails_the_health_wait_with_its_cause() {
+    let (result, _) = wait_healthy_through_events("this is not json\n".to_string()).await;
+
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Failed to stream Docker events while waiting for the container to become healthy"
+    );
+    assert!(err.chain().count() > 1, "no cause beneath it: {err:#}");
+}
+
+/// Batect's U52: a stream that ends before any event fails the wait saying
+/// so, rather than waiting for ever or passing.
+#[tokio::test]
+async fn an_event_stream_that_ends_without_a_verdict_fails_the_health_wait() {
+    let (result, _) = wait_healthy_through_events(String::new()).await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Docker's event stream ended without reporting a health status"
+    );
+}
+
+/// Batect's U35, end to end through the daemon (ratect#348): an unhealthy
+/// verdict re-inspects the container, and the error explains it from the
+/// last health-check run in its health log.
+#[tokio::test]
+async fn an_unhealthy_verdict_is_explained_from_the_reinspected_health_log() {
+    let reinspect = serde_json::json!({
+        "Config": {"Healthcheck": {"Test": ["CMD-SHELL", "exit 1"]}},
+        "State": {"Health": {"Status": "unhealthy", "Log": [
+            {"ExitCode": 0, "Output": "an earlier run"},
+            {"ExitCode": 1, "Output": ""},
+        ]}},
+    });
+    let (result, requests) = wait_healthy_against(
+        vec![
+            (200, INSPECT_WITH_HEALTH_CHECK.to_string()),
+            (200, reinspect.to_string()),
+        ],
+        (200, event_line("health_status: unhealthy")),
+    )
+    .await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        unhealthy_message(Some(health_check_run(1, "")))
+    );
+    assert_eq!(
+        method_and_path(&requests),
+        vec![
+            ("GET".to_string(), "/containers/db-id/json".to_string()),
+            ("GET".to_string(), "/events".to_string()),
+            ("GET".to_string(), "/containers/db-id/json".to_string()),
+        ]
+    );
+}
+
+/// Batect's U35 fallback (ratect#328's recorded divergence): when the
+/// re-inspect fails, the unhealthy error is the verdict alone — not an
+/// inspect error masking it.
+#[tokio::test]
+async fn an_unhealthy_verdict_whose_reinspect_fails_is_the_verdict_alone() {
+    let (result, _) = wait_healthy_against(
+        vec![
+            (200, INSPECT_WITH_HEALTH_CHECK.to_string()),
+            (404, r#"{"message":"No such container: db-id"}"#.to_string()),
+        ],
+        (200, event_line("health_status: unhealthy")),
+    )
+    .await;
+
+    let err = result.unwrap_err();
+    assert_eq!(format!("{err:#}"), UNHEALTHY_VERDICT);
 }

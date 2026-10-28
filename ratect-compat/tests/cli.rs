@@ -132,6 +132,10 @@ fn image_with_build_fields_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/image-with-build-fields.yml")
 }
 
+fn stream_routing_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stream-routing.yml")
+}
+
 /// #324: Batect reads a config-variables file's values as strings, so an
 /// unquoted number in one — named by `--config-vars-file` or the default
 /// `batect.local.yml` — loads rather than failing the run. No daemon: the
@@ -2067,6 +2071,93 @@ fn fancy_output_renders_a_live_status_block_on_a_terminal_via_docker() {
 }
 
 /// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and a local pseudo-terminal (see the test above). Run
+/// explicitly with `cargo test -- --ignored`.
+///
+/// Under `fancy`, with stdin and stdout on a terminal — so the task
+/// container runs on a TTY — both of its streams appear on that terminal,
+/// and none of either on Ratect's own stderr, which `sh` redirects to a
+/// file here so the two can be told apart (ratect#349, TCIO-5).
+#[test]
+#[ignore]
+fn fancy_output_keeps_task_container_stderr_off_process_stderr_via_docker() {
+    let stderr_path = std::env::temp_dir().join(format!(
+        "ratect-stream-routing-stderr-{}",
+        std::process::id()
+    ));
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("failed to open pty");
+
+    let mut cmd = CommandBuilder::new("sh");
+    cmd.arg("-c");
+    cmd.arg(r#"exec "$0" "$@" 2>"$RATECT_TEST_STDERR""#);
+    cmd.arg(env!("CARGO_BIN_EXE_ratect-compat"));
+    cmd.args(["-o", "fancy", "-f"]);
+    cmd.arg(stream_routing_config_path());
+    cmd.arg("both-streams");
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("RATECT_TEST_STDERR", &stderr_path);
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .expect("failed to spawn ratect in the pty");
+    drop(pair.slave);
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .expect("failed to clone pty reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok(n @ 1..) = reader.read(&mut buf) {
+            if tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut output = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !String::from_utf8_lossy(&output).contains("finished with exit code")
+        && Instant::now() < deadline
+    {
+        if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+            output.extend_from_slice(&chunk);
+        }
+    }
+    let (wait_tx, wait_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = wait_tx.send(child.wait());
+    });
+    let status = wait_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("ratect did not exit after the task finished")
+        .expect("failed to wait for ratect");
+    let output = String::from_utf8_lossy(&output);
+    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&stderr_path);
+
+    assert!(
+        status.success(),
+        "{status:?}: {output:?}\nstderr:\n{stderr}"
+    );
+    for line in ["from-container-stdout", "from-container-stderr"] {
+        assert!(
+            output.contains(line),
+            "{line} missing from the pty: {output:?}"
+        );
+        assert!(!stderr.contains(line), "{line} reached stderr:\n{stderr}");
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
 /// `redis:7-alpine` and `alpine:3.18.2`. Run explicitly with
 /// `cargo test -- --ignored`.
 ///
@@ -2131,6 +2222,48 @@ fn all_output_prefixes_every_line_and_shows_dependency_output_via_docker() {
             line.contains(" | "),
             "unprefixed line in all-mode output: {line:?}\nfull:\n{stdout}"
         );
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// With stdout piped, the task container's stderr reaches Ratect's
+/// stdout alongside its stdout, and nothing of either reaches Ratect's
+/// stderr, under every non-`fancy` style — Batect hands both streams one
+/// stdout sink (ratect#349, NRC-1). Under `all` both carry the container's
+/// prefix.
+#[test]
+#[ignore]
+fn task_container_stderr_reaches_stdout_under_every_piped_style_via_docker() {
+    for style in ["simple", "quiet", "all"] {
+        let output = ratect_command()
+            .args(["-o", style, "-f"])
+            .arg(stream_routing_config_path())
+            .arg("both-streams")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{style}: stdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+
+        for line in ["from-container-stdout", "from-container-stderr"] {
+            let on_stdout = stdout.lines().any(|candidate| match style {
+                "all" => candidate
+                    .split_once(" | ")
+                    .is_some_and(|(prefix, rest)| prefix.trim() == "app" && rest == line),
+                _ => candidate == line,
+            });
+            assert!(on_stdout, "{style}: {line} missing from stdout:\n{stdout}");
+            assert!(
+                !stderr.contains(line),
+                "{style}: {line} reached stderr:\n{stderr}"
+            );
+        }
     }
 }
 
@@ -3971,6 +4104,12 @@ fn unhealthy_dependency_fails_the_task_via_docker() {
     assert!(
         stderr.contains("'database' did not become healthy"),
         "the error should name the unhealthy container:\n{stderr}"
+    );
+    // The health check's own last run, read back from the daemon: `exit 1`
+    // prints nothing, so the detail says that (ratect#348).
+    assert!(
+        stderr.contains("The last health check exited with code 1 but did not produce any output."),
+        "the error should explain the last health check run:\n{stderr}"
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);

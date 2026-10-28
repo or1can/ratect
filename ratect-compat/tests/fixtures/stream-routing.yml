@@ -1,0 +1,13 @@
+# Proves where the task container's own two output streams go: one line on
+# its stdout, one on its stderr, and both reach Ratect's stdout — never its
+# stderr — whatever the output style, as Batect's single stdout sink for
+# both streams does (ratect#349).
+project_name: ratect-stream-routing-test
+containers:
+  app:
+    image: alpine:3.18.2
+tasks:
+  both-streams:
+    run:
+      container: app
+      command: sh -c "echo from-container-stdout; echo from-container-stderr >&2"
