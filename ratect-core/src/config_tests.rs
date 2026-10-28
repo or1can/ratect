@@ -5931,6 +5931,20 @@ fn load_errors_when_run_as_current_user_home_directory_has_no_leaf() {
     }
 }
 
+/// A trailing `/` still leaves the home a leaf to create, as Batect's
+/// `splitToPathSegments` trims it.
+#[test]
+fn run_as_current_user_accepts_a_home_directory_with_a_trailing_slash() {
+    let config = config_with_container(container_with_run_as_current_user(
+        true,
+        Some("/home/some-user/"),
+    ));
+
+    config
+        .check_with(Path::new("/base"), &HashMap::new())
+        .unwrap();
+}
+
 #[test]
 fn load_errors_when_run_as_current_user_home_directory_contains_a_colon() {
     // SEC-002: a ':' would shift the fields of the colon-delimited

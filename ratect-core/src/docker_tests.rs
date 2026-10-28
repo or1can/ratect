@@ -2562,6 +2562,62 @@ fn owned_directory_parent_is_root_for_a_top_level_home_directory() {
     assert_eq!(owned_directory_parent("/ratect"), "/");
 }
 
+/// A trailing `/` names the same directory, as Batect's
+/// `splitToPathSegments` trims it: a home or cache path's leaf is uploaded
+/// unchanged, owned as any other.
+#[test]
+fn build_owned_directory_tar_ignores_a_trailing_slash() {
+    for (path, leaf) in [
+        ("/home/some-user/", "some-user/"),
+        ("/caches/first-cache/", "first-cache/"),
+    ] {
+        let tar_bytes = build_owned_directory_tar(path, 123, 456).unwrap();
+        let mut archive = tar::Archive::new(tar_bytes.as_slice());
+        let mut entries = archive.entries().unwrap().map(|e| e.unwrap());
+        let entry = entries.next().unwrap();
+
+        assert_eq!(entry.path().unwrap().to_string_lossy(), leaf);
+        assert_eq!(entry.header().entry_type(), tar::EntryType::Directory);
+        assert_eq!(entry.header().uid().unwrap(), 123);
+        assert_eq!(entry.header().gid().unwrap(), 456);
+        assert_eq!(entry.header().mode().unwrap(), 0o755);
+        assert!(entries.next().is_none());
+    }
+}
+
+/// The parent a trailing-slash path's leaf is uploaded into, as Batect's
+/// `splitToPathSegments` gives it.
+#[test]
+fn owned_directory_parent_ignores_a_trailing_slash() {
+    assert_eq!(owned_directory_parent("/home/some-user/"), "/home");
+    assert_eq!(owned_directory_parent("/caches/first-cache/"), "/caches");
+}
+
+/// A root host user is passed through as `0:0`, as in Batect's
+/// `uploadDirectory`/`determineUserAndGroup`: its directories are owned by
+/// `0:0`, still mode `0755`, and the container runs as `0:0`.
+#[tokio::test]
+async fn a_root_host_user_owns_its_directories_and_runs_the_container_as_root() {
+    let tar_bytes = build_owned_directory_tar("/home/root", 0, 0).unwrap();
+    let mut archive = tar::Archive::new(tar_bytes.as_slice());
+    let entry = archive.entries().unwrap().next().unwrap().unwrap();
+    assert_eq!(entry.header().uid().unwrap(), 0);
+    assert_eq!(entry.header().gid().unwrap(), 0);
+    assert_eq!(entry.header().mode().unwrap(), 0o755);
+
+    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let mut spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+    let mut mapping = user_mapping_fixture();
+    mapping.user.uid = 0;
+    mapping.user.gid = 0;
+    spec.shared.user_mapping = Some(mapping);
+    let config = client.container_config(&spec).unwrap();
+    assert_eq!(config.user.as_deref(), Some("0:0"));
+}
+
 /// A `local` (or directory-type `cache`) mount of `source` at `container`.
 fn host_bind(source: &Path, container: &str) -> BindMount {
     BindMount {
