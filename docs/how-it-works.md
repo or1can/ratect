@@ -152,8 +152,8 @@ where that lives and stays current.
 The "run once", "pull once" and "build once" guarantees are in-memory and scoped to
 a **single invocation** — nothing persists between runs, so a `build_directory`
 container is rebuilt every time. Pulls and builds are memoized as shareable futures
-rather than plain sets, so two containers resolving the same image share one
-in-flight operation instead of racing. Dependency readiness, by contrast, is scoped
+rather than plain sets, so two containers resolving the same image under the same
+pull policy share one in-flight operation instead of racing. Dependency readiness, by contrast, is scoped
 to a single **task execution** and discarded when it finishes.
 
 Concurrency follows Batect's in outline: **prerequisites run sequentially**, one to

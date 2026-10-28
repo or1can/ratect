@@ -1488,7 +1488,7 @@ fn deserialize_expression_list<'de, D: serde::Deserializer<'de>>(
 /// (`serde`'s default enum serialization already matches Rust's own PascalCase
 /// variant names, so no `rename_all` is needed here, unlike [`Capability`]).
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ImagePullPolicy {
     /// Pull only if the image doesn't already exist locally — Batect's own
     /// default.
