@@ -195,7 +195,13 @@ enum Stage {
     Pulling(Option<String>),
     /// `ImageBuildStarting`/`ImageBuildProgress` — the latest build line.
     Building(Option<String>),
-    /// Image resolved; waiting on the named dependencies — those not yet
+    /// `ImageBuildCompleted` — built, and the container not yet being
+    /// created.
+    ImageBuilt,
+    /// `ContainerCreating`.
+    Creating,
+    /// Image resolved — and, once `ContainerCreated` arrives, the container
+    /// created; waiting on the named dependencies — those not yet
     /// ready when the line started waiting, drained as each becomes ready
     /// (see [`State::mark_ready`]). Empty once nothing is left, which it
     /// may be from the start.
@@ -247,6 +253,8 @@ impl ContainerLine {
             },
             Stage::Building(None) => "building image...".to_string(),
             Stage::Building(Some(line)) => format!("building image: {line}"),
+            Stage::ImageBuilt => "image built, ready to create container".to_string(),
+            Stage::Creating => "creating container...".to_string(),
             Stage::WaitingForDependencies(remaining) if remaining.is_empty() => {
                 "waiting to start...".to_string()
             }
@@ -798,7 +806,9 @@ impl EventSink for FancyEventLogger {
                 if !state.keep_updating_startup {
                     return;
                 }
-                state.start_waiting(|line| line.info.name == container);
+                if let Some(line) = Self::line_mut(&mut state, &container) {
+                    line.stage = Stage::ImageBuilt;
+                }
                 self.repaint_startup(&mut state);
             }
             TaskEvent::ImageResolved { container } => {
@@ -926,12 +936,25 @@ impl EventSink for FancyEventLogger {
                     }
                 }
             }
-            // The creation step has no stage of its own here yet — Batect's
-            // `creating container...` and `image built, ready to create
-            // container` are ratect#500's — so the line stays at whatever it
-            // was showing.
-            TaskEvent::ContainerCreating { .. } => {}
+            TaskEvent::ContainerCreating { container } => {
+                if !state.keep_updating_startup {
+                    return;
+                }
+                if let Some(line) = Self::line_mut(&mut state, &container) {
+                    line.stage = Stage::Creating;
+                }
+                self.repaint_startup(&mut state);
+            }
             TaskEvent::ContainerCreated { container } => {
+                // Created, the container waits only for its dependencies.
+                // Whatever stage the line is in: the engine creates a
+                // container before it starts it, so nothing later than
+                // `Creating` can be showing yet. Were a start ever posted
+                // before its create, this would move the line back.
+                if state.keep_updating_startup {
+                    state.start_waiting(|line| line.info.name == container);
+                    self.repaint_startup(&mut state);
+                }
                 // Counted from *created*, not from `RunningTaskContainer` or
                 // `DependencyStarted` — those are posted when a container's
                 // start begins, and a container that is created but never

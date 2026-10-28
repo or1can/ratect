@@ -1554,7 +1554,7 @@ fn a_dependant_never_waits_for_a_dependency_already_ready() {
         true,
     ));
     logger.post(healthy("dep-a"));
-    logger.post(TaskEvent::ImageBuildCompleted {
+    logger.post(TaskEvent::ContainerCreated {
         container: "z-app".into(),
     });
     assert_eq!(
@@ -1677,5 +1677,74 @@ fn an_externally_checked_container_with_setup_commands_runs_them_first() {
     assert_eq!(
         last_frame(&buffer, 2)[0],
         "checked: running setup commands..."
+    );
+}
+
+/// Batect's states between an image and a container: built, then being
+/// created, then — once created — waiting for its dependencies.
+#[test]
+fn a_built_container_is_created_before_it_waits() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("db", Some("db:1"), &[], false),
+            built("app", "p-app", &["db"], true),
+        ],
+    });
+    logger.post(TaskEvent::ImageBuildCompleted {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: image built, ready to create container"]
+    );
+    logger.post(TaskEvent::ImageResolved {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: image built, ready to create container"]
+    );
+    logger.post(TaskEvent::ContainerCreating {
+        container: "app".into(),
+    });
+    assert_eq!(last_frame(&buffer, 1), ["app: creating container..."]);
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 1),
+        ["app: waiting for dependency db to be ready..."]
+    );
+}
+
+/// A dependency is created like the task's own container, and one that
+/// became ready while its dependant was being created is not waited for.
+#[test]
+fn a_dependency_is_created_too_and_readiness_survives_creation() {
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("db", Some("db:1"), &[], false),
+            info("app", Some("app:1"), &["db"], true),
+        ],
+    });
+    logger.post(TaskEvent::ContainerCreating {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::ContainerCreating {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        ["db: creating container...", "app: creating container..."]
+    );
+    logger.post(healthy("db"));
+    logger.post(TaskEvent::ContainerCreated {
+        container: "app".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 2),
+        ["db: ready", "app: waiting to start..."]
     );
 }
