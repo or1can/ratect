@@ -5404,6 +5404,37 @@ async fn a_dependency_whose_creation_fails_after_docker_created_it_is_still_clea
     assert_removed_before_network(&docker.events(), "fails");
 }
 
+/// Batect's RRC-1/RRC-3/RRC-7, the engine half (ratect#340): a container
+/// whose creation failed is never started — whether Docker created nothing
+/// or created one whose preparation then failed, and whether it's a
+/// dependency or the task's own container. The fake records a start only
+/// for a container the engine actually asks to start.
+#[tokio::test]
+async fn a_container_whose_creation_failed_is_never_started() {
+    type Failing = fn(FakeContainerRuntime, &str) -> FakeContainerRuntime;
+    let failures: [(&str, Failing); 2] = [
+        ("nothing created", FakeContainerRuntime::failing_creation),
+        (
+            "created, then failed",
+            FakeContainerRuntime::failing_creation_after_docker_created,
+        ),
+    ];
+    for (failure, failing) in failures {
+        for (container, start_event) in [("fails", "sidecar-start:fails:"), ("app", "run:app:")] {
+            let docker = failing(FakeContainerRuntime::default(), container);
+            let engine = engine(config_with_sibling_dependencies(), docker.clone());
+
+            assert!(engine.run_task("start", &[]).await.is_err());
+
+            let events = docker.events();
+            assert!(
+                !events.iter().any(|e| e.starts_with(start_event)),
+                "{failure}: '{container}' was started: {events:?}"
+            );
+        }
+    }
+}
+
 /// Creation doesn't wait for a dependency's readiness; only the start does
 /// (decisions/0019, rule 2). `a` takes a second to become healthy; `b`
 /// (which depends on it) and the task container are both *created* before
