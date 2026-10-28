@@ -789,6 +789,39 @@ fn build_health_config(health_check: Option<&HealthCheckOptions>) -> Option<Heal
     })
 }
 
+/// Why a container was reported unhealthy, from `last_result`, its last
+/// recorded health-check run — ported from Batect's
+/// `containerBecameUnhealthyMessage`, including its "exited 0 just after
+/// the timeout" special case. Pure, unit-testable without a daemon; the
+/// verdict alone when there is no run to explain it.
+fn unhealthy_message(last_result: Option<bollard::models::HealthcheckResult>) -> String {
+    const VERDICT: &str = "The configured health check did not indicate that the container \
+                           was healthy within the timeout period.";
+
+    let Some(last_result) = last_result else {
+        return VERDICT.to_string();
+    };
+
+    let exit_code = last_result.exit_code.unwrap_or_default();
+    let output = last_result.output.unwrap_or_default();
+    let details = if exit_code == 0 {
+        "The most recent health check exited with code 0, which usually indicates that the \
+         container became healthy just after the timeout period expired."
+            .to_string()
+    } else if output.is_empty() {
+        format!(
+            "The last health check exited with code {exit_code} but did not produce any output."
+        )
+    } else {
+        format!(
+            "The last health check exited with code {exit_code} and output:\n{}",
+            output.trim()
+        )
+    };
+
+    format!("{VERDICT} {details}")
+}
+
 /// Builds Docker's `Config.exposed_ports` + `HostConfig.port_bindings` from
 /// already-expanded `(local_port, container_port, protocol)` triples — pure,
 /// unit-testable without a daemon. `None` when `ports` itself is `None`
@@ -2579,15 +2612,11 @@ impl DockerClient {
     }
 
     /// Explains why a container was reported unhealthy, from its last
-    /// recorded health-check run — ported from Batect's
-    /// `containerBecameUnhealthyMessage`, including its "exited 0 just
-    /// after the timeout" special case. Best-effort: falls back to the
-    /// verdict alone if the inspect (or its health log) is unavailable,
-    /// rather than masking the real failure with an inspection error.
+    /// recorded health-check run (see `unhealthy_message`). Best-effort:
+    /// falls back to the verdict alone if the inspect (or its health log)
+    /// is unavailable, rather than masking the real failure with an
+    /// inspection error.
     async fn unhealthy_details(&self, container_id: &str) -> String {
-        const VERDICT: &str = "The configured health check did not indicate that the container \
-                               was healthy within the timeout period.";
-
         let last_result = self
             .docker
             .inspect_container(container_id, None::<InspectContainerOptions>)
@@ -2597,27 +2626,7 @@ impl DockerClient {
             .and_then(|state| state.health)
             .and_then(|health| health.log)
             .and_then(|log| log.into_iter().next_back());
-
-        let Some(last_result) = last_result else {
-            return VERDICT.to_string();
-        };
-
-        let exit_code = last_result.exit_code.unwrap_or_default();
-        let output = last_result.output.unwrap_or_default();
-        let details = if exit_code == 0 {
-            "The most recent health check exited with code 0, which usually indicates that the \
-             container became healthy just after the timeout period expired."
-                .to_string()
-        } else if output.is_empty() {
-            format!("The last health check exited with code {exit_code} but did not produce any output.")
-        } else {
-            format!(
-                "The last health check exited with code {exit_code} and output:\n{}",
-                output.trim()
-            )
-        };
-
-        format!("{VERDICT} {details}")
+        unhealthy_message(last_result)
     }
 
     /// The shared primitive behind two different contracts: this method's

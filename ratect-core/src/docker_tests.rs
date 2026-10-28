@@ -4677,3 +4677,356 @@ async fn remove_volume_fails_for_a_missing_volume() {
         "{err:#}"
     );
 }
+
+/// `unhealthy_message`'s fixed verdict sentence, which every unhealthy
+/// message starts with.
+const UNHEALTHY_VERDICT: &str = "The configured health check did not indicate that the container \
+                                 was healthy within the timeout period.";
+
+/// A health-check run that exited `exit_code` having printed `output`.
+fn health_check_run(exit_code: i64, output: &str) -> bollard::models::HealthcheckResult {
+    bollard::models::HealthcheckResult {
+        exit_code: Some(exit_code),
+        output: Some(output.to_string()),
+        ..Default::default()
+    }
+}
+
+/// Batect's U35 (ratect#348): with no health-check run to explain it, the
+/// message is the verdict alone — the fallback ratect#328 recorded as a
+/// divergence.
+#[test]
+fn unhealthy_message_is_the_verdict_alone_without_a_health_check_run() {
+    assert_eq!(unhealthy_message(None), UNHEALTHY_VERDICT);
+}
+
+/// Batect's U35: a last run that exited 0 means the container turned
+/// healthy just too late, whatever it printed — nothing included.
+#[test]
+fn unhealthy_message_explains_a_last_run_that_exited_0_as_just_too_late() {
+    for output in ["ok", ""] {
+        assert_eq!(
+            unhealthy_message(Some(health_check_run(0, output))),
+            format!(
+                "{UNHEALTHY_VERDICT} The most recent health check exited with code 0, which \
+                 usually indicates that the container became healthy just after the timeout \
+                 period expired."
+            ),
+            "output: {output:?}"
+        );
+    }
+}
+
+/// Batect's U35: a failing last run that printed nothing says so.
+#[test]
+fn unhealthy_message_says_a_failing_last_run_produced_no_output() {
+    assert_eq!(
+        unhealthy_message(Some(health_check_run(1, ""))),
+        format!(
+            "{UNHEALTHY_VERDICT} The last health check exited with code 1 but did not produce \
+             any output."
+        )
+    );
+}
+
+/// Batect's U35: a failing last run's output follows its exit code,
+/// trimmed of surrounding whitespace.
+#[test]
+fn unhealthy_message_gives_a_failing_last_runs_output_trimmed() {
+    assert_eq!(
+        unhealthy_message(Some(health_check_run(7, "\n  connection refused\n\n"))),
+        format!(
+            "{UNHEALTHY_VERDICT} The last health check exited with code 7 and output:\n\
+             connection refused"
+        )
+    );
+}
+
+/// An inspect of a container whose config declares a health check.
+const INSPECT_WITH_HEALTH_CHECK: &str =
+    r#"{"Config":{"Healthcheck":{"Test":["CMD-SHELL","exit 1"]}}}"#;
+
+/// One Docker event with `action`, as a line of the `/events` stream.
+fn event_line(action: &str) -> String {
+    format!(
+        "{}\n",
+        serde_json::json!({
+            "Type": "container",
+            "Action": action,
+            "Actor": {"ID": "db-id", "Attributes": {}},
+            "time": 1,
+        })
+    )
+}
+
+/// `wait_for_container_healthy("db-id")` against a [`StubDaemon`] answering
+/// the container's inspects with `inspects` in turn (the last repeated)
+/// and `/events` with `events`: what it returned, and every request it
+/// sent.
+async fn wait_healthy_against(
+    inspects: Vec<(u16, String)>,
+    events: (u16, String),
+) -> (Result<()>, Vec<RecordedRequest>) {
+    let inspected = std::sync::atomic::AtomicUsize::new(0);
+    let (client, log) = client_for_recording_daemon(move |method, path| match (method, path) {
+        ("GET", "/containers/db-id/json") => {
+            let turn = inspected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            inspects[turn.min(inspects.len() - 1)].clone()
+        }
+        ("GET", "/events") => events.clone(),
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    })
+    .await;
+
+    let result = client.wait_for_container_healthy("db-id").await;
+
+    let requests = log.lock().unwrap().clone();
+    (result, requests)
+}
+
+/// [`wait_healthy_against`] for a container with a health check, whose
+/// `/events` stream answers `events` with a 200.
+async fn wait_healthy_through_events(events: String) -> (Result<()>, Vec<RecordedRequest>) {
+    wait_healthy_against(
+        vec![(200, INSPECT_WITH_HEALTH_CHECK.to_string())],
+        (200, events),
+    )
+    .await
+}
+
+/// Whether `requests` include a request for Docker's event stream.
+fn requested_events(requests: &[RecordedRequest]) -> bool {
+    requests.iter().any(|request| request.path == "/events")
+}
+
+/// Batect's U34 (ratect#348): an inspect the daemon refuses fails the wait
+/// naming the container, the daemon's own words beneath it, before any
+/// event is asked for.
+#[tokio::test]
+async fn wait_for_container_healthy_fails_on_a_refused_inspect_before_asking_for_events() {
+    let (result, requests) = wait_healthy_against(
+        vec![(404, r#"{"message":"No such container: db-id"}"#.to_string())],
+        (200, event_line("health_status: healthy")),
+    )
+    .await;
+
+    let err = result.unwrap_err();
+    assert_eq!(err.to_string(), "Failed to inspect container 'db-id'");
+    assert!(
+        format!("{err:#}").contains("No such container: db-id"),
+        "{err:#}"
+    );
+    assert!(!requested_events(&requests), "{requests:?}");
+}
+
+/// Batect's U34, for `container_is_running`, which inspects the same way.
+#[tokio::test]
+async fn container_is_running_fails_on_a_refused_inspect_naming_the_container() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "GET",
+        "/containers/db-id/json",
+        404,
+        r#"{"message":"No such container: db-id"}"#,
+    ))
+    .await;
+
+    let err = client.container_is_running("db-id").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to inspect container 'db-id'");
+    assert!(
+        format!("{err:#}").contains("No such container: db-id"),
+        "{err:#}"
+    );
+}
+
+/// Batect's U35 shortcut (ratect#348): a container with no health check —
+/// no config, no `Healthcheck`, or an empty `Test` — is healthy at once,
+/// without asking for a single event.
+#[tokio::test]
+async fn a_container_without_a_health_check_is_healthy_without_asking_for_events() {
+    for inspect in [
+        r#"{}"#,
+        r#"{"Config":{}}"#,
+        r#"{"Config":{"Healthcheck":{}}}"#,
+        r#"{"Config":{"Healthcheck":{"Test":[]}}}"#,
+    ] {
+        let (result, requests) = wait_healthy_against(
+            vec![(200, inspect.to_string())],
+            (200, event_line("health_status: unhealthy")),
+        )
+        .await;
+
+        assert!(result.is_ok(), "{inspect}: {result:?}");
+        assert!(!requested_events(&requests), "{inspect}: {requests:?}");
+    }
+}
+
+/// Batect's U50 and U51 (ratect#348): the event stream is asked for this
+/// container's `die` and `health_status` events only — the daemon ANDs
+/// the two filters — replayed from the beginning of time (`since=0`) with
+/// no end (`until`), so a verdict Docker reached before the stream opened
+/// still arrives.
+#[tokio::test]
+async fn the_health_wait_asks_for_this_containers_verdicts_since_the_beginning_of_time() {
+    let (result, requests) =
+        wait_healthy_through_events(event_line("health_status: healthy")).await;
+
+    result.unwrap();
+    let events: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path == "/events")
+        .collect();
+    let [events] = events[..] else {
+        panic!("one events request: {requests:?}");
+    };
+    let query: HashMap<String, String> = url::form_urlencoded::parse(events.query.as_bytes())
+        .into_owned()
+        .collect();
+    assert_eq!(
+        query.get("since").map(String::as_str),
+        Some("0"),
+        "{query:?}"
+    );
+    assert!(!query.contains_key("until"), "{query:?}");
+    let filters: HashMap<String, Vec<String>> =
+        serde_json::from_str(query.get("filters").expect("a filters parameter")).unwrap();
+    assert_eq!(
+        filters,
+        HashMap::from([
+            ("container".to_string(), vec!["db-id".to_string()]),
+            (
+                "event".to_string(),
+                vec!["die".to_string(), "health_status".to_string()]
+            ),
+        ])
+    );
+}
+
+/// Batect's U51 and U49 (ratect#348): a verdict waiting in the stream the
+/// moment it opens — as a replayed one is — decides the wait, and only the
+/// first event counts: a contrary verdict after it is never read.
+#[tokio::test]
+async fn only_the_first_event_in_the_stream_decides_the_health_wait() {
+    let (result, _) = wait_healthy_through_events(format!(
+        "{}{}",
+        event_line("health_status: healthy"),
+        event_line("health_status: unhealthy")
+    ))
+    .await;
+    assert!(result.is_ok(), "healthy, then unhealthy: {result:?}");
+
+    let (result, _) = wait_healthy_through_events(format!(
+        "{}{}",
+        event_line("health_status: unhealthy"),
+        event_line("health_status: healthy")
+    ))
+    .await;
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().starts_with(UNHEALTHY_VERDICT),
+        "unhealthy, then healthy: {err:#}"
+    );
+}
+
+/// Batect's U49: a container that exits before a verdict fails the wait
+/// saying so.
+#[tokio::test]
+async fn a_container_that_dies_before_a_verdict_fails_the_health_wait() {
+    let (result, _) = wait_healthy_through_events(event_line("die")).await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "The container exited before becoming healthy."
+    );
+}
+
+/// Batect's U49: any other event fails the wait, naming it.
+#[tokio::test]
+async fn an_unexpected_event_fails_the_health_wait_naming_it() {
+    let (result, _) = wait_healthy_through_events(event_line("health_status: starting")).await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Unexpected event 'health_status: starting' received while waiting for the container to \
+         become healthy"
+    );
+}
+
+/// Batect's U52 (ratect#348): a stream that fails fails the wait saying
+/// what it was doing, the stream's own error beneath it.
+#[tokio::test]
+async fn a_failed_event_stream_fails_the_health_wait_with_its_cause() {
+    let (result, _) = wait_healthy_through_events("this is not json\n".to_string()).await;
+
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Failed to stream Docker events while waiting for the container to become healthy"
+    );
+    assert!(err.chain().count() > 1, "no cause beneath it: {err:#}");
+}
+
+/// Batect's U52: a stream that ends before any event fails the wait saying
+/// so, rather than waiting for ever or passing.
+#[tokio::test]
+async fn an_event_stream_that_ends_without_a_verdict_fails_the_health_wait() {
+    let (result, _) = wait_healthy_through_events(String::new()).await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Docker's event stream ended without reporting a health status"
+    );
+}
+
+/// Batect's U35, end to end through the daemon (ratect#348): an unhealthy
+/// verdict re-inspects the container, and the error explains it from the
+/// last health-check run in its health log.
+#[tokio::test]
+async fn an_unhealthy_verdict_is_explained_from_the_reinspected_health_log() {
+    let reinspect = serde_json::json!({
+        "Config": {"Healthcheck": {"Test": ["CMD-SHELL", "exit 1"]}},
+        "State": {"Health": {"Status": "unhealthy", "Log": [
+            {"ExitCode": 0, "Output": "an earlier run"},
+            {"ExitCode": 1, "Output": ""},
+        ]}},
+    });
+    let (result, requests) = wait_healthy_against(
+        vec![
+            (200, INSPECT_WITH_HEALTH_CHECK.to_string()),
+            (200, reinspect.to_string()),
+        ],
+        (200, event_line("health_status: unhealthy")),
+    )
+    .await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        unhealthy_message(Some(health_check_run(1, "")))
+    );
+    assert_eq!(
+        method_and_path(&requests),
+        vec![
+            ("GET".to_string(), "/containers/db-id/json".to_string()),
+            ("GET".to_string(), "/events".to_string()),
+            ("GET".to_string(), "/containers/db-id/json".to_string()),
+        ]
+    );
+}
+
+/// Batect's U35 fallback (ratect#328's recorded divergence): when the
+/// re-inspect fails, the unhealthy error is the verdict alone — not an
+/// inspect error masking it.
+#[tokio::test]
+async fn an_unhealthy_verdict_whose_reinspect_fails_is_the_verdict_alone() {
+    let (result, _) = wait_healthy_against(
+        vec![
+            (200, INSPECT_WITH_HEALTH_CHECK.to_string()),
+            (404, r#"{"message":"No such container: db-id"}"#.to_string()),
+        ],
+        (200, event_line("health_status: unhealthy")),
+    )
+    .await;
+
+    let err = result.unwrap_err();
+    assert_eq!(format!("{err:#}"), UNHEALTHY_VERDICT);
+}

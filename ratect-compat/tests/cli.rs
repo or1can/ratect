@@ -4105,6 +4105,12 @@ fn unhealthy_dependency_fails_the_task_via_docker() {
         stderr.contains("'database' did not become healthy"),
         "the error should name the unhealthy container:\n{stderr}"
     );
+    // The health check's own last run, read back from the daemon: `exit 1`
+    // prints nothing, so the detail says that (ratect#348).
+    assert!(
+        stderr.contains("The last health check exited with code 1 but did not produce any output."),
+        "the error should explain the last health check run:\n{stderr}"
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
