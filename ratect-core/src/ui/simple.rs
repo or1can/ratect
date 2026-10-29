@@ -103,7 +103,7 @@ impl EventSink for SimpleEventLogger {
             } => {
                 self.console.println(&super::format_task_summary(
                     &self.console,
-                    &self.console.bold(&task),
+                    &task,
                     exit_code,
                     duration,
                 ));

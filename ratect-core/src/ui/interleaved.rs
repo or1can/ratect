@@ -446,12 +446,7 @@ impl EventSink for InterleavedEventLogger {
             } => {
                 self.print_for_task(
                     &state,
-                    &super::format_task_summary(
-                        &self.console,
-                        &self.console.bold(&task),
-                        exit_code,
-                        duration,
-                    ),
+                    &super::format_task_summary(&self.console, &task, exit_code, duration),
                 );
             }
             // Nothing to show of its own — `all` has no live display to

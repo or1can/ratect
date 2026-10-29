@@ -1066,7 +1066,7 @@ impl EventSink for FancyEventLogger {
                 self.pay_separator(&mut state);
                 self.console.println(&super::format_task_summary(
                     &self.console,
-                    &self.console.bold(&task),
+                    &task,
                     exit_code,
                     duration,
                 ));

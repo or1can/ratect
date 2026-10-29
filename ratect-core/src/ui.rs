@@ -1247,14 +1247,11 @@ pub(crate) fn format_task_failed_summary(
 }
 
 /// The task summary line every output mode ends a task with —
-/// `<task_label> finished with exit code <n> in <duration>.`, the exit code
-/// bold, and green for `0` or red otherwise. `task_label` is the already-
-/// formatted task name (every style passes a bolded one) rather than a bare
-/// `&str`, so this stays agnostic to which styling, if any, the caller
-/// wants around the name itself.
+/// `<task> finished with exit code <n> in <duration>.`, the name bold and
+/// the exit code bold, green for `0` or red otherwise.
 pub(crate) fn format_task_summary(
     console: &Console,
-    task_label: &str,
+    task: &str,
     exit_code: i64,
     duration: Duration,
 ) -> String {
@@ -1265,7 +1262,8 @@ pub(crate) fn format_task_summary(
     };
     let exit_code = console.bold_colored(color, &exit_code.to_string());
     format!(
-        "{task_label} finished with exit code {exit_code} in {}.",
+        "{} finished with exit code {exit_code} in {}.",
+        console.bold(task),
         format_duration(duration)
     )
 }
