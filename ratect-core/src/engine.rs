@@ -3692,9 +3692,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // reported an exit code — zero (`Ok`) or not (the
         // `ContainerExitedNonZero` error, which still propagates to become
         // ratect's own exit code); an infrastructure failure posts
-        // `TaskFailed` instead. Both are posted after cleanup, matching Batect's `onTaskFinished` (called
-        // once `ParallelExecutionManager.run()` — cleanup included — has
-        // returned).
+        // `TaskFailed` instead, and so does a passing command whose cleanup
+        // then failed: "finished with exit code 0" would be true of the
+        // command and false of the run (ratect#610), and the `CleanupFailed`
+        // error already says the command passed. A non-zero code a cleanup
+        // failure leaves alone keeps its "finished" line, still true. Both
+        // are posted after cleanup, matching Batect's `onTaskFinished`
+        // (called once `ParallelExecutionManager.run()` — cleanup included —
+        // has returned).
+        let exit_code =
+            exit_code.filter(|_| !result.as_ref().is_err_and(|e| e.is::<CleanupFailed>()));
         if let Some(exit_code) = exit_code {
             self.event_sink.post(TaskEvent::TaskFinished {
                 task: task_name.to_string(),
@@ -3703,9 +3710,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             });
         } else if interrupted_by.is_none() && !stdout_closed {
             // Infrastructure failure — the error itself was reported before
-            // cleanup, above; this ends the task, as `TaskFinished` would. A
-            // signal or a gone reader posts nothing: its notice already said
-            // how the run ended (decisions/0017's interrupt sequence).
+            // cleanup, above, or by it for a cleanup failure; this ends the
+            // task, as `TaskFinished` would. A signal or a gone reader posts
+            // nothing: its notice already said how the run ended
+            // (decisions/0017's interrupt sequence).
             self.event_sink.post(TaskEvent::TaskFailed {
                 task: task_name.to_string(),
                 duration: task_started_at.elapsed(),

@@ -3427,16 +3427,16 @@ fn a_signal_while_connecting_wins_over_the_failed_connect() {
 
 /// Runs `task` from the cleanup-outcome fixture with a bystander container
 /// attached to its network mid-run, so the network's removal is refused, and
-/// returns the exit code and stderr. Removes the bystander and the network
-/// afterwards, whatever happened.
-fn run_with_network_removal_refused(task: &str) -> (Option<i32>, String) {
+/// returns the exit code, stdout and stderr. Removes the bystander and the
+/// network afterwards, whatever happened.
+fn run_with_network_removal_refused(task: &str) -> (Option<i32>, String, String) {
     let filter = CLEANUP_OUTCOME_PROJECT_FILTER;
     let bystander_label = "ratect-cleanup-outcome-bystander";
     let child = ratect_command()
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cleanup-outcome.yml"))
         .args(["-o", "simple", task])
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn ratect");
@@ -3472,6 +3472,7 @@ fn run_with_network_removal_refused(task: &str) -> (Option<i32>, String) {
     );
     (
         output.status.code(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
 }
@@ -3485,7 +3486,7 @@ fn a_passing_run_whose_cleanup_fails_exits_125_via_docker() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let (code, stderr) = run_with_network_removal_refused("pass");
+    let (code, stdout, stderr) = run_with_network_removal_refused("pass");
 
     assert_eq!(code, Some(125), "stderr:\n{stderr}");
     // The engine's own line, quoting the daemon and naming what was left and
@@ -3503,6 +3504,13 @@ fn a_passing_run_whose_cleanup_fails_exits_125_via_docker() {
         1,
         "one cleanup failure, one Error: line:\n{stderr}"
     );
+    // The run failed, so its summary — on stdout, `ratect-compat`'s
+    // progress console — says so, not "finished with exit code 0"
+    // (ratect#610).
+    assert!(
+        stdout.contains("pass failed after ") && !stdout.contains("finished with exit code"),
+        "{stdout}"
+    );
 }
 
 /// The same refusal after a task that exited 3 leaves the 3 alone: a task's
@@ -3514,9 +3522,13 @@ fn a_failing_run_whose_cleanup_fails_keeps_its_own_code_via_docker() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    let (code, stderr) = run_with_network_removal_refused("fail");
+    let (code, stdout, stderr) = run_with_network_removal_refused("fail");
 
     assert_eq!(code, Some(3), "stderr:\n{stderr}");
+    assert!(
+        stdout.contains("fail finished with exit code 3 in "),
+        "{stdout}"
+    );
 }
 
 /// A dependency `docker rm -f`'d mid-run is already gone when cleanup comes

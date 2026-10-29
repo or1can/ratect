@@ -7209,7 +7209,8 @@ async fn a_supervisors_follow_up_signal_after_escalation_does_not_abandon() {
 /// first escalates, a `SIGINT` after it abandons — and an abandoned cleanup
 /// is a failed one, so a run that would have passed fails with
 /// `CleanupFailed` rather than reporting either signal, neither of which
-/// ended the command (decisions/0016).
+/// ended the command (decisions/0016) — and, the run having failed, its
+/// summary is `TaskFailed`, not `TaskFinished` (ratect#610).
 #[tokio::test]
 async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons_it() {
     let config = config_with_database_dependency(|_| {});
@@ -7221,10 +7222,11 @@ async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons
             crate::interrupt::TerminationSignal::Interrupt,
         ],
     );
+    let sink = RawEventSink::default();
     let engine = TaskEngine::new(
         project(config),
         docker.clone(),
-        Arc::new(NullEventSink),
+        Arc::new(sink.clone()),
         Arc::clone(&interrupt),
     );
 
@@ -7233,6 +7235,7 @@ async fn an_interrupt_after_escalation_of_an_uninterrupted_runs_cleanup_abandons
         error.is::<CleanupFailed>(),
         "an abandoned cleanup fails a passing run: {error:#}"
     );
+    assert_eq!(summaries(&sink.0.lock().unwrap(), "start"), (vec![], 1));
 
     let events = docker.events();
     assert!(
@@ -7321,6 +7324,106 @@ async fn a_dependency_already_gone_at_cleanup_is_not_a_cleanup_failure() {
         crate::exit_code::RATECT_FAILED,
         "{error:#}"
     );
+}
+
+/// The summary events a run posted for `task`: each `TaskFinished`'s exit
+/// code, and how many `TaskFailed`s.
+fn summaries(events: &[TaskEvent], task: &str) -> (Vec<i64>, usize) {
+    let finished = events
+        .iter()
+        .filter_map(|event| match event {
+            TaskEvent::TaskFinished {
+                task: finished,
+                exit_code,
+                ..
+            } if finished == task => Some(*exit_code),
+            _ => None,
+        })
+        .collect();
+    let failed = events
+        .iter()
+        .filter(
+            |event| matches!(event, TaskEvent::TaskFailed { task: failed, .. } if failed == task),
+        )
+        .count();
+    (finished, failed)
+}
+
+/// A passing run whose cleanup fails failed, so its summary is the failed
+/// one — not "finished with exit code 0", true of the command and false of
+/// the run (ratect#610) — for a refused network and a refused dependency
+/// alike.
+#[tokio::test]
+async fn a_passing_run_whose_cleanup_fails_posts_task_failed() {
+    let network = FakeContainerRuntime::default().refusing_network_removal();
+    let dependency =
+        FakeContainerRuntime::default().refusing_container_removal("sidecar-id-database");
+    for docker in [network, dependency] {
+        let sink = RawEventSink::default();
+        let engine = TaskEngine::new(
+            project(config_with_database_dependency(|_| {})),
+            docker,
+            Arc::new(sink.clone()),
+            crate::interrupt::Interrupt::new(),
+        );
+
+        let error = engine.run_task("start", &[]).await.unwrap_err();
+
+        assert!(error.is::<CleanupFailed>(), "{error:#}");
+        assert_eq!(summaries(&sink.0.lock().unwrap(), "start"), (vec![], 1));
+    }
+}
+
+/// A task whose own command exited non-zero keeps its "finished with exit
+/// code" summary when cleanup then fails: decisions/0016 keeps that code, so
+/// the line is still true.
+#[tokio::test]
+async fn a_failing_run_whose_cleanup_fails_still_posts_task_finished() {
+    let docker = FakeContainerRuntime::default()
+        .with_run_exit("app", 3)
+        .refusing_network_removal();
+    let sink = RawEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_database_dependency(|_| {})),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+
+    assert_eq!(summaries(&sink.0.lock().unwrap(), "start"), (vec![3], 0));
+}
+
+/// The same for a prerequisite: one whose command passed but whose cleanup
+/// failed posts `TaskFailed`, and the task after it never starts.
+#[tokio::test]
+async fn a_prerequisite_whose_cleanup_fails_posts_task_failed() {
+    let mut config = config_with_database_dependency(|_| {});
+    config
+        .containers
+        .insert("tool".to_string(), container("alpine:3.18", None));
+    config
+        .tasks
+        .insert("prepare".to_string(), task("app", "true"));
+    let mut main = task("tool", "true");
+    main.prerequisites = Some(vec!["prepare".to_string()]);
+    config.tasks.insert("main".to_string(), main);
+    let docker = FakeContainerRuntime::default().refusing_container_removal("sidecar-id-database");
+    let sink = RawEventSink::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker,
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = engine.run_task("main", &[]).await.unwrap_err();
+
+    assert!(error.is::<CleanupFailed>(), "{error:#}");
+    let events = sink.0.lock().unwrap();
+    assert_eq!(summaries(&events, "prepare"), (vec![], 1));
+    assert_eq!(summaries(&events, "main"), (vec![], 0));
 }
 
 /// A task's own non-zero code is never overridden by a cleanup failure.

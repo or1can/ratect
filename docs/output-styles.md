@@ -54,7 +54,10 @@ not run the task, or could not clean up after it. A failure to run a task that
 has started — an image that won't pull, a dependency that never becomes
 healthy — is reported when it happens, before any cleanup line, and outside
 `quiet` the run then ends with the summary line's other form, `<task> failed
-after <duration>.`, where `finished with exit code N` would have gone. A
+after <duration>.`, where `finished with exit code N` would have gone. So
+does a run whose command exited `0` but whose cleanup then failed, after the
+error saying what was left behind; a command that exited non-zero keeps its
+`finished with exit code N` line whatever cleanup does. A
 failure before any task starts, such as a config that doesn't load, is printed
 as the run exits, with no summary line, as is a prerequisite's failure for the
 task waiting on it: the prerequisite's own line is the one printed.

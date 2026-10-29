@@ -106,6 +106,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A run whose task's command exited `0` but whose cleanup failed ends with `<task> failed after <duration>.` instead of `<task> finished with exit code 0 in <duration>.`, in every style but `quiet`.
 - `-o all` output no longer prints an empty line for a carriage return (`\r`) with nothing before it — at the start of a container's output, right after a newline, or after another `\r` — or after a `\r` that already ended a line, as in Batect. A setup command's output drops a leading `\r` and splits on a lone one, the same as a container's.
 - On a colour terminal, `simple` output bolds the task, container and image names, the task's command and setup commands, and the summary's task name, as Batect does — and the container in its ratect-only lines too.
 - `fancy` output with cleanup off: the summary line no longer runs onto the end of task output that lacks a trailing newline, and follows a blank line otherwise, as in Batect.
