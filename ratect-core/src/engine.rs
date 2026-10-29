@@ -1644,25 +1644,19 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             // skipped entirely otherwise (see
             // `EventSink::wants_progress_detail`) rather than allocating and
             // posting one event per line only to have every other mode
-            // immediately discard it.
-            //
-            // `.lines()` + `trim_end_matches('\r')` re-implements a shape of
-            // `crate::ui::interleaved::LineBuffer`'s own framing rule, and
-            // not quite identically: on `"a\r\r\n"`, this produces one line,
-            // `"a"`, where `LineBuffer` now produces two, `"a"` and `""`
-            // (ratect#74 made it flush on a lone `\r` too). Switching this
-            // over would trade an owned `String` for `LineBuffer`'s
-            // bytes-plus-`FnMut`-closure shape — more ceremony than the few
-            // lines here — so this stays a real but shallow duplication, not
-            // unified.
+            // immediately discard it. Framed by the same `LineBuffer` as a
+            // container's streamed output, so both follow one rule.
             if self.event_sink.wants_progress_detail() {
-                for line in result.output.lines() {
+                let post = |line: &str| {
                     self.event_sink.post(TaskEvent::SetupCommandOutput {
                         container: name.to_string(),
                         index: setup_command_index + 1,
-                        line: line.trim_end_matches('\r').to_string(),
+                        line: line.to_string(),
                     });
-                }
+                };
+                let mut lines = crate::ui::interleaved::LineBuffer::new();
+                lines.push(result.output.as_bytes(), post);
+                lines.flush(post);
             }
             if result.exit_code != 0 {
                 let output = if result.output.trim().is_empty() {

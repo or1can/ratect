@@ -369,13 +369,16 @@ tables above:
   `\r` to redraw progress in place (pip/curl/apt-style) produces no output at
   all until its next `\n`, then dumps everything since as one giant
   concatenated line — or produces none at all, if the stream ends first. A
-  deliberate divergence: Ratect flushes on a lone `\r` (one not
+  deliberate divergence: Ratect also ends a line at a lone `\r` (one not
   immediately followed by `\n` — a CRLF pair still folds to a single line
-  break) the same way it already does on `\n`, so a real progress bar
-  prints one interleaved line per redraw tick instead of staying silent —
-  spammier, but never silent-then-dumped. A `\r` that is a line's first byte
-  — the first of the output, or the one after a `\n` — is skipped, as in
-  Batect, rather than ending an empty line.
+  break), so a real progress bar prints one interleaved line per redraw
+  tick instead of staying silent — spammier, but never silent-then-dumped.
+  The split never adds an empty line: a `\r` with nothing before it since
+  the last line ended — a line's first byte, or one of a run of them — ends
+  no line, and an empty line is printed only if no `\r` has ended a line
+  since the previous `\n`. So `10%\r\r20%` prints `10%` and `20%`, and
+  Ratect prints as many empty lines as Batect. A setup command's output
+  follows the same rule.
 - **`all` mode prints a container's last line even without a trailing
   newline.** Batect prints a line only once its `\n` arrives, so a container
   whose output ends without one loses that last line.
