@@ -502,6 +502,17 @@ impl BatectFile {
 /// file the reader has never seen. `ratect-compat` keeps its own wording,
 /// which names the bundle; `ratect` names the file, a bundle file by its
 /// bundle, and gives the way out [`BatectFile::remedy`] says that file has.
+///
+/// Every walk over include entries has to call this — today the loader
+/// (`Config::load_from_file_impl`) and shell completion
+/// (`collect_completion_task_names`) — or it accepts the field in a `.yml`
+/// without complaint. A new native-only field needs adding only here, but a
+/// new walk needs this call. It isn't made in YAML parsing, which would cover
+/// every walk at once, because the parser has neither the project's format
+/// nor where the file sits, which the error needs, and completion skips a
+/// file that fails to parse, so a refusal there would hide all of that
+/// file's tasks rather than only the refused include's. If walks multiply,
+/// moving it into parsing is the fix.
 pub(crate) fn check_dialect(
     asked: Grants,
     reviews: bool,
