@@ -400,7 +400,11 @@ with `ratect.toml`, so it is refused under any release that has changed what a
 configuration means since. The refusal names the bundle's repository, ref and
 entry file, and the file declaring the include, and offers both ways out —
 when that file is a `.yml`, the second starts with getting that include into
-TOML, the way [that file allows](#which-fields-a-file-may-use).
+TOML, the way [that file allows](#which-fields-a-file-may-use). Like a
+project's, it says for each change [whether it touches the
+bundle](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for),
+looking only in the bundle's own files — or, if the project doesn't load, in
+its entry file alone; whether it loads is the whole project's answer.
 
 - **Every entry is checked on its own.** Two entries reaching one bundle each
   need covering, by the bundle's version or their own `reviewed_ratect_version`

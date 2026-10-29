@@ -82,6 +82,32 @@ run the project in two cases:
   you've reviewed them, set `ratect_version` to the version you're running.
   An upgrade that crosses none of them is silent.
 
+A refusal of the second kind also says, for each change, whether it touches
+the project, to help with the review — it never replaces it, and the project
+is refused either way:
+
+- **A change that only makes something fail to load** is checked by loading
+  the project once more under the running version's rules, with this check
+  set aside. That load runs nothing, but fetches what a normal load does, Git
+  bundles included. The refusal says once whether the project loads. If it
+  does, each such change *doesn't apply*; if it doesn't, the refusal shows the
+  error, and each such change *may apply*, since the error doesn't say which
+  one caused it.
+- **A change with a detector** — one Ratect can recognise by looking, such
+  as the one refusing a Git bundle — is looked for in each of the project's
+  `.toml` files, read as plain TOML: *none found*, or *found* with the field
+  and file it was found in. Its `.yml` files aren't looked in, so a project
+  with one reads *not known* rather than *none found*. Nor is it *none found*
+  when the project doesn't load: which files there are isn't known then, so
+  only the root file is looked in, and a use there is still *found*.
+- **A change nothing checks** says *not checked*. So far that includes each
+  change to what a value means.
+
+`ratect doctor` and `ratect config validate` report a refusal the same way:
+the refusal is a `problem`, each change a finding of its own — `ok` once it's
+ruled out, `warning` otherwise — and whether the project loads is `ok`, or a
+`problem` naming the error.
+
 Only the major and minor numbers are compared, and only the root file may set
 it — an included file, or any YAML file, that does is rejected, except the
 file a Git include names, which declares a bundle's own. The root's version

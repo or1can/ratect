@@ -45,6 +45,8 @@ fn check_and_evaluate_in_place(
         dialect: Dialect::BatectCompatible,
         provenance,
         toml_files: Vec::new(),
+        toml_sources: Vec::new(),
+        other_sources: Vec::new(),
     };
     let Evaluated { containers, tasks } = project.evaluate(
         project.config.containers.keys().map(String::as_str),
@@ -12103,6 +12105,8 @@ tasks: {}
         project_directory,
         dialect: Dialect::BatectCompatible,
         toml_files: Vec::new(),
+        toml_sources: Vec::new(),
+        other_sources: Vec::new(),
     };
     let root = |_: &str| Some("/".to_string());
     let err = project
@@ -12179,6 +12183,8 @@ extends = "base"
         dialect: Dialect::Native,
         provenance,
         toml_files: Vec::new(),
+        toml_sources: Vec::new(),
+        other_sources: Vec::new(),
     };
 
     let root = |_: &str| Some("/".to_string());
@@ -16841,6 +16847,180 @@ async fn an_unmarked_bundle_is_refused_whatever_the_root_declares() {
         "names fields, never syntax: {error}"
     );
 
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// decisions/0022: a bundle's refusal is assessed against the bundle's own
+/// files, and a project's against the files it owns. The root declares a Git
+/// include and the bundle doesn't, so the bundle row is found for one and not
+/// the other — and the trial load, with the written-for checks set aside,
+/// loads both.
+#[tokio::test]
+async fn a_refusals_detectors_read_only_the_files_its_version_covers() {
+    let (bundle, project) = native_project_including_a_bundle(
+        &[(
+            "ratect-bundle.toml",
+            &format!("[containers.c]\nimage = \"alpine:3.18\"\n\n{BUNDLE_TASK}"),
+        )],
+        "",
+    );
+    let refusal = load_bundled(&project, running_0_12())
+        .await
+        .expect_err("an unmarked bundle predates every row")
+        .downcast::<crate::written_for::Refusal>()
+        .expect("a bundle's refusal is a `Refusal`");
+
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+    let root = project.join("ratect.toml");
+    let trial = load_project_impl(
+        &root,
+        ConfigFormat::Native,
+        Config::load_from_file_native_with_git_cache(&root, &git_cache)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+
+    let bundle_row = |refusal: &crate::written_for::Refusal| {
+        refusal
+            .assess(Ok(&trial))
+            .rows()
+            .into_iter()
+            .find(|(line, _)| line.contains("a Git bundle is refused"))
+            .map(|(_, outcome)| outcome.cloned())
+            .expect("the bundle row applies")
+    };
+    assert_eq!(
+        bundle_row(&refusal),
+        Some(crate::written_for::Outcome::NoneFound)
+    );
+    // The same root, unmarked: refused itself, before the load.
+    let unmarked = std::fs::read_to_string(&root)
+        .unwrap()
+        .replace("ratect_version = \"0.12.0\"\n", "");
+    std::fs::write(&root, unmarked).unwrap();
+    let project_refusal = crate::written_for::check(&root, running_0_12())
+        .expect_err("an unmarked root predates every row")
+        .downcast::<crate::written_for::Refusal>()
+        .unwrap();
+    assert_eq!(
+        bundle_row(&project_refusal),
+        Some(crate::written_for::Outcome::Found(vec![
+            crate::written_for::Hit {
+                field: "include".to_string(),
+                file: format!("{:?}", absolute_path(&root).unwrap()),
+            }
+        ]))
+    );
+
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// The trial load of `root`, as `ratect` runs it for a refusal, with Git
+/// includes cloned under `cache_root`.
+async fn trial_load(root: &Path, cache_root: &Path) -> LoadedProject {
+    let git_cache = GitIncludeCache::for_test(cache_root.to_path_buf(), SystemGitClient, 1000);
+    load_project_impl(
+        root,
+        ConfigFormat::Native,
+        Config::load_from_file_native_with_git_cache(root, &git_cache)
+            .await
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+/// The bundle row's outcome in `refusal`, assessed against `trial`.
+fn bundle_row_outcome(
+    refusal: &crate::written_for::Refusal,
+    trial: &LoadedProject,
+) -> crate::written_for::Outcome {
+    refusal
+        .assess(Ok(trial))
+        .rows()
+        .into_iter()
+        .find(|(line, _)| line.contains("a Git bundle is refused"))
+        .and_then(|(_, outcome)| outcome.cloned())
+        .expect("the bundle row applies")
+}
+
+/// A detector reads only TOML, so a YAML file in a refusal's scope — here
+/// an owned include declaring the Git include — leaves finding nothing "not
+/// known", never "none found".
+#[tokio::test]
+async fn a_yaml_file_in_scope_leaves_a_detected_row_unknown() {
+    let bundle = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        "ratect_version = \"0.12.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+    )]);
+    let project = unique_temp_dir();
+    let root = project.join("ratect.toml");
+    std::fs::write(
+        &root,
+        "project_name = \"demo\"\ninclude = [\"other.yml\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("other.yml"),
+        format!(
+            "include:\n  - type: git\n    repo: {}\n    ref: v1\n",
+            bundle.display()
+        ),
+    )
+    .unwrap();
+    let refusal = crate::written_for::check(&root, running_0_12())
+        .expect_err("an unmarked root predates every row")
+        .downcast::<crate::written_for::Refusal>()
+        .unwrap();
+    let cache_root = unique_temp_dir();
+    let trial = trial_load(&root, &cache_root).await;
+
+    assert_eq!(
+        bundle_row_outcome(&refusal, &trial),
+        crate::written_for::Outcome::Unknown
+    );
+
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
+/// A YAML root refused for a bundle's TOML file has no TOML file of its own
+/// in scope, but the root itself is one — so its bundle row isn't "none
+/// found" either.
+#[tokio::test]
+async fn a_yaml_roots_refusal_never_finds_nothing_for_want_of_toml() {
+    let bundle = git_bundle_repo(&[(
+        "ratect-bundle.toml",
+        "ratect_version = \"0.12.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+    )]);
+    let project = unique_temp_dir();
+    let root = project.join("batect.yml");
+    std::fs::write(
+        &root,
+        format!(
+            "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n",
+            bundle.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let trial = trial_load(&root, &cache_root).await;
+    let refusal = crate::written_for::check_yaml_root(&root, trial.toml_files(), running_0_12())
+        .expect_err("a YAML root including a TOML file predates every row")
+        .downcast::<crate::written_for::Refusal>()
+        .unwrap();
+
+    assert_eq!(
+        bundle_row_outcome(&refusal, &trial),
+        crate::written_for::Outcome::Unknown
+    );
+
+    std::fs::remove_dir_all(&cache_root).ok();
     std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
 }

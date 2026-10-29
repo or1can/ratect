@@ -38,6 +38,19 @@
 //!   existed was retrofitted, since every unmarked project would then have
 //!   refused on the spot; the first row (0.12.0, #382) is what made them
 //!   refuse.
+//! - **Every row declares how it is checked** — its [`Check`], a required
+//!   field, so the compiler stops a row added without one. A refusal is a
+//!   [`Refusal`], which `ratect` [assesses](Refusal::assess) after a trial
+//!   load to give each row an outcome; `doctor` and `config validate` report
+//!   the same result through `diagnostics::load_failure_findings`
+//!   ([decisions/0022](../../decisions/0022-written-for-refusal-says-what-applies.md)).
+//!   A row that only makes something fail to load is [`Check::FailsTheLoad`];
+//!   one that changes what a value means is [`Check::Detected`], or
+//!   [`Check::NotChecked`] until it has a detector. **A detected row carries
+//!   tests** against a file that uses the construct and one that doesn't: a
+//!   false "none found" is the one wrong answer that matters. Its detector
+//!   reads plain TOML tables, never the config model, so it keeps recognising
+//!   old files however that model changes.
 //! - **A Git bundle is checked too, by `check_bundle`**, against the later
 //!   of its entry file's own `ratect_version` and its include entry's
 //!   `reviewed_ratect_version` — never the root's
@@ -73,6 +86,71 @@ pub struct BreakingChange {
     pub version: &'static str,
     /// What changed, as one line a user can act on.
     pub summary: &'static str,
+    /// How a refusal finds out whether it touches the project
+    /// ([decisions/0022](../../decisions/0022-written-for-refusal-says-what-applies.md)).
+    pub check: Check,
+}
+
+/// How a refusal tells whether a [`BreakingChange`] touches the project it
+/// refuses. Only advice: the refusal itself never depends on it.
+#[derive(Debug, Clone, Copy)]
+pub enum Check {
+    /// The change only makes something that used to load fail to, so the
+    /// trial load — the project loaded once more with the written-for checks
+    /// set aside — is its detector.
+    FailsTheLoad,
+    /// The change alters what a value means, so a load that succeeds proves
+    /// nothing: the detector returns every use of the construct in the
+    /// files in scope, each read as a plain TOML document. It reads only
+    /// files a successful trial load reached, so "none found" always also
+    /// means the project loads — which covers a change some uses of which
+    /// fail the load instead.
+    Detected(fn(&[TomlFile]) -> Vec<Hit>),
+    /// No detector covers the change, and the refusal says so.
+    NotChecked,
+}
+
+/// One file a [`Check::Detected`] row's detector reads.
+#[derive(Debug, Clone)]
+pub struct TomlFile {
+    /// As a refusal names it.
+    pub name: String,
+    /// The whole file as a generic TOML table, never through the config
+    /// model, so a detector keeps recognising an old file however that
+    /// model changes later.
+    pub document: toml::Table,
+}
+
+/// One use a detector found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    /// The field it was found in.
+    pub field: String,
+    /// The file, as [`TomlFile::name`] names it.
+    pub file: String,
+}
+
+/// The bundle row's detector: every file declaring a `type = "git"`
+/// include, in either of the forms `include` takes — an inline array or
+/// `[[include]]` tables, which TOML reads alike.
+fn declares_git_include(files: &[TomlFile]) -> Vec<Hit> {
+    files
+        .iter()
+        .filter(|file| {
+            file.document
+                .get("include")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|entries| {
+                    entries
+                        .iter()
+                        .any(|entry| entry.get("type").and_then(toml::Value::as_str) == Some("git"))
+                })
+        })
+        .map(|file| Hit {
+            field: "include".to_string(),
+            file: file.name.clone(),
+        })
+        .collect()
 }
 
 /// Every breaking change to what a `ratect.toml` means or accepts, oldest
@@ -82,12 +160,14 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         version: "0.12.0",
         summary: "a '\\' in an expression escapes the character after it and is dropped, and \
                   a trailing '\\' fails the load",
+        check: Check::NotChecked,
     },
     BreakingChange {
         version: "0.12.0",
         summary: "every '$' or '<' in an expression starts a reference, so a malformed one \
                   ('$$', 'a < b', '${X:default}') fails the load, and an unbraced name ends at \
                   '.' or '-' (write '<{batect.project_directory}')",
+        check: Check::NotChecked,
     },
     BreakingChange {
         version: "0.12.0",
@@ -95,39 +175,46 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
                   is letters, digits, ':', '-', '.' and '_', starting and ending with a letter \
                   or digit; a config variable name is letters, digits, '-', '.' and '_', \
                   starting with a letter and not with 'batect'",
+        check: Check::FailsTheLoad,
     },
     BreakingChange {
         version: "0.12.0",
         summary: "'project_name' and every container name must be a Docker image-name \
                   component, or the load fails: lowercase letters and digits, joined by a \
                   single '.', one or two '_', or any number of '-'",
+        check: Check::FailsTheLoad,
     },
     BreakingChange {
         version: "0.12.0",
         summary: "an included file that sets 'forbid_telemetry' to true fails the load; only \
                   the root file may",
+        check: Check::FailsTheLoad,
     },
     BreakingChange {
         version: "0.12.0",
         summary: "a string 'volumes' or 'devices' entry with an empty options segment \
                   ('a:b:') fails the load",
+        check: Check::FailsTheLoad,
     },
     BreakingChange {
         version: "0.12.0",
         summary: "a local include's 'path' whose first component is '~' is looked for in the \
                   home directory, not in a '~' directory beside the file declaring it",
+        check: Check::NotChecked,
     },
     BreakingChange {
         version: "0.12.0",
         summary: "a 'command', 'entrypoint', 'run.command', 'run.entrypoint' or setup command \
                   that can't be split into arguments (an unbalanced quote, a trailing '\\') \
                   fails the load, even where no task runs it",
+        check: Check::FailsTheLoad,
     },
     BreakingChange {
         version: "0.12.0",
         summary: "a Git bundle is refused until the 'ratect_version' of the file its include \
                   names, or the include's 'reviewed_ratect_version', covers every change since; \
                   the root's 'ratect_version' doesn't cover a bundle",
+        check: Check::Detected(declares_git_include),
     },
 ];
 
@@ -241,8 +328,13 @@ pub fn check(root: &Path, running: Version) -> Result<()> {
     if written_for == WrittenFor::YamlRoot {
         return Ok(());
     }
-    check_against(&written_for, running, BREAKING_CHANGES)
-        .with_context(|| format!("Refusing to load {}", root.display()))
+    check_against(
+        format!("Refusing to load {}", root.display()),
+        Some(root),
+        &written_for,
+        running,
+        BREAKING_CHANGES,
+    )
 }
 
 /// Refuses a project whose root is YAML when the load read any TOML file —
@@ -273,18 +365,25 @@ fn check_yaml_root_against(
     let Some(first) = toml_files.first() else {
         return Ok(());
     };
-    check_against(&WrittenFor::YamlRoot, running, table).with_context(|| {
+    check_against(
         format!(
-            "Refusing to load {:?}, which includes {first}: a TOML file follows ratect's own \
-             rules",
-            root
-        )
-    })
+            "Refusing to load {root:?}, which includes {first}: a TOML file follows ratect's \
+             own rules"
+        ),
+        None,
+        &WrittenFor::YamlRoot,
+        running,
+        table,
+    )
 }
 
 /// [`check`]'s decision, over an explicit table so it can be tested with
-/// rows the real one doesn't have yet.
+/// rows the real one doesn't have yet. `heading` says what is refused, and
+/// `root` is the root file when it is TOML — what a refusal's detectors can
+/// still read if the trial load fails.
 fn check_against(
+    heading: String,
+    root: Option<&Path>,
     written_for: &WrittenFor,
     running: Version,
     table: &[BreakingChange],
@@ -294,16 +393,18 @@ fn check_against(
         WrittenFor::Unmarked | WrittenFor::YamlRoot => FIRST_NATIVE_RELEASE,
     };
     if declared.release_line() > running.release_line() {
-        anyhow::bail!(
+        return Err(anyhow::anyhow!(
             "This project's '{FIELD}' is {declared}, so it needs ratect {}.{} or later; \
              this is ratect {running}.",
             declared.major,
             declared.minor
-        );
+        )
+        .context(heading));
     }
-    let Some(changes) = changes_since(declared, table) else {
+    let rows = changes_since(declared, table);
+    if rows.is_empty() {
         return Ok(());
-    };
+    }
     let written = match written_for {
         WrittenFor::Declared(version) => format!("was written for ratect {version}"),
         WrittenFor::Unmarked => {
@@ -314,7 +415,7 @@ fn check_against(
              {declared}"
         ),
     };
-    let next = match written_for {
+    let remedy = match written_for {
         // Only a YAML root that includes a TOML file gets here — see
         // `check_yaml_root` — and `config convert` reads every file as YAML,
         // so it can't carry a local one over.
@@ -329,25 +430,32 @@ fn check_against(
              this version."
         ),
     };
-    anyhow::bail!(
-        "This project {written}, and ratect has changed what a configuration means since:\
-         {changes}\n{next}"
-    )
+    Err(Refusal {
+        opening: format!("{heading}: This project {written}"),
+        rows,
+        remedy,
+        running,
+        scope: Scope::Project,
+        fallback: root.map(|root| {
+            let root = crate::config::absolute_path(root).unwrap_or_else(|_| root.to_path_buf());
+            (format!("{root:?}"), root)
+        }),
+        assessment: None,
+    }
+    .into())
 }
 
-/// Every row of `table` newer than `declared`, one per line as a refusal
-/// lists them — `None` when there are none.
-fn changes_since(declared: Version, table: &[BreakingChange]) -> Option<String> {
-    let changes = table
+/// Every row of `table` newer than `declared`, in the table's order.
+fn changes_since(declared: Version, table: &[BreakingChange]) -> Vec<BreakingChange> {
+    table
         .iter()
         .filter(|row| {
             row.version
                 .parse::<Version>()
                 .is_ok_and(|version| version.release_line() > declared.release_line())
         })
-        .map(|row| format!("\n  - ratect {}: {}", row.version, row.summary))
-        .collect::<String>();
-    (!changes.is_empty()).then_some(changes)
+        .copied()
+        .collect()
 }
 
 /// One Git include entry reaching a bundle, as [`check_bundle`] judges it
@@ -371,6 +479,11 @@ pub(crate) struct BundleEntry<'a> {
     pub(crate) first_toml: Option<&'a str>,
     /// The include entry's `reviewed_ratect_version`.
     pub(crate) reviewed: Option<Version>,
+    /// The bundle, which a refusal's detectors are scoped to.
+    pub(crate) bundle: &'a crate::include_trust::BundleId,
+    /// Where the entry file is — what a refusal's detectors can still read
+    /// if the trial load fails, when it is TOML.
+    pub(crate) entry_path: &'a Path,
 }
 
 /// The include-entry field a bundle's user acknowledges a review in.
@@ -397,6 +510,8 @@ pub(crate) fn check_bundle(
         written_for,
         first_toml,
         reviewed,
+        bundle,
+        entry_path,
     } = entry;
     let refusing = || format!("Refusing to load {entry_file}, included by {declared_in}");
     let declared = match written_for {
@@ -429,9 +544,10 @@ pub(crate) fn check_bundle(
         .flatten()
         .max_by_key(|version| version.release_line())
         .unwrap_or(FIRST_NATIVE_RELEASE);
-    let Some(changes) = changes_since(effective, table) else {
+    let rows = changes_since(effective, table);
+    if rows.is_empty() {
         return Ok(());
-    };
+    }
     let mut written = match (written_for, first_toml) {
         (WrittenFor::Declared(version), _) => format!("was written for ratect {version}"),
         (WrittenFor::YamlRoot, Some(toml)) => format!(
@@ -461,13 +577,261 @@ pub(crate) fn check_bundle(
         ),
         None => String::new(),
     };
-    anyhow::bail!(
-        "{}: the bundle {written}, and ratect has changed what a configuration means since:\
-         {changes}\nEither {author}, or — once you have reviewed the bundle against them \
-         yourself — set '{REVIEWED_FIELD}' to {running} on its include in \
-         {declared_in}{convert_first}.",
-        refusing()
-    )
+    Err(Refusal {
+        opening: format!("{}: the bundle {written}", refusing()),
+        rows,
+        remedy: format!(
+            "Either {author}, or — once you have reviewed the bundle against them yourself — \
+             set '{REVIEWED_FIELD}' to {running} on its include in {declared_in}{convert_first}."
+        ),
+        running,
+        scope: Scope::Bundle((*bundle).clone()),
+        fallback: (*written_for != WrittenFor::YamlRoot)
+            .then(|| (entry_file.to_string(), entry_path.to_path_buf())),
+        assessment: None,
+    }
+    .into())
+}
+
+/// A refusal for the rows of [`BREAKING_CHANGES`] a project or a bundle
+/// predates — the error [`check`], [`check_yaml_root`] and a bundle's own
+/// check during the load return for it, and which `ratect` then [`assess`](Self::assess)es: each
+/// row gets an outcome, from a trial load and the row's [`Check`]
+/// ([decisions/0022](../../decisions/0022-written-for-refusal-says-what-applies.md)).
+/// The outcomes are advice; the refusal stands whatever they say.
+#[derive(Debug, Clone)]
+pub struct Refusal {
+    /// What is refused, and the version it counts as written for.
+    opening: String,
+    rows: Vec<BreakingChange>,
+    /// What to do about it.
+    remedy: String,
+    running: Version,
+    scope: Scope,
+    /// The file a detector can still read when the trial load fails — the
+    /// root, or a bundle's entry file, when it is TOML — as a refusal names
+    /// it and where it is. `None` for a YAML one.
+    fallback: Option<(String, std::path::PathBuf)>,
+    assessment: Option<Assessment>,
+}
+
+/// The files a refusal's detectors read: those its written-for version
+/// covers.
+#[derive(Debug, Clone)]
+pub(crate) enum Scope {
+    /// The root and every local include reached without crossing a Git
+    /// include.
+    Project,
+    /// One bundle's own files — not those of a bundle it includes, which has
+    /// a version of its own.
+    Bundle(crate::include_trust::BundleId),
+}
+
+impl Scope {
+    /// Whether a file of `bundle` (`None` for an owned one) is in scope.
+    pub(crate) fn covers(&self, bundle: Option<&crate::include_trust::BundleId>) -> bool {
+        match (self, bundle) {
+            (Scope::Project, None) => true,
+            (Scope::Bundle(scope), Some(bundle)) => {
+                scope.remote == bundle.remote && scope.git_ref == bundle.git_ref
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Assessment {
+    /// One per row, in the same order.
+    outcomes: Vec<Outcome>,
+    /// The trial load's error, if it failed.
+    load_error: Option<String>,
+}
+
+/// Whether one row touches what a refusal refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// A [`Check::FailsTheLoad`] row, and the trial load succeeded.
+    Loads,
+    /// A [`Check::FailsTheLoad`] row, and the trial load failed — never a
+    /// claim that this row is why.
+    DoesNotLoad,
+    /// A [`Check::Detected`] row whose detector found nothing.
+    NoneFound,
+    /// A [`Check::Detected`] row's uses — in every file in scope, or, when
+    /// the trial load failed, in the root or a bundle's entry file alone.
+    Found(Vec<Hit>),
+    /// A [`Check::Detected`] row whose detector found nothing, but not
+    /// every file could be looked in: the trial load failed, so only the
+    /// root or a bundle's entry file was; a YAML file is in scope, which a
+    /// detector can't read; or a file it read couldn't be read back.
+    Unknown,
+    /// A [`Check::NotChecked`] row.
+    NotChecked,
+}
+
+impl Outcome {
+    /// The row doesn't touch the project — the outcomes that need no review.
+    pub fn rules_out(&self) -> bool {
+        matches!(self, Outcome::Loads | Outcome::NoneFound)
+    }
+}
+
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Outcome::Loads => write!(f, "doesn't apply: it loads under these rules"),
+            Outcome::DoesNotLoad => write!(f, "may apply: it doesn't load under these rules"),
+            Outcome::NoneFound => write!(f, "none found"),
+            Outcome::Found(hits) => {
+                let hits: Vec<String> = hits
+                    .iter()
+                    .map(|hit| format!("'{}' in {}", hit.field, hit.file))
+                    .collect();
+                write!(f, "found: {}", hits.join("; "))
+            }
+            Outcome::Unknown => write!(f, "not known: not every file could be looked in"),
+            Outcome::NotChecked => write!(f, "not checked"),
+        }
+    }
+}
+
+impl Refusal {
+    /// This refusal with an outcome for each row. `trial` is the project
+    /// loaded once more with the written-for checks set aside — for a bundle
+    /// too, so whether it loads is the whole project's answer — and its
+    /// files are what each [`Check::Detected`] row reads, as far as this
+    /// refusal's version covers them. When it doesn't load, which files
+    /// there are isn't known, so a detector reads the root, or the bundle's
+    /// entry file, alone: a use found there is still found.
+    pub fn assess(
+        &self,
+        trial: std::result::Result<&crate::config::LoadedProject, &anyhow::Error>,
+    ) -> Refusal {
+        match trial {
+            Ok(project) => match project.toml_documents(&self.scope) {
+                Ok((files, true)) => self.with_outcomes(None, Readable::Every(&files)),
+                Ok((files, false)) => self.with_outcomes(None, Readable::Only(&files)),
+                Err(_) => self.with_outcomes(None, Readable::Only(&[])),
+            },
+            Err(error) => {
+                let fallback: Vec<TomlFile> = self
+                    .fallback
+                    .iter()
+                    .filter_map(|(name, path)| {
+                        let document = std::fs::read_to_string(path).ok()?.parse().ok()?;
+                        Some(TomlFile {
+                            name: name.clone(),
+                            document,
+                        })
+                    })
+                    .collect();
+                self.with_outcomes(Some(format!("{error:#}")), Readable::Only(&fallback))
+            }
+        }
+    }
+
+    /// [`assess`](Self::assess) once the trial load is known: its error, if
+    /// it failed, and the files a detector can read.
+    fn with_outcomes(&self, load_error: Option<String>, readable: Readable<'_>) -> Refusal {
+        let outcomes = self
+            .rows
+            .iter()
+            .map(|row| match row.check {
+                Check::NotChecked => Outcome::NotChecked,
+                Check::FailsTheLoad if load_error.is_none() => Outcome::Loads,
+                Check::FailsTheLoad => Outcome::DoesNotLoad,
+                Check::Detected(detect) => {
+                    let (Readable::Every(files) | Readable::Only(files)) = readable;
+                    let hits = detect(files);
+                    match readable {
+                        _ if !hits.is_empty() => Outcome::Found(hits),
+                        Readable::Every(_) => Outcome::NoneFound,
+                        Readable::Only(_) => Outcome::Unknown,
+                    }
+                }
+            })
+            .collect();
+        Refusal {
+            assessment: Some(Assessment {
+                outcomes,
+                load_error,
+            }),
+            ..self.clone()
+        }
+    }
+
+    /// What is refused, and why, up to the list of changes.
+    pub fn opening(&self) -> String {
+        format!(
+            "{}, and ratect has changed what a configuration means since:",
+            self.opening
+        )
+    }
+
+    /// One line per change, each with its outcome once assessed.
+    pub fn rows(&self) -> Vec<(String, Option<&Outcome>)> {
+        let mut outcomes = self
+            .assessment
+            .iter()
+            .flat_map(|assessment| assessment.outcomes.iter());
+        self.rows
+            .iter()
+            .map(|row| {
+                let line = format!("ratect {}: {}", row.version, row.summary);
+                match outcomes.next() {
+                    Some(outcome) => (format!("{line} — {outcome}"), Some(outcome)),
+                    None => (line, None),
+                }
+            })
+            .collect()
+    }
+
+    /// What the trial load found, said once — `None` until assessed, then
+    /// `Ok` when the project loads and `Err` when it doesn't.
+    pub fn trial_load(&self) -> Option<std::result::Result<String, String>> {
+        let assessment = self.assessment.as_ref()?;
+        let rules = "With this check set aside, the project";
+        Some(match &assessment.load_error {
+            None => Ok(format!(
+                "{rules} loads under ratect {}'s rules.",
+                self.running
+            )),
+            Some(error) => Err(format!(
+                "{rules} doesn't load under ratect {}'s rules: {error}",
+                self.running
+            )),
+        })
+    }
+
+    /// What to do about it.
+    pub fn remedy(&self) -> &str {
+        &self.remedy
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.opening())?;
+        for (line, _) in self.rows() {
+            write!(f, "\n  - {line}")?;
+        }
+        if let Some(Ok(trial) | Err(trial)) = self.trial_load() {
+            write!(f, "\n{trial}")?;
+        }
+        write!(f, "\n{}", self.remedy)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// The files a refusal's detectors can read.
+#[derive(Clone, Copy)]
+enum Readable<'a> {
+    /// Every file in scope, so finding nothing means there is nothing.
+    Every(&'a [TomlFile]),
+    /// Only some of them, so finding nothing proves nothing.
+    Only(&'a [TomlFile]),
 }
 
 #[cfg(test)]

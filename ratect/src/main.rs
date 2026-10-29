@@ -35,8 +35,8 @@ use ratect_core::config::{
     format_task_list, format_task_list_quiet, load_project_native, Config, Dialect,
 };
 use ratect_core::diagnostics::{
-    config_findings, docker_environment_findings, leftover_finding, wrapper_script_findings,
-    ConversionCheck, Finding,
+    config_findings, docker_environment_findings, leftover_finding, load_failure_findings,
+    wrapper_script_findings, ConversionCheck, Finding,
 };
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -969,20 +969,54 @@ async fn load(global: &GlobalArgs) -> Result<ratect_core::config::LoadedProject>
 /// a project written for a newer Ratect is refused for that rather than for
 /// whichever new field the parser trips on first; after it, for a YAML root,
 /// which is judged by the TOML files it turned out to include. `between`
-/// runs once the first half has passed, before the load.
+/// runs once the first half has passed, before the load. A refusal from
+/// either half, or from a bundle's check during the load, is [`assessed`].
 async fn load_around<T>(
     global: &GlobalArgs,
     between: impl FnOnce() -> Result<T>,
 ) -> Result<(ratect_core::config::LoadedProject, T)> {
-    ratect_core::written_for::check(&global.config_file, running_version())?;
+    let config_file = &global.config_file;
+    if let Err(error) = ratect_core::written_for::check(config_file, running_version()) {
+        return Err(assessed(error, config_file, None).await);
+    }
     let between = between()?;
-    let project = load_project_native(&global.config_file, running_version()).await?;
-    ratect_core::written_for::check_yaml_root(
-        &global.config_file,
+    let project = match load_project_native(config_file, running_version()).await {
+        Ok(project) => project,
+        Err(error) => return Err(assessed(error, config_file, None).await),
+    };
+    if let Err(error) = ratect_core::written_for::check_yaml_root(
+        config_file,
         project.toml_files(),
         running_version(),
-    )?;
+    ) {
+        return Err(assessed(error, config_file, Some(&project)).await);
+    }
     Ok((project, between))
+}
+
+/// A written-for refusal with an outcome for each of its rows, from the
+/// trial load (decisions/0022); any other error as it was. `loaded` is the
+/// project when the load already succeeded — a YAML root's refusal comes
+/// after it — and otherwise the trial load runs here: the project loaded
+/// once more with the written-for checks set aside, which runs nothing but
+/// fetches what a normal load would.
+async fn assessed(
+    error: anyhow::Error,
+    config_file: &Path,
+    loaded: Option<&ratect_core::config::LoadedProject>,
+) -> anyhow::Error {
+    let Some(refusal) = error.downcast_ref::<ratect_core::written_for::Refusal>() else {
+        return error;
+    };
+    match loaded {
+        Some(project) => refusal.assess(Ok(project)),
+        None => refusal.assess(
+            ratect_core::config::load_project_native_for_trial(config_file)
+                .await
+                .as_ref(),
+        ),
+    }
+    .into()
 }
 
 /// The config-variable values evaluation uses — `--config-vars-file` merged
@@ -1584,10 +1618,7 @@ async fn diagnose(
             findings
                 .extend(leftover_finding(docker.as_ref(), &project.config.project_name, now).await);
         }
-        Err(error) => findings.push(Finding::Problem(format!(
-            "{} does not load: {error:#}",
-            global.config_file.display()
-        ))),
+        Err(error) => findings.extend(load_failure_findings(&global.config_file, &error)),
     }
 
     report_findings(&global.config_file, &findings, style, stdout)
@@ -1661,10 +1692,7 @@ async fn validate_config(
             )));
             findings.extend(config_findings(&project.config, &evaluation));
         }
-        Err(error) => findings.push(Finding::Problem(format!(
-            "{} does not load: {error:#}",
-            global.config_file.display()
-        ))),
+        Err(error) => findings.extend(load_failure_findings(&global.config_file, &error)),
     }
     report_findings(&global.config_file, &findings, style, stdout)
 }

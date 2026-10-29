@@ -3560,6 +3560,8 @@ impl YamlBundleEntry {
                 written_for: crate::written_for::WrittenFor::YamlRoot,
                 first_toml: first_toml.as_deref(),
                 reviewed: self.reviewed,
+                bundle: &self.boundary.bundle.id,
+                entry_path: &self.entry,
             },
             running,
             crate::written_for::BREAKING_CHANGES,
@@ -3610,6 +3612,8 @@ fn check_bundle_entry(
                     written_for,
                     first_toml: None,
                     reviewed,
+                    bundle: &boundary.bundle.id,
+                    entry_path: resolved,
                 },
                 running,
                 crate::written_for::BREAKING_CHANGES,
@@ -5353,6 +5357,13 @@ pub struct LoadedProject {
     provenance: Provenance,
     /// See [`LoadedProject::toml_files`].
     toml_files: Vec<String>,
+    /// Where each of `toml_files` is, and the bundle it belongs to (`None`
+    /// for an owned file) — what [`LoadedProject::toml_documents`] reads.
+    toml_sources: Vec<(PathBuf, Option<crate::include_trust::BundleId>)>,
+    /// The bundle of each file the load read that isn't TOML (`None` for an
+    /// owned one) — a file a detector can't read, so finding nothing in
+    /// its scope proves nothing.
+    other_sources: Vec<Option<crate::include_trust::BundleId>>,
 }
 
 /// Containers and tasks as [`LoadedProject::evaluate`] returns them: every
@@ -5384,6 +5395,39 @@ impl LoadedProject {
     /// [`crate::written_for::check_yaml_root`] judges a YAML root by.
     pub fn toml_files(&self) -> &[String] {
         &self.toml_files
+    }
+
+    /// Each of [`toml_files`](Self::toml_files) that `scope` covers, read
+    /// again as a plain TOML document — what a written-for refusal's
+    /// detectors read ([`crate::written_for::Check::Detected`]), and never
+    /// the parsed model, which later releases change — and whether those are
+    /// every file in scope: `false` when it also covers a YAML file, which a
+    /// detector can't read.
+    pub(crate) fn toml_documents(
+        &self,
+        scope: &crate::written_for::Scope,
+    ) -> Result<(Vec<crate::written_for::TomlFile>, bool)> {
+        let every = !self
+            .other_sources
+            .iter()
+            .any(|bundle| scope.covers(bundle.as_ref()));
+        let documents = self
+            .toml_files
+            .iter()
+            .zip(&self.toml_sources)
+            .filter(|(_, (_, bundle))| scope.covers(bundle.as_ref()))
+            .map(|(name, (path, _))| {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("Failed to read {name}"))?;
+                Ok(crate::written_for::TomlFile {
+                    name: name.clone(),
+                    document: text
+                        .parse()
+                        .with_context(|| format!("Failed to parse {name}"))?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok((documents, every))
     }
 
     /// Evaluates the named containers and tasks against this machine — with
@@ -5521,6 +5565,8 @@ impl LoadedProject {
             dialect: Dialect::default(),
             provenance: Provenance::default(),
             toml_files: Vec::new(),
+            toml_sources: Vec::new(),
+            other_sources: Vec::new(),
         }
     }
 }
@@ -5764,6 +5810,19 @@ pub async fn load_project_native(
     load_project_impl(config_file, ConfigFormat::Native, loaded)
 }
 
+/// [`load_project_native`] with every written-for check set aside — a
+/// written-for refusal's **trial load**, which
+/// [`crate::written_for::Refusal::assess`] judges its rows by
+/// ([decisions/0022](../../decisions/0022-written-for-refusal-says-what-applies.md)).
+/// It runs nothing, but fetches whatever a normal load would, Git bundles
+/// included.
+pub async fn load_project_native_for_trial(config_file: &Path) -> Result<LoadedProject> {
+    check_config_file(config_file)?;
+    let git_cache = crate::git_include::GitIncludeCache::new();
+    let loaded = Config::load_from_file_native_with_git_cache(config_file, &git_cache).await?;
+    load_project_impl(config_file, ConfigFormat::Native, loaded)
+}
+
 /// `--config-vars-file`'s own check: the file it names exists and is a
 /// regular file — not a directory, and not something else such as
 /// `/dev/null`, as Batect's option parser requires — or an
@@ -5826,15 +5885,28 @@ fn load_project_impl(
     check_values(&loaded.config, &provenance, &project_directory)?;
     // Only the native loader reads a file as TOML — `Compat` parses every
     // file as YAML, whatever its name.
-    let toml_files = match format {
-        ConfigFormat::Compat => Vec::new(),
+    let (toml, other): (Vec<&LoadedFile>, Vec<&LoadedFile>) = match format {
+        ConfigFormat::Compat => (Vec::new(), Vec::new()),
         ConfigFormat::Native => loaded
             .files
             .iter()
-            .filter(|file| matches!(config_file_format(&file.path), Ok(FileFormat::Toml)))
-            .map(|file| describe_origin(&file.path, file.boundary.as_ref()))
-            .collect(),
+            .partition(|file| matches!(config_file_format(&file.path), Ok(FileFormat::Toml))),
     };
+    let other_sources = other
+        .iter()
+        .map(|file| file.boundary.as_ref().map(|b| b.bundle.id.clone()))
+        .collect();
+    let toml_files = toml
+        .iter()
+        .map(|file| describe_origin(&file.path, file.boundary.as_ref()))
+        .collect();
+    let toml_sources = toml
+        .iter()
+        .map(|file| {
+            let bundle = file.boundary.as_ref().map(|b| b.bundle.id.clone());
+            (file.path.clone(), bundle)
+        })
+        .collect();
     let mut config = loaded.config;
     // Records which ancestor supplied each path-bearing field, so evaluation
     // anchors an inherited relative path on its parent's own file — see
@@ -5883,6 +5955,8 @@ fn load_project_impl(
         dialect: format.dialect(),
         provenance,
         toml_files,
+        toml_sources,
+        other_sources,
     })
 }
 
