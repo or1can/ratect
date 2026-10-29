@@ -401,7 +401,7 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!("{}.", super::exited_unexpectedly(exit_code)),
+                    &format!("{}.", super::exited_unexpectedly(&self.console, exit_code)),
                 );
             }
             TaskEvent::RunningTaskContainer { container, command } => {

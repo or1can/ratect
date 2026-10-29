@@ -1234,19 +1234,43 @@ fn stdin_flags(interactive: bool, use_tty: bool) -> StdinFlags {
 /// passes straight through to the container's own TTY instead of being
 /// handled locally first. Restores the terminal on `Drop`, so it's never
 /// left in raw mode even if the session ends via an error return.
-struct RawModeGuard;
+///
+/// A restore that fails is a `Warning:` naming the fix, not a log line: a
+/// shell with no echo or line editing leaves a user with `RUST_LOG` unset
+/// worse off without it (decisions/0017). It is posted from here, not
+/// returned, because the early-error return this `Drop` exists for has no
+/// caller left to report it. The warning is one line, since it prints
+/// while the terminal is still raw: raw mode stops a line feed returning
+/// the cursor to the first column, so every line Ratect prints from here
+/// on starts where the one before it ended, until the user restores the
+/// terminal as the warning says. A second line of its own would be the
+/// first to stagger, so there is none.
+struct RawModeGuard {
+    event_sink: std::sync::Arc<dyn EventSink>,
+    /// `crossterm::terminal::disable_raw_mode`, except in a test, which
+    /// can't make a real terminal fail to restore.
+    restore: fn() -> std::io::Result<()>,
+}
 
 impl RawModeGuard {
-    fn enable() -> Result<Self> {
+    fn enable(event_sink: std::sync::Arc<dyn EventSink>) -> Result<Self> {
         crossterm::terminal::enable_raw_mode().context("Failed to enable raw terminal mode")?;
-        Ok(Self)
+        Ok(Self {
+            event_sink,
+            restore: crossterm::terminal::disable_raw_mode,
+        })
     }
 }
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        if let Err(e) = crossterm::terminal::disable_raw_mode() {
-            tracing::warn!(error = ?e, "Failed to restore terminal mode");
+        if let Err(e) = (self.restore)() {
+            tracing::debug!(error = ?e, "failed to restore terminal mode");
+            self.event_sink.post(TaskEvent::Warning {
+                message: "Couldn't take the terminal out of raw mode, so it may not echo \
+                          what you type; run reset or stty sane to restore it"
+                    .to_string(),
+            });
         }
     }
 }
@@ -2847,7 +2871,7 @@ impl DockerClient {
             .attach_output(container_name, container_id, true)
             .await?;
 
-        let raw_mode = RawModeGuard::enable()?;
+        let raw_mode = RawModeGuard::enable(self.event_sink.clone())?;
 
         self.docker
             .start_container(container_id, None)

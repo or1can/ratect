@@ -303,7 +303,7 @@ impl ContainerLine {
             Stage::Ready => "ready".to_string(),
             Stage::RunningCommand(Some(command)) => format!("running {}", console.bold(command)),
             Stage::RunningCommand(None) => "running".to_string(),
-            Stage::ExitedUnexpectedly(exit_code) => super::exited_unexpectedly(*exit_code),
+            Stage::ExitedUnexpectedly(exit_code) => super::exited_unexpectedly(console, *exit_code),
         }
     }
 
@@ -956,7 +956,7 @@ impl EventSink for FancyEventLogger {
                     // frozen block.
                     self.console.println(&format!(
                         "{container} {}.",
-                        super::exited_unexpectedly(exit_code)
+                        super::exited_unexpectedly(&self.console, exit_code)
                     ));
                     // Printed below whatever was last painted — possibly the
                     // cleanup countdown, since a dependency's watcher can
