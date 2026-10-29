@@ -207,7 +207,9 @@ same state:
 Both scopes are read from *storage*, not from the configuration — a project cache
 is found by its `batect-cache-<key>-` prefix, a shared one by
 `ratect-shared-cache-`. That is what keeps these commands working on a project
-whose configuration is broken.
+whose configuration is broken. With `--scope shared`, they never read or create
+the project's key file, `.batect/caches/key`, since only a project cache is
+named after it.
 
 ## `includes` options
 

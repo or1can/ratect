@@ -1014,3 +1014,126 @@ fn a_shared_cache_is_never_removed_without_being_named() {
         "and naming one must not also match the project cache of the same name"
     );
 }
+
+/// A shared-scope listing and clean, in volume mode, of `project_dir`, with
+/// one shared volume, `registry`, to find and remove. Returns what was
+/// removed.
+async fn shared_scope_list_and_clean(project_dir: &Path) -> Vec<RemovedCache> {
+    let runtime = FakeRuntime {
+        volumes: vec!["ratect-shared-cache-registry".to_string()],
+        ..Default::default()
+    };
+    let store = CacheStore::new(
+        CacheType::Volume,
+        Some(&runtime),
+        project_dir.to_path_buf(),
+        None,
+    )
+    .unwrap();
+
+    let found = store.list(Some(CacheScope::Shared)).await.unwrap();
+    assert_eq!(found.shared, ["registry"]);
+    let only = HashSet::from(["registry".to_string()]);
+    store.remove(&found, &only, |_| {}).await.unwrap().unwrap()
+}
+
+/// ratect#697: a shared-scope `caches list`/`clean` never looks at a
+/// project cache, so it has no reason to create the project's key file.
+#[tokio::test]
+async fn a_shared_scope_volume_list_and_clean_create_no_key_file() {
+    let project_dir = unique_temp_dir();
+
+    let removed = shared_scope_list_and_clean(&project_dir).await;
+
+    assert_eq!(removed[0].name, "registry");
+    assert!(!cache_directory(&project_dir).join("key").exists());
+    assert!(!cache_directory(&project_dir).exists());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// ratect#697: nor does a key file it can't use stop it.
+#[tokio::test]
+async fn a_shared_scope_volume_list_and_clean_ignore_a_malformed_key_file() {
+    let project_dir = unique_temp_dir();
+    write_key_file(&project_dir, b"abc123\ndef456\n");
+
+    let removed = shared_scope_list_and_clean(&project_dir).await;
+
+    assert_eq!(removed[0].name, "registry");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// ratect#697's other half: a listing that includes project caches still
+/// needs the key, so a malformed key file fails it, before anything is
+/// removed — whether `--scope project` or no scope at all.
+#[tokio::test]
+async fn a_project_scope_volume_clean_with_a_malformed_key_file_fails_before_removing() {
+    for scope in [None, Some(CacheScope::Project)] {
+        let project_dir = unique_temp_dir();
+        write_key_file(&project_dir, b"abc123\ndef456\n");
+        let runtime = FakeRuntime {
+            volumes: vec![
+                "batect-cache-abc123-a".to_string(),
+                "ratect-shared-cache-registry".to_string(),
+            ],
+            ..Default::default()
+        };
+        let store =
+            CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
+
+        let Err(err) = store.list(scope).await else {
+            panic!("{scope:?}: a malformed key file was ignored");
+        };
+
+        assert!(
+            format!("{err:#}").contains("has more than one key line"),
+            "{scope:?}: {err:#}"
+        );
+        // `remove` resolves the key for itself, so it fails the same way
+        // even given a selection no `list` call produced.
+        let found = CacheSelection {
+            owned: vec!["a".to_string()],
+            shared: Vec::new(),
+            scope,
+        };
+        let Err(err) = store.remove(&found, &HashSet::new(), |_| {}).await else {
+            panic!("{scope:?}: a malformed key file was ignored by remove");
+        };
+        assert!(
+            format!("{err:#}").contains("has more than one key line"),
+            "{scope:?}: {err:#}"
+        );
+        assert!(runtime.removed.lock().unwrap().is_empty(), "{scope:?}");
+
+        fs::remove_dir_all(&project_dir).unwrap();
+    }
+}
+
+/// The property `CacheStore` resolved the key eagerly for, kept now that it
+/// doesn't: one invocation reads the key file once, so a `remove` after a
+/// `list` uses the key the `list` read, not the file as it is by then.
+#[tokio::test]
+async fn a_volume_store_reads_the_key_once_per_invocation() {
+    let project_dir = unique_temp_dir();
+    let key_file = write_key_file(&project_dir, b"abc123\n");
+    let runtime = FakeRuntime {
+        volumes: vec!["batect-cache-abc123-a".to_string()],
+        ..Default::default()
+    };
+    let store =
+        CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
+
+    let found = store.list(None).await.unwrap();
+    fs::write(&key_file, "abc123\ndef456\n").unwrap();
+    let removed = store
+        .remove(&found, &HashSet::new(), |_| {})
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(removed[0].storage, "batect-cache-abc123-a");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}

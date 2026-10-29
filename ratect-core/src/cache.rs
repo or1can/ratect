@@ -67,6 +67,7 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// The volume operations [`CacheStore`] needs — a narrower contract than
 /// [`crate::docker::ContainerRuntime`]'s full 16 methods, which this module
@@ -311,19 +312,24 @@ fn matching_shared_cache_volumes<'a>(
 }
 
 /// Every cache volume this project can see, with the scope each one's name
-/// implies — one `list_volumes` call covering both scopes.
+/// implies — one `list_volumes` call covering both scopes. With no
+/// `project_cache_key`, only shared ones: a project volume is recognised by
+/// its key alone.
 async fn list_all_volume_caches(
     runtime: &impl VolumeStore,
-    project_cache_key: &str,
+    project_cache_key: Option<&str>,
 ) -> Result<Vec<(String, CacheScope)>> {
     let existing = runtime.list_volumes().await?;
-    let project_prefix = cache_volume_name(project_cache_key, "");
+    let project_prefix = project_cache_key.map(|key| cache_volume_name(key, ""));
     let shared_prefix = shared_cache_volume_name("");
 
     let mut found: Vec<(String, CacheScope)> = existing
         .iter()
         .filter_map(|volume| {
-            if let Some(name) = volume.strip_prefix(&project_prefix) {
+            if let Some(name) = project_prefix
+                .as_ref()
+                .and_then(|prefix| volume.strip_prefix(prefix))
+            {
                 Some((name.to_string(), CacheScope::Project))
             } else {
                 volume
@@ -661,7 +667,10 @@ pub enum CacheRefusal {
 pub enum CacheStore<'a, D: VolumeStore + Send + Sync> {
     Volume {
         docker: &'a D,
-        project_cache_key: String,
+        project_directory: PathBuf,
+        /// The project's cache key, once something has needed it — see
+        /// `CacheStore::project_cache_key`.
+        project_cache_key: OnceLock<String>,
     },
     Directory {
         project_directory: PathBuf,
@@ -680,10 +689,9 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
     /// `CacheType::Directory` — a caller that never opened a Docker
     /// connection for a directory-type invocation can simply pass `None`.
     ///
-    /// Resolves (and, the first time, persists) the project's cache key
-    /// immediately for `CacheType::Volume`, rather than on first use: it was
-    /// previously read once for listing and again for removal, two file
-    /// reads doing the same job in one invocation.
+    /// Doesn't resolve the project's cache key: only a listing or removal
+    /// that includes project caches needs it, and that resolves it — see
+    /// `CacheStore::project_cache_key`.
     pub fn new(
         cache_type: CacheType,
         docker: Option<&'a D>,
@@ -693,13 +701,30 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
         Ok(match cache_type {
             CacheType::Volume => Self::Volume {
                 docker: docker.expect("a volume cache store needs a Docker client"),
-                project_cache_key: project_cache_key(&project_directory)?,
+                project_directory,
+                project_cache_key: OnceLock::new(),
             },
             CacheType::Directory => Self::Directory {
                 project_directory,
                 shared_root,
             },
         })
+    }
+
+    /// The project's cache key, resolved (and, the first time, persisted) by
+    /// the first call that needs it and reused after, so one invocation
+    /// reads the key file at most once — its listing and its removal agree
+    /// on one key. Called only for project caches: a shared-scope invocation
+    /// never reads, creates or depends on the key file (ratect#697).
+    fn project_cache_key<'k>(
+        project_directory: &Path,
+        resolved: &'k OnceLock<String>,
+    ) -> Result<&'k str> {
+        if let Some(key) = resolved.get() {
+            return Ok(key);
+        }
+        let key = project_cache_key(project_directory)?;
+        Ok(resolved.get_or_init(|| key))
     }
 
     /// Every cache this project can see, split by ownership and narrowed by
@@ -715,11 +740,17 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
         match self {
             Self::Volume {
                 docker,
+                project_directory,
                 project_cache_key,
             } => {
-                for (name, found_scope) in
-                    list_all_volume_caches(*docker, project_cache_key).await?
-                {
+                let key = match scope {
+                    Some(CacheScope::Shared) => None,
+                    _ => Some(Self::project_cache_key(
+                        project_directory,
+                        project_cache_key,
+                    )?),
+                };
+                for (name, found_scope) in list_all_volume_caches(*docker, key).await? {
                     match found_scope {
                         CacheScope::Project => owned.push(name),
                         CacheScope::Shared => shared.push(name),
@@ -805,15 +836,19 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
         Ok(match self {
             Self::Volume {
                 docker,
+                project_directory,
                 project_cache_key,
-            } => clean_volume_caches(*docker, project_cache_key, only)
-                .await?
-                .into_iter()
-                .map(|name| {
-                    let storage = cache_volume_name(project_cache_key, &name);
-                    RemovedCache { name, storage }
-                })
-                .collect(),
+            } => {
+                let key = Self::project_cache_key(project_directory, project_cache_key)?;
+                clean_volume_caches(*docker, key, only)
+                    .await?
+                    .into_iter()
+                    .map(|name| {
+                        let storage = cache_volume_name(key, &name);
+                        RemovedCache { name, storage }
+                    })
+                    .collect()
+            }
             Self::Directory {
                 project_directory, ..
             } => clean_directory_caches(project_directory, only, warn)?
