@@ -328,8 +328,8 @@ fn task_finished_colors_exit_code_by_outcome() {
     });
     assert_eq!(
         buffer.contents(),
-        "build finished with exit code \x1b[1;32m0\x1b[0m in 2.3s.\n\
-             lint finished with exit code \x1b[1;31m3\x1b[0m in 1m 1.0s.\n"
+        "\x1b[1mbuild\x1b[0m finished with exit code \x1b[1;32m0\x1b[0m in 2.3s.\n\
+             \x1b[1mlint\x1b[0m finished with exit code \x1b[1;31m3\x1b[0m in 1m 1.0s.\n"
     );
 }
 
@@ -378,4 +378,177 @@ fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
         buffer.contents(),
         "The task \x1b[1mall\x1b[0m only defines prerequisite tasks, nothing more to do.\n"
     );
+}
+
+/// On a colour console every milestone bolds the user's own names and
+/// values — the task, container, image and commands — as Batect's simple
+/// logger does, and nothing else: no white (SGR 37), and the words around
+/// them stay plain (decisions/0017).
+#[test]
+fn milestones_bold_the_names_they_carry_on_a_colour_console() {
+    let (logger, buffer) = colored_logger();
+    logger.post(TaskEvent::TaskStarting {
+        task: "build".into(),
+    });
+    logger.post(TaskEvent::ImagePullStarting {
+        image: "alpine:3".into(),
+    });
+    logger.post(TaskEvent::ImagePullCompleted {
+        image: "alpine:3".into(),
+    });
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::ImageBuildCompleted {
+        container: "app".into(),
+    });
+    logger.post(TaskEvent::DependencyStarting {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::DependencyStarted {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::ContainerBecameHealthy {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "db".into(),
+        command: "./init.sh".into(),
+        index: 1,
+        total: 2,
+        run_in: None,
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: "db".into(),
+        command: "./seed.sh".into(),
+        index: 2,
+        total: 2,
+        run_in: Some("seeder".into()),
+    });
+    logger.post(TaskEvent::SetupCommandsCompleted {
+        container: "db".into(),
+    });
+    logger.post(TaskEvent::DependencyCompleted {
+        container: "migrate".into(),
+    });
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "cache".into(),
+        exit_code: 137,
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("cargo test".into()),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    logger.post(TaskEvent::TaskFinished {
+        task: "build".into(),
+        exit_code: 0,
+        duration: Duration::from_millis(2300),
+    });
+    let contents = buffer.contents();
+    assert_eq!(
+        contents,
+        "Running \x1b[1mbuild\x1b[0m...\n\
+         Pulling \x1b[1malpine:3\x1b[0m...\n\
+         Pulled \x1b[1malpine:3\x1b[0m.\n\
+         Building \x1b[1mapp\x1b[0m...\n\
+         Built \x1b[1mapp\x1b[0m.\n\
+         Starting \x1b[1mdb\x1b[0m...\n\
+         Started \x1b[1mdb\x1b[0m.\n\
+         \x1b[1mdb\x1b[0m has become healthy.\n\
+         Running setup command \x1b[1m./init.sh\x1b[0m (1 of 2) in \x1b[1mdb\x1b[0m...\n\
+         Running setup command \x1b[1m./seed.sh\x1b[0m (2 of 2) in \x1b[1mseeder\x1b[0m, for \x1b[1mdb\x1b[0m...\n\
+         \x1b[1mdb\x1b[0m has completed all setup commands.\n\
+         \x1b[1mmigrate\x1b[0m ran to completion.\n\
+         \x1b[1mcache\x1b[0m exited unexpectedly with exit code 137.\n\
+         Running \x1b[1mcargo test\x1b[0m in \x1b[1mapp\x1b[0m...\n\
+         Running \x1b[1mapp\x1b[0m...\n\
+         \n\
+         Cleaning up...\n\
+         \x1b[1mbuild\x1b[0m finished with exit code \x1b[1;32m0\x1b[0m in 2.3s.\n"
+    );
+    assert!(!contents.contains("\x1b[37m") && !contents.contains(";37m"));
+}
+
+/// Batect's simple logger prints nothing for an event or step it doesn't
+/// list (SimpleEventLogger.kt's `else -> {}`), and neither does this one —
+/// not even an escape code on a colour console. Checked after each post, so
+/// a failure names the event that printed.
+#[test]
+fn events_with_no_simple_line_print_nothing() {
+    let events = [
+        TaskEvent::ImageResolved {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerCreating {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerCreated {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerStopped {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerRemoved {
+            container: "app".into(),
+        },
+        TaskEvent::RemovingNetwork,
+        TaskEvent::NetworkRemoved,
+        TaskEvent::RunEnded {
+            task: "build".into(),
+        },
+        TaskEvent::CleanupFinished,
+        TaskEvent::ContainerOutput {
+            container: "app".into(),
+            line: "hello".into(),
+        },
+        TaskEvent::SetupCommandOutput {
+            container: "db".into(),
+            index: 1,
+            line: "seeded".into(),
+        },
+    ];
+    for color in [false, true] {
+        for event in events.clone() {
+            let buffer = SharedBuffer::default();
+            let stderr = SharedBuffer::default();
+            let logger = SimpleEventLogger::new(
+                Console::new(Box::new(buffer.clone()), color),
+                Console::new(Box::new(stderr.clone()), color),
+            );
+            let name = format!("{event:?} (colour {color})");
+            logger.post(event);
+            assert_eq!(
+                buffer.contents(),
+                "",
+                "{name} printed on the progress console"
+            );
+            assert_eq!(stderr.contents(), "", "{name} printed on stderr");
+        }
+    }
+}
+
+/// Cleanup is one line, however many steps follow it: simple has no
+/// countdown — only fancy does, as only Batect's fancy logger is given a
+/// cleanup progress display.
+#[test]
+fn cleanup_steps_add_nothing_after_the_cleanup_line() {
+    let (logger, buffer) = logger();
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    for container in ["app", "db"] {
+        logger.post(TaskEvent::ContainerStopped {
+            container: container.into(),
+        });
+        logger.post(TaskEvent::ContainerRemoved {
+            container: container.into(),
+        });
+    }
+    logger.post(TaskEvent::RemovingNetwork);
+    logger.post(TaskEvent::NetworkRemoved);
+    logger.post(TaskEvent::CleanupFinished);
+    assert_eq!(buffer.contents(), "\nCleaning up...\n");
 }

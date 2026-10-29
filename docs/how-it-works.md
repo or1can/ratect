@@ -262,7 +262,7 @@ it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017
   milestones, and the three stderr classes, to an event sink instead of
   printing, and the selected [output style](output-styles.md) decides what
   each renders as — `fancy`'s live per-container status block on an
-  interactive terminal, `simple`'s plain append-only lines otherwise, no
+  interactive terminal, `simple`'s append-only lines otherwise, no
   progress at all under `quiet`, or `all`'s per-container prefixed lines (the
   one style where even container output routes through the event sink,
   line-buffered, instead of streaming to stdout directly — the task container's

@@ -255,11 +255,11 @@ fn format_task_summary_colors_exit_code_by_outcome() {
     let console = Console::new(Box::new(std::io::sink()), true);
     assert_eq!(
         format_task_summary(&console, "build", 0, Duration::from_millis(2300)),
-        "build finished with exit code \x1b[1;32m0\x1b[0m in 2.3s."
+        "\x1b[1mbuild\x1b[0m finished with exit code \x1b[1;32m0\x1b[0m in 2.3s."
     );
     assert_eq!(
         format_task_summary(&console, "lint", 3, Duration::from_secs(61)),
-        "lint finished with exit code \x1b[1;31m3\x1b[0m in 1m 1.0s."
+        "\x1b[1mlint\x1b[0m finished with exit code \x1b[1;31m3\x1b[0m in 1m 1.0s."
     );
 }
 
