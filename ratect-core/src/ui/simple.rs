@@ -13,7 +13,7 @@
 // limitations under the License.
 
 //! The `simple` output mode — a port of Batect's `SimpleEventLogger`:
-//! plain, append-only milestone lines, one per lifecycle event, with no
+//! append-only milestone lines, one per lifecycle event, with no
 //! live-updating progress detail at all (pull/build progress events are
 //! deliberately ignored — only their start/finish milestones print). The
 //! mode every non-interactive console gets by default.
@@ -83,7 +83,8 @@ impl EventSink for SimpleEventLogger {
                 // "Cleaning up...".
                 state.started_cleanup.reset();
                 state.task_container = None;
-                self.console.println(&format!("Running {task}..."));
+                self.console
+                    .println(&format!("Running {}...", self.console.bold(&task)));
             }
             // In place of a task's `Running` line, so separated the same way.
             TaskEvent::PrerequisitesOnly { task } => {
@@ -102,7 +103,7 @@ impl EventSink for SimpleEventLogger {
             } => {
                 self.console.println(&super::format_task_summary(
                     &self.console,
-                    &task,
+                    &self.console.bold(&task),
                     exit_code,
                     duration,
                 ));
@@ -115,33 +116,43 @@ impl EventSink for SimpleEventLogger {
                 ));
             }
             TaskEvent::ImagePullStarting { image } => {
-                self.console.println(&format!("Pulling {image}..."));
+                self.console
+                    .println(&format!("Pulling {}...", self.console.bold(&image)));
             }
             TaskEvent::ImagePullCompleted { image } => {
-                self.console.println(&format!("Pulled {image}."));
+                self.console
+                    .println(&format!("Pulled {}.", self.console.bold(&image)));
             }
             TaskEvent::ImageBuildStarting { container } => {
-                self.console.println(&format!("Building {container}..."));
+                self.console
+                    .println(&format!("Building {}...", self.console.bold(&container)));
             }
             TaskEvent::ImageBuildCompleted { container } => {
-                self.console.println(&format!("Built {container}."));
+                self.console
+                    .println(&format!("Built {}.", self.console.bold(&container)));
             }
             TaskEvent::DependencyStarting { container } => {
-                self.console.println(&format!("Starting {container}..."));
+                self.console
+                    .println(&format!("Starting {}...", self.console.bold(&container)));
             }
             TaskEvent::DependencyStarted { container } => {
-                self.console.println(&format!("Started {container}."));
+                self.console
+                    .println(&format!("Started {}.", self.console.bold(&container)));
             }
             TaskEvent::ContainerBecameHealthy { container } => {
                 if self.is_task_container(&container) {
                     return;
                 }
-                self.console
-                    .println(&format!("{container} has become healthy."));
+                self.console.println(&format!(
+                    "{} has become healthy.",
+                    self.console.bold(&container)
+                ));
             }
             TaskEvent::DependencyCompleted { container } => {
-                self.console
-                    .println(&format!("{container} ran to completion."));
+                self.console.println(&format!(
+                    "{} ran to completion.",
+                    self.console.bold(&container)
+                ));
             }
             TaskEvent::RunningSetupCommand {
                 container,
@@ -156,34 +167,42 @@ impl EventSink for SimpleEventLogger {
                 // Both names when they differ: this line is flat, with no
                 // per-container prefix to say whose gate it belongs to, so
                 // dropping either one loses something.
+                let bold = |text: &str| self.console.bold(text);
                 let location = match run_in {
-                    Some(run_in) => format!("{run_in}, for {container}"),
-                    None => container,
+                    Some(run_in) => format!("{}, for {}", bold(&run_in), bold(&container)),
+                    None => bold(&container),
                 };
                 self.console.println(&format!(
-                    "Running setup command {command} ({index} of {total}) in {location}..."
+                    "Running setup command {} ({index} of {total}) in {location}...",
+                    bold(&command)
                 ));
             }
             TaskEvent::SetupCommandsCompleted { container } => {
                 if self.is_task_container(&container) {
                     return;
                 }
-                self.console
-                    .println(&format!("{container} has completed all setup commands."));
+                self.console.println(&format!(
+                    "{} has completed all setup commands.",
+                    self.console.bold(&container)
+                ));
             }
             TaskEvent::DependencyExitedUnexpectedly {
                 container,
                 exit_code,
             } => {
                 self.console.println(&format!(
-                    "{container} {}.",
+                    "{} {}.",
+                    self.console.bold(&container),
                     super::exited_unexpectedly(exit_code)
                 ));
             }
             TaskEvent::RunningTaskContainer { container, command } => {
+                let bold = |text: &str| self.console.bold(text);
                 let line = match command {
-                    Some(command) => format!("Running {command} in {container}..."),
-                    None => format!("Running {container}..."),
+                    Some(command) => {
+                        format!("Running {} in {}...", bold(&command), bold(&container))
+                    }
+                    None => format!("Running {}...", bold(&container)),
                 };
                 self.console.println(&line);
             }

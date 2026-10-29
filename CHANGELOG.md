@@ -103,6 +103,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- On a colour terminal, `simple` output bolds the task, container and image names, the task's command and setup commands, and the summary's task name, as Batect does — and the container in its ratect-only lines too.
 - `fancy` output with cleanup off: the summary line no longer runs onto the end of task output that lacks a trailing newline, and follows a blank line otherwise, as in Batect.
 - `fancy` output bolds the task's command, and the image a container pulls, as Batect does.
 - `fancy` output bolds the setup command it is running — and, for a `run_in` setup command (ratect only), the container it runs in — and a container with nothing left to wait for reads `ready to start`, as in Batect, rather than `waiting to start...`.

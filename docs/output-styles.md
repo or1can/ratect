@@ -178,7 +178,9 @@ point at here.
 ## Colour
 
 Colour in Ratect's own output (the exit code in the summary line, `all`'s
-per-container prefixes, the `Error:`/`Warning:` markers) is, by default,
+per-container prefixes, the `Error:`/`Warning:` markers, and the bold that
+picks out task, container and image names and commands in `simple`
+and `fancy` progress) is, by default,
 emitted only when the stream being written to is a terminal — each stream
 decides for itself, so with `ratect run test > out.txt` the progress on stderr
 is still coloured while a `2>err.txt` gets plain text, `RUST_LOG` lines
