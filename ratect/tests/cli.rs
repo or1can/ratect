@@ -750,20 +750,16 @@ fn breaking_change_lines(text: &str) -> Vec<String> {
 /// is told so once, every row that only fails the load says it doesn't
 /// apply, the bundle row finds nothing in a project with no Git include, and
 /// the rows nothing checks say so. `config validate` and `doctor` report
-/// exactly the refusal's outcomes, from the same result.
+/// exactly the refusal's outcomes, from the same result. The fixture is
+/// the project `docs/ratect-config-reference.md`'s captured refusal shows.
 #[test]
 fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
-    let dir = unique_project_dir();
-    std::fs::write(
-        dir.join("ratect.toml"),
-        "ratect_version = \"0.11.0\"\nproject_name = \"demo\"\n\n\
-         [containers.app]\nimage = \"alpine:3.18\"\n",
-    )
-    .unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/written-for/ratect.toml");
     let run = |args: &[&str]| {
         let output = ratect_command()
             .arg("-f")
-            .arg(dir.join("ratect.toml"))
+            .arg(&fixture)
             .args(args)
             .output()
             .expect("failed to run ratect");
@@ -773,10 +769,9 @@ fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
             String::from_utf8_lossy(&output.stderr).into_owned(),
         )
     };
-    let (_, refusal) = run(&["tasks", "list"]);
+    let (_, refusal) = run(&["run", "hello"]);
     let (validate, _) = run(&["config", "validate"]);
     let (doctor, _) = run(&["doctor"]);
-    std::fs::remove_dir_all(&dir).ok();
 
     let rows = breaking_change_lines(&refusal);
     assert_eq!(rows.len(), 9, "{refusal}");

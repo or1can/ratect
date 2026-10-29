@@ -84,7 +84,15 @@ run the project in two cases:
 
 A refusal of the second kind also says, for each change, whether it touches
 the project, to help with the review — it never replaces it, and the project
-is refused either way:
+is refused either way. `ratect run hello`, captured in
+[`ratect/tests/fixtures/written-for`](https://github.com/or1can/ratect/tree/main/ratect/tests/fixtures/written-for)
+— a project written for 0.11.0, run by 0.12.0:
+
+```ansi
+{{#include captures/written-for-refusal.ansi}}
+```
+
+Each change's outcome depends on how it can be checked:
 
 - **A change that only makes something fail to load** is checked by loading
   the project once more under the running version's rules, with this check
@@ -102,6 +110,12 @@ is refused either way:
   only the root file is looked in, and a use there is still *found*.
 - **A change nothing checks** says *not checked*. So far that includes each
   change to what a value means.
+
+So for the project above, the review is the three changes marked *not
+checked*: look through its values for a `\`, a `$` or a `<`, and through its
+local includes for a `path` starting with `~`, and check each use against the
+change. The rest are ruled out — it loads, and declares no Git include. Once
+that's done, set `ratect_version` to 0.12.0 and it loads.
 
 `ratect doctor` and `ratect config validate` report a refusal the same way:
 the refusal is a `problem`, each change a finding of its own — `ok` once it's
