@@ -161,6 +161,13 @@ The markers and the notices are
 **Shared cache** — cache storage identified by name alone, so every project on
 the machine naming it addresses the same storage.
 
+**Cache root** — `.batect/caches` in the project directory, which holds the
+project cache key file and every directory-type project cache. It belongs to
+the project and is trusted the way its config is. A symbolic link at or above
+it relocates it, and every cache operation follows that link, as Batect's do:
+creating, mounting and removing alike. Someone who links it to storage shared
+with something else accepts that a clean removes what it finds there.
+
 ## Built images
 
 **Built image** — the image a container's `build_directory` produces, as
