@@ -495,6 +495,13 @@ tables above:
   the manual cleanup commands it prints. While that container is still attached
   to the network, Docker refuses, and that refusal is reported in the same
   `Cleanup failed:` error as the container's, which lists both as left behind.
+- **A container or network already gone at cleanup isn't a failure.** When
+  something else has already removed one — a dependency `docker rm -f`'d
+  mid-run, say — Docker answers cleanup's stop or removal with `404`, and
+  Ratect counts it as removed, since nothing is left behind: a passing run
+  still exits `0`, and `ratect resources clean` counts one that disappears
+  mid-sweep as removed. Batect fails the task's cleanup on any error from
+  that stop or removal, `404` included.
 - **A task with only `prerequisites` says so in every style but `quiet`.**
   Once its prerequisites have run, `The task <name> only defines prerequisite
   tasks, nothing more to do.` is printed as under Batect, but not under

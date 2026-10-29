@@ -522,7 +522,9 @@ container run to an exit code of its own?
    exception: if every container exited `0` but Ratect then **fails to clean up** — a
    removal the daemon refused, or a cleanup stopped with Ctrl+C with something still to
    remove — the run exits `125` instead, and a prerequisite whose cleanup fails stops
-   the chain there. A task's own non-zero code is never overridden.
+   the chain there. A task's own non-zero code is never overridden. A container or
+   network that something else already removed, such as a dependency `docker rm -f`'d
+   mid-run, isn't a cleanup failure, since nothing is left behind.
 2. **A termination signal ended it: 128 + that signal's own number** — `130` for Ctrl+C
    (`SIGINT`), `143` for `SIGTERM`, `129` for `SIGHUP`. Any of the three abandons the run
    and then cleans up after it; a second one *during* that cleanup force-removes

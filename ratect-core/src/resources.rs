@@ -84,6 +84,8 @@ pub trait ResourceInventory {
     async fn list_networks(&self, labels: &[(&str, Option<&str>)])
         -> Result<Vec<LabelledResource>>;
 
+    /// Removes network `name`. One already gone is no failure: there is
+    /// nothing left to remove (decisions/0016).
     async fn remove_network(&self, name: &str) -> Result<()>;
 
     /// Stops and removes a container started with `start_background_container`.
@@ -93,9 +95,11 @@ pub trait ResourceInventory {
     /// `stop_grace_period`, ratect#112).
     ///
     /// `stopped`, given, is signaled once the stop has succeeded — the
-    /// container is stopped, by this request or already — and before the
-    /// removal is asked for, never if the stop fails, so cleanup can say a
-    /// container stopped while its removal is still under way.
+    /// container is stopped, by this request or already, or is already gone
+    /// altogether — and before the removal is asked for, never if the stop
+    /// fails, so cleanup can say a container stopped while its removal is
+    /// still under way. A container already gone is no failure: there is
+    /// nothing left to remove (decisions/0016).
     async fn stop_and_remove_container(
         &self,
         container_id: &str,

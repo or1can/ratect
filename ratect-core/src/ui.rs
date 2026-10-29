@@ -141,8 +141,9 @@ pub enum TaskEvent {
     /// non-zero `exit_code`: a command exiting non-zero still "finishes"
     /// (Batect prints the same summary line either way). An infrastructure
     /// failure (image build failed, dependency never became healthy, ...)
-    /// never posts this. Posted after cleanup, so it's the last event of a
-    /// successful task execution.
+    /// never posts this, nor does a command that exited `0` and whose
+    /// cleanup then failed — [`TaskEvent::TaskFailed`] covers both. Posted
+    /// after cleanup, so it's the last event of a successful task execution.
     TaskFinished {
         task: String,
         exit_code: i64,
@@ -333,14 +334,16 @@ pub enum TaskEvent {
         task: String,
     },
     /// The task failed to run for an infrastructure reason (image build
-    /// failed, a dependency never became healthy, ...) — the counterpart of
+    /// failed, a dependency never became healthy, ...), or its command
+    /// exited `0` and cleanup then failed — the counterpart of
     /// [`TaskEvent::TaskFinished`], which covers the task's own command
     /// completing (with any exit code), and what every style but `quiet`
     /// renders the failed summary line from (`<task> failed after <t>.`).
     /// Posted after cleanup, like `TaskFinished`, with `duration` measured
     /// the same way: from `TaskStarting` to the end of cleanup. It carries
-    /// no error: that was reported when it happened, before cleanup, as a
-    /// [`TaskEvent::Error`]. Never posted for a run a termination signal or
+    /// no error: that was reported when it happened, as a
+    /// [`TaskEvent::Error`] — before cleanup, or at its end for a cleanup
+    /// failure. Never posted for a run a termination signal or
     /// stdout's reader going ended — its notice says so instead — nor for a
     /// task that never reached `TaskStarting`, such as one whose
     /// prerequisite failed.
