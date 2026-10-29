@@ -202,10 +202,12 @@ pub struct CachedInclude {
 }
 
 /// Removes an entry's working copy and sidecar, tolerating either being
-/// absent already. `false` if something is left behind, logged.
+/// absent already — including when another process removes the same entry
+/// at the same time, since removal takes no lock. `false` if something is
+/// left behind, logged.
 async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> bool {
-    if working_copy.exists() {
-        if let Err(e) = tokio::fs::remove_dir_all(working_copy).await {
+    if let Err(e) = tokio::fs::remove_dir_all(working_copy).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
             tracing::warn!("Failed to remove Git include cache clone {working_copy:?}: {e}");
             return false;
         }
@@ -470,10 +472,10 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
     }
 
-    /// Best-effort: a failure here just leaves a stale lock file behind. A
-    /// load doesn't take the lock once the working copy exists, so that only
-    /// times out a caller that still needs to clone (as Batect's would) and
-    /// `remove_entry`, which takes the same lock.
+    /// Best-effort: a failure here just leaves a stale lock file behind.
+    /// Only cloning takes the lock — not a load once the working copy exists,
+    /// nor `remove_entry` — so that only times out a caller that still needs
+    /// to clone, as Batect's would.
     async fn release_lock(&self, lock_path: &Path) {
         if let Err(e) = tokio::fs::remove_file(lock_path).await {
             tracing::warn!("Failed to remove Git include lock file {lock_path:?}: {e}");
@@ -693,23 +695,21 @@ impl<G: GitClient> GitIncludeCache<G> {
         Ok(found)
     }
 
-    /// Removes one entry's working copy and sidecar, under the same
-    /// per-entry lock `ensure_cached` takes to clone — without it, this can
-    /// delete a directory another `ratect` process is cloning into.
+    /// Removes one entry's working copy and sidecar, without taking the
+    /// per-entry lock `ensure_cached` clones under — as Batect's
+    /// `GitRepositoryCache.delete` takes none either — and leaving any lock
+    /// file in place. Waiting for a clone in progress would only remove the
+    /// finished clone afterwards, and `SystemGitClient` builds one in
+    /// `<key>.tmp`, which this never touches, so there is nothing mid-clone to
+    /// protect; while a lock file left beside a complete clone would stall
+    /// every removal of that entry for the whole lock timeout. A load racing
+    /// this can still return the removed path and write a sidecar for it,
+    /// with or without the lock: the next load re-clones it, or once stale
+    /// the sweep removes the sidecar.
     /// `false` if anything went wrong, already logged; a single unremovable
     /// entry shouldn't abandon the rest.
     async fn remove_entry(&self, root: &Path, key: &str) -> bool {
-        let working_copy = root.join(key);
-        let info_path = root.join(format!("{key}.toml"));
-        let lock_path = root.join(format!("{key}.lock"));
-
-        if let Err(e) = self.acquire_lock(&lock_path).await {
-            tracing::warn!("Failed to lock Git include cache entry {key}: {e:#}");
-            return false;
-        }
-        let removed = remove_entry_files(&working_copy, &info_path).await;
-        self.release_lock(&lock_path).await;
-        removed
+        remove_entry_files(&root.join(key), &root.join(format!("{key}.toml"))).await
     }
 
     /// Removes any cached repo whose `last_used` is more than

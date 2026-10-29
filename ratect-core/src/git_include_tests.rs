@@ -646,6 +646,139 @@ async fn ensure_cached_bumps_last_used_for_an_already_cloned_working_copy_beside
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+/// The entry `cloned_entry_with_a_stale_lock` set up is gone, and its lock
+/// file is exactly as it was left: removal neither takes, releases nor
+/// deletes it.
+async fn assert_removed_beside_its_untouched_lock(root: &Path, key: &str) {
+    assert!(!root.join(key).exists(), "working copy should be removed");
+    assert!(
+        !root.join(format!("{key}.toml")).exists(),
+        "sidecar should be removed"
+    );
+    let lock = tokio::fs::read(root.join(format!("{key}.lock")))
+        .await
+        .unwrap();
+    assert_eq!(lock, LOCK_CONTENT);
+}
+
+#[tokio::test]
+async fn clean_removes_an_entry_beside_a_stale_lock_without_waiting_on_it() {
+    let (root, key, cache) = cloned_entry_with_a_stale_lock(FakeGitClient::new()).await;
+
+    let start = Instant::now();
+    let removed = cache.clean(None).await.unwrap();
+
+    assert!(
+        start.elapsed() < cache.lock_timeout,
+        "clean waited on the lock"
+    );
+    assert_eq!(removed.len(), 1);
+    assert_removed_beside_its_untouched_lock(&root, &key).await;
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn cleanup_stale_removes_an_entry_beside_a_stale_lock_without_waiting_on_it() {
+    let (root, key, mut cache) = cloned_entry_with_a_stale_lock(FakeGitClient::new()).await;
+    cache.clock = Box::new(|| 500 + STALE_AFTER.as_secs() + 1);
+
+    let start = Instant::now();
+    cache.cleanup_stale().await.unwrap();
+
+    assert!(
+        start.elapsed() < cache.lock_timeout,
+        "the sweep waited on the lock"
+    );
+    assert_removed_beside_its_untouched_lock(&root, &key).await;
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// Removal doesn't wait on the lock, but the re-clone still does: a leftover
+/// lock blocks a clone of its entry, as Batect's does, so the entry is left
+/// removed and not reported as refreshed — the next load clones it once the
+/// lock is gone. That wait rules out timing the removal, so the files being
+/// gone stands in for it: a removal that waited on the lock would time out
+/// and leave them.
+#[tokio::test]
+async fn refresh_removes_an_entry_beside_a_stale_lock_but_its_re_clone_is_blocked_by_it() {
+    let git =
+        FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
+    let (root, key, cache) = cloned_entry_with_a_stale_lock(git.clone()).await;
+
+    let refreshed = cache.refresh().await.unwrap();
+
+    assert!(refreshed.is_empty());
+    assert_eq!(git.clone_count(), 0);
+    assert_removed_beside_its_untouched_lock(&root, &key).await;
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// A load whose `exists()` check passed just before a concurrent removal
+/// returns the removed path, then writes its sidecar after the removal —
+/// leaving a sidecar with no working copy. No lock prevents that (#631);
+/// it repairs itself, which the two tests below pin.
+async fn sidecar_left_by_a_load_racing_a_removal(
+    git: FakeGitClient,
+) -> (PathBuf, String, GitIncludeCache<FakeGitClient>) {
+    let root = unique_temp_dir();
+    let cache = GitIncludeCache::for_test(root.clone(), git, 1_000);
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let info_path = root.join(format!("{key}.toml"));
+
+    cache.clean(None).await.unwrap();
+    cache
+        .update_info_file("https://example.com/repo.git", "v1.0.0", &info_path)
+        .await
+        .unwrap();
+
+    assert!(!root.join(&key).exists());
+    assert!(info_path.exists());
+    (root, key, cache)
+}
+
+#[tokio::test]
+async fn the_next_load_re_clones_an_entry_removed_beneath_a_load() {
+    let git = FakeGitClient::new().with_files(
+        "https://example.com/repo.git",
+        "v1.0.0",
+        HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+    );
+    let (root, key, cache) = sidecar_left_by_a_load_racing_a_removal(git.clone()).await;
+
+    let working_copy = cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(git.clone_count(), 2);
+    assert_eq!(working_copy, root.join(&key));
+    assert!(working_copy.join("bundle.yml").exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn cleanup_stale_removes_a_sidecar_left_without_a_working_copy() {
+    let git =
+        FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
+    let (root, key, _) = sidecar_left_by_a_load_racing_a_removal(git).await;
+
+    let now = 1_000 + STALE_AFTER.as_secs() + 1;
+    let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
+    sweeper.cleanup_stale().await.unwrap();
+
+    assert!(!root.join(format!("{key}.toml")).exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
 /// Two entries with different last-used times, so ordering and the
 /// per-entry fields can both be checked at once.
 async fn cache_with_two_entries(root: &std::path::Path) -> GitIncludeCache<FakeGitClient> {
@@ -971,36 +1104,37 @@ async fn cleanup_stale_removes_only_the_stale_entries_among_several() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
-/// A held lock is the forced failure: unlike an unwritable directory, it
-/// still fails when the tests run as root. The sweep visits entries in
+/// A regular file where the working copy should be is the forced failure:
+/// `remove_dir_all` refuses a non-directory, even when the tests run as
+/// root, which an unwritable directory doesn't. The sweep visits entries in
 /// `read_dir` order, which the test can't choose, so each entry takes a turn as
 /// the failing one: unless that order differs between the two runs, one of
 /// them puts the failure first, which is the order that matters.
 #[tokio::test]
 async fn cleanup_stale_still_removes_other_stale_entries_when_one_removal_fails() {
     let remotes = ["https://example.com/a.git", "https://example.com/b.git"];
-    for (locked, other) in [(remotes[0], remotes[1]), (remotes[1], remotes[0])] {
+    for (failing, other) in [(remotes[0], remotes[1]), (remotes[1], remotes[0])] {
         let root = unique_temp_dir();
-        let (locked_key, locked_copy, locked_info) =
-            cached_entry_used_at(&root, locked, 1_000).await;
+        let (failing_key, failing_copy, failing_info) =
+            cached_entry_used_at(&root, failing, 1_000).await;
         let (other_key, other_copy, other_info) = cached_entry_used_at(&root, other, 1_000).await;
-        tokio::fs::write(root.join(format!("{locked_key}.lock")), b"")
+        tokio::fs::remove_dir_all(&failing_copy).await.unwrap();
+        tokio::fs::write(&failing_copy, b"not a directory")
             .await
             .unwrap();
 
         let now = 1_000 + STALE_AFTER.as_secs() + 1;
-        let mut sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
-        sweeper.lock_timeout = Duration::from_millis(250);
+        let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
         sweeper.cleanup_stale().await.unwrap();
 
-        assert!(locked_copy.exists(), "{locked} should be left in place");
-        assert!(locked_info.exists(), "{locked} should be left in place");
+        assert!(failing_copy.exists(), "{failing} should be left in place");
+        assert!(failing_info.exists(), "{failing} should be left in place");
         assert!(!other_copy.exists(), "{other} should be removed");
         assert!(!other_info.exists(), "{other} should be removed");
 
         // The per-entry results the sweep ignores.
         cached_entry_used_at(&root, other, 1_000).await;
-        assert!(!sweeper.remove_entry(&root, &locked_key).await);
+        assert!(!sweeper.remove_entry(&root, &failing_key).await);
         assert!(sweeper.remove_entry(&root, &other_key).await);
 
         tokio::fs::remove_dir_all(&root).await.ok();
