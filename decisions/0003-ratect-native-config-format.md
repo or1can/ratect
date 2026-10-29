@@ -1,6 +1,8 @@
 # 0003 — `ratect`-native config format (TOML)
 
-**Status:** Accepted — shipped (ratect 0.3.0). Supersedes the exploratory "Alternative Configuration Format (TOML)"
+**Status:** Accepted — shipped (ratect 0.3.0). Its include-entry exception
+("Generalized (ratect#214)") is superseded by
+[0021](0021-native-field-follows-its-file.md). Supersedes the exploratory "Alternative Configuration Format (TOML)"
 [Future Vision](../ROADMAP.md#future-vision) item.
 
 ## Context

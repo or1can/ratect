@@ -3,7 +3,12 @@
 **Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
 [#559](https://github.com/or1can/ratect/issues/559)). Takes up the per-bundle
 alternative [0015](0015-native-project-records-its-written-for-version.md)
-deferred.
+deferred. Clarified on 2026-10-29, before that release shipped: "a
+`batect.yml` gains no field" means that the YAML format gains none, so a
+`.yml` can't set `reviewed_ratect_version` under either binary
+([0021](0021-native-field-follows-its-file.md), rework
+[#680](https://github.com/or1can/ratect/issues/680)). As first implemented,
+a `.yml` in a native project could set it.
 
 ## Context
 
