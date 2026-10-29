@@ -373,7 +373,9 @@ tables above:
   immediately followed by `\n` — a CRLF pair still folds to a single line
   break) the same way it already does on `\n`, so a real progress bar
   prints one interleaved line per redraw tick instead of staying silent —
-  spammier, but never silent-then-dumped.
+  spammier, but never silent-then-dumped. A `\r` that is a line's first byte
+  — the first of the output, or the one after a `\n` — is skipped, as in
+  Batect, rather than ending an empty line.
 - **`all` mode prints a container's last line even without a trailing
   newline.** Batect prints a line only once its `\n` arrives, so a container
   whose output ends without one loses that last line.

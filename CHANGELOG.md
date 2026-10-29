@@ -109,6 +109,7 @@ history, from when it was the only binary.
 - `fancy` output bolds the setup command it is running — and, for a `run_in` setup command (ratect only), the container it runs in — and a container with nothing left to wait for reads `ready to start`, as in Batect, rather than `waiting to start...`.
 - `fancy` output joins the names in its waiting and cleanup lines as Batect does (`a and b`, `a, b and c`), with each name bold, and lists what a container is waiting for in the order its dependencies were declared.
 - With `--override-image`, `fancy` and `-o all` output name the override image and show its pull, rather than the container's configured image or build.
+- `-o all` output no longer prints a blank line for a carriage return at the start of a container's output or right after a newline, as in Batect.
 - `fancy` output shows `image built, ready to create container` once a container's image is built and `creating container...` while it is created, as Batect does.
 - `fancy` output: a dependency with setup commands shows `running setup commands...` when it becomes healthy, and `ready` only once they have all run — until then, the containers depending on it still show it as one they are waiting for.
 - `fancy` output: a container's "waiting for dependencies" list no longer names dependencies that are already ready.

@@ -234,6 +234,29 @@ fn prefixes_are_padded_to_the_longest_name() {
     );
 }
 
+/// An empty output line is a blank prefixed line — the prefix and separator
+/// with nothing after them — as Batect prints a lone `\n`.
+#[test]
+fn an_empty_output_line_prints_just_the_prefix() {
+    let (logger, buffer) = logger();
+    start_task(
+        &logger,
+        vec![
+            info("db", Some("postgres:15"), None),
+            info("app-server", Some("app:1"), None),
+        ],
+    );
+    logger.post(TaskEvent::ContainerOutput {
+        container: "db".into(),
+        line: String::new(),
+    });
+    assert_eq!(
+        buffer.contents(),
+        "test       | Running test...\n\
+             db         | \n"
+    );
+}
+
 #[test]
 fn prefix_padding_aligns_by_display_width_not_char_count() {
     // "数据库" is 3 `char`s but 6 terminal columns (2 per CJK
@@ -656,6 +679,92 @@ fn line_buffer_drops_an_unresolved_trailing_carriage_return_on_flush() {
     );
     buffer.flush(&mut |line: &str| lines.push(line.to_string()));
     assert_eq!(lines, vec!["last"]);
+}
+
+/// A lone `\n` is one empty line, as in Batect's sink — `\n\n` and `\r\r`
+/// reach an empty line through different branches of `push`, so this one
+/// is pinned on its own.
+#[test]
+fn line_buffer_emits_an_empty_line_for_a_lone_newline() {
+    let mut buffer = LineBuffer::new();
+    let mut lines: Vec<String> = Vec::new();
+    buffer.push(b"\n", &mut |line: &str| lines.push(line.to_string()));
+    assert_eq!(lines, vec![""]);
+    buffer.flush(&mut |_line: &str| panic!("nothing should be pending"));
+}
+
+/// Batect's own shape for a line split across writes: a partial left behind
+/// a complete line, finished by the next `push` rather than by `flush`.
+#[test]
+fn line_buffer_finishes_a_partial_line_on_the_next_push() {
+    let mut buffer = LineBuffer::new();
+    let mut lines: Vec<String> = Vec::new();
+    buffer.push(b"Line 1\nLine", &mut |line: &str| {
+        lines.push(line.to_string())
+    });
+    assert_eq!(lines, vec!["Line 1"]);
+    buffer.push(b" 2\n", &mut |line: &str| lines.push(line.to_string()));
+    assert_eq!(lines, vec!["Line 1", "Line 2"]);
+    buffer.flush(&mut |_line: &str| panic!("nothing should be pending"));
+}
+
+#[test]
+fn line_buffer_ignores_an_empty_push() {
+    let mut buffer = LineBuffer::new();
+    buffer.push(b"", &mut |_line: &str| {
+        panic!("an empty push emits nothing")
+    });
+
+    let mut lines: Vec<String> = Vec::new();
+    buffer.push(b"partial", &mut |line: &str| lines.push(line.to_string()));
+    buffer.push(b"", &mut |_line: &str| {
+        panic!("an empty push emits nothing")
+    });
+    buffer.flush(&mut |line: &str| lines.push(line.to_string()));
+    assert_eq!(lines, vec!["partial"]);
+}
+
+/// Every line `chunks` produce, each pushed in turn, then flushed.
+fn framed(chunks: &[&[u8]]) -> Vec<String> {
+    let mut buffer = LineBuffer::new();
+    let mut lines: Vec<String> = Vec::new();
+    for chunk in chunks {
+        buffer.push(chunk, &mut |line: &str| lines.push(line.to_string()));
+    }
+    buffer.flush(&mut |line: &str| lines.push(line.to_string()));
+    lines
+}
+
+/// A `\r` at the start of a line is skipped rather than flushing the empty
+/// line before it — Batect's `writeLine` strips a leading `\r` (ratect#477).
+#[test]
+fn line_buffer_skips_a_carriage_return_at_the_start_of_a_line() {
+    assert_eq!(framed(&[b"\rSome text\n"]), vec!["Some text"]);
+    assert_eq!(
+        framed(&[b"Downloading\n\r10%\r20%\r30%\n"]),
+        vec!["Downloading", "10%", "20%", "30%"]
+    );
+    assert_eq!(framed(&[b"a\r\n\rb\n"]), vec!["a", "b"]);
+    assert_eq!(framed(&[b"\rWait for it..."]), vec!["Wait for it..."]);
+}
+
+/// "Start of a line" holds across `push` calls, as `pending_cr` does.
+#[test]
+fn line_buffer_skips_a_line_leading_carriage_return_split_across_pushes() {
+    assert_eq!(
+        framed(&[b"Downloading\n", b"\r10%\n"]),
+        vec!["Downloading", "10%"]
+    );
+    assert_eq!(framed(&[b"\r", b"x\n"]), vec!["x"]);
+}
+
+/// Only the one `\r` at the start of a line is skipped, as Batect strips
+/// only its buffer's first byte; a lone `\r` and nothing else still emits
+/// nothing.
+#[test]
+fn line_buffer_skips_only_one_line_leading_carriage_return() {
+    assert_eq!(framed(&[b"\r\rText\n"]), vec!["", "Text"]);
+    assert!(framed(&[b"\r"]).is_empty());
 }
 
 /// A prerequisites-only task's line, Batect's words with its name in bold,

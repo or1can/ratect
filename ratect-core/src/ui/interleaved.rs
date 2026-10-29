@@ -481,7 +481,11 @@ impl EventSink for InterleavedEventLogger {
 /// Turns a container's raw output chunks into whole lines: buffers until a
 /// `\n` *or* a lone `\r` (one not immediately followed by `\n` — a CRLF pair
 /// still folds to one line break, not two), and hands each complete line to
-/// `emit`. [`LineBuffer::flush`] emits any unterminated tail when the stream
+/// `emit`. A `\r` at the very start of a line (the stream's first byte, or
+/// the one right after a `\n`) is no boundary: it's skipped, as Batect's
+/// sink strips its buffer's leading `\r`, rather than flushing the empty line
+/// before it — only that one `\r`, since Batect strips only its first byte.
+/// [`LineBuffer::flush`] emits any unterminated tail when the stream
 /// ends. Deliberately **not** a port of Batect's own
 /// `InterleavedContainerOutputSink`, which splits on `\n` alone: a
 /// carriage-return progress redraw (pip/curl/apt-style) would otherwise
@@ -500,6 +504,11 @@ pub struct LineBuffer {
     /// pair can land in different chunks (and therefore different `push`
     /// calls) when Docker's stream happens to split there.
     pending_cr: bool,
+    /// Set while the next byte would start a line, so a `\r` there is
+    /// skipped; a field for the same reason as `pending_cr` — the `\n`
+    /// ending one line and the `\r` starting the next can arrive in
+    /// different `push` calls.
+    at_line_start: bool,
 }
 
 impl LineBuffer {
@@ -508,6 +517,7 @@ impl LineBuffer {
         Self {
             pending: Vec::new(),
             pending_cr: false,
+            at_line_start: true,
         }
     }
 
@@ -518,15 +528,23 @@ impl LineBuffer {
                 if byte == b'\n' {
                     // CRLF: one line break, not two.
                     self.flush_line(&mut emit);
+                    self.at_line_start = true;
                     continue;
                 }
                 // A lone `\r` — its own flush boundary. `byte` wasn't part
                 // of it, so it still falls through to the match below.
                 self.flush_line(&mut emit);
             }
+            let at_line_start = std::mem::take(&mut self.at_line_start);
+            if at_line_start && byte == b'\r' {
+                continue;
+            }
             match byte {
                 b'\r' => self.pending_cr = true,
-                b'\n' => self.flush_line(&mut emit),
+                b'\n' => {
+                    self.flush_line(&mut emit);
+                    self.at_line_start = true;
+                }
                 _ => self.pending.push(byte),
             }
         }
@@ -539,6 +557,7 @@ impl LineBuffer {
         // unterminated tail; the `\r` itself is simply dropped, never
         // emitted.
         self.pending_cr = false;
+        self.at_line_start = true;
         if !self.pending.is_empty() {
             self.flush_line(&mut emit);
         }
