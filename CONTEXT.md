@@ -114,7 +114,8 @@ exits with is [0016](decisions/0016-exit-codes.md)'s.
 **Cleanup failure** — Ratect failing to remove something it set out to
 remove: a removal the daemon refused, or the cleanup ladder's abandon rung
 reached with something still to remove. What a `--no-cleanup*` flag leaves
-in place on purpose is not one. An error, with
+in place on purpose is not one, and nor is a container or network already gone
+when cleanup reaches it. An error, with
 [0016](decisions/0016-exit-codes.md)'s exit code.
 
 **Abandoned build** — a built image's build that a run stopped waiting for

@@ -10,7 +10,12 @@ That rework is implemented in
 the same release
 ([#654](https://github.com/or1can/ratect/issues/654)). As first written, a
 usage error was `2` everywhere, and a value that failed its check was the
-command's ordinary failure.
+command's ordinary failure. Refined again on 2026-10-29, also before release:
+a container or network already gone when cleanup reaches it is not a cleanup
+failure, on every removal path. Its rework is
+[#609](https://github.com/or1can/ratect/issues/609). As first implemented, a
+graceful stop or a network removal answered `404` counted as one, while
+forced removal did not.
 
 ## Context
 
@@ -84,9 +89,10 @@ exited `0`.
    exited `0` exits **`125`** instead. A cleanup failure is Ratect failing to
    remove something it set out to remove; what `--no-cleanup`,
    `--no-cleanup-after-success` or `--no-cleanup-after-failure` leaves in
-   place on purpose is not one. A task's own non-zero code is never
-   overridden: the failure is the thing the user needs to see, and a leak is
-   reported on stderr either way. Forced removal that completes is a faster
+   place on purpose is not one, and nor is a container or network that is
+   already gone when cleanup reaches it, whatever removed it. A task's own
+   non-zero code is never overridden: the failure is the thing the user
+   needs to see, and a leak is reported on stderr either way. Forced removal that completes is a faster
    cleanup, not a failed one. A *prerequisite* whose cleanup fails this way
    ends the chain there, like any other failure of Ratect's own: the tasks
    after it never run, so rule 3 decides the run, and it exits `125`.
@@ -282,6 +288,13 @@ and tests pin the precedence above case by case.
   a leaked container or network is Ratect failing at its own job, and CI
   should see it. Limiting the override to runs that would otherwise exit `0`
   keeps the task's own failure visible.
+- **A container or network already gone counts as a cleanup failure**, as
+  in Batect, whose stop and removal steps fail the task on any error,
+  Docker's `404` included. Rejected: nothing is left behind, so it isn't the
+  leak that "cleanup failure stays a warning" was rejected over. It also can't hold on every
+  path. A graceful stop dropped on the escalation rung can still finish
+  server-side, so forced removal's `404` may be Ratect's own doing, and the
+  daemon's answer doesn't say whose.
 
 A survey of comparable command-running tools (coreutils' wrappers, `docker
 run`, `podman run`, `docker compose`, `kubectl`, `earthly`, `dagger`, `act`,
