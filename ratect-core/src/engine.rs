@@ -4078,7 +4078,13 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                     .docker
                                     .container_output(&container_id)
                                     .await
-                                    .unwrap_or_default();
+                                    .unwrap_or_else(|error| {
+                                        tracing::debug!(
+                                            "Could not read the output of container '{name}', \
+                                             so its diagnosis is lost: {error:#}"
+                                        );
+                                        String::new()
+                                    });
                                 let detail = detail.trim();
                                 return Err(Failed::tag(
                                     anyhow::anyhow!(

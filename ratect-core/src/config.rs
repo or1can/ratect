@@ -7085,6 +7085,12 @@ fn expand_external_health_checks(config: &mut Config) -> Result<()> {
                 dependencies: Some(vec![name.clone()]),
                 run_to_completion: Some(true),
                 reports_readiness_for: Some(name.clone()),
+                // Its failure diagnosis is its own output, read back after
+                // it exits, so it needs a driver Docker can read back —
+                // not the daemon's default, which may be `none`
+                // (ratect#694). Ratect's to choose: nobody configured this
+                // container.
+                log_driver: Some("json-file".to_string()),
                 ..Container::default()
             },
         );

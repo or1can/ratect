@@ -218,6 +218,10 @@ struct FakeContainerRuntime {
     /// What `container_output` returns per container id — an external
     /// health check's companion diagnoses its own failure there.
     container_outputs: Arc<Mutex<HashMap<String, String>>>,
+    /// Container ids whose `container_output` fails, as a `logs` call does
+    /// against a log driver Docker can't read back (see
+    /// `with_unreadable_container_output`).
+    unreadable_container_outputs: Arc<Mutex<HashSet<String>>>,
     /// When set, each removal (`stop_and_remove_container` or
     /// `remove_container_forcibly`, in the order the engine makes them)
     /// records the next queued signal on the tracker *before* doing its own
@@ -313,6 +317,7 @@ impl Default for FakeContainerRuntime {
             gate_observes_exits: Default::default(),
             dependency_exits: Default::default(),
             container_outputs: Default::default(),
+            unreadable_container_outputs: Default::default(),
             signals_on_removal: Default::default(),
             refused_container_removals: Default::default(),
             refuse_network_removal: Default::default(),
@@ -803,6 +808,17 @@ impl FakeContainerRuntime {
         self
     }
 
+    /// Makes that container's `container_output` fail, as Docker's `logs`
+    /// does for a log driver it can't read back — keyed the same way
+    /// `with_dependency_exit` keys its own map.
+    fn with_unreadable_container_output(self, name: &str) -> Self {
+        self.unreadable_container_outputs
+            .lock()
+            .unwrap()
+            .insert(format!("sidecar-id-{name}"));
+        self
+    }
+
     /// The [`crate::container_spec::ContainerSpec`] a prior `run_container`/
     /// `start_background_container` call for `name` was given — the last
     /// one, if called more than once. Every `_for` accessor below projects
@@ -1254,6 +1270,17 @@ impl ContainerRuntime for FakeContainerRuntime {
     }
 
     async fn container_output(&self, container_id: &str) -> Result<String> {
+        if self
+            .unreadable_container_outputs
+            .lock()
+            .unwrap()
+            .contains(container_id)
+        {
+            anyhow::bail!(
+                "Docker responded with status code 501: configured logging driver does not \
+                 support reading"
+            );
+        }
         Ok(self
             .container_outputs
             .lock()
@@ -6057,6 +6084,35 @@ async fn a_failing_external_health_check_fails_in_the_checked_containers_name() 
     assert!(
         error.contains(COMPANION),
         "the companion is named so it can be inspected afterwards: {error}"
+    );
+}
+
+/// A companion whose output can't be read back still fails in the checked
+/// container's name, with the generic reason in place of the diagnosis it
+/// couldn't get — the read failing is not a second, different failure.
+#[tokio::test]
+async fn a_failing_external_health_check_with_unreadable_output_reports_the_generic_reason() {
+    let docker = FakeContainerRuntime::default()
+        .with_dependency_exit(COMPANION, std::time::Duration::ZERO, 1)
+        .with_unreadable_container_output(COMPANION);
+    let engine = TaskEngine::new(
+        project(config_with_an_external_health_check()),
+        docker,
+        Arc::new(RecordingEventSink::default()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let error = format!("{:#}", engine.run_task("start", &[]).await.unwrap_err());
+
+    assert!(
+        error.contains(
+            "Container 'database' did not become healthy: its external health check failed"
+        ),
+        "an unreadable diagnosis falls back to the generic reason: {error}"
+    );
+    assert!(
+        !error.contains("501"),
+        "the read's own error is a diagnostic, not part of the failure: {error}"
     );
 }
 
