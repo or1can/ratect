@@ -2849,17 +2849,17 @@ pub(crate) enum IncludeEntry {
         /// owner controls.
         ///
         /// `Option` because presence, not value, is what
-        /// [`include_trust::check_dialect`] rejects in a `batect.yml`: writing
-        /// `allow_nested_git_includes: false` there would otherwise look
-        /// accepted while describing the opposite of what that format does.
+        /// [`include_trust::check_dialect`] rejects in a Batect-format file:
+        /// writing `false` there would otherwise look accepted while
+        /// describing a gate that format doesn't have.
         allow_nested_git_includes: Option<bool>,
         /// The Ratect version this entry's author has reviewed the bundle
         /// against — its reviewed-for version, see
         /// [`crate::written_for::check_bundle`] and
         /// [decisions/0020](../../decisions/0020-bundle-records-its-written-for-version.md).
-        /// Not a grant, so it counts in any file declaring the entry. Kept
-        /// as written; the check parses it. Native-only, like
-        /// `allow_nested_git_includes`.
+        /// Not a grant, so it counts in any TOML file declaring the entry.
+        /// Kept as written; the check parses it. Native-only, like
+        /// `allow_nested_git_includes`, so refused in a `.yml`.
         reviewed_ratect_version: Option<String>,
     },
 }
@@ -3367,6 +3367,18 @@ impl ConfigFormat {
         }
     }
 
+    /// Whether this policy reads `path` as a Batect-format (YAML) file —
+    /// the one answer to "which fields may this file set", whatever the
+    /// file declares: a container ([`batect_shaped_containers`](Self::batect_shaped_containers))
+    /// or an include entry ([`include_trust::check_dialect`]).
+    /// `Compat` reads every file as YAML, whatever it is named.
+    fn reads_as_batect(&self, path: &Path) -> bool {
+        match self {
+            ConfigFormat::Compat => true,
+            ConfigFormat::Native => matches!(config_file_format(path), Ok(FileFormat::Yaml)),
+        }
+    }
+
     /// The project dialect this loading policy is.
     fn dialect(&self) -> Dialect {
         match self {
@@ -3421,12 +3433,11 @@ impl ConfigFormat {
             .iter()
             .filter_map(|(name, container)| {
                 let origin = origins.get(name).map(PathBuf::as_path);
-                let batect_shaped = match self {
-                    ConfigFormat::Compat => true,
-                    ConfigFormat::Native => origin.is_some_and(|origin| {
-                        matches!(config_file_format(origin), Ok(FileFormat::Yaml))
-                    }),
-                };
+                // A container with no recorded file is Batect-shaped only
+                // where every file is.
+                let batect_shaped = origin.map_or(matches!(self, ConfigFormat::Compat), |origin| {
+                    self.reads_as_batect(origin)
+                });
                 batect_shaped.then_some(BatectShaped {
                     name: name.as_str(),
                     container,
@@ -3529,6 +3540,7 @@ struct YamlBundleEntry {
     boundary: Boundary,
     entry_file: String,
     declared_in: String,
+    declared_in_batect: Option<include_trust::BatectFile>,
     reviewed: Option<crate::written_for::Version>,
 }
 
@@ -3544,6 +3556,7 @@ impl YamlBundleEntry {
             &crate::written_for::BundleEntry {
                 entry_file: &self.entry_file,
                 declared_in: &self.declared_in,
+                declared_in_batect: self.declared_in_batect,
                 written_for: crate::written_for::WrittenFor::YamlRoot,
                 first_toml: first_toml.as_deref(),
                 reviewed: self.reviewed,
@@ -3558,11 +3571,13 @@ impl YamlBundleEntry {
 /// against `running` ([`crate::written_for::check_bundle`]): a TOML entry
 /// file now, before it is parsed, and a YAML one returned to be judged once
 /// the load knows what it reaches. `declared_in` names the file declaring
-/// the entry; `reviewed` is the entry's `reviewed_ratect_version`.
+/// the entry, and `declared_in_batect` where it sits if it is Batect-format;
+/// `reviewed` is the entry's `reviewed_ratect_version`.
 fn check_bundle_entry(
     resolved: &Path,
     boundary: &Boundary,
     declared_in: String,
+    declared_in_batect: Option<include_trust::BatectFile>,
     reviewed: Option<&str>,
     running: crate::written_for::Version,
 ) -> Result<Option<YamlBundleEntry>> {
@@ -3583,6 +3598,7 @@ fn check_bundle_entry(
             boundary: boundary.clone(),
             entry_file,
             declared_in,
+            declared_in_batect,
             reviewed,
         })),
         Some(written_for) => {
@@ -3590,6 +3606,7 @@ fn check_bundle_entry(
                 &crate::written_for::BundleEntry {
                     entry_file: &entry_file,
                     declared_in: &declared_in,
+                    declared_in_batect,
                     written_for,
                     first_toml: None,
                     reviewed,
@@ -4204,6 +4221,9 @@ impl Config {
         running: Option<crate::written_for::Version>,
     ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
+        // Kept to tell a `.yml` root's include entries from an included
+        // file's ([`include_trust::BatectFile`]).
+        let root = root_path.clone();
         let root_file = format.parse(path, None)?;
         reject_misplaced_ratect_version(path, None, &root_file, format, true)?;
 
@@ -4241,6 +4261,15 @@ impl Config {
             let containing_dir = declaring_file.parent().unwrap_or(Path::new(""));
             // Before `boundary` becomes a Git include's own, below.
             let declared_in = describe_origin(&declaring_file, boundary.as_ref());
+            let declared_in_batect = format.reads_as_batect(&declaring_file).then(|| {
+                if boundary.is_some() {
+                    include_trust::BatectFile::Bundle
+                } else if declaring_file == root {
+                    include_trust::BatectFile::Root
+                } else {
+                    include_trust::BatectFile::Owned
+                }
+            });
             let (resolved, boundary) = match &include {
                 IncludeEntry::File { path } => {
                     let resolved = resolve_file_include(containing_dir, path, boundary.as_ref())?;
@@ -4269,6 +4298,8 @@ impl Config {
                         asked,
                         reviewed_ratect_version.is_some(),
                         declaring,
+                        &declared_in,
+                        declared_in_batect,
                         repo,
                         format,
                     )?;
@@ -4350,6 +4381,7 @@ impl Config {
                     &resolved,
                     entry_boundary,
                     declared_in,
+                    declared_in_batect,
                     reviewed_ratect_version.as_deref(),
                     running,
                 )?);
@@ -5607,13 +5639,33 @@ fn collect_completion_task_names(
                 // stays one rule.
                 allow_host_paths,
                 allow_nested_git_includes,
-                // Like the root's own `ratect_version`, not judged here:
-                // completion has no binary version to judge it against.
-                reviewed_ratect_version: _,
+                // Like the root's own `ratect_version`, its value is not
+                // judged here: completion has no binary version to judge it
+                // against. Only whether a `.yml` wrote it at all.
+                reviewed_ratect_version,
             } => {
                 // The loader refuses this include, so offering its tasks would
                 // complete a `ratect run` that then fails. Completion is
                 // native-only, which is the format that has the gate at all.
+                let asked = Grants {
+                    host_paths: allow_host_paths,
+                    nested_git: allow_nested_git_includes,
+                };
+                // Only whether it refuses counts here, so the file's name and
+                // place in the error are never read.
+                if include_trust::refuse_read(include_trust::check_dialect(
+                    asked,
+                    reviewed_ratect_version.is_some(),
+                    bundle,
+                    "",
+                    ConfigFormat::Native
+                        .reads_as_batect(&absolute)
+                        .then_some(include_trust::BatectFile::Owned),
+                    &repo,
+                    ConfigFormat::Native,
+                )) {
+                    continue;
+                }
                 let restricted = include_trust::restricting(bundle, ConfigFormat::Native);
                 if include_trust::refuse_read(include_trust::check_may_declare_git(
                     restricted, &repo,
@@ -5642,10 +5694,7 @@ fn collect_completion_task_names(
                             remote: repo,
                             git_ref,
                         },
-                        Grants {
-                            host_paths: allow_host_paths,
-                            nested_git: allow_nested_git_includes,
-                        },
+                        asked,
                     ),
                 };
                 // Containment before `is_file`, as in the loader, so a `path`

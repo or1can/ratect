@@ -103,6 +103,11 @@ fn a_restricted_bundle_may_declare_a_git_include_only_when_granted() {
         message.contains("Set 'allow_nested_git_includes' to true"),
         "gives the remedy: {message}"
     );
+    // A `.yml` holding that entry can't take the remedy (decisions/0021).
+    assert!(
+        message.contains("only a TOML file can set it"),
+        "says where the remedy can go: {message}"
+    );
     assert!(
         !message.contains(": true") && !message.contains("= true"),
         "names the field without spelling either syntax, since a native \
@@ -133,6 +138,8 @@ fn the_native_only_field_is_refused_in_a_compat_project() {
         asks(false, Some(true)),
         false,
         None,
+        YAML_ROOT,
+        Some(BatectFile::Root),
         "inner",
         ConfigFormat::Compat,
     )
@@ -152,6 +159,8 @@ fn the_compat_refusal_names_the_bundle_that_wrote_the_field() {
         asks(false, Some(true)),
         false,
         Some(&declaring),
+        YAML_ROOT,
+        Some(BatectFile::Root),
         "inner",
         ConfigFormat::Compat,
     )
@@ -170,6 +179,8 @@ fn a_compat_project_refuses_the_field_set_to_false_too() {
         asks(false, Some(false)),
         false,
         None,
+        YAML_ROOT,
+        Some(BatectFile::Root),
         "inner",
         ConfigFormat::Compat
     )
@@ -178,14 +189,88 @@ fn a_compat_project_refuses_the_field_set_to_false_too() {
         asks(false, None),
         false,
         None,
+        YAML_ROOT,
+        Some(BatectFile::Root),
         "inner",
         ConfigFormat::Compat
     )
     .is_ok());
+}
+
+/// How the loader names a local `.yml` declaring an include.
+const YAML_ROOT: &str = "\"batect.yml\"";
+
+/// Under `ratect` the declaring file's format decides, not the project's
+/// (decisions/0021): a `.yml` may set neither native-only field — `false`
+/// included — while a TOML file may set both. The way out depends on where
+/// the `.yml` sits: a root's entries can only reach TOML by converting the
+/// project, an included file's by moving the entry, and a bundle file's only
+/// by its author.
+#[test]
+fn a_native_project_refuses_the_native_only_fields_in_a_yaml_file_only() {
+    for (asked, reviews, field) in [
+        (asks(false, Some(true)), false, "allow_nested_git_includes"),
+        (asks(false, Some(false)), false, "allow_nested_git_includes"),
+        (asks(false, None), true, "reviewed_ratect_version"),
+    ] {
+        for (place, remedy) in [
+            (
+                BatectFile::Root,
+                "To set it, convert the project to TOML (ratect config convert).",
+            ),
+            (
+                BatectFile::Owned,
+                "To set it, move that Git include into a TOML file.",
+            ),
+            (
+                BatectFile::Bundle,
+                "To set it, the bundle's author has to move that Git include into a TOML file.",
+            ),
+        ] {
+            let message = format!(
+                "{:#}",
+                check_dialect(
+                    asked,
+                    reviews,
+                    None,
+                    YAML_ROOT,
+                    Some(place),
+                    "inner",
+                    ConfigFormat::Native
+                )
+                .unwrap_err()
+            );
+            for expected in [
+                &format!("\"batect.yml\" sets '{field}' on its Git include of 'inner'"),
+                "a Batect-format (YAML) file can't set",
+                remedy,
+            ] {
+                assert!(
+                    message.contains(expected),
+                    "missing {expected:?} in: {message}"
+                );
+            }
+        }
+        assert!(
+            check_dialect(
+                asked,
+                reviews,
+                None,
+                YAML_ROOT,
+                None,
+                "inner",
+                ConfigFormat::Native
+            )
+            .is_ok(),
+            "a TOML file may set '{field}'"
+        );
+    }
     assert!(check_dialect(
-        asks(false, Some(true)),
+        asks(true, None),
         false,
         None,
+        YAML_ROOT,
+        Some(BatectFile::Owned),
         "inner",
         ConfigFormat::Native
     )

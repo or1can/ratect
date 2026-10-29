@@ -6553,6 +6553,50 @@ fn completion_excludes_a_nested_git_include_the_bundle_was_not_granted() {
     std::fs::remove_dir_all(&project).ok();
 }
 
+/// Completion declines a Git include whose entry the loader refuses for a
+/// native-only field written in a `.yml` (decisions/0021), as it declines one
+/// refused for nesting: that include's tasks are not offered. Like that
+/// refusal, it fails the whole load, but completion still offers the rest.
+#[test]
+fn completion_excludes_a_git_include_whose_yaml_entry_sets_a_native_only_field() {
+    let scratch = unique_temp_dir();
+    let cache_root = scratch.join("incl");
+    let remote = "https://example.com/bundle.git";
+    let clone = cache_root.join(crate::git_include::cache_key(remote, "v1"));
+    std::fs::create_dir_all(&clone).unwrap();
+    std::fs::write(
+        clone.join("ratect-bundle.toml"),
+        "[tasks.bundle-task]\nrun = { container = \"a\" }\n",
+    )
+    .unwrap();
+
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"shared.yml\" }]\n\
+         [tasks.root-task]\nrun = { container = \"a\" }\n",
+    )
+    .unwrap();
+    for (entry, offered) in [
+        ("", vec!["bundle-task", "root-task"]),
+        ("    allow_nested_git_includes: false\n", vec!["root-task"]),
+    ] {
+        std::fs::write(
+            project.join("shared.yml"),
+            format!("include:\n  - type: git\n    repo: {remote}\n    ref: v1\n{entry}"),
+        )
+        .unwrap();
+        assert_eq!(
+            task_names_for_completion_in(&project.join("ratect.toml"), Some(&cache_root)),
+            offered,
+            "entry: {entry:?}"
+        );
+    }
+
+    std::fs::remove_dir_all(&scratch).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
 /// A helper: run the native load-and-resolve path on a single TOML string
 /// written to a temp `ratect.toml`, returning the resolved project.
 async fn load_native_toml(body: &str) -> Result<LoadedProject> {
@@ -11379,13 +11423,13 @@ async fn the_nested_include_flag_is_rejected_in_a_batect_yml() {
     }
 }
 
-/// A native project can include a local `.yml`, and that file can be where
-/// the Git include is declared — so "native" does not mean "TOML". The grant
-/// has to be honoured there, since it is still the owner's own configuration:
-/// what makes a file owner-controlled is having no Git boundary, not its
-/// extension.
+/// A local include is still the owner's own configuration — what makes a
+/// file owner-controlled is having no Git boundary, not its extension — so a
+/// grant in a locally included TOML file is honoured. The same entry in a
+/// `.yml` is refused: a native-only field follows its file (decisions/0021),
+/// and the file is Batect's format.
 #[tokio::test]
-async fn the_grant_is_honoured_in_a_locally_included_yaml_file() {
+async fn the_grant_is_honoured_in_a_locally_included_toml_file_but_not_a_yaml_one() {
     let inner = git_bundle_repo(&[(
         "ratect-bundle.toml",
         "[tasks.inner-task.run]\ncontainer = \"build-env\"\n",
@@ -11397,34 +11441,163 @@ async fn the_grant_is_honoured_in_a_locally_included_yaml_file() {
             inner.display()
         ),
     )]);
-    let project = unique_temp_dir();
-    std::fs::write(
-        project.join("ratect.toml"),
-        "project_name = \"demo\"\ninclude = [{ path = \"bundles.yml\" }]\n",
-    )
-    .unwrap();
-    std::fs::write(
-        project.join("bundles.yml"),
-        format!(
-            "include:\n  - type: git\n    repo: {}\n    ref: v1\n    \
-             allow_nested_git_includes: true\n",
-            outer.display()
+    for (name, body) in [
+        (
+            "bundles.toml",
+            format!(
+                "[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n\
+                 allow_nested_git_includes = true\n",
+                outer.display()
+            ),
         ),
-    )
-    .unwrap();
-    let cache_root = unique_temp_dir();
-    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+        (
+            "bundles.yml",
+            format!(
+                "include:\n  - type: git\n    repo: {}\n    ref: v1\n    \
+                 allow_nested_git_includes: true\n",
+                outer.display()
+            ),
+        ),
+    ] {
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("ratect.toml"),
+            format!("project_name = \"demo\"\ninclude = [{{ path = \"{name}\" }}]\n"),
+        )
+        .unwrap();
+        std::fs::write(project.join(name), body).unwrap();
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
 
-    let loaded =
-        Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
-            .await
-            .expect("a local YAML include is still the owner's own configuration");
-    assert!(loaded.config.tasks.contains_key("inner-task"));
+        let result =
+            Config::load_from_file_native_with_git_cache(&project.join("ratect.toml"), &git_cache)
+                .await;
+        if name.ends_with(".toml") {
+            assert!(result
+                .expect("a local TOML include is the owner's own configuration")
+                .config
+                .tasks
+                .contains_key("inner-task"));
+        } else {
+            let error = format!("{:#}", result.expect_err("a .yml can't set the field"));
+            assert!(
+                error.contains(&format!(
+                    "{:?} sets 'allow_nested_git_includes' on its Git include of '{}'",
+                    project.join(name),
+                    outer.display()
+                )),
+                "got: {error}"
+            );
+        }
 
+        std::fs::remove_dir_all(&project).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
+    }
     std::fs::remove_dir_all(&inner).ok();
     std::fs::remove_dir_all(&outer).ok();
-    std::fs::remove_dir_all(&project).ok();
-    std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// Under `ratect`, each native-only include-entry field is refused in every
+/// kind of `.yml` — the root, a local include of a `ratect.toml` root, and a
+/// bundle file — `false` as well as `true` (decisions/0021). Refused before
+/// any clone, so the remote it names is never reached; a bundle file is named
+/// by its bundle, never by the clone cache's path. Each gets the way out its
+/// place allows.
+#[tokio::test]
+async fn a_native_only_include_field_is_refused_in_every_kind_of_yaml_file() {
+    const NEVER_CLONED: &str = "https://example.invalid/inner.git";
+    let yaml_entry = |field: &str| {
+        format!("include:\n  - type: git\n    repo: {NEVER_CLONED}\n    ref: v1\n    {field}\n")
+    };
+    for (field, written) in [
+        (
+            "allow_nested_git_includes",
+            "allow_nested_git_includes: true",
+        ),
+        (
+            "allow_nested_git_includes",
+            "allow_nested_git_includes: false",
+        ),
+        ("reviewed_ratect_version", "reviewed_ratect_version: 0.12.0"),
+    ] {
+        // A `.yml` root, as `ratect -f batect.yml` loads it.
+        let project = unique_temp_dir();
+        std::fs::write(
+            project.join("batect.yml"),
+            format!("project_name: demo\n{}", yaml_entry(written)),
+        )
+        .unwrap();
+        let root = project.join("batect.yml");
+        let local_root = format!("{root:?}");
+
+        // A local `.yml` included from a `ratect.toml` root.
+        std::fs::write(
+            project.join("ratect.toml"),
+            "project_name = \"demo\"\ninclude = [{ path = \"shared.yml\" }]\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("shared.yml"), yaml_entry(written)).unwrap();
+        let local_include = format!("{:?}", project.join("shared.yml"));
+
+        // A YAML bundle file, its include granted nesting so the field is
+        // the only thing refused.
+        let bundle = git_bundle_repo(&[("batect-bundle.yml", &yaml_entry(written))]);
+        let bundled = unique_temp_dir();
+        std::fs::write(
+            bundled.join("ratect.toml"),
+            format!(
+                "project_name = \"demo\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\n\
+                 ref = \"v1\"\nallow_nested_git_includes = true\n",
+                bundle.display()
+            ),
+        )
+        .unwrap();
+        let bundle_file = format!(
+            "'batect-bundle.yml' from the bundle '{}' at 'v1'",
+            bundle.display()
+        );
+
+        for (path, declared_in, remedy) in [
+            (root.clone(), local_root, "convert the project to TOML"),
+            (
+                project.join("ratect.toml"),
+                local_include,
+                "move that Git include into a TOML file",
+            ),
+            (
+                bundled.join("ratect.toml"),
+                bundle_file,
+                "the bundle's author has to move that Git include",
+            ),
+        ] {
+            let cache_root = unique_temp_dir();
+            let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+            let error = format!(
+                "{:#}",
+                Config::load_from_file_native_with_git_cache(&path, &git_cache)
+                    .await
+                    .expect_err("a .yml can't set a native-only field")
+            );
+            for expected in [
+                &format!("{declared_in} sets '{field}' on its Git include of '{NEVER_CLONED}'"),
+                remedy,
+            ] {
+                assert!(
+                    error.contains(expected),
+                    "{written} via {path:?}: missing {expected:?} in: {error}"
+                );
+            }
+            assert!(
+                !error.contains(&cache_root.display().to_string()),
+                "the clone cache's path leaked: {error}"
+            );
+            std::fs::remove_dir_all(&cache_root).ok();
+        }
+
+        std::fs::remove_dir_all(&bundle).ok();
+        std::fs::remove_dir_all(&bundled).ok();
+        std::fs::remove_dir_all(&project).ok();
+    }
 }
 
 /// The suppression is native-only, like the gate. `ratect-compat` is a
@@ -16915,6 +17088,73 @@ async fn a_nested_bundle_is_covered_by_its_parents_entry_for_it() {
         std::fs::remove_dir_all(&outer).ok();
         std::fs::remove_dir_all(&project).ok();
     }
+}
+
+/// A `.yml` can't set the acknowledgement (decisions/0021), so a refusal of
+/// a bundle its include reaches says how to get that include into TOML first
+/// rather than pointing at an edit the next load would refuse. For a `.yml`
+/// root that is converting the project: a YAML root reaching any TOML file is
+/// refused, so moving the include alone would be refused next.
+#[tokio::test]
+async fn a_refusal_for_an_include_in_a_yaml_file_says_how_to_reach_toml_first() {
+    let bundle = git_bundle_repo(&[("ratect-bundle.toml", BUNDLE_TASK)]);
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        "project_name = \"demo\"\nratect_version = \"0.12.0\"\n\
+         include = [{ path = \"shared.yml\" }]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("shared.yml"),
+        format!(
+            "include:\n  - type: git\n    repo: {}\n    ref: v1\n",
+            bundle.display()
+        ),
+    )
+    .unwrap();
+
+    let error = bundled_refusal(&project).await;
+    assert!(
+        error.contains(&format!(
+            "set 'reviewed_ratect_version' to 0.12.0 on its include in {:?}, which a \
+             Batect-format (YAML) file can't set: first, move that Git include into a TOML file.",
+            project.join("shared.yml")
+        )),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&project).ok();
+
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("batect.yml"),
+        format!(
+            "project_name: demo\ninclude:\n  - type: git\n    repo: {}\n    ref: v1\n",
+            bundle.display()
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
+    let error = format!(
+        "{:#}",
+        Config::load_from_file_native_written_for(
+            &project.join("batect.yml"),
+            &git_cache,
+            running_0_12()
+        )
+        .await
+        .expect_err("the bundle should be refused")
+    );
+    assert!(
+        error.contains("first, convert the project to TOML (ratect config convert)."),
+        "got: {error}"
+    );
+
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&bundle).ok();
+    std::fs::remove_dir_all(&project).ok();
 }
 
 /// Every entry reaching a bundle is judged on its own, so an acknowledgement
