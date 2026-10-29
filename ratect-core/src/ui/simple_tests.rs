@@ -379,3 +379,82 @@ fn a_prerequisites_only_task_says_there_is_nothing_more_to_do() {
         "The task \x1b[1mall\x1b[0m only defines prerequisite tasks, nothing more to do.\n"
     );
 }
+
+/// Batect's simple logger prints nothing for an event or step it doesn't
+/// list (SimpleEventLogger.kt's `else -> {}`), and neither does this one —
+/// not even an escape code on a colour console. Checked after each post, so
+/// a failure names the event that printed.
+#[test]
+fn events_with_no_simple_line_print_nothing() {
+    let events = [
+        TaskEvent::ImageResolved {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerCreating {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerCreated {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerStopped {
+            container: "app".into(),
+        },
+        TaskEvent::ContainerRemoved {
+            container: "app".into(),
+        },
+        TaskEvent::RemovingNetwork,
+        TaskEvent::NetworkRemoved,
+        TaskEvent::RunEnded {
+            task: "build".into(),
+        },
+        TaskEvent::CleanupFinished,
+        TaskEvent::ContainerOutput {
+            container: "app".into(),
+            line: "hello".into(),
+        },
+        TaskEvent::SetupCommandOutput {
+            container: "db".into(),
+            index: 1,
+            line: "seeded".into(),
+        },
+    ];
+    for color in [false, true] {
+        for event in events.clone() {
+            let buffer = SharedBuffer::default();
+            let stderr = SharedBuffer::default();
+            let logger = SimpleEventLogger::new(
+                Console::new(Box::new(buffer.clone()), color),
+                Console::new(Box::new(stderr.clone()), color),
+            );
+            let name = format!("{event:?} (colour {color})");
+            logger.post(event);
+            assert_eq!(
+                buffer.contents(),
+                "",
+                "{name} printed on the progress console"
+            );
+            assert_eq!(stderr.contents(), "", "{name} printed on stderr");
+        }
+    }
+}
+
+/// Cleanup is one line, however many steps follow it: simple has no
+/// countdown — only fancy does, as only Batect's fancy logger is given a
+/// cleanup progress display.
+#[test]
+fn cleanup_steps_add_nothing_after_the_cleanup_line() {
+    let (logger, buffer) = logger();
+    logger.post(TaskEvent::CleanupStarting { cause: None });
+    for container in ["app", "db"] {
+        logger.post(TaskEvent::ContainerStopped {
+            container: container.into(),
+        });
+        logger.post(TaskEvent::ContainerRemoved {
+            container: container.into(),
+        });
+    }
+    logger.post(TaskEvent::RemovingNetwork);
+    logger.post(TaskEvent::NetworkRemoved);
+    logger.post(TaskEvent::CleanupFinished);
+    assert_eq!(buffer.contents(), "\nCleaning up...\n");
+}
