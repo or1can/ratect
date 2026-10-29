@@ -218,7 +218,17 @@ has `async-trait` as a dev-dependency (see its own `Cargo.toml`).
       "cargo run -q -p ratect -- tasks list -f examples/rust/ratect.toml",
       "cargo run -q -p ratect -- tasks list -f examples/getting-started/ratect.toml",
   ]
+
+  [check-cli-flags]
+  denied = ["tools/changelog-section.py --help"]
   ```
+
+  `check-cli-flags` asks for the same kind of grant before running a
+  script it finds named next to a flag. Its one candidate here is denied:
+  guideline 8 names `tools/changelog-section.py` on the same line as the
+  `gh` flags of the release recovery steps, so its `--help` could only
+  report that the script lacks flags nobody claims it has. A denied
+  command is still listed, as skipped, rather than asked about.
 
   This closes the automatic-execution risk `decisions/0009` originally
   documented as an accepted, unresolved gap — filed upstream as
