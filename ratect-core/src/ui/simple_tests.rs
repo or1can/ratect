@@ -464,7 +464,7 @@ fn milestones_bold_the_names_they_carry_on_a_colour_console() {
          Running setup command \x1b[1m./seed.sh\x1b[0m (2 of 2) in \x1b[1mseeder\x1b[0m, for \x1b[1mdb\x1b[0m...\n\
          \x1b[1mdb\x1b[0m has completed all setup commands.\n\
          \x1b[1mmigrate\x1b[0m ran to completion.\n\
-         \x1b[1mcache\x1b[0m exited unexpectedly with exit code 137.\n\
+         \x1b[1mcache\x1b[0m exited unexpectedly with exit code \x1b[1m137\x1b[0m.\n\
          Running \x1b[1mcargo test\x1b[0m in \x1b[1mapp\x1b[0m...\n\
          Running \x1b[1mapp\x1b[0m...\n\
          \n\

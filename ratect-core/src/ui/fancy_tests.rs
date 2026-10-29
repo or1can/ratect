@@ -472,6 +472,71 @@ fn dependency_exiting_after_the_block_has_frozen_prints_a_plain_milestone() {
     );
 }
 
+/// The exit code is the user's own value, so it is bold (decisions/0017) —
+/// on the live block's line and on the plain line printed once it froze.
+#[test]
+fn a_dependency_exit_code_is_bold_in_the_block_and_after_it_froze() {
+    let (logger, buffer) = colored_logger(120);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 137,
+    });
+    assert!(
+        buffer.contents().contains(&format!(
+            "{}: exited unexpectedly with exit code {}\n",
+            bold("db"),
+            bold("137")
+        )),
+        "{}",
+        buffer.contents()
+    );
+
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: None,
+    });
+    let after_freeze = buffer.contents();
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 1,
+    });
+    assert_eq!(
+        &buffer.contents()[after_freeze.len()..],
+        format!("db exited unexpectedly with exit code {}.\n", bold("1"))
+    );
+}
+
+/// Clipping counts only visible characters, so a line cut inside the bold
+/// exit code keeps what fits, and closes the bold after the ellipsis.
+#[test]
+fn a_dependency_line_clipped_inside_its_bold_exit_code_closes_the_bold() {
+    let (logger, buffer) = colored_logger(43);
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            info("app", Some("app:1"), &["db"], true),
+            info("db", Some("postgres:15"), &[], false),
+        ],
+    });
+    logger.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 12345,
+    });
+    assert!(
+        buffer.contents().contains(&format!(
+            "{}: exited unexpectedly with exit code \x1b[1m1...\x1b[0m\n",
+            bold("db")
+        )),
+        "{:?}",
+        buffer.contents()
+    );
+}
+
 /// A stderr-class line lands below the live block, so nothing may move the
 /// cursor up over it: the block is painted afresh below the line on its
 /// next update — not at once — and is live from there.

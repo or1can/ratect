@@ -193,7 +193,7 @@ impl EventSink for SimpleEventLogger {
                 self.console.println(&format!(
                     "{} {}.",
                     self.console.bold(&container),
-                    super::exited_unexpectedly(exit_code)
+                    super::exited_unexpectedly(&self.console, exit_code)
                 ));
             }
             TaskEvent::RunningTaskContainer { container, command } => {

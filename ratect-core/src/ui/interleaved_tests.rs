@@ -489,6 +489,25 @@ fn dependency_exiting_unexpectedly_is_a_milestone_with_its_own_prefix() {
     );
 }
 
+/// With colour on, the exit code is bold, the user's own value
+/// (decisions/0017).
+#[test]
+fn a_dependency_exit_code_is_bold() {
+    let (colored, buffer, _, _) = logger_with_streams(true);
+    start_task(&colored, vec![info("db", Some("postgres:15"), None)]);
+    let before = buffer.contents().len();
+    colored.post(TaskEvent::DependencyExitedUnexpectedly {
+        container: "db".into(),
+        exit_code: 137,
+    });
+    assert!(
+        buffer.contents()[before..]
+            .ends_with("| exited unexpectedly with exit code \x1b[1m137\x1b[0m.\n"),
+        "{}",
+        buffer.contents()
+    );
+}
+
 /// The three stderr classes are unprefixed (ratect#367) and go to stderr,
 /// whatever the progress console is.
 #[test]

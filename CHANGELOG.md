@@ -202,6 +202,7 @@ history, from when it was the only binary.
 - `image_pull_policy: Always` is honoured even when another container already used the same image under `IfNotPresent`, including through `--override-image`.
 - A Ctrl+C, `SIGTERM` or `SIGHUP` while a run is still connecting to Docker ends it promptly with the signal's exit code, instead of waiting for the connection to finish or fail.
 - An explicit `-o fancy` on a terminal with `TERM` unset is honoured, as in Batect, instead of refused. `TERM=dumb` is still refused, and the refusal now names the one reason that applies.
+- On a colour terminal, the exit code in `<container> exited unexpectedly with exit code <n>` is bold in every output style.
 
 ### Security
 

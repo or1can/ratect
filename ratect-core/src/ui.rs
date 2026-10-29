@@ -1275,9 +1275,13 @@ pub(crate) fn format_task_summary(
 /// wears no `Warning:` and goes to the progress console like any other.
 /// One phrase, here, so a test pins the wording once; the same shape every
 /// other event the two styles share will take as ratect#505/#507 move them
-/// in.
-pub(crate) fn exited_unexpectedly(exit_code: i64) -> String {
-    format!("exited unexpectedly with exit code {exit_code}")
+/// in. The exit code is bold, the user's own value (decisions/0017), and
+/// uncoloured: a palette colour on an exit code is the summary line's.
+pub(crate) fn exited_unexpectedly(console: &Console, exit_code: i64) -> String {
+    format!(
+        "exited unexpectedly with exit code {}",
+        console.bold(&exit_code.to_string())
+    )
 }
 
 /// `duration` as a short human-readable string for the task summary line —
