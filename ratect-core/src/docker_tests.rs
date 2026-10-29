@@ -1818,8 +1818,12 @@ impl RecordedRequest {
 struct StubDaemon {
     version_body: serde_json::Value,
     builder_version: Option<&'static str>,
-    /// How many connections it accepts before it stops listening, so the
-    /// next one is refused.
+    /// How many connections it accepts, at least one, before it stops
+    /// listening, so the next one is refused. It stops before answering the
+    /// last, and holds
+    /// the port lock for writing from then until the test's runtime ends, so
+    /// nothing else can be listening there when the next one is made
+    /// (ratect#728, see `test_support::stop_listening`).
     connections: usize,
 }
 
@@ -1845,7 +1849,8 @@ type RequestLog = std::sync::Arc<std::sync::Mutex<Vec<RecordedRequest>>>;
 
 impl StubDaemon {
     /// Starts listening, answering with `route`, until the test's runtime
-    /// ends; returns the options connecting to it and its request log.
+    /// ends or it has taken its `connections`; returns the options
+    /// connecting to it and its request log.
     async fn serve(
         self,
         route: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
@@ -1856,11 +1861,16 @@ impl StubDaemon {
         let recorded = log.clone();
         let daemon = std::sync::Arc::new(self);
         tokio::spawn(async move {
-            for _ in 0..daemon.connections {
+            for _ in 1..daemon.connections {
                 let (stream, _) = listener.accept().await.unwrap();
                 let (daemon, route, recorded) = (daemon.clone(), route.clone(), recorded.clone());
                 tokio::spawn(async move { daemon.answer(stream, &*route, &recorded).await });
             }
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ports = super::test_support::stop_listening(listener).await;
+            daemon.answer(stream, &*route, &recorded).await;
+            // Keeps `_ports` held until the runtime drops this task.
+            std::future::pending::<()>().await;
         });
         (
             DockerConnectionOptions {

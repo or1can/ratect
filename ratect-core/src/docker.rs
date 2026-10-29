@@ -3830,9 +3830,13 @@ pub(crate) mod test_support {
     /// So every bind holds this for reading, for the bind alone
     /// ([`bind_ephemeral_port`]): a listener that stays open can't be handed
     /// out again, so only a fresh bind can take a freed port. A test freeing
-    /// a port holds it for writing from its own bind until it has connected
-    /// ([`refused_port`]). No read guard outlives its bind, so a test binding
-    /// several listeners can't deadlock behind a queued writer.
+    /// a port holds it for writing from closing the listener until it no
+    /// longer needs the port refused ([`stop_listening`], or
+    /// [`refused_port`] for a port it never listens on). No read guard
+    /// outlives its bind, so a test binding several listeners can't deadlock
+    /// behind a queued writer. The lock isn't reentrant, though: a test
+    /// holding the write guard that binds or frees another port deadlocks on
+    /// itself.
     ///
     /// A new bind of `127.0.0.1:0` in this binary's tests goes through
     /// [`bind_ephemeral_port`]; one that doesn't can be handed the freed port.
@@ -3853,8 +3857,17 @@ pub(crate) mod test_support {
     /// guard is held (see [`EPHEMERAL_PORTS`]): connecting to it has already
     /// been refused once before this returns.
     pub(crate) async fn refused_port() -> (u16, RwLockWriteGuard<'static, ()>) {
+        let (listener, port) = bind_ephemeral_port().await;
+        (port, stop_listening(listener).await)
+    }
+
+    /// Closes `listener`, returning once connecting to its port is refused;
+    /// nothing listens there for as long as the returned guard is held (see
+    /// [`EPHEMERAL_PORTS`]).
+    pub(crate) async fn stop_listening(
+        listener: tokio::net::TcpListener,
+    ) -> RwLockWriteGuard<'static, ()> {
         let guard = EPHEMERAL_PORTS.write().await;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
         // Not noise: dropping the listener doesn't close it while a child
@@ -3865,7 +3878,7 @@ pub(crate) mod test_support {
         for _ in 0..100 {
             match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
                 Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-                    return (port, guard);
+                    return guard;
                 }
                 _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
             }
