@@ -29,9 +29,9 @@
 //!   (`build | Batect | Running build...`); Ratect drops that inner prefix —
 //!   the outer one already says whose line it is, and Ratect's milestone
 //!   wording is unambiguous about being Ratect's own.
-//! - A container's output is split into lines on a lone `\r` as well as on
-//!   `\n`, so a progress redraw prints rather than piling up — see
-//!   [`LineBuffer`].
+//! - A container's output, and a setup command's, is split into lines on a
+//!   lone `\r` as well as on `\n`, so a progress redraw prints rather than
+//!   piling up — see [`LineBuffer`].
 //! - A container's last line is printed even without a trailing newline;
 //!   Batect loses it.
 //! - A failure is an unprefixed `Error: …` line on stderr, as in every
@@ -478,37 +478,48 @@ impl EventSink for InterleavedEventLogger {
     }
 }
 
-/// Turns a container's raw output chunks into whole lines: buffers until a
-/// `\n` *or* a lone `\r` (one not immediately followed by `\n` — a CRLF pair
-/// still folds to one line break, not two), and hands each complete line to
-/// `emit`. A `\r` at the very start of a line (the stream's first byte, or
-/// the one right after a `\n`) is no boundary: it's skipped, as Batect's
-/// sink strips its buffer's leading `\r`, rather than flushing the empty line
-/// before it — only that one `\r`, since Batect strips only its first byte.
-/// [`LineBuffer::flush`] emits any unterminated tail when the stream
-/// ends. Deliberately **not** a port of Batect's own
+/// Turns a container's raw output chunks into whole lines, handing each to
+/// `emit` — `-o all`'s framing of a container's streamed output and a setup
+/// command's collected output alike. The rule
+/// (ratect#716, under [decisions/0013]):
+///
+/// - Lines end at `\n`, at a CRLF, or at a lone `\r` (one not immediately
+///   followed by `\n`).
+/// - A line ending at a lone `\r` is emitted only if it has content, so a
+///   `\r` with nothing buffered — a line's first byte, or a run of them —
+///   ends no line at all.
+/// - An empty line ending at `\n` or CRLF is emitted unless a lone `\r` has
+///   ended a line since the previous `\n`/CRLF, so a `\r` that already
+///   ended a line is never followed by a blank one.
+/// - [`LineBuffer::flush`] emits an unterminated tail with content when the
+///   stream ends.
+///
+/// Splitting on a lone `\r` is a deliberate divergence from Batect's
 /// `InterleavedContainerOutputSink`, which splits on `\n` alone: a
 /// carriage-return progress redraw (pip/curl/apt-style) would otherwise
 /// produce no output until the next `\n`, then dump one giant concatenated
-/// line. Nor does Batect's sink emit an unterminated tail: only its `close`
-/// does, and nothing in production closes it, so that last line is lost —
-/// see `docs/differences-from-batect.md`'s own entries for both. `docker.rs`
-/// drives one of these per streamed container.
+/// line. The empty-line rule keeps the count of empty lines Batect's — which
+/// strips its buffer's one leading `\r` and a CRLF's `\r` — so the split
+/// adds none. Nor does Batect's sink emit an
+/// unterminated tail: only its `close` does, and nothing in production
+/// closes it, so that last line is lost. `docs/differences-from-batect.md`
+/// records both divergences.
+///
+/// [decisions/0013]: https://github.com/or1can/ratect/blob/main/decisions/0013-when-ratect-compat-copies-batect.md
 pub struct LineBuffer {
     pending: Vec<u8>,
     /// Set on seeing a `\r` whose successor isn't known yet — resolved by
     /// the very next byte, whichever call it arrives on: `\n` folds into
     /// one line break (CRLF), anything else means the `\r` was a lone
-    /// flush boundary of its own and that next byte starts fresh content.
+    /// boundary of its own and that next byte starts fresh content.
     /// A field rather than a `push`-local, since the two bytes of a CRLF
     /// pair can land in different chunks (and therefore different `push`
     /// calls) when Docker's stream happens to split there.
     pending_cr: bool,
-    /// Set while the next byte would start a line, so a `\r` there is
-    /// skipped; a field for the same reason as `pending_cr` — the `\n`
-    /// ending one line and the `\r` starting the next can arrive in
-    /// different `push` calls.
-    at_line_start: bool,
+    /// Set while the last line emitted ended at a lone `\r`, so an empty
+    /// line ending at the next `\n`/CRLF is not emitted; a field for the
+    /// same reason as `pending_cr`.
+    after_lone_cr: bool,
 }
 
 impl LineBuffer {
@@ -517,34 +528,25 @@ impl LineBuffer {
         Self {
             pending: Vec::new(),
             pending_cr: false,
-            at_line_start: true,
+            after_lone_cr: false,
         }
     }
 
     pub fn push(&mut self, chunk: &[u8], mut emit: impl FnMut(&str)) {
         for &byte in chunk {
-            if self.pending_cr {
-                self.pending_cr = false;
+            if std::mem::take(&mut self.pending_cr) {
                 if byte == b'\n' {
                     // CRLF: one line break, not two.
-                    self.flush_line(&mut emit);
-                    self.at_line_start = true;
+                    self.end_at_newline(&mut emit);
                     continue;
                 }
-                // A lone `\r` — its own flush boundary. `byte` wasn't part
-                // of it, so it still falls through to the match below.
-                self.flush_line(&mut emit);
-            }
-            let at_line_start = std::mem::take(&mut self.at_line_start);
-            if at_line_start && byte == b'\r' {
-                continue;
+                // A lone `\r`. `byte` wasn't part of it, so it still falls
+                // through to the match below.
+                self.end_at_lone_cr(&mut emit);
             }
             match byte {
                 b'\r' => self.pending_cr = true,
-                b'\n' => {
-                    self.flush_line(&mut emit);
-                    self.at_line_start = true;
-                }
+                b'\n' => self.end_at_newline(&mut emit),
                 _ => self.pending.push(byte),
             }
         }
@@ -552,18 +554,30 @@ impl LineBuffer {
 
     pub fn flush(&mut self, mut emit: impl FnMut(&str)) {
         // Nothing will ever arrive to resolve a still-pending `\r` at this
-        // point (the stream ended) — the content buffered before it is the
-        // whole story either way, so it's flushed the same as any other
-        // unterminated tail; the `\r` itself is simply dropped, never
-        // emitted.
+        // point (the stream ended), so it is a lone one — which, like the
+        // end of the stream itself, emits only a line with content.
         self.pending_cr = false;
-        self.at_line_start = true;
+        self.after_lone_cr = false;
         if !self.pending.is_empty() {
-            self.flush_line(&mut emit);
+            self.emit_line(&mut emit);
         }
     }
 
-    fn flush_line(&mut self, emit: &mut impl FnMut(&str)) {
+    fn end_at_newline(&mut self, emit: &mut impl FnMut(&str)) {
+        if !self.pending.is_empty() || !self.after_lone_cr {
+            self.emit_line(emit);
+        }
+        self.after_lone_cr = false;
+    }
+
+    fn end_at_lone_cr(&mut self, emit: &mut impl FnMut(&str)) {
+        if !self.pending.is_empty() {
+            self.emit_line(emit);
+            self.after_lone_cr = true;
+        }
+    }
+
+    fn emit_line(&mut self, emit: &mut impl FnMut(&str)) {
         let line = std::mem::take(&mut self.pending);
         emit(&String::from_utf8_lossy(&line));
     }

@@ -674,19 +674,6 @@ fn line_buffer_folds_a_split_crlf_pair_into_one_line_break() {
 }
 
 #[test]
-fn line_buffer_flushes_a_run_of_bare_carriage_returns_separately() {
-    let mut buffer = LineBuffer::new();
-    let mut lines: Vec<String> = Vec::new();
-    buffer.push(b"a\r\r\rb\n", &mut |line: &str| {
-        lines.push(line.to_string())
-    });
-    // Each bare `\r` is its own flush boundary — including the two
-    // back-to-back ones with nothing between them, which flush an empty
-    // line each, the same as `\n\n` already would.
-    assert_eq!(lines, vec!["a", "", "", "b"]);
-}
-
-#[test]
 fn line_buffer_drops_an_unresolved_trailing_carriage_return_on_flush() {
     let mut buffer = LineBuffer::new();
     let mut lines: Vec<String> = Vec::new();
@@ -700,9 +687,7 @@ fn line_buffer_drops_an_unresolved_trailing_carriage_return_on_flush() {
     assert_eq!(lines, vec!["last"]);
 }
 
-/// A lone `\n` is one empty line, as in Batect's sink — `\n\n` and `\r\r`
-/// reach an empty line through different branches of `push`, so this one
-/// is pinned on its own.
+/// A lone `\n` is one empty line, as in Batect's sink.
 #[test]
 fn line_buffer_emits_an_empty_line_for_a_lone_newline() {
     let mut buffer = LineBuffer::new();
@@ -754,8 +739,8 @@ fn framed(chunks: &[&[u8]]) -> Vec<String> {
     lines
 }
 
-/// A `\r` at the start of a line is skipped rather than flushing the empty
-/// line before it — Batect's `writeLine` strips a leading `\r` (ratect#477).
+/// A `\r` at the start of a line has nothing buffered, so it ends no line —
+/// as Batect's `writeLine` strips a leading `\r` (ratect#477).
 #[test]
 fn line_buffer_skips_a_carriage_return_at_the_start_of_a_line() {
     assert_eq!(framed(&[b"\rSome text\n"]), vec!["Some text"]);
@@ -767,7 +752,8 @@ fn line_buffer_skips_a_carriage_return_at_the_start_of_a_line() {
     assert_eq!(framed(&[b"\rWait for it..."]), vec!["Wait for it..."]);
 }
 
-/// "Start of a line" holds across `push` calls, as `pending_cr` does.
+/// A `\r` with nothing buffered ends no line even when the `\n` before it
+/// arrived in an earlier `push`.
 #[test]
 fn line_buffer_skips_a_line_leading_carriage_return_split_across_pushes() {
     assert_eq!(
@@ -777,13 +763,34 @@ fn line_buffer_skips_a_line_leading_carriage_return_split_across_pushes() {
     assert_eq!(framed(&[b"\r", b"x\n"]), vec!["x"]);
 }
 
-/// Only the one `\r` at the start of a line is skipped, as Batect strips
-/// only its buffer's first byte; a lone `\r` and nothing else still emits
-/// nothing.
+/// The framing rule (ratect#716): a lone `\r` with nothing buffered ends no
+/// line, and an empty line ending at `\n` or CRLF is emitted only after
+/// another `\n`/CRLF or at the start of the stream — so Ratect prints as
+/// many blank lines as Batect. Each row also holds fed one byte per `push`,
+/// since a chunk boundary can fall anywhere, including inside a CRLF.
 #[test]
-fn line_buffer_skips_only_one_line_leading_carriage_return() {
-    assert_eq!(framed(&[b"\r\rText\n"]), vec!["", "Text"]);
-    assert!(framed(&[b"\r"]).is_empty());
+fn line_buffer_emits_no_blank_line_a_carriage_return_already_ended() {
+    let rows: &[(&[u8], &[&str])] = &[
+        (b"10%\r\r20%\n", &["10%", "20%"]),
+        (b"\r\rText\n", &["Text"]),
+        (b"a\r\r\n", &["a"]),
+        (b"a\n\nb\n", &["a", "", "b"]),
+        (b"\r\n", &[""]),
+        (b"\n\r\n", &["", ""]),
+        (b"a\r\n\n", &["a", ""]),
+        (b"a\r\r\rb\n", &["a", "b"]),
+        // A `\r` with nothing buffered is no boundary, so the empty line
+        // after it still follows a `\n`, as Batect prints it.
+        (b"a\n\r\r\n", &["a", ""]),
+        (b"\r\r\n", &[""]),
+        (b"last\r", &["last"]),
+        (b"\r", &[]),
+    ];
+    for (input, expected) in rows {
+        assert_eq!(framed(&[input]), *expected, "{input:?} in one push");
+        let bytes: Vec<&[u8]> = input.chunks(1).collect();
+        assert_eq!(framed(&bytes), *expected, "{input:?} one byte per push");
+    }
 }
 
 /// A prerequisites-only task's line, Batect's words with its name in bold,

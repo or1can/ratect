@@ -103,6 +103,9 @@ struct FakeContainerRuntime {
     // Command whose `exec_in_container` reports a non-zero exit (see
     // `with_failing_setup_command`).
     failing_setup_command: Arc<Mutex<Option<String>>>,
+    // Command and the output its successful `exec_in_container` reports
+    // (see `with_setup_command_output`).
+    setup_command_output: Arc<Mutex<Option<(String, String)>>>,
     // Command whose `exec_in_container` call itself fails (see
     // `with_unrunnable_setup_command`).
     unrunnable_setup_command: Arc<Mutex<Option<String>>>,
@@ -286,6 +289,7 @@ impl Default for FakeContainerRuntime {
             stop_options: Default::default(),
             unhealthy_container: Default::default(),
             failing_setup_command: Default::default(),
+            setup_command_output: Default::default(),
             unrunnable_setup_command: Default::default(),
             failing_creations: Default::default(),
             failing_creations_after_docker_created: Default::default(),
@@ -490,6 +494,14 @@ impl FakeContainerRuntime {
     /// for the given command — simulates a failing setup command.
     fn with_failing_setup_command(self, command: &str) -> Self {
         *self.failing_setup_command.lock().unwrap() = Some(command.to_string());
+        self
+    }
+
+    /// Makes `exec_in_container` report exit code 0 with `output` for the
+    /// given command.
+    fn with_setup_command_output(self, command: &str, output: &str) -> Self {
+        *self.setup_command_output.lock().unwrap() =
+            Some((command.to_string(), output.to_string()));
         self
     }
 
@@ -1366,12 +1378,19 @@ impl ContainerRuntime for FakeContainerRuntime {
             anyhow::bail!("Docker responded with status code 500: exec failed");
         }
         let failing = self.failing_setup_command.lock().unwrap().as_deref() == Some(command);
+        let output = self
+            .setup_command_output
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(configured, _)| configured == command)
+            .map(|(_, output)| output.clone());
         Ok(crate::docker::ExecResult {
             exit_code: if failing { 1 } else { 0 },
             output: if failing {
                 "something went wrong\n".to_string()
             } else {
-                String::new()
+                output.unwrap_or_default()
             },
         })
     }
@@ -16123,6 +16142,47 @@ async fn setup_command_output_only_posts_when_the_sink_wants_progress_detail() {
         "an interleaved sink should see the command's output: {:?}",
         sink.inner.events()
     );
+}
+
+/// Setup-command output is framed by `LineBuffer`, the same rule as a
+/// container's streamed output (ratect#716): a lone `\r` ends a line, a
+/// leading one ends none, and a `\r` that ended one isn't followed by an
+/// empty one.
+#[tokio::test]
+async fn setup_command_output_is_framed_like_container_output() {
+    for (output, expected) in [
+        ("10%\r20%\n", vec!["10%", "20%"]),
+        ("\rProgress 50%\n", vec!["Progress 50%"]),
+        ("a\r\r\n", vec!["a"]),
+    ] {
+        let config = config_with_database_dependency(|database| {
+            database.setup_commands = Some(vec![crate::config::SetupCommand {
+                command: "./seed-data.sh".to_string(),
+                working_directory: None,
+                run_in: None,
+            }]);
+        });
+        let docker =
+            FakeContainerRuntime::default().with_setup_command_output("./seed-data.sh", output);
+        let sink = InterleavedRecordingSink::default();
+        let engine = TaskEngine::new(
+            project(config),
+            docker,
+            Arc::new(sink.clone()),
+            crate::interrupt::Interrupt::new(),
+        );
+        engine.run_task("start", &[]).await.unwrap();
+        let lines: Vec<String> = sink
+            .inner
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                TaskEvent::SetupCommandOutput { line, .. } => Some(line),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, expected, "setup command output {output:?}");
+    }
 }
 
 #[tokio::test]
