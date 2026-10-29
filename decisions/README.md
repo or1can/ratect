@@ -89,3 +89,4 @@ record refined this way.
 | [0019](0019-readiness-gates-starting-only.md) | A dependency's readiness gates only the start of what depends on it | Accepted — image work shipped (ratect-compat 0.33.0 · ratect 0.12.0); container creation planned |
 | [0020](0020-bundle-records-its-written-for-version.md) | A bundle records the Ratect version it was written for | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0021](0021-native-field-follows-its-file.md) | A native field follows its file, on include entries as on containers | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
+| [0022](0022-written-for-refusal-says-what-applies.md) | A written-for refusal says which changes touch the project | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
