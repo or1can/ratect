@@ -3737,11 +3737,17 @@ impl ResourceInventory for DockerClient {
     }
 
     async fn remove_network(&self, name: &str) -> Result<()> {
-        self.docker
-            .remove_network(name)
-            .await
-            .with_context(|| format!("Failed to remove network '{}'", name))?;
-        tracing::debug!(network = name, "removed network");
+        match self.docker.remove_network(name).await {
+            Ok(()) => tracing::debug!(network = name, "removed network"),
+            // Already gone: the outcome asked for, so not a cleanup failure
+            // (decisions/0016) — as for a container, below.
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => tracing::debug!(network = name, "network already removed"),
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to remove network '{}'", name));
+            }
+        }
         Ok(())
     }
 
@@ -3770,10 +3776,21 @@ impl ResourceInventory for DockerClient {
             }
             builder.build()
         });
-        self.docker
-            .stop_container(container_id, stop_options)
-            .await
-            .with_context(|| format!("Failed to stop container '{}'", container_id))?;
+        match self.docker.stop_container(container_id, stop_options).await {
+            Ok(_) => {}
+            // Already gone, so as stopped as it will ever be: the forced
+            // removal below tolerates the same 404, and still waits for the
+            // container's log follower. Nothing is left behind, so this is
+            // not a cleanup failure (decisions/0016) — a divergence from
+            // Batect, which fails the task.
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => tracing::debug!(container_id, "container already removed before its stop"),
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to stop container '{}'", container_id));
+            }
+        }
         if let Some(stopped) = stopped {
             let _ = stopped.send(());
         }

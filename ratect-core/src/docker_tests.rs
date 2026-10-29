@@ -2182,7 +2182,6 @@ fn cleanup_route(
                 let status = stop_status_for(id);
                 let body = match status {
                     204 | 304 => String::new(),
-                    404 => format!(r#"{{"message":"No such container: {id}"}}"#),
                     _ => r#"{"message":"stub daemon refused the stop"}"#.to_string(),
                 };
                 (status, body)
@@ -2361,22 +2360,29 @@ async fn stop_and_remove_container_signals_stopped_only_after_a_successful_stop(
     assert!(on_stopped.await.is_err());
 }
 
-/// Batect's U31 (ratect#310): stopping a container that's already gone is
-/// an error naming both the container and the daemon's own reason, and no
-/// removal follows.
+/// Batect's U31 (ratect#310), now a recorded divergence (ratect#609): a
+/// container already gone answers its stop with a 404, which counts as
+/// stopped — `stopped` is signaled and the forced removal still follows,
+/// which tolerates the same 404 — so the call succeeds. Nothing is left
+/// behind, so it isn't a cleanup failure (decisions/0016).
 #[tokio::test]
-async fn stop_and_remove_container_reports_a_missing_container_without_removing() {
-    let (client, log) = client_for_recording_daemon(cleanup_route(|_| 404)).await;
+async fn stop_and_remove_container_treats_a_missing_container_as_stopped_and_removed() {
+    let (client, log) = client_for_recording_daemon(|method, path| match (method, path) {
+        ("POST", "/containers/abc/stop") | ("DELETE", "/containers/abc") => {
+            (404, r#"{"message":"No such container: abc"}"#.to_string())
+        }
+        _ => (404, r#"{"message":"not found"}"#.to_string()),
+    })
+    .await;
+    let (stopped, on_stopped) = tokio::sync::oneshot::channel();
 
-    let err = client
-        .stop_and_remove_container("abc", None, None, None)
+    client
+        .stop_and_remove_container("abc", None, None, Some(stopped))
         .await
-        .unwrap_err();
+        .unwrap();
 
-    let chain = format!("{err:#}");
-    assert!(chain.contains("Failed to stop container 'abc'"), "{chain}");
-    assert!(chain.contains("No such container: abc"), "{chain}");
-    assert_eq!(requests_sent(&log), vec![stop_of("abc")]);
+    assert!(on_stopped.await.is_ok());
+    assert_eq!(requests_sent(&log), vec![stop_of("abc"), delete_of("abc")]);
 }
 
 /// Batect's U32 and NRM-5/ECS-3 (ratect#310): a container created but
@@ -4678,11 +4684,12 @@ async fn network_exists_is_false_only_for_a_daemon_not_found() {
     );
 }
 
-/// Batect's `DockerClientNetworkManagementSpec`, deleting a network that
-/// doesn't exist: unlike a lookup, that's a failure, naming the network,
-/// with the daemon's reason in the chain.
+/// Batect's `DockerClientNetworkManagementSpec` fails deleting a network
+/// that doesn't exist; Ratect doesn't (ratect#609): a network already gone
+/// is the outcome asked for, so it isn't a cleanup failure
+/// (decisions/0016).
 #[tokio::test]
-async fn remove_network_fails_for_a_missing_network() {
+async fn remove_network_succeeds_for_a_missing_network() {
     let (client, _) = client_for_recording_daemon(one_route(
         "DELETE",
         "/networks/gone",
@@ -4691,11 +4698,26 @@ async fn remove_network_fails_for_a_missing_network() {
     ))
     .await;
 
-    let err = client.remove_network("gone").await.unwrap_err();
+    client.remove_network("gone").await.unwrap();
+}
 
-    assert_eq!(err.to_string(), "Failed to remove network 'gone'");
+/// Any other refusal still fails, naming the network, with the daemon's
+/// reason in the chain — a network with a container still attached, say.
+#[tokio::test]
+async fn remove_network_fails_when_the_daemon_refuses() {
+    let (client, _) = client_for_recording_daemon(one_route(
+        "DELETE",
+        "/networks/busy",
+        403,
+        r#"{"message":"error while removing network: network busy has active endpoints"}"#,
+    ))
+    .await;
+
+    let err = client.remove_network("busy").await.unwrap_err();
+
+    assert_eq!(err.to_string(), "Failed to remove network 'busy'");
     assert!(
-        format!("{err:#}").contains("network gone not found"),
+        format!("{err:#}").contains("has active endpoints"),
         "{err:#}"
     );
 }

@@ -7,7 +7,10 @@
 # network's removal is refused (`403: ... has active endpoints`), the second of
 # #316's reproductions. `finish` has a dependency whose `sleep` runs as PID 1
 # and so ignores `SIGTERM`: its graceful stop takes Docker's whole ten-second
-# kill timeout, which is the window the test signals in.
+# kill timeout, which is the window the test signals in. `pass-with-dependency`
+# gives the test time to `docker rm -f` that dependency mid-run, the first of
+# #316's reproductions — which leaves nothing behind and so isn't a cleanup
+# failure.
 #
 # `project_name` is its own so the label filters in the tests can't match a
 # concurrently-running test's resources.
@@ -36,6 +39,11 @@ tasks:
     run:
       container: app
       command: sh -c 'sleep 5; exit 3'
+
+  pass-with-dependency:
+    run:
+      container: client
+      command: sleep 5
 
   finish:
     run:

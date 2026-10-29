@@ -231,7 +231,8 @@ did the task's own container run to an exit code of its own?
    prerequisite that fails this way stops the chain there. A task's own
    non-zero code is never overridden, and what `--no-cleanup`,
    `--no-cleanup-after-success` or `--no-cleanup-after-failure` leaves in place on purpose
-   isn't a cleanup failure.
+   isn't a cleanup failure — nor is a container or network that something else already
+   removed, such as a dependency `docker rm -f`'d mid-run, since nothing is left behind.
 2. **A termination signal ended it: 128 + that signal's own number** — `130` for Ctrl+C
    (`SIGINT`), `143` for `SIGTERM`, `129` for `SIGHUP` — the shell's own convention, so
    a script or CI job can tell a cancelled run apart from a failed one *and* tell what

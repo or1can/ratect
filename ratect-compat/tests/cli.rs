@@ -3519,6 +3519,74 @@ fn a_failing_run_whose_cleanup_fails_keeps_its_own_code_via_docker() {
     assert_eq!(code, Some(3), "stderr:\n{stderr}");
 }
 
+/// A dependency `docker rm -f`'d mid-run is already gone when cleanup comes
+/// to stop it, which leaves nothing behind and so isn't a cleanup failure: a
+/// passing run still exits 0 (ratect#609, decisions/0016).
+#[test]
+#[ignore]
+fn a_passing_run_whose_dependency_is_already_gone_at_cleanup_exits_0_via_docker() {
+    let _shared_project = CLEANUP_OUTCOME_PROJECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let filter = CLEANUP_OUTCOME_PROJECT_FILTER;
+    let child = ratect_command()
+        .arg("-f")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cleanup-outcome.yml"))
+        .args(["-o", "simple", "pass-with-dependency"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn ratect");
+
+    // Once the task's own container is running, its dependency is ready and
+    // being watched, so removing it now is removing it mid-run.
+    let running = |container: &str| {
+        let output = Command::new("docker")
+            .args(["ps", "-q", "--filter", filter, "--filter"])
+            .arg(format!("label=eu.orican.ratect.container={container}"))
+            .output()
+            .expect("failed to run docker ps");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let mut database = Vec::new();
+    let found = poll_until(Duration::from_secs(120), || {
+        database = running("database");
+        !running("client").is_empty() && !database.is_empty()
+    });
+    let removed = found
+        && Command::new("docker")
+            .args(["rm", "-fv"])
+            .args(&database)
+            .output()
+            .expect("failed to run docker rm")
+            .status
+            .success();
+
+    let output = child.wait_with_output().expect("failed to wait on ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let left_containers = docker_ids("container", filter, true);
+    let left_networks = docker_ids("network", filter, false);
+    for id in &left_containers {
+        let _ = Command::new("docker").args(["rm", "-fv", id]).output();
+    }
+    for id in &left_networks {
+        let _ = Command::new("docker").args(["network", "rm", id]).output();
+    }
+    assert!(
+        removed,
+        "the test never removed the dependency mid-run, so proved nothing"
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr:\n{stderr}");
+    assert!(!stderr.contains("Error:"), "stderr:\n{stderr}");
+    assert!(
+        left_containers.is_empty() && left_networks.is_empty(),
+        "left behind: {left_containers:?} {left_networks:?}"
+    );
+}
+
 /// A signal that arrives only during the cleanup of a passing run hurries
 /// that cleanup and ends nothing, so the run still exits 0 — not 130, as it
 /// did before decisions/0016 — and leaves nothing behind.

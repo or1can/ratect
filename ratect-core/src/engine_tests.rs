@@ -245,6 +245,9 @@ struct FakeContainerRuntime {
     // Container ids whose removal — graceful or forced — the daemon refuses
     // (see `refusing_container_removal`).
     refused_container_removals: Arc<Mutex<HashSet<String>>>,
+    // Container ids something else already removed (see
+    // `with_container_already_gone`).
+    gone_containers: Arc<Mutex<HashSet<String>>>,
     // Makes `remove_network` fail, as a daemon refusing to remove a network
     // with an endpoint still attached does (see `refusing_network_removal`).
     refuse_network_removal: Arc<Mutex<bool>>,
@@ -324,6 +327,7 @@ impl Default for FakeContainerRuntime {
             unreadable_container_outputs: Default::default(),
             signals_on_removal: Default::default(),
             refused_container_removals: Default::default(),
+            gone_containers: Default::default(),
             refuse_network_removal: Default::default(),
             stop_delays: Default::default(),
             signal_as_stop_of: Default::default(),
@@ -411,11 +415,25 @@ impl FakeContainerRuntime {
         self
     }
 
-    /// Makes every removal of `container_id` fail, as the daemon does for a
-    /// container something else already removed (`404: No such container`).
-    /// The removal records no event, since nothing was removed.
+    /// Makes every removal of `container_id` fail, as the daemon does when it
+    /// refuses one for a reason of its own (a `500` failing to kill it, say)
+    /// — a real refusal, not a container already gone, which `DockerClient`
+    /// reports as removed (see `with_container_already_gone`). The removal
+    /// records no event, since nothing was removed.
     fn refusing_container_removal(self, container_id: &str) -> Self {
         self.refused_container_removals
+            .lock()
+            .unwrap()
+            .insert(container_id.to_string());
+        self
+    }
+
+    /// Makes every removal of `container_id` succeed without removing
+    /// anything, as `DockerClient`'s does for a container something else
+    /// already removed (`404: No such container`, ratect#609). The removal
+    /// records no event, since nothing was removed by it.
+    fn with_container_already_gone(self, container_id: &str) -> Self {
+        self.gone_containers
             .lock()
             .unwrap()
             .insert(container_id.to_string());
@@ -463,6 +481,10 @@ impl FakeContainerRuntime {
         self.stop_windows.lock().unwrap().get(name).copied()
     }
 
+    fn is_gone(&self, container_id: &str) -> bool {
+        self.gone_containers.lock().unwrap().contains(container_id)
+    }
+
     fn refuses_removal_of(&self, container_id: &str) -> Result<()> {
         if self
             .refused_container_removals
@@ -470,7 +492,7 @@ impl FakeContainerRuntime {
             .unwrap()
             .contains(container_id)
         {
-            anyhow::bail!("No such container: {container_id}");
+            anyhow::bail!("stub daemon refused to remove container {container_id}");
         }
         Ok(())
     }
@@ -1468,7 +1490,9 @@ impl ContainerRuntime for FakeContainerRuntime {
         // pending too — and dropped with it — rather than already done.
         tokio::task::yield_now().await;
         self.refuses_removal_of(container_id)?;
-        self.push(format!("force-remove:{container_id}"));
+        if !self.is_gone(container_id) {
+            self.push(format!("force-remove:{container_id}"));
+        }
         Ok(())
     }
 }
@@ -1540,7 +1564,9 @@ impl ResourceInventory for FakeContainerRuntime {
             let _ = stopped.send(());
         }
         self.refuses_removal_of(container_id)?;
-        self.push(format!("sidecar-stop:{container_id}"));
+        if !self.is_gone(container_id) {
+            self.push(format!("sidecar-stop:{container_id}"));
+        }
         Ok(())
     }
 }
@@ -7271,6 +7297,30 @@ async fn a_passing_run_whose_cleanup_fails_fails_with_cleanup_failed() {
             "the task's own container is still removed: {events:?}"
         );
     }
+}
+
+/// A dependency something else already removed by cleanup time is not a
+/// cleanup failure: nothing was left behind, so a passing run still exits
+/// `0` (ratect#609, decisions/0016) — while a real refusal of the same
+/// container's removal still exits `125`.
+#[tokio::test]
+async fn a_dependency_already_gone_at_cleanup_is_not_a_cleanup_failure() {
+    let gone = FakeContainerRuntime::default().with_container_already_gone("sidecar-id-database");
+    engine(config_with_database_dependency(|_| {}), gone)
+        .run_task("start", &[])
+        .await
+        .unwrap();
+
+    let refused = FakeContainerRuntime::default().refusing_container_removal("sidecar-id-database");
+    let error = engine(config_with_database_dependency(|_| {}), refused)
+        .run_task("start", &[])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        crate::exit_code::for_error(&error),
+        crate::exit_code::RATECT_FAILED,
+        "{error:#}"
+    );
 }
 
 /// A task's own non-zero code is never overridden by a cleanup failure.
@@ -16632,7 +16682,7 @@ async fn a_refused_removal_reports_the_daemons_reason_and_what_was_left() {
     assert_eq!(
         errors,
         vec![
-            "Cleanup failed: No such container: sidecar-id-database; left behind: database \
+            "Cleanup failed: stub daemon refused to remove container sidecar-id-database; left behind: database \
              (sidecar-id-d). Remove with: docker rm -f -v sidecar-id-d"
                 .to_string()
         ]
@@ -16777,7 +16827,7 @@ async fn a_refused_removal_and_a_refused_network_are_reported_together() {
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
         errors[0].starts_with(
-            "Cleanup failed: No such container: sidecar-id-database; error while removing \
+            "Cleanup failed: stub daemon refused to remove container sidecar-id-database; error while removing \
              network: network demo-network-"
         ),
         "{}",
