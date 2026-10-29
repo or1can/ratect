@@ -8,7 +8,10 @@ deferred. Clarified on 2026-10-29, before that release shipped: "a
 `.yml` can't set `reviewed_ratect_version` under either binary
 ([0021](0021-native-field-follows-its-file.md), rework
 [#680](https://github.com/or1can/ratect/issues/680)). As first implemented,
-a `.yml` in a native project could set it.
+a `.yml` in a native project could set it. Extended the same day: a bundle
+of YAML files alone stays unchecked even when a release changes how Ratect
+reads YAML, and the record now says why
+([#721](https://github.com/or1can/ratect/issues/721)).
 
 ## Context
 
@@ -62,6 +65,16 @@ failure worth preventing in advance — applies to a bundle unchanged.
   field, and its meaning is Batect's, so it is checked only once the bundle
   loads a TOML file — and then counts as unmarked unless its entry acknowledges
   it.
+- **A bundle of YAML files alone is never checked, even when Ratect changes
+  how it reads YAML.** Such a change moves Ratect towards Batect's meaning,
+  which is what the bundle was written for. So far every one has failed
+  loudly rather than changing a meaning silently. In 0.12.0, six of the seven
+  fail the load with Batect's message. The seventh, an unbraced name ending
+  at its first `.`, changes a meaning silently only for a bundle declaring
+  both `foo` and `foo.bar`, since a reference to an undeclared config
+  variable fails. A change that would make a YAML file silently mean
+  something other than Batect's reading needs a check like a row's, and
+  reopens this decision.
 - **A version from the future is refused, on either side.** A bundle declaring
   a version newer than the binary is refused before it is parsed, so its new
   fields don't surface as an unknown-field error; the remedies are a newer
@@ -99,6 +112,14 @@ failure worth preventing in advance — applies to a bundle unchanged.
 - **Shipping after the first rows.** The 0.12.0 rows would then refuse
   bundles a release later, after users had already reviewed their roots for
   them — a second migration for the same changes.
+
+- **A written-for check for a bundle of YAML files alone**, triggered by a
+  change to how Ratect reads YAML (#721). Rejected: those changes move towards
+  the meaning the bundle's author wrote it for, and fail loudly in all but a
+  contrived case. A YAML file can't record a version or an acknowledgement
+  ([0021](0021-native-field-follows-its-file.md)), so only a TOML entry could
+  satisfy such a check. That would be a new mechanism for one narrow silent
+  case.
 
 ## Consequences
 
