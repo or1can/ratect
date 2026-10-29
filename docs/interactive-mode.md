@@ -43,7 +43,9 @@ below.)
 Additionally, when *both* Ratect's own stdin *and* stdout are real
 terminals, **a real Docker TTY**: the local terminal goes into raw mode for
 the session, so a full-screen program (an editor, `top`, a REPL with line
-editing) renders as it would in a shell. A raw terminal sends Ctrl+C to the
+editing) renders as it would in a shell. The terminal is restored when the
+session ends; if that fails, a warning says so and names the fix (`reset` or
+`stty sane`). A raw terminal sends Ctrl+C to the
 container as a keystroke, as `docker run -it` does, so it interrupts the
 program in the container rather than the run — and a command running as the
 container's main process with no handler of its own ignores it. Piped output,

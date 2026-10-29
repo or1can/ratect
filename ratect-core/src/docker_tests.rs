@@ -5064,3 +5064,44 @@ async fn an_unhealthy_verdict_whose_reinspect_fails_is_the_verdict_alone() {
     let err = result.unwrap_err();
     assert_eq!(format!("{err:#}"), UNHEALTHY_VERDICT);
 }
+
+/// Every event posted, in order.
+#[derive(Default)]
+struct AllEventsSink(std::sync::Mutex<Vec<TaskEvent>>);
+
+impl EventSink for AllEventsSink {
+    fn post(&self, event: TaskEvent) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+/// A terminal left in raw mode has no echo and no line editing, so a user
+/// with `RUST_LOG` unset is worse off without being told how to fix it:
+/// a printed warning, not a log line (decisions/0017, ratect#614).
+#[test]
+fn a_terminal_left_in_raw_mode_is_a_warning_naming_the_fix() {
+    let sink = std::sync::Arc::new(AllEventsSink::default());
+    drop(RawModeGuard {
+        event_sink: sink.clone(),
+        restore: || Err(std::io::Error::other("no tty")),
+    });
+    let events = sink.0.lock().unwrap().clone();
+    let [TaskEvent::Warning { message }] = events.as_slice() else {
+        panic!("expected exactly one warning, got {events:?}");
+    };
+    assert!(
+        message.contains("raw mode") && message.contains("reset") && message.contains("stty sane"),
+        "{message}"
+    );
+    assert!(!message.contains('\n'), "{message:?}");
+}
+
+#[test]
+fn a_restored_terminal_posts_nothing() {
+    let sink = std::sync::Arc::new(AllEventsSink::default());
+    drop(RawModeGuard {
+        event_sink: sink.clone(),
+        restore: || Ok(()),
+    });
+    assert_eq!(*sink.0.lock().unwrap(), Vec::new());
+}
