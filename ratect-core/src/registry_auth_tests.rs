@@ -266,7 +266,21 @@ fn stub_helper(directory: &std::path::Path, body: &str, status: i32) -> std::pat
     )
     .unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
-    helper
+    // Not noise: another test thread's fork can inherit the write descriptor
+    // above until its child execs (`O_CLOEXEC` closes it then, not at the
+    // fork), and Linux refuses to run a file open for writing with `ETXTBSY`
+    // (rust-lang/rust#114554, ratect#715). So run the stub once, with an
+    // argument it rejects, until a spawn succeeds — only then is it runnable.
+    for _ in 0..100 {
+        match std::process::Command::new(&helper).arg("probe").status() {
+            Ok(_) => return helper,
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("couldn't run the stub helper {helper:?}: {error}"),
+        }
+    }
+    panic!("the stub helper {helper:?} stayed busy for a second");
 }
 
 #[cfg(unix)]
