@@ -3,7 +3,10 @@
 **Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
 [#680](https://github.com/or1can/ratect/issues/680)). Supersedes the
 include-entry exception in [0003](0003-ratect-native-config-format.md)'s
-"Generalized (ratect#214)" paragraph; the rest of 0003 stands.
+"Generalized (ratect#214)" paragraph; the rest of 0003 stands. Refined while
+implementing (#680): the error gives a way out per kind of file rather than
+always `ratect config convert`, which converts a project from its root and so
+can't convert an included `.yml` or a bundle file.
 
 ## Context
 
@@ -38,9 +41,11 @@ why that statement may be written in Batect's format.
 - **Today that covers `allow_nested_git_includes` and `reviewed_ratect_version`**
   on a Git include entry. Under `ratect`, a `.yml` that sets either one fails
   the load. That includes a `.yml` root, a local `.yml` include and a YAML
-  bundle file. The error names the field and the file, and says to convert
-  that file to TOML (`ratect config convert`). It never spells the field in
-  either format's syntax.
+  bundle file. The error names the field and the file, and the way out that
+  file has: a `.yml` root converts the project (`ratect config convert`),
+  since a YAML root can't include a TOML file; a local `.yml` moves that Git
+  include into a TOML file; a bundle file needs its author to. It never
+  spells the field in either format's syntax.
 - **A field both formats accept is unaffected**, such as `allow_host_paths`:
   Ratect's own field ([0004](0004-git-include-host-path-trust.md)), which
   both binaries support. This record is about native-only fields.

@@ -398,9 +398,12 @@ repositories; only the transport detail moves behind `RUST_LOG=debug`. An
 include *you* declared keeps `git`'s message in full — it describes a remote
 you wrote down, and hiding it would only make your own typo harder to find.
 
-The field is rejected in a `batect.yml` rather than ignored, value and all:
-setting `allow_nested_git_includes` to false there would claim a restriction
-that format never applies.
+The field is rejected in any `.yml` rather than ignored, value and all, under
+either binary: it is native-only, and a native-only field follows the file it
+is written in (see [Which fields a file may
+use](includes.md#which-fields-a-file-may-use)). Setting it to false in a
+`batect.yml` would claim a restriction that format never applies.
+`reviewed_ratect_version` is refused in a `.yml` the same way.
 
 ## `run_in`: setup commands in another container
 
@@ -849,7 +852,9 @@ that declares it, not by the project — a container written in a `.yml` takes
 the left-hand column even inside a native project (see [Which fields a file
 may use](includes.md#which-fields-a-file-may-use)). The first three rows
 follow the project instead: two are about an `include` entry rather than a
-container, and the third about how a task runs its own container.
+container, and the third about how a task runs its own container. An include
+entry's native-only fields, `allow_nested_git_includes` among them, still
+follow the file: only a `.toml` file can set them.
 
 | Behaviour | `batect.yml` (`ratect-compat`) | `ratect.toml` (`ratect`) |
 | --- | --- | --- |

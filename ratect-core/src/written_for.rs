@@ -359,6 +359,9 @@ pub(crate) struct BundleEntry<'a> {
     pub(crate) entry_file: &'a str,
     /// The file declaring the include, as an error names it.
     pub(crate) declared_in: &'a str,
+    /// Where that file sits if it is Batect-format (YAML), which can't set
+    /// [`REVIEWED_FIELD`] (decisions/0021); `None` for a TOML file.
+    pub(crate) declared_in_batect: Option<crate::include_trust::BatectFile>,
     /// What the entry file says, as [`read`] reads it: `YamlRoot` for a
     /// Batect-format entry file, which can't say.
     pub(crate) written_for: WrittenFor,
@@ -390,6 +393,7 @@ pub(crate) fn check_bundle(
     let BundleEntry {
         entry_file,
         declared_in,
+        declared_in_batect,
         written_for,
         first_toml,
         reviewed,
@@ -450,10 +454,18 @@ pub(crate) fn check_bundle(
         ),
         _ => format!("its author can review them and raise its '{FIELD}' to {running}"),
     };
+    let convert_first = match declared_in_batect {
+        Some(place) => format!(
+            ", which a Batect-format (YAML) file can't set: first, {}",
+            place.remedy()
+        ),
+        None => String::new(),
+    };
     anyhow::bail!(
         "{}: the bundle {written}, and ratect has changed what a configuration means since:\
          {changes}\nEither {author}, or — once you have reviewed the bundle against them \
-         yourself — set '{REVIEWED_FIELD}' to {running} on its include in {declared_in}.",
+         yourself — set '{REVIEWED_FIELD}' to {running} on its include in \
+         {declared_in}{convert_first}.",
         refusing()
     )
 }

@@ -91,6 +91,17 @@ one of `image`/`build_directory`. That holds even when a `ratect.toml`
 project is what pulled the file in, and it holds for a YAML *root* file too
 — `ratect -f batect.yml` reads a Batect file, and reads it as one.
 
+The same goes for a Git include entry's native-only fields,
+[`allow_nested_git_includes`](#nested-git-includes) and
+[`reviewed_ratect_version`](#the-version-a-bundle-was-written-for): a `.yml`
+that sets either one fails to load, under either binary, whatever its value.
+Under `ratect` the error names the field and the file, and the way out that
+file has: a root `.yml` needs the project converted ([`ratect config
+convert`](ratect-cli.md#config)), since a YAML root can't include a TOML file;
+an included `.yml` can move that Git include into a TOML file; and a bundle
+file needs its author to.
+`allow_host_paths` isn't one of them — both formats accept it.
+
 What a container does at *run time* follows the binary instead, not the file:
 under `ratect`, a task's own container has no readiness gate, whichever file
 declares it — a `.yml` task container in a native project, or in `ratect -f
@@ -281,8 +292,9 @@ asking any consumer for host filesystem access — reach for that before
 > **`batect.yml` differs here.** In a `ratect-compat` project a bundle's own
 > `type: git` includes are always allowed, matching Batect, and the field below
 > is rejected rather than ignored. Everything in this section is the `ratect`
-> binary's behaviour — decided by which binary loads the project, not by the
-> extension of the file an entry sits in.
+> binary's behaviour, and the field goes in a TOML file: a `.yml` that sets it
+> fails to load under `ratect` too (see [Which fields a file may
+> use](#which-fields-a-file-may-use)).
 
 A bundle can declare `include` entries of its own, and under `ratect-compat`
 those may be further Git includes naming any remote, with the same trust your
@@ -293,7 +305,7 @@ The bundle 'https://github.com/my-org/infra-bundle.git' at '1.2.3' declares a
 Git include of its own ('https://elsewhere.example/other.git'), which would
 fetch and run configuration from a remote you have not named. Set
 'allow_nested_git_includes' to true on that bundle's own include entry to
-accept this.
+accept this; only a TOML file can set it.
 ```
 
 You chose the bundle; you did not choose whatever it decides to pull in next,
@@ -309,9 +321,12 @@ allow_nested_git_includes = true
 ```
 
 The entry doesn't have to be in the `ratect.toml` itself — an entry in a local
-`.yml` the native project includes is just as much your own configuration,
-spelled `allow_nested_git_includes: true`, because that file is
-[owned](#owned-files-and-bundle-files).
+file the project includes is just as much your own configuration, because that
+file is [owned](#owned-files-and-bundle-files). It does have to be a `.toml`
+file: the field is native-only, so a `.yml` that sets it fails to load. To
+grant from a shared `.yml`, move that Git include into a `.toml` file and
+include that instead. [`ratect config convert`](ratect-cli.md#config)
+converts a whole Batect-format project from its root, not one included file.
 
 **The grant is one level deep.** It admits that bundle's own Git includes; it
 does not let *those* bundles declare further ones. Like `allow_host_paths`, it
@@ -369,7 +384,8 @@ the later version counts:
 - **The include entry's `reviewed_ratect_version`**: you, as the author of the
   include, saying you reviewed the bundle against the changes up to that
   version. It lets you answer a refusal for a bundle you don't own without
-  waiting for its author:
+  waiting for its author. Like the grants it is native-only, so the entry has
+  to be in a `.toml` file:
 
   ```toml
   [[include]]
@@ -382,7 +398,9 @@ the later version counts:
 A bundle that sets neither counts as written for 0.3.0, the first release
 with `ratect.toml`, so it is refused under any release that has changed what a
 configuration means since. The refusal names the bundle's repository, ref and
-entry file, and the file declaring the include, and offers both ways out.
+entry file, and the file declaring the include, and offers both ways out —
+when that file is a `.yml`, the second starts with getting that include into
+TOML, the way [that file allows](#which-fields-a-file-may-use).
 
 - **Every entry is checked on its own.** Two entries reaching one bundle each
   need covering, by the bundle's version or their own `reviewed_ratect_version`
@@ -390,8 +408,10 @@ entry file, and the file declaring the include, and offers both ways out.
   no entry wins.
 - **A nested bundle is a bundle of its own**, covered by neither its parent's
   version nor yours. The parent bundle's entry for it may set
-  `reviewed_ratect_version`: it widens no permission, so unlike a grant it
-  counts in a bundle file too.
+  `reviewed_ratect_version` if that bundle file is TOML: it widens no
+  permission, so unlike a grant it counts in a bundle file too. A YAML bundle
+  file can't set it, so a TOML bundle it nests is covered only by its own
+  `ratect_version`.
 - **A YAML entry file follows Batect's rules**, as a `batect.yml` root does:
   it can't set `ratect_version`, and a bundle whose files are all YAML loads
   whatever has changed. That includes a change to how Ratect reads YAML: such

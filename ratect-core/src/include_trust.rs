@@ -99,7 +99,7 @@ use crate::config::ConfigFormat;
 /// two bare `bool`s in the wrong order.
 ///
 /// `nested_git` is `Option` because absent and `false` differ: writing it in a
-/// `batect.yml` is refused either way (see [`check_dialect`]), and only an
+/// Batect-format file is refused either way (see [`check_dialect`]), and only an
 /// entry that wrote *something* can be refused for it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Grants {
@@ -458,25 +458,62 @@ pub(crate) fn restricting(declaring: Option<&Bundle>, format: ConfigFormat) -> O
     }
 }
 
-/// Refuses a Git include's ratect-native fields in a Batect-compatible
-/// project — `allow_nested_git_includes`, and `reviewed_ratect_version` when
-/// `reviews` — where they are not merely inert but fields Batect has never
-/// had.
+/// Where a Batect-format (YAML) file declaring a Git include sits, which
+/// decides how that entry can reach TOML once it needs a native-only field
+/// (decisions/0021). `Option<BatectFile>`, `None` for a TOML file, is how both
+/// [`check_dialect`] and [`crate::written_for::check_bundle`] are told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BatectFile {
+    /// The root. Its entries reach TOML only by converting the project: a
+    /// YAML root that includes a TOML file is refused.
+    Root,
+    /// A file the project owner controls, included locally: the entry can
+    /// move into a TOML file of its own.
+    Owned,
+    /// A bundle file, which only its author can edit.
+    Bundle,
+}
+
+impl BatectFile {
+    /// The way out, as a clause completing "To set it, …".
+    pub(crate) fn remedy(self) -> &'static str {
+        match self {
+            BatectFile::Root => "convert the project to TOML (ratect config convert)",
+            BatectFile::Owned => "move that Git include into a TOML file",
+            BatectFile::Bundle => {
+                "the bundle's author has to move that Git include into a TOML file"
+            }
+        }
+    }
+}
+
+/// Refuses a Git include's ratect-native fields — `allow_nested_git_includes`,
+/// and `reviewed_ratect_version` when `reviews` — in a Batect-format (YAML)
+/// file, whichever binary loads it: a native-only field follows the file it
+/// is written in, not the project ([decisions/0021](../../decisions/0021-native-field-follows-its-file.md)),
+/// as a container's do. `declared_in` names the declaring file as an error
+/// does; `batect_file` says where it sits if it is Batect-format, `None` for
+/// a TOML file, which may set every field. A `ratect-compat` project's files
+/// are all Batect-format, so there it is always `Some`.
 ///
 /// Rejects `false` as well as `true`: the field is unsupported, not the
 /// permission. Names *where it was written*, because it can appear inside a
 /// bundle — and an error about "the Git include of X" would then describe a
-/// file the `ratect-compat` user has never seen.
+/// file the reader has never seen. `ratect-compat` keeps its own wording,
+/// which names the bundle; `ratect` names the file, a bundle file by its
+/// bundle, and gives the way out [`BatectFile::remedy`] says that file has.
 pub(crate) fn check_dialect(
     asked: Grants,
     reviews: bool,
     declaring: Option<&Bundle>,
+    declared_in: &str,
+    batect_file: Option<BatectFile>,
     repo: &str,
     format: ConfigFormat,
 ) -> Result<()> {
-    if !matches!(format, ConfigFormat::Compat) {
+    let Some(batect_file) = batect_file else {
         return Ok(());
-    }
+    };
     let (field, remark) = if asked.nested_git.is_some() {
         (
             "allow_nested_git_includes",
@@ -490,6 +527,13 @@ pub(crate) fn check_dialect(
     } else {
         return Ok(());
     };
+    if matches!(format, ConfigFormat::Native) {
+        anyhow::bail!(
+            "{declared_in} sets '{field}' on its Git include of '{repo}', but a Batect-format \
+             (YAML) file can't set that field. To set it, {}.",
+            batect_file.remedy()
+        );
+    }
     let subject = match declaring {
         Some(declaring) => format!(
             "The bundle '{}' at '{}' sets '{field}' on its Git include of '{repo}'",
@@ -527,7 +571,8 @@ pub(crate) fn check_may_declare_git(restricted: Option<&Bundle>, repo: &str) -> 
         "The bundle '{}' at '{}' declares a Git include of its own \
          ('{repo}'), which would fetch and run configuration from a \
          remote you have not named. Set 'allow_nested_git_includes' to \
-         true on that bundle's own include entry to accept this.",
+         true on that bundle's own include entry to accept this; only a \
+         TOML file can set it.",
         declaring.id.remote,
         declaring.id.git_ref
     );
