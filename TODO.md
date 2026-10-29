@@ -34,17 +34,6 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
 
 ## Maintainability / latent hazards
 
-- **9.** **The `claims` plugin's checks have no CI-level backstop, only the local
-  `pre-commit` hook** (`decisions/0009`, `.pre-commit-config.yaml`) — a PR
-  from a clone where `pre-commit install` was never run, or from a bot
-  account like Renovate, merges without `check-links`/`check-citations`/
-  `executable-claims` ever running against it. `or1can/claims` now tags
-  its releases, so a CI job can pin the same tag the hook does; what's
-  left to decide is what it checks — the hook compares the working tree
-  with `HEAD`, which on a CI checkout is no change at all, so the job
-  needs a range (`--diff-range origin/main..HEAD`) rather than the hook
-  as is.
-
 - **13.** **No confirmation prompt on `ratect resources clean --all-projects`**
   (`ratect/src/main.rs`) — the one thing `list`-before-`clean` can't catch
   is typing the dangerous command by accident, which only a prompt does,
