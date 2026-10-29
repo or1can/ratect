@@ -1170,3 +1170,119 @@ async fn a_volume_store_reads_the_key_once_per_invocation() {
 
     fs::remove_dir_all(&project_dir).unwrap();
 }
+
+/// A project whose cache root, `.batect/caches`, is a symbolic link to
+/// `elsewhere`, a directory outside it. With `link_batect`, `.batect`
+/// itself is the link instead, so the root resolves to `elsewhere/caches`.
+#[cfg(unix)]
+struct LinkedCacheRoot {
+    project_dir: PathBuf,
+    elsewhere: PathBuf,
+    /// Where the cache root resolves to.
+    target: PathBuf,
+}
+
+#[cfg(unix)]
+impl LinkedCacheRoot {
+    fn new(link_batect: bool) -> Self {
+        let project_dir = unique_temp_dir();
+        let elsewhere = unique_temp_dir();
+        let target = if link_batect {
+            std::os::unix::fs::symlink(&elsewhere, project_dir.join(".batect")).unwrap();
+            elsewhere.join("caches")
+        } else {
+            fs::create_dir_all(project_dir.join(".batect")).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, cache_directory(&project_dir)).unwrap();
+            elsewhere.clone()
+        };
+        Self {
+            project_dir,
+            elsewhere,
+            target,
+        }
+    }
+
+    /// Removes the two directories `new` created, and nothing else.
+    fn remove(self) {
+        fs::remove_dir_all(&self.project_dir).unwrap();
+        fs::remove_dir_all(&self.elsewhere).unwrap();
+    }
+}
+
+/// CONTEXT.md's **Cache root** (ratect#698): a link at or above the cache
+/// root relocates it, as in Batect, so a new key file is written where the
+/// link points — whether the link is `.batect/caches` or `.batect`.
+#[cfg(unix)]
+#[test]
+fn project_cache_key_follows_a_linked_cache_root() {
+    for link_batect in [false, true] {
+        let linked = LinkedCacheRoot::new(link_batect);
+
+        let key = project_cache_key(&linked.project_dir).unwrap();
+
+        let written = fs::read_to_string(linked.target.join("key")).unwrap();
+        assert!(written.ends_with(&format!("{key}\n")), "{written}");
+
+        linked.remove();
+    }
+}
+
+/// The same for a directory-type cache: it's created at the link's target,
+/// and the path through the link is what's bind-mounted, which a daemon on
+/// this host resolves to the same directory.
+#[cfg(unix)]
+#[test]
+fn resolve_cache_mount_follows_a_linked_cache_root_for_directory_type() {
+    let linked = LinkedCacheRoot::new(false);
+    let options = CacheOptions {
+        cache_type: CacheType::Directory,
+        project_directory: linked.project_dir.clone(),
+    };
+    let mount = CacheVolumeMount {
+        name: "gradle-cache".to_string(),
+        container: "/root/.gradle".to_string(),
+        options: None,
+        scope: Default::default(),
+    };
+
+    let resolved = resolve_cache_mount(&options, || unreachable!(), &mount).unwrap();
+
+    let through_link = cache_directory(&linked.project_dir).join("gradle-cache");
+    assert_eq!(
+        resolved.source,
+        BindSource::Host(through_link.display().to_string())
+    );
+    assert!(linked.target.join("gradle-cache").is_dir());
+    assert_eq!(
+        through_link.canonicalize().unwrap(),
+        linked.target.join("gradle-cache").canonicalize().unwrap()
+    );
+
+    linked.remove();
+}
+
+/// And a directory-type clean removes the cache directories it finds
+/// wherever the root resolves to — what someone linking the root to storage
+/// shared with something else accepts.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_clean_follows_a_linked_cache_root() {
+    let linked = LinkedCacheRoot::new(false);
+    touch_cache(&linked.target, "gradle-cache");
+    touch_cache(&linked.target, "npm-cache");
+    let store = directory_store(&linked.project_dir, None);
+
+    let found = store.list(None).await.unwrap();
+    let removed = store
+        .remove(&found, &HashSet::new(), |_| {})
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(names(removed), ["gradle-cache", "npm-cache"]);
+    assert!(!linked.target.join("gradle-cache").exists());
+    assert!(!linked.target.join("npm-cache").exists());
+    assert!(cache_directory(&linked.project_dir).is_symlink());
+
+    linked.remove();
+}

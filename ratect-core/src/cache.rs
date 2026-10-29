@@ -33,6 +33,16 @@
 //! orphaned. Batect has no *shared* cache — [`CacheStore`]'s scope handling
 //! is `ratect`-only.
 //!
+//! The cache root, [`cache_directory`], is followed when it or `.batect` is
+//! a symbolic link, as Batect's `createDirectories`/`Files.write` follow
+//! one. It belongs to the project and is trusted the way its config is
+//! (CONTEXT.md's **Cache root**): a link only relocates storage the
+//! project's config could already reach, since a `local` mount may name any
+//! host path. So nothing here checks for one, on any path — writing the key
+//! file, creating and mounting a directory cache, or cleaning — and that is
+//! deliberate (ratect#698). Someone who links the root to storage shared
+//! with something else accepts that a clean removes what it finds there.
+//!
 //! Deliberate divergences:
 //!
 //! - A freshly generated [`project_cache_key`] is a full

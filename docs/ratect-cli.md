@@ -162,7 +162,9 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 for both `list` and `clean` — a cache in one is invisible to the other, so this has to
 match how the project runs its tasks. Under `directory`, this project's caches are
 host directories under `<project>/.batect/caches/<name>` and shared ones live at
-`~/.ratect/caches/<name>`.
+`~/.ratect/caches/<name>`. A `.batect/caches` or `.batect` that is a symbolic link
+is followed, as in Batect, so `caches clean` removes the cache directories wherever
+it points — see [Cache volumes](ratect-compat-config-reference.md#cache-volumes).
 
 `caches` never reads the configuration file. A cache belongs to the project
 *directory*, so both commands work on a project whose configuration is broken or
