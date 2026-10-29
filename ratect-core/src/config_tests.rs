@@ -8642,6 +8642,41 @@ dependencies = ["api"]
     );
 }
 
+/// The companion's own output is the only place its failure diagnosis
+/// survives, and it is read back after the container exits — so its log
+/// driver must be one Docker can read back, whatever the daemon's default
+/// (`"log-driver": "none"` answers 501 to a `logs` call). Pinned rather
+/// than inherited from the checked container, whose own `log_driver` is the
+/// user's choice for *that* container (ratect#694).
+#[tokio::test]
+async fn an_external_health_checks_companion_logs_to_json_file() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.api]
+image = "my-org/api:1.0.0"
+log_driver = "none"
+[containers.api.external_health_check]
+type = "tcp"
+port = 8080
+
+[tasks.t]
+run = { container = "api" }
+"#,
+    )
+    .await
+    .unwrap();
+
+    let generated = &project.config.containers[&external_health_check_container_name("api")];
+    assert_eq!(generated.log_driver.as_deref(), Some("json-file"));
+    assert_eq!(
+        project.config.containers["api"].log_driver.as_deref(),
+        Some("none"),
+        "the checked container keeps the log driver its user chose"
+    );
+}
+
 /// The generated command is what actually performs the check, so it is
 /// asserted directly rather than only end-to-end: it reaches the checked
 /// container by its own network alias (no published host port), asks for the

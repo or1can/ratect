@@ -204,6 +204,7 @@ history, from when it was the only binary.
 - An explicit `-o fancy` on a terminal with `TERM` unset is honoured, as in Batect, instead of refused. `TERM=dumb` is still refused, and the refusal now names the one reason that applies.
 - On a colour terminal, the exit code in `<container> exited unexpectedly with exit code <n>` is bold in every output style.
 - A terminal that can't be taken out of raw mode after an interactive session is a warning on stderr naming the fix (`reset` or `stty sane`), in every output style, instead of only a log line.
+- A failing `external_health_check` reports what the check last saw even when the daemon's default log driver can't be read back (`"log-driver": "none"`), instead of only `its external health check failed`. (ratect only)
 
 ### Security
 

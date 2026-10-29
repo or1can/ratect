@@ -592,7 +592,9 @@ check is made with read a zero timeout as *no* timeout. So is an
   [`run_to_completion`](#run_to_completion-init-containers) dependency, so the
   waiting happens in the dependency graph rather than anywhere new. It
   narrates nothing of its own in any output style: it is how the check runs,
-  not something you declared. It is still a real container, so
+  not something you declared. It always logs with `json-file`, whatever the
+  daemon's default log driver, since a failure's diagnosis is read back from
+  its output. It is still a real container, so
   [`ratect resources`](ratect-cli.md#resources-options) and `docker ps` see
   it, and a failure names it so
   [`--no-cleanup-after-failure`](ratect-cli.md#run-options) leaves you

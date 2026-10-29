@@ -1954,7 +1954,8 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// `external_health_check`'s companion diagnoses its own failure on
     /// stderr (which attempt, what it last saw), and without this that
     /// diagnosis dies with the container. Not a streaming call — the
-    /// container is finished by the time anything asks.
+    /// container is finished by the time anything asks. Fails for a log
+    /// driver Docker can't read back, which is why the companion's is pinned.
     async fn container_output(&self, container_id: &str) -> Result<String>;
 
     /// Runs `command` inside the already-running `container_id` — used for
