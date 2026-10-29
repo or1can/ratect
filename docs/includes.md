@@ -394,7 +394,10 @@ entry file, and the file declaring the include, and offers both ways out.
   counts in a bundle file too.
 - **A YAML entry file follows Batect's rules**, as a `batect.yml` root does:
   it can't set `ratect_version`, and a bundle whose files are all YAML loads
-  whatever has changed. Once it includes a `.toml` file it counts as written
+  whatever has changed. That includes a change to how Ratect reads YAML: such
+  a change brings Ratect's reading closer to Batect's, which is what the
+  bundle was written for. So far, such changes have reported an error naming
+  the problem rather than quietly changing what the bundle means. Once it includes a `.toml` file it counts as written
   for 0.3.0, until its include sets `reviewed_ratect_version`.
 - **A version newer than `ratect` is refused, on either side.** A bundle
   written for a newer Ratect is refused before anything but that field is
