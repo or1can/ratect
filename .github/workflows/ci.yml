@@ -133,6 +133,68 @@ jobs:
       # prints the diff when it has drifted (see the script's own docstring).
       - run: python3 tools/check-readme-docs-list.py
 
+  # The `claims` documentation checks (decisions/0009, `claims.toml`) as a
+  # backstop for the `pre-commit` hook, which only gates a commit made in a
+  # clone where `pre-commit install` was run — a PR from anywhere else, or
+  # from Renovate, would otherwise merge without `check-links`,
+  # `check-citations` or `executable-claims` ever running against it.
+  #
+  # Pull requests only: `main` takes changes through nothing else, so a
+  # `push` run would re-check what its PR already did.
+  claims:
+    name: Claims
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: `stale-claims` reads it, and the base ref the diff is
+      # taken against has to exist.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # `executable-claims` runs `cargo run`.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The `rev` is read from `.pre-commit-config.yaml` rather than written
+      # here a second time, so Renovate's bump of the hook moves this job too
+      # and the two never check against different releases.
+      - name: Check out the pinned claims release
+        shell: bash
+        run: |
+          rev=$(awk '/repo: https:\/\/github.com\/or1can\/claims/ { found = 1 }
+                     found && $1 == "rev:" { print $2; exit }' .pre-commit-config.yaml)
+          if [ -z "$rev" ]; then
+            echo "No rev for or1can/claims in .pre-commit-config.yaml — this search is broken."
+            exit 1
+          fi
+          echo "claims $rev"
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$rev" \
+            https://github.com/or1can/claims "$RUNNER_TEMP/claims"
+      # `executable-claims` runs a `<!-- verify: -->` marker's command only
+      # with an exact-string grant in the git-ignored `claims.local.toml`.
+      # This is the same list `AGENTS.md`'s Tooling & CI section gives
+      # contributors, and it adds no exposure: `cargo test` already runs the
+      # PR's code. A new marker fails this job until its command is added
+      # here, which is the point — someone has to look at what it runs.
+      - name: Grant the verify markers' commands
+        run: |
+          cat > claims.local.toml <<'EOF'
+          [executable-claims]
+          allowed = [
+              "cargo run -q -p ratect-compat -- -f ratect-compat/tests/fixtures/smoke.yml --list-tasks",
+              "cargo run -q -p ratect-compat -- -f examples/jvm/batect.yml --list-tasks",
+              "cargo run -q -p ratect-compat -- -f examples/jvm/batect.yml -o quiet --list-tasks",
+              "cargo run -q -p ratect -- tasks list -f examples/rust/ratect.toml",
+              "cargo run -q -p ratect -- tasks list -f examples/getting-started/ratect.toml",
+          ]
+          EOF
+      # The working tree against the base branch, i.e. the PR's whole change.
+      # Exits 1 on a gate finding and 2 on an unparsable `claims.toml`, both
+      # failing the job; advisory findings are printed and pass.
+      - name: Run the claims checks
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli --repo-root . --diff-range "origin/$BASE_REF"
+
   docker-integration:
     name: Docker Integration Test
     runs-on: ubuntu-latest
