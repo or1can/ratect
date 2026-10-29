@@ -1300,9 +1300,37 @@ async fn manage_caches(
     };
 
     let only: HashSet<String> = names.into_iter().collect();
+    remove_caches(&store, &found, &only, quiet, stdout, stderr).await
+}
 
+/// `ratect caches clean` once it has listed what `found` holds: removes the
+/// caches `only` names, or every one of this project's if it's empty.
+///
+/// Each cache is reported as it's removed, not once all are, so a removal
+/// that fails leaves every cache removed before it reported alongside the
+/// error — project caches included, which are removed before shared ones
+/// (ratect#700).
+async fn remove_caches<D: ratect_core::cache::VolumeStore + Send + Sync>(
+    store: &ratect_core::cache::CacheStore<'_, D>,
+    found: &ratect_core::cache::CacheSelection,
+    only: &HashSet<String>,
+    quiet: bool,
+    stdout: &Console,
+    stderr: &Console,
+) -> Result<()> {
     let removed = match store
-        .remove(&found, &only, |message| stderr.warning(&message))
+        .remove(found, only, |event| match event {
+            ratect_core::cache::CleanEvent::Removing(_) => {}
+            // Reported by *cache* name whichever storage was used — a
+            // volume's own Docker name carries a prefix, which is an
+            // implementation detail of where it's kept, not what the user
+            // called it.
+            ratect_core::cache::CleanEvent::Removed(cache) if !quiet => {
+                stdout.println(&format!("Removed cache '{}'.", cache.name))
+            }
+            ratect_core::cache::CleanEvent::Removed(_) => {}
+            ratect_core::cache::CleanEvent::Warning(message) => stderr.warning(&message),
+        })
         .await?
     {
         // `--scope shared` with nothing named would silently do nothing,
@@ -1326,12 +1354,6 @@ async fn manage_caches(
     };
 
     if !quiet {
-        // Reported by *cache* name whichever storage was used — a volume's
-        // own Docker name carries a prefix, which is an implementation
-        // detail of where it's kept, not what the user called it.
-        for cache in &removed {
-            stdout.println(&format!("Removed cache '{}'.", cache.name));
-        }
         stdout.println(&format!("Removed {} cache(s).", removed.len()));
     }
 
@@ -1344,7 +1366,7 @@ async fn manage_caches(
     {
         // Named after what was actually searched: under `--scope shared`
         // "for this project" points at the wrong storage entirely.
-        match wanted {
+        match found.scope {
             Some(ratect_core::config::CacheScope::Shared) => {
                 stderr.warning(&format!("No shared cache named '{name}' exists."))
             }

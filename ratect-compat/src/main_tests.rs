@@ -1146,9 +1146,7 @@ fn defaults_clean_cache_to_empty() {
 }
 
 /// `--clean`/`--clean-cache`'s per-item progress line, pinned exactly as
-/// Batect's own `CleanupCachesCommand` prints it — nothing else in this
-/// suite runs the Docker-backed half of `clean_caches`, so this wording is
-/// otherwise proven by nothing `cargo test` executes.
+/// Batect's own `CleanupCachesCommand` prints it, for both cache types.
 #[test]
 fn a_cache_removal_is_reported_in_batects_own_wording() {
     assert_eq!(
@@ -1165,6 +1163,131 @@ fn a_cache_removal_is_reported_in_batects_own_wording() {
         ),
         "Deleting '/project/.batect/caches/gradle-cache'..."
     );
+}
+
+/// A `Console` writer whose output a test can read back afterwards.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+/// Three cache volumes, `a`, `b` and `c`, of a project keyed `abc123`,
+/// where removing `b` fails as the daemon does for a volume already gone.
+struct VolumeFailingAtB;
+
+#[async_trait::async_trait]
+impl ratect_core::cache::VolumeStore for VolumeFailingAtB {
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        Ok(["a", "b", "c"]
+            .map(|name| format!("batect-cache-abc123-{name}"))
+            .to_vec())
+    }
+
+    async fn remove_volume(&self, name: &str) -> Result<()> {
+        anyhow::ensure!(!name.ends_with("-b"), "get {name}: no such volume");
+        Ok(())
+    }
+}
+
+/// ratect#700: as in Batect, each `Deleting volume` line is printed before
+/// that volume's removal is attempted, so a clean that fails partway shows
+/// every volume it deleted, and the one it failed on.
+#[tokio::test]
+async fn a_failed_volume_clean_has_printed_each_volume_it_reached() {
+    let project_dir = unique_temp_dir();
+    let caches = ratect_core::cache::cache_directory(&project_dir);
+    std::fs::create_dir_all(&caches).unwrap();
+    std::fs::write(caches.join("key"), "abc123\n").unwrap();
+    let store = ratect_core::cache::CacheStore::new(
+        CacheType::Volume,
+        Some(&VolumeFailingAtB),
+        project_dir.clone(),
+        None,
+    )
+    .unwrap();
+    let stdout = Captured::default();
+
+    let error = remove_project_caches(
+        &store,
+        CacheType::Volume,
+        &HashSet::new(),
+        &Console::new(Box::new(stdout.clone()), false),
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(format!("{error:#}").contains("no such volume"), "{error:#}");
+    assert_eq!(
+        stdout.text(),
+        "Deleting volume 'batect-cache-abc123-a'...\n\
+         Deleting volume 'batect-cache-abc123-b'...\n"
+    );
+
+    std::fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// The directory half of ratect#700: each `Deleting '<path>'...` line is
+/// printed as its directory is reached, after the warning naming a symbolic
+/// link that was skipped, and the summary counts only what was removed.
+/// One buffer behind both consoles, so the order between them is pinned.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_clean_prints_each_line_as_it_goes() {
+    let project_dir = unique_temp_dir();
+    let caches = ratect_core::cache::cache_directory(&project_dir);
+    std::fs::create_dir_all(caches.join("a")).unwrap();
+    std::fs::create_dir_all(caches.join("b")).unwrap();
+    std::os::unix::fs::symlink(caches.join("a"), caches.join("linked")).unwrap();
+    let store = ratect_core::cache::CacheStore::<VolumeFailingAtB>::new(
+        CacheType::Directory,
+        None,
+        project_dir.clone(),
+        None,
+    )
+    .unwrap();
+    let output = Captured::default();
+
+    remove_project_caches(
+        &store,
+        CacheType::Directory,
+        &HashSet::new(),
+        &Console::new(Box::new(output.clone()), false),
+        &Console::new(Box::new(output.clone()), false),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        output.text(),
+        format!(
+            "Warning: Skipped '{linked}': it is a symbolic link, and a cache clean never \
+             follows one.\n\
+             Deleting '{a}'...\n\
+             Deleting '{b}'...\n\
+             Done! Deleted 2 directories.\n",
+            linked = caches.join("linked").display(),
+            a = caches.join("a").display(),
+            b = caches.join("b").display(),
+        )
+    );
+
+    std::fs::remove_dir_all(&project_dir).unwrap();
 }
 
 #[test]

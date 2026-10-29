@@ -342,8 +342,8 @@ async fn list_all_volume_caches(
     Ok(found)
 }
 
-/// Removes the named shared cache volumes, returning the cache names
-/// actually removed.
+/// Removes the named shared cache volumes, reporting each to `report` —
+/// see [`remove_cache_volumes`] — and returning those removed.
 ///
 /// **An empty `only` removes nothing**, the opposite of
 /// [`clean_volume_caches`], where empty means "this project's, all of
@@ -355,26 +355,61 @@ async fn list_all_volume_caches(
 async fn clean_shared_volume_caches(
     runtime: &impl VolumeStore,
     only: &HashSet<String>,
-) -> Result<Vec<String>> {
+    report: &impl Fn(CleanEvent<'_>),
+) -> Result<Vec<RemovedCache>> {
     let existing = runtime.list_volumes().await?;
-    let matched: Vec<String> = matching_shared_cache_volumes(&existing, only)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-
-    for name in &matched {
-        runtime.remove_volume(name).await?;
-    }
-
-    let prefix = shared_cache_volume_name("");
-    Ok(matched
-        .iter()
-        .map(|name| name.strip_prefix(&prefix).unwrap_or(name).to_string())
-        .collect())
+    let matched = matching_shared_cache_volumes(&existing, only);
+    remove_cache_volumes(runtime, &matched, &shared_cache_volume_name(""), report).await
 }
 
-/// Removes the named shared cache directories under `root`, returning those
-/// removed.
+/// Removes each of `volumes`, every one named `prefix` then its cache name,
+/// in order, stopping at the first that fails. Each is reported to `report`
+/// before its removal is attempted and again once it's gone, so a failure
+/// leaves every earlier removal already reported (ratect#700).
+async fn remove_cache_volumes(
+    runtime: &impl VolumeStore,
+    volumes: &[&str],
+    prefix: &str,
+    report: &impl Fn(CleanEvent<'_>),
+) -> Result<Vec<RemovedCache>> {
+    let mut removed = Vec::new();
+    for volume in volumes {
+        let cache = RemovedCache {
+            name: volume.strip_prefix(prefix).unwrap_or(volume).to_string(),
+            storage: volume.to_string(),
+        };
+        report(CleanEvent::Removing(&cache));
+        runtime.remove_volume(volume).await?;
+        report(CleanEvent::Removed(&cache));
+        removed.push(cache);
+    }
+    Ok(removed)
+}
+
+/// The directory counterpart of [`remove_cache_volumes`]: removes each of
+/// `names` under `root`, reporting each the same way.
+fn remove_cache_directories(
+    root: &Path,
+    names: Vec<String>,
+    report: &impl Fn(CleanEvent<'_>),
+) -> Result<Vec<RemovedCache>> {
+    let mut removed = Vec::new();
+    for name in names {
+        let dir = root.join(&name);
+        let cache = RemovedCache {
+            name,
+            storage: dir.display().to_string(),
+        };
+        report(CleanEvent::Removing(&cache));
+        fs::remove_dir_all(&dir).with_context(|| format!("Failed to remove {dir:?}"))?;
+        report(CleanEvent::Removed(&cache));
+        removed.push(cache);
+    }
+    Ok(removed)
+}
+
+/// Removes the named shared cache directories under `root`, reporting each
+/// to `report` and returning those removed.
 ///
 /// **An empty `only` removes nothing** — see [`clean_shared_volume_caches`]
 /// for why that is the opposite of the project-scoped rule. `root` is a
@@ -382,16 +417,15 @@ async fn clean_shared_volume_caches(
 /// `shared_cache_root()`): [`CacheStore`] resolves it once, tolerating a host
 /// with no home directory by treating "no root" as "no shared caches",
 /// rather than this function silently swallowing that failure on every call.
-fn clean_shared_directory_caches(root: &Path, only: &HashSet<String>) -> Result<Vec<String>> {
+fn clean_shared_directory_caches(
+    root: &Path,
+    only: &HashSet<String>,
+    report: &impl Fn(CleanEvent<'_>),
+) -> Result<Vec<RemovedCache>> {
     if only.is_empty() {
         return Ok(Vec::new());
     }
-    let matched = matching_cache_directories(root, only)?;
-    for name in &matched {
-        let dir = root.join(name);
-        fs::remove_dir_all(&dir).with_context(|| format!("Failed to remove {dir:?}"))?;
-    }
-    Ok(matched)
+    remove_cache_directories(root, matching_cache_directories(root, only)?, report)
 }
 
 /// Filters `existing_volumes` (from [`VolumeStore::list_volumes`])
@@ -431,31 +465,19 @@ fn list_directory_caches(project_directory: &Path) -> Result<Vec<String>> {
 
 /// Removes this project's own cache volumes (or, with `only` non-empty,
 /// just the named ones) — `--clean`/`--clean-cache` under
-/// `CacheType::Volume`. Mirrors Batect's own `CleanupCachesCommand.runForVolumes`.
-/// Returns the *cache* names actually removed (the prefix stripped), matching
-/// [`clean_shared_volume_caches`]'s convention — [`CacheStore`] reconstructs
-/// the full volume name from a cache name whenever it needs to, so the two
-/// removal functions it sits beside can agree on one contract.
+/// `CacheType::Volume`. Mirrors Batect's own `CleanupCachesCommand.runForVolumes`,
+/// reporting each removal as it goes, as Batect prints each — see
+/// [`remove_cache_volumes`].
 async fn clean_volume_caches(
     runtime: &impl VolumeStore,
     project_cache_key: &str,
     only: &HashSet<String>,
-) -> Result<Vec<String>> {
+    report: &impl Fn(CleanEvent<'_>),
+) -> Result<Vec<RemovedCache>> {
     let existing = runtime.list_volumes().await?;
     let prefix = cache_volume_name(project_cache_key, "");
-    let matched: Vec<String> = matching_cache_volumes(&existing, &prefix, only)
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-
-    for name in &matched {
-        runtime.remove_volume(name).await?;
-    }
-
-    Ok(matched
-        .iter()
-        .map(|name| name.strip_prefix(&prefix).unwrap_or(name).to_string())
-        .collect())
+    let matched = matching_cache_volumes(&existing, &prefix, only);
+    remove_cache_volumes(runtime, &matched, &prefix, report).await
 }
 
 /// The synchronous counterpart of `matching_cache_volumes` for
@@ -520,36 +542,30 @@ fn scan_cache_directories(
 /// `CacheType::Directory`. Mirrors Batect's own
 /// `CleanupCachesCommand.runForDirectories`, except that a missing cache
 /// directory removes nothing rather than failing, and an entry that is a
-/// symbolic link is skipped rather than followed — each passed to `warn`,
-/// once, since both would otherwise read exactly like a clean that found
-/// nothing to do. Returns the names actually removed.
+/// symbolic link is skipped rather than followed — each reported to
+/// `report` as a [`CleanEvent::Warning`], once, since both would otherwise
+/// read exactly like a clean that found nothing to do. Each removal is
+/// reported as it goes — see [`remove_cache_directories`].
 fn clean_directory_caches(
     project_directory: &Path,
     only: &HashSet<String>,
-    warn: impl Fn(String),
-) -> Result<Vec<String>> {
+    report: &impl Fn(CleanEvent<'_>),
+) -> Result<Vec<RemovedCache>> {
     let cache_dir = cache_directory(project_directory);
     let Some(found) = scan_cache_directories(&cache_dir, only)? else {
-        warn(format!(
+        report(CleanEvent::Warning(format!(
             "There is no cache directory at '{}', so there is nothing to remove.",
             cache_dir.display()
-        ));
+        )));
         return Ok(Vec::new());
     };
     for link in &found.skipped_links {
-        warn(format!(
+        report(CleanEvent::Warning(format!(
             "Skipped '{}': it is a symbolic link, and a cache clean never follows one.",
             link.display()
-        ));
+        )));
     }
-    let matched = found.matched;
-
-    for name in &matched {
-        let dir = cache_dir.join(name);
-        fs::remove_dir_all(&dir).with_context(|| format!("Failed to remove {dir:?}"))?;
-    }
-
-    Ok(matched)
+    remove_cache_directories(&cache_dir, found.matched, report)
 }
 
 /// The caches one `ratect caches`/`ratect-compat --clean` invocation is
@@ -621,7 +637,8 @@ impl CacheSelection {
     }
 }
 
-/// One cache [`CacheStore::remove`] actually removed.
+/// One cache [`CacheStore::remove`] removes: named in each [`CleanEvent`]
+/// about it, and in what `remove` returns once every removal has succeeded.
 #[derive(Debug, PartialEq, Eq)]
 pub struct RemovedCache {
     /// What a `volumes` entry calls this cache — what `ratect` reports.
@@ -630,6 +647,21 @@ pub struct RemovedCache {
     /// what `ratect-compat` reports, matching Batect's own wording, which
     /// never spoke in terms of cache names at all.
     pub storage: String,
+}
+
+/// What [`CacheStore::remove`] reports while it works, as it happens rather
+/// than once it's done: a removal that fails stops the clean, and what was
+/// removed before it would otherwise go unreported (ratect#700).
+#[derive(Debug, PartialEq, Eq)]
+pub enum CleanEvent<'c> {
+    /// This cache's removal is about to be attempted — when Batect prints
+    /// its `Deleting` line, so a failure is preceded by the line naming it.
+    Removing(&'c RemovedCache),
+    /// This cache is gone.
+    Removed(&'c RemovedCache),
+    /// Something a project-scoped directory clean passed over — see
+    /// `clean_directory_caches`.
+    Warning(String),
 }
 
 /// Why [`CacheStore::remove`] declined to remove a *shared* cache — returned
@@ -798,16 +830,17 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
     /// shared half, so a same-named shared cache is correctly not flagged as
     /// ambiguous when the caller has already said which one they mean.
     ///
-    /// `warn` receives each warning about what a project-scoped directory
-    /// clean passed over (see `clean_directory_caches`) — a callback, as
-    /// [`crate::docker::DockerClient::new`]'s is, since how a warning is
-    /// printed is each binary's own. [`list`](Self::list) has none: only
-    /// cleaning skips anything, so a list-then-remove run warns once.
+    /// `report` receives each [`CleanEvent`] as it happens — a callback, as
+    /// [`crate::docker::DockerClient::new`]'s is, since how each is printed
+    /// is each binary's own. Removal stops at the first that fails, and that
+    /// error is returned, by which point every earlier removal has been
+    /// reported. [`list`](Self::list) has no callback: only cleaning skips
+    /// anything, so a list-then-remove run warns once.
     pub async fn remove(
         &self,
         found: &CacheSelection,
         only: &HashSet<String>,
-        warn: impl Fn(String),
+        report: impl Fn(CleanEvent<'_>),
     ) -> Result<Result<Vec<RemovedCache>, CacheRefusal>> {
         if only.is_empty() && found.scope == Some(CacheScope::Shared) {
             return Ok(Err(CacheRefusal::SharedSweepNotNamed));
@@ -820,10 +853,10 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
 
         let mut removed = Vec::new();
         if found.covers(CacheScope::Project) {
-            removed.extend(self.remove_project(only, warn).await?);
+            removed.extend(self.remove_project(only, &report).await?);
         }
         if found.covers(CacheScope::Shared) {
-            removed.extend(self.remove_shared(only).await?);
+            removed.extend(self.remove_shared(only, &report).await?);
         }
         Ok(Ok(removed))
     }
@@ -831,62 +864,35 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
     async fn remove_project(
         &self,
         only: &HashSet<String>,
-        warn: impl Fn(String),
+        report: &impl Fn(CleanEvent<'_>),
     ) -> Result<Vec<RemovedCache>> {
-        Ok(match self {
+        match self {
             Self::Volume {
                 docker,
                 project_directory,
                 project_cache_key,
             } => {
                 let key = Self::project_cache_key(project_directory, project_cache_key)?;
-                clean_volume_caches(*docker, key, only)
-                    .await?
-                    .into_iter()
-                    .map(|name| {
-                        let storage = cache_volume_name(key, &name);
-                        RemovedCache { name, storage }
-                    })
-                    .collect()
+                clean_volume_caches(*docker, key, only, report).await
             }
             Self::Directory {
                 project_directory, ..
-            } => clean_directory_caches(project_directory, only, warn)?
-                .into_iter()
-                .map(|name| {
-                    let storage = cache_directory(project_directory)
-                        .join(&name)
-                        .display()
-                        .to_string();
-                    RemovedCache { name, storage }
-                })
-                .collect(),
-        })
+            } => clean_directory_caches(project_directory, only, report),
+        }
     }
 
-    async fn remove_shared(&self, only: &HashSet<String>) -> Result<Vec<RemovedCache>> {
-        Ok(match self {
-            Self::Volume { docker, .. } => clean_shared_volume_caches(*docker, only)
-                .await?
-                .into_iter()
-                .map(|name| {
-                    let storage = shared_cache_volume_name(&name);
-                    RemovedCache { name, storage }
-                })
-                .collect(),
-            Self::Directory { shared_root, .. } => {
-                let Some(root) = shared_root else {
-                    return Ok(Vec::new());
-                };
-                clean_shared_directory_caches(root, only)?
-                    .into_iter()
-                    .map(|name| {
-                        let storage = root.join(&name).display().to_string();
-                        RemovedCache { name, storage }
-                    })
-                    .collect()
-            }
-        })
+    async fn remove_shared(
+        &self,
+        only: &HashSet<String>,
+        report: &impl Fn(CleanEvent<'_>),
+    ) -> Result<Vec<RemovedCache>> {
+        match self {
+            Self::Volume { docker, .. } => clean_shared_volume_caches(*docker, only, report).await,
+            Self::Directory { shared_root, .. } => match shared_root {
+                Some(root) => clean_shared_directory_caches(root, only, report),
+                None => Ok(Vec::new()),
+            },
+        }
     }
 }
 

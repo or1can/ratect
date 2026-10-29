@@ -376,6 +376,21 @@ fn list_directory_caches_is_empty_for_a_project_with_no_caches() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The cache names in `removed`, in order.
+fn names(removed: Vec<RemovedCache>) -> Vec<String> {
+    removed.into_iter().map(|cache| cache.name).collect()
+}
+
+/// A `report` callback collecting every warning into `warnings`, ignoring
+/// every other event.
+fn warnings_into(warnings: &std::cell::RefCell<Vec<String>>) -> impl Fn(CleanEvent<'_>) + '_ {
+    |event| {
+        if let CleanEvent::Warning(warning) = event {
+            warnings.borrow_mut().push(warning);
+        }
+    }
+}
+
 #[test]
 fn clean_directory_caches_removes_matching_subdirectories_and_leaves_others() {
     let dir = unique_temp_dir();
@@ -384,7 +399,7 @@ fn clean_directory_caches_removes_matching_subdirectories_and_leaves_others() {
     fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
     fs::write(caches_dir.join("key"), "abc123\n").unwrap();
 
-    let removed = clean_directory_caches(&dir, &HashSet::new(), |_| {}).unwrap();
+    let removed = names(clean_directory_caches(&dir, &HashSet::new(), &|_| {}).unwrap());
 
     let mut removed = removed;
     removed.sort();
@@ -406,7 +421,7 @@ fn clean_directory_caches_restricts_to_only_when_given() {
     fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
 
     let only = HashSet::from(["npm-cache".to_string()]);
-    let removed = clean_directory_caches(&dir, &only, |_| {}).unwrap();
+    let removed = names(clean_directory_caches(&dir, &only, &|_| {}).unwrap());
 
     assert_eq!(removed, vec!["npm-cache"]);
     assert!(caches_dir.join("gradle-cache").is_dir());
@@ -421,7 +436,7 @@ fn clean_directory_caches_does_nothing_when_the_cache_directory_does_not_exist()
 
     let warnings = std::cell::RefCell::new(Vec::new());
     let removed =
-        clean_directory_caches(&dir, &HashSet::new(), |w| warnings.borrow_mut().push(w)).unwrap();
+        names(clean_directory_caches(&dir, &HashSet::new(), &warnings_into(&warnings)).unwrap());
 
     assert!(removed.is_empty());
     // A divergence from Batect, which fails here (ratect#459) — said out
@@ -453,7 +468,7 @@ fn clean_directory_caches_skips_a_symbolic_link_and_warns_about_it() {
 
     let warnings = std::cell::RefCell::new(Vec::new());
     let removed =
-        clean_directory_caches(&dir, &HashSet::new(), |w| warnings.borrow_mut().push(w)).unwrap();
+        names(clean_directory_caches(&dir, &HashSet::new(), &warnings_into(&warnings)).unwrap());
 
     assert_eq!(removed, ["real"]);
     assert!(caches_dir.join("linked").is_symlink());
@@ -470,7 +485,7 @@ fn clean_directory_caches_skips_a_symbolic_link_and_warns_about_it() {
     // it isn't warned about.
     let warnings = std::cell::RefCell::new(Vec::new());
     let only = HashSet::from(["other".to_string()]);
-    clean_directory_caches(&dir, &only, |w| warnings.borrow_mut().push(w)).unwrap();
+    clean_directory_caches(&dir, &only, &warnings_into(&warnings)).unwrap();
     assert!(warnings.into_inner().is_empty());
 
     fs::remove_dir_all(&dir).unwrap();
@@ -835,8 +850,11 @@ async fn a_volume_removal_that_fails_fails_the_clean_and_stops_it() {
         CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
 
     let found = store.list(None).await.unwrap();
+    let events = std::sync::Mutex::new(Vec::new());
     let err = store
-        .remove(&found, &HashSet::new(), |_| {})
+        .remove(&found, &HashSet::new(), |event| {
+            events.lock().unwrap().push(format!("{event:?}"))
+        })
         .await
         .unwrap_err();
 
@@ -849,6 +867,21 @@ async fn a_volume_removal_that_fails_fails_the_clean_and_stops_it() {
         vec![
             "batect-cache-abc123-a".to_string(),
             "batect-cache-abc123-b".to_string(),
+        ]
+    );
+    // ratect#700: `a`'s removal was reported before the clean failed, and
+    // so was the attempt on `b`, before it was made — as Batect prints its
+    // `Deleting volume` line first.
+    let cache = |name: &str| RemovedCache {
+        name: name.to_string(),
+        storage: format!("batect-cache-abc123-{name}"),
+    };
+    assert_eq!(
+        events.into_inner().unwrap(),
+        [
+            format!("{:?}", CleanEvent::Removing(&cache("a"))),
+            format!("{:?}", CleanEvent::Removed(&cache("a"))),
+            format!("{:?}", CleanEvent::Removing(&cache("b"))),
         ]
     );
 

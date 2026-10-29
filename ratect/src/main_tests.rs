@@ -920,3 +920,156 @@ async fn resources_clean_fails_after_trying_everything_when_a_removal_is_refused
     .await
     .expect("nothing refused, nothing to report");
 }
+
+/// A `Console` writer whose output a test can read back afterwards.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+/// One project cache volume, `a`, of a project keyed `abc123`. Once `a`
+/// is removed, a shared cache volume `registry` appears, as one another
+/// project creates between a clean's listing and its removals would, and
+/// removing it fails.
+#[derive(Default)]
+struct SharedCacheAppearsAndFails {
+    removed_a: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl ratect_core::cache::VolumeStore for SharedCacheAppearsAndFails {
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        let mut volumes = vec!["batect-cache-abc123-a".to_string()];
+        if self.removed_a.load(std::sync::atomic::Ordering::SeqCst) {
+            volumes.push("ratect-shared-cache-registry".to_string());
+        }
+        Ok(volumes)
+    }
+
+    async fn remove_volume(&self, name: &str) -> Result<()> {
+        anyhow::ensure!(name != "ratect-shared-cache-registry", "{name} is in use");
+        self.removed_a
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// ratect#700: a clean removes project caches, then shared ones, and a
+/// failure among the shared ones still leaves each project cache it removed
+/// reported.
+#[tokio::test]
+async fn caches_clean_reports_what_it_removed_before_failing() {
+    let project_dir =
+        std::env::temp_dir().join(format!("ratect-caches-clean-{}", std::process::id()));
+    let caches = ratect_core::cache::cache_directory(&project_dir);
+    std::fs::create_dir_all(&caches).unwrap();
+    std::fs::write(caches.join("key"), "abc123\n").unwrap();
+    let runtime = SharedCacheAppearsAndFails::default();
+    let store = ratect_core::cache::CacheStore::new(
+        ratect_core::cache::CacheType::Volume,
+        Some(&runtime),
+        project_dir.clone(),
+        None,
+    )
+    .unwrap();
+    let found = store.list(None).await.unwrap();
+    let stdout = Captured::default();
+
+    let error = remove_caches(
+        &store,
+        &found,
+        &HashSet::from(["a".to_string(), "registry".to_string()]),
+        false,
+        &Console::new(Box::new(stdout.clone()), false),
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("ratect-shared-cache-registry is in use"),
+        "{error:#}"
+    );
+    assert_eq!(stdout.text(), "Removed cache 'a'.\n");
+
+    std::fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// Two project cache volumes, `a` and `b`, of a project keyed `abc123`,
+/// both removed without complaint.
+struct TwoRemovableVolumes;
+
+#[async_trait::async_trait]
+impl ratect_core::cache::VolumeStore for TwoRemovableVolumes {
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        Ok(vec![
+            "batect-cache-abc123-a".to_string(),
+            "batect-cache-abc123-b".to_string(),
+        ])
+    }
+
+    async fn remove_volume(&self, _name: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A clean that succeeds reports each cache, then the count — and under
+/// `-o quiet`, nothing at all, though each line is now printed as its cache
+/// is removed rather than from the finished list (ratect#700).
+#[tokio::test]
+async fn caches_clean_reports_each_cache_then_the_count_unless_quiet() {
+    for (quiet, expected) in [
+        (
+            false,
+            "Removed cache 'a'.\nRemoved cache 'b'.\nRemoved 2 cache(s).\n",
+        ),
+        (true, ""),
+    ] {
+        let project_dir = std::env::temp_dir().join(format!(
+            "ratect-caches-clean-ok-{}-{quiet}",
+            std::process::id()
+        ));
+        let caches = ratect_core::cache::cache_directory(&project_dir);
+        std::fs::create_dir_all(&caches).unwrap();
+        std::fs::write(caches.join("key"), "abc123\n").unwrap();
+        let store = ratect_core::cache::CacheStore::new(
+            ratect_core::cache::CacheType::Volume,
+            Some(&TwoRemovableVolumes),
+            project_dir.clone(),
+            None,
+        )
+        .unwrap();
+        let found = store.list(None).await.unwrap();
+        let stdout = Captured::default();
+
+        remove_caches(
+            &store,
+            &found,
+            &HashSet::new(),
+            quiet,
+            &Console::new(Box::new(stdout.clone()), false),
+            &Console::new(Box::new(std::io::sink()), false),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(stdout.text(), expected, "quiet: {quiet}");
+
+        std::fs::remove_dir_all(&project_dir).unwrap();
+    }
+}

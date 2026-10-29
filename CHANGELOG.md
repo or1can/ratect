@@ -203,6 +203,8 @@ history, from when it was the only binary.
 - A container whose image is pulled, or found locally, is created from that image's ID rather than its tag, as in Batect.
 - A `--cache-type=directory` run no longer creates, reads or rewrites `.batect/caches/key`, as in Batect, so a cache named `key` works in that mode and an unreadable key file no longer fails the run. Nor does a run whose only caches under `--cache-type=volume` have `scope = "shared"`.
 - An existing `.batect/caches/key` is never overwritten. One with no key line or more than one, or that can't be read, is an error naming the file, as in Batect, instead of being replaced with a new key or having its first key used. Bytes in it that aren't UTF-8 no longer count as unreadable. A key path that is a symbolic link to nothing is an error too, instead of a new key file being created wherever it points.
+- `ratect-compat --clean` and `--clean-cache` print each `Deleting ...` line before that removal is attempted, as in Batect, so a clean that fails partway shows every cache it deleted and the one it failed on.
+- `ratect caches clean` reports each cache as it removes it, so a clean that fails partway still reports every cache it removed.
 - `ratect caches list --scope shared` and `ratect caches clean --scope shared` with volume caches no longer create or read `.batect/caches/key`, so a missing, malformed or unreadable key file makes no difference to them.
 - `image_pull_policy: Always` is honoured even when another container already used the same image under `IfNotPresent`, including through `--override-image`.
 - A Ctrl+C, `SIGTERM` or `SIGHUP` while a run is still connecting to Docker ends it promptly with the signal's exit code, instead of waiting for the connection to finish or fail.
