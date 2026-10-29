@@ -3788,3 +3788,63 @@ impl VolumeStore for DockerClient {
 #[cfg(test)]
 #[path = "docker_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use tokio::sync::{RwLock, RwLockWriteGuard};
+
+    /// Serialises a test's freed-port window against every ephemeral-port
+    /// bind in this test binary (ratect#688). A test wanting a refused
+    /// connection binds `127.0.0.1:0` and drops the listener, so nothing
+    /// listens on that port — until another test, on another `cargo test`
+    /// thread, is handed the same port by its own bind, and the connection
+    /// succeeds or fails some other way. A socket bound but never listening
+    /// isn't the fix: connecting to one is refused on Linux but times out on
+    /// macOS.
+    ///
+    /// So every bind holds this for reading, for the bind alone
+    /// ([`bind_ephemeral_port`]): a listener that stays open can't be handed
+    /// out again, so only a fresh bind can take a freed port. A test freeing
+    /// a port holds it for writing from its own bind until it has connected
+    /// ([`refused_port`]). No read guard outlives its bind, so a test binding
+    /// several listeners can't deadlock behind a queued writer.
+    ///
+    /// A new bind of `127.0.0.1:0` in this binary's tests goes through
+    /// [`bind_ephemeral_port`]; one that doesn't can be handed the freed port.
+    /// `cargo test` runs test binaries one at a time, so other binaries can't
+    /// race.
+    static EPHEMERAL_PORTS: RwLock<()> = RwLock::const_new(());
+
+    /// A listener on a fresh `127.0.0.1` port, and that port (see
+    /// [`EPHEMERAL_PORTS`]).
+    pub(crate) async fn bind_ephemeral_port() -> (tokio::net::TcpListener, u16) {
+        let _guard = EPHEMERAL_PORTS.read().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (listener, port)
+    }
+
+    /// A `127.0.0.1` port nothing listens on, for as long as the returned
+    /// guard is held (see [`EPHEMERAL_PORTS`]): connecting to it has already
+    /// been refused once before this returns.
+    pub(crate) async fn refused_port() -> (u16, RwLockWriteGuard<'static, ()>) {
+        let guard = EPHEMERAL_PORTS.write().await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        // Not noise: dropping the listener doesn't close it while a child
+        // another test thread forked meanwhile still holds its descriptor,
+        // until that child execs (`O_CLOEXEC` closes it then, not at the
+        // fork). Until then a connection is accepted into its backlog and
+        // reset at the exec. So wait for a connection to be refused.
+        for _ in 0..100 {
+            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    return (port, guard);
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+        panic!("127.0.0.1:{port} was still accepting connections after a second");
+    }
+}

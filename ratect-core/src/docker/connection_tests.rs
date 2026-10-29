@@ -1338,8 +1338,7 @@ async fn connect_over_tls_completes_a_real_handshake_against_a_valid_certificate
         now + time::Duration::days(365),
     );
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let (listener, port) = local_listener().await;
     let server = tokio::spawn(serve_one_tls_connection(
         listener,
         materials.cert_der.clone(),
@@ -1381,8 +1380,7 @@ async fn connect_over_tls_rejects_an_expired_certificate() {
     let materials =
         generate_test_tls_materials(now - time::Duration::days(2), now - time::Duration::days(1));
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+    let (listener, port) = local_listener().await;
     let server = tokio::spawn(serve_one_tls_connection(
         listener,
         materials.cert_der.clone(),
@@ -1550,9 +1548,7 @@ fn valid_materials() -> GeneratedTlsMaterials {
 }
 
 async fn local_listener() -> (tokio::net::TcpListener, u16) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    (listener, port)
+    crate::docker::test_support::bind_ephemeral_port().await
 }
 
 #[tokio::test]
@@ -1644,10 +1640,9 @@ async fn a_failed_verification_is_not_explained_when_the_context_did_not_ask_to_
 #[tokio::test]
 async fn a_failure_other_than_verification_is_not_explained_as_one() {
     let materials = valid_materials();
-    // Bound then dropped: nothing listens, so the connection is refused
-    // before any certificate is seen.
-    let (listener, port) = local_listener().await;
-    drop(listener);
+    // Nothing listens, so the connection is refused before any certificate
+    // is seen.
+    let (port, _ports) = crate::docker::test_support::refused_port().await;
     let options = tls_context_options(port, "insecure", true, &[("ca.pem", &materials.ca_pem)]);
 
     let connection = {
@@ -1678,8 +1673,7 @@ async fn plain_first_request_error(host: &str) -> String {
 
 #[tokio::test]
 async fn a_refused_connection_is_reported_as_an_unreachable_daemon_naming_the_host_tried() {
-    let (listener, port) = local_listener().await;
-    drop(listener);
+    let (port, _ports) = crate::docker::test_support::refused_port().await;
     let host = format!("tcp://127.0.0.1:{port}");
 
     let message = plain_first_request_error(&host).await;

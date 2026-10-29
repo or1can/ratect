@@ -1850,8 +1850,7 @@ impl StubDaemon {
         self,
         route: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static,
     ) -> (DockerConnectionOptions, RequestLog) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let (listener, port) = super::test_support::bind_ephemeral_port().await;
         let route: std::sync::Arc<StubRoute> = std::sync::Arc::new(route);
         let log = RequestLog::default();
         let recorded = log.clone();
