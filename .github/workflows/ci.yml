@@ -174,7 +174,8 @@ jobs:
       # This is the same list `AGENTS.md`'s Tooling & CI section gives
       # contributors, and it adds no exposure: `cargo test` already runs the
       # PR's code. A new marker fails this job until its command is added
-      # here, which is the point — someone has to look at what it runs.
+      # here, which is the point — someone has to look at what it runs. The
+      # `[check-cli-flags]` denial is from the same list; `AGENTS.md` says why.
       - name: Grant the verify markers' commands
         run: |
           cat > claims.local.toml <<'EOF'
@@ -186,6 +187,9 @@ jobs:
               "cargo run -q -p ratect -- tasks list -f examples/rust/ratect.toml",
               "cargo run -q -p ratect -- tasks list -f examples/getting-started/ratect.toml",
           ]
+
+          [check-cli-flags]
+          denied = ["tools/changelog-section.py --help"]
           EOF
       # The working tree against the base branch, i.e. the PR's whole change.
       # Exits 1 on a gate finding and 2 on an unparsable `claims.toml`, both
