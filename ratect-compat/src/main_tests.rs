@@ -1403,8 +1403,13 @@ fn a_batect_local_yml_that_cannot_be_read_says_so() {
     let sealed = dir.join("sealed");
     std::fs::create_dir(&sealed).unwrap();
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root sees through any mode, so there is nothing to test as root.
+    let sees_through = std::fs::read_dir(&sealed).is_ok();
     let result = resolve_config_vars_file(None, &sealed);
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if sees_through {
+        return;
+    }
 
     let message = result.unwrap_err().to_string();
     assert!(message.contains("can't be read: "), "{message}");

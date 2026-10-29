@@ -272,6 +272,23 @@ fn connect_warns_about_a_config_json_it_cannot_use_and_uses_the_default_context(
         ..Default::default()
     };
 
+    // With no Docker here, connecting to the default context's socket fails
+    // and takes the warning with it, and no host can stand in for the socket:
+    // any host skips reading `config.json`'s active context at all. Failing
+    // at the socket rather than at `config.json` still shows `connect` went
+    // on with the default context. The warning itself goes unchecked here;
+    // `active_docker_context_reports_a_config_json_it_cannot_use` still
+    // checks that the error it's built from names the file.
+    let socket = DEFAULT_DOCKER_HOST.strip_prefix("unix://").unwrap();
+    if !Path::new(socket).exists() {
+        let message = format!("{:#}", connect(&options).unwrap_err());
+        assert!(
+            message.starts_with("Failed to connect to Docker: "),
+            "{message}"
+        );
+        assert!(message.contains(socket), "{message}");
+        return;
+    }
     let connection = connect(&options).unwrap();
     let [warning] = connection.warnings.as_slice() else {
         panic!("expected one warning: {:?}", connection.warnings);
