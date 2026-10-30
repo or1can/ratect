@@ -824,7 +824,9 @@ impl EventSink for FancyEventLogger {
                 self.repaint_startup(&mut state);
             }
             TaskEvent::ImageBuildProgress { tag, message } => {
-                if !state.keep_updating_startup {
+                // A blank line of build output would blank the status, so
+                // the last line with content stays shown instead.
+                if !state.keep_updating_startup || message.is_empty() {
                     return;
                 }
                 for line in &mut state.lines {

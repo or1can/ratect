@@ -378,10 +378,12 @@ tables above:
   no line, and an empty line is printed only if no `\r` has ended a line
   since the previous `\n`. So `10%\r\r20%` prints `10%` and `20%`, and
   Ratect prints as many empty lines as Batect. A setup command's output
-  follows the same rule.
+  and an image build's `Image build | ` lines follow the same rule; a failed
+  build's `Build output:` keeps each `\r` as Docker sent it.
 - **`all` mode prints a container's last line even without a trailing
   newline.** Batect prints a line only once its `\n` arrives, so a container
-  whose output ends without one loses that last line.
+  whose output ends without one loses that last line. Image build output
+  follows the same rule.
 - **Failure messages are Ratect's own.** A task fails at the same step as under
   Batect — an image that won't pull or build, a task network that can't be
   created, a container that can't be created, set up for

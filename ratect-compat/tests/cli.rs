@@ -664,6 +664,10 @@ fn build_failure_buildkit_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure-buildkit.yml")
 }
 
+fn build_output_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-output.yml")
+}
+
 fn build_buildkit_default_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-buildkit-default.yml")
 }
@@ -6490,6 +6494,54 @@ fn failing_buildkit_build_output_reaches_the_error() {
             < position("this buildkit line should reach the user"),
         "step output should appear in execution order in the transcript: {stderr}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// `-o all` prints a build step's output a line at a time, on both builders,
+/// each line its own `Image build | ` line (ratect#518): indentation kept, a
+/// blank line kept as a prefixed empty one, and a carriage-return redraw
+/// split rather than overwriting the prefix. The cache is busted per run,
+/// since a cached step prints nothing.
+#[test]
+#[ignore]
+fn build_output_keeps_indentation_and_blank_lines_under_output_all() {
+    for buildkit in ["0", "1"] {
+        let cache_bust = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string();
+        let output = ratect_command()
+            .arg("-f")
+            .arg(build_output_config_path())
+            .args(["-o", "all", "build"])
+            .env("DOCKER_BUILDKIT", buildkit)
+            .env("RATECT_BUILD_OUTPUT_CACHE_BUST", &cache_bust)
+            .env_remove("RATECT_BUILD_OUTPUT_FAIL")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "DOCKER_BUILDKIT={buildkit}: the build should have succeeded: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected = [
+            "build-env | Image build | first",
+            "build-env | Image build |   --> src/main.rs:3:5",
+            "build-env | Image build | ",
+            "build-env | Image build | after-blank",
+            "build-env | Image build | a",
+            "build-env | Image build | b",
+        ]
+        .join("\n");
+        assert!(
+            stdout.contains(&format!("{expected}\n")),
+            "DOCKER_BUILDKIT={buildkit}: the step's output should be line for line: {stdout}"
+        );
+    }
 }
 
 /// Requires a running Docker daemon that advertises BuildKit as its default
