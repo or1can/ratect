@@ -19,33 +19,61 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{Duration, Instant};
 
 fn ratect_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_ratect"))
 }
 
-/// Serializes the real-Docker tests below. They share one Docker daemon, and
-/// [`all_projects_never_reaches_containers_ratect_did_not_create`] runs a
-/// machine-wide `resources clean --all-projects` sweep that, by design,
-/// removes *every* Ratect-created container and network regardless of
-/// project — so it must never overlap another test here, which would lose
-/// its containers mid-assertion (a real, timing-dependent CI flake, rare on
-/// a fast machine but reliable on a slow runner). A process-wide lock is
-/// enough on its own: Cargo runs test binaries one at a time, so only the
-/// within-binary parallelism needs taming — no need for a special
-/// `--test-threads=1` invocation that a contributor running these locally
-/// would have to remember. The lock is recovered from poisoning so one
-/// failing test reports its own assertion rather than cascading a
-/// `PoisonError` onto every test after it.
-static DOCKER_SERIAL: Mutex<()> = Mutex::new(());
+/// Keeps the real-Docker tests below from overlapping the few that can't
+/// share the daemon. Every one of them holds [`shared_docker`], so they run
+/// alongside each other — each on a project of its own, or behind that
+/// project's own lock below — except three that hold [`exclusive_docker`]:
+/// - [`all_projects_never_reaches_containers_ratect_did_not_create`], whose
+///   `resources clean --all-projects` sweep removes *every* Ratect-created
+///   container and network regardless of project, so overlapping any other
+///   test would lose that test's containers mid-assertion (a real,
+///   timing-dependent CI flake, rare on a fast machine but reliable on a
+///   slow runner).
+/// - [`stop_signal_reaches_the_configured_signal_via_docker`] and
+///   [`stop_grace_period_shortens_the_wait_before_a_forceful_kill_via_docker`],
+///   which bound their whole run's wall-clock time a few seconds under
+///   Docker's own 10s stop timeout. Two dozen runs starting at once on a
+///   small CI runner eat into that margin, and the bound is the assertion.
+///
+/// A process-wide lock is enough on its own: Cargo runs test binaries one at
+/// a time, so only the within-binary parallelism needs taming — no need for
+/// a special `--test-threads=1` invocation that a contributor running these
+/// locally would have to remember. Every lock here is recovered from
+/// poisoning so one failing test reports its own assertion rather than
+/// cascading a `PoisonError` onto every test after it.
+static DOCKER_DAEMON: RwLock<()> = RwLock::new(());
 
-fn serial_docker() -> MutexGuard<'static, ()> {
-    DOCKER_SERIAL
-        .lock()
+fn shared_docker() -> RwLockReadGuard<'static, ()> {
+    DOCKER_DAEMON
+        .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+fn exclusive_docker() -> RwLockWriteGuard<'static, ()> {
+    DOCKER_DAEMON
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// One test at a time on a project whose tests would see each other's
+/// containers: `resources.yml`'s, where each test's `resources clean` removes
+/// everything the project label carries, and `exit-code.toml`'s, where
+/// [`an_interrupted_run_ends_with_cleanup_complete_via_docker`] waits for
+/// *a* container carrying that label to know its own task has started.
+/// Taken after [`shared_docker`], always in that order.
+fn project_lock(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+static RESOURCES_PROJECT: Mutex<()> = Mutex::new(());
+static EXIT_CODE_PROJECT: Mutex<()> = Mutex::new(());
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tasks.yml")
@@ -2312,7 +2340,7 @@ fn caches_command(project: &Path) -> Command {
 #[test]
 #[ignore]
 fn caches_reports_scope_and_refuses_an_ambiguous_name() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
 
     let project = project_with_directory_caches(&[]);
     std::fs::create_dir_all(&project).unwrap();
@@ -2614,7 +2642,7 @@ fn only_cleaning_warns_about_a_symbolic_link_among_the_caches() {
 #[test]
 #[ignore]
 fn run_executes_a_task_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(fixture_path())
@@ -2646,7 +2674,7 @@ fn run_executes_a_task_via_docker() {
 #[test]
 #[ignore]
 fn run_keeps_stdout_for_the_tasks_own_output_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(fixture_path())
@@ -2677,7 +2705,7 @@ fn run_keeps_stdout_for_the_tasks_own_output_via_docker() {
 #[test]
 #[ignore]
 fn run_all_keeps_stdout_for_the_task_containers_lines_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(fixture_path())
@@ -2709,7 +2737,8 @@ fn run_all_keeps_stdout_for_the_task_containers_lines_via_docker() {
 #[test]
 #[ignore]
 fn a_tasks_own_exit_code_prints_no_error_line_but_ratects_own_failure_does_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
+    let _project = project_lock(&EXIT_CODE_PROJECT);
     let run = |task: &str, style: &str| {
         ratect_command()
             .arg("-f")
@@ -2761,7 +2790,8 @@ fn a_tasks_own_exit_code_prints_no_error_line_but_ratects_own_failure_does_via_d
 #[test]
 #[ignore]
 fn a_task_that_fails_to_run_ends_with_the_failed_summary_line_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
+    let _project = project_lock(&EXIT_CODE_PROJECT);
     let output = ratect_command()
         .arg("-f")
         .arg(exit_code_fixture_path())
@@ -2797,7 +2827,8 @@ fn a_task_that_fails_to_run_ends_with_the_failed_summary_line_via_docker() {
 #[cfg(unix)]
 fn an_interrupted_run_ends_with_cleanup_complete_via_docker() {
     use std::io::Read;
-    let _guard = serial_docker();
+    let _guard = shared_docker();
+    let _project = project_lock(&EXIT_CODE_PROJECT);
     let filter = "label=eu.orican.ratect.project=ratect-exit-code-test";
     let running = || {
         let output = Command::new("docker")
@@ -2857,7 +2888,7 @@ fn an_interrupted_run_ends_with_cleanup_complete_via_docker() {
 #[test]
 #[ignore]
 fn run_executes_a_task_from_a_native_toml_config_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(native_fixture_path())
@@ -2885,7 +2916,7 @@ fn run_executes_a_task_from_a_native_toml_config_via_docker() {
 #[test]
 #[ignore]
 fn run_to_completion_dependency_runs_before_the_task_container_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(run_to_completion_fixture_path())
@@ -2916,7 +2947,7 @@ fn run_to_completion_dependency_runs_before_the_task_container_via_docker() {
 #[test]
 #[ignore]
 fn a_setup_command_with_run_in_execs_into_its_dependency_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(setup_command_run_in_fixture_path())
@@ -2949,7 +2980,7 @@ fn a_setup_command_with_run_in_execs_into_its_dependency_via_docker() {
 #[test]
 #[ignore]
 fn external_health_checks_gate_a_dependent_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(external_health_check_fixture_path())
@@ -2979,7 +3010,7 @@ fn external_health_checks_gate_a_dependent_via_docker() {
 #[test]
 #[ignore]
 fn an_external_health_check_ignores_the_images_own_healthcheck_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(external_health_check_fixture_path())
@@ -3009,7 +3040,7 @@ fn an_external_health_check_ignores_the_images_own_healthcheck_via_docker() {
 #[test]
 #[ignore]
 fn a_failing_external_health_check_fails_the_run_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(external_health_check_fixture_path())
@@ -3041,7 +3072,7 @@ fn a_failing_external_health_check_fails_the_run_via_docker() {
 #[test]
 #[ignore]
 fn a_failing_run_to_completion_dependency_fails_the_run_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(run_to_completion_fixture_path())
@@ -3081,11 +3112,10 @@ fn a_failing_run_to_completion_dependency_fails_the_run_via_docker() {
 #[test]
 #[ignore]
 fn a_run_stamps_this_binarys_own_version_onto_what_it_creates() {
-    let _guard = serial_docker();
-    // `tests/fixtures/labels.yml` has a project name of its own: even with
-    // the tests here serialized (see `serial_docker`), a distinct project
-    // keeps this one from finding a leftover carried by `tasks.yml`'s
-    // project, which `run_executes_a_task_via_docker` also uses.
+    let _guard = shared_docker();
+    // `tests/fixtures/labels.yml` has a project name of its own, which keeps
+    // this one from finding a container carried by `tasks.yml`'s project,
+    // which `run_executes_a_task_via_docker` also uses.
     let filter = "label=eu.orican.ratect.project=ratect-cli-labels-test";
 
     let output = ratect_command()
@@ -3160,7 +3190,7 @@ fn a_run_stamps_this_binarys_own_version_onto_what_it_creates() {
 #[test]
 #[ignore]
 fn all_projects_never_reaches_containers_ratect_did_not_create() {
-    let _guard = serial_docker();
+    let _guard = exclusive_docker();
     let name = "ratect-bystander-test";
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
     let started = Command::new("docker")
@@ -3306,7 +3336,8 @@ fn project_scoped_resources_without_a_project_name_points_at_all_projects() {
 #[test]
 #[ignore]
 fn resources_finds_and_removes_what_a_previous_run_left_behind() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
+    let _project = project_lock(&RESOURCES_PROJECT);
     let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml");
     let ratect = |arguments: &[&str]| {
         let mut command = ratect_command();
@@ -3375,12 +3406,13 @@ fn resources_finds_and_removes_what_a_previous_run_left_behind() {
 ///
 /// #669: `resources list` and `resources clean` carry on when stdout's
 /// reader has gone, and `clean` still removes what a run left behind.
-/// Shares `resources.yml` with the test above, which `serial_docker` keeps
+/// Shares `resources.yml` with the test above, which `RESOURCES_PROJECT` keeps
 /// from overlapping it.
 #[test]
 #[ignore]
 fn resources_succeeds_when_stdout_is_closed() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
+    let _project = project_lock(&RESOURCES_PROJECT);
     let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml");
     let ratect = |arguments: &[&str]| {
         let mut command = ratect_command();
@@ -3428,7 +3460,7 @@ fn resources_succeeds_when_stdout_is_closed() {
 #[test]
 #[ignore]
 fn caches_list_and_clean_manage_real_docker_volumes() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cache.yml");
     let ratect = |arguments: &[&str]| {
         let mut command = ratect_command();
@@ -3476,7 +3508,7 @@ fn caches_list_and_clean_manage_real_docker_volumes() {
 #[test]
 #[ignore]
 fn run_forwards_arguments_after_a_double_dash_to_the_task_command() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(fixture_path())
@@ -3586,7 +3618,7 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
 #[test]
 #[ignore]
 fn a_run_creates_a_shared_cache_that_only_a_scoped_clean_removes() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/shared-cache.toml");
     let ratect = |arguments: &[&str]| {
         let mut command = ratect_command();
@@ -3664,7 +3696,7 @@ fn a_run_creates_a_shared_cache_that_only_a_scoped_clean_removes() {
 #[test]
 #[ignore]
 fn stop_signal_reaches_the_configured_signal_via_docker() {
-    let _guard = serial_docker();
+    let _guard = exclusive_docker();
     let start = Instant::now();
     let output = ratect_command()
         .arg("-f")
@@ -3699,7 +3731,7 @@ fn stop_signal_reaches_the_configured_signal_via_docker() {
 #[test]
 #[ignore]
 fn stop_grace_period_shortens_the_wait_before_a_forceful_kill_via_docker() {
-    let _guard = serial_docker();
+    let _guard = exclusive_docker();
     let start = Instant::now();
     let output = ratect_command()
         .arg("-f")
@@ -3730,7 +3762,7 @@ fn stop_grace_period_shortens_the_wait_before_a_forceful_kill_via_docker() {
 #[test]
 #[ignore]
 fn ulimits_in_the_object_form_reach_the_container_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(ulimits_fixture_path())
@@ -3760,7 +3792,7 @@ fn ulimits_in_the_object_form_reach_the_container_via_docker() {
 #[test]
 #[ignore]
 fn each_container_gets_only_its_own_ulimits_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(ulimits_fixture_path())
@@ -3791,7 +3823,7 @@ fn each_container_gets_only_its_own_ulimits_via_docker() {
 #[test]
 #[ignore]
 fn each_container_gets_only_its_own_dns_settings_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(dns_fixture_path())
@@ -3822,7 +3854,7 @@ fn each_container_gets_only_its_own_dns_settings_via_docker() {
 #[test]
 #[ignore]
 fn each_container_gets_only_its_own_network_mode_via_docker() {
-    let _guard = serial_docker();
+    let _guard = shared_docker();
     let output = ratect_command()
         .arg("-f")
         .arg(network_mode_fixture_path())
