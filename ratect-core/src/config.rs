@@ -3603,9 +3603,9 @@ fn check_bundle_entry(
         .transpose()
         .with_context(|| {
             format!(
-                "Invalid '{}' on the Git include of '{}' in {declared_in}",
+                "Invalid '{}' on the Git include of {} in {declared_in}",
                 crate::written_for::REVIEWED_FIELD,
-                boundary.bundle.id.remote
+                boundary.bundle.id
             )
         })?;
     let entry_file = boundary.describe(resolved);

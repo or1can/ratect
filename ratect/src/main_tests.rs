@@ -1063,3 +1063,55 @@ async fn caches_clean_reports_each_cache_then_the_count_unless_quiet() {
         std::fs::remove_dir_all(&project_dir).unwrap();
     }
 }
+
+/// #751: every human `includes` line names an entry through `named_include`:
+/// its remote with credentials shown as `***`, its ref, and — only when
+/// something was hidden, so two entries could otherwise print alike — the
+/// first 12 characters of its cache key.
+#[test]
+fn includes_output_names_an_entry_without_its_credentials() {
+    let entry = |remote: &str| ratect_core::git_include::CachedInclude {
+        key: "45de9a2d81c0f00dfeedbeef".to_string(),
+        remote: remote.to_string(),
+        git_ref: "v1".to_string(),
+        last_used: 0,
+        path: PathBuf::from("/k"),
+        size_bytes: 0,
+    };
+
+    assert_eq!(
+        named_include(&entry("https://u:s3cret@host/b.git")),
+        "https://***@host/b.git at v1 (key 45de9a2d81c0)"
+    );
+    assert_eq!(
+        named_include(&entry("https://host/b.git")),
+        "https://host/b.git at v1"
+    );
+    assert_eq!(
+        named_include(&entry("git@host:o/b.git")),
+        "git@host:o/b.git at v1"
+    );
+}
+
+/// #751: `includes list -o quiet` adds the cache key, so two entries that
+/// differ only in their credentials stay distinct once redacted.
+#[test]
+fn a_quiet_includes_line_is_repo_ref_and_cache_key() {
+    let entry = |remote: &str, key: &str| ratect_core::git_include::CachedInclude {
+        key: key.to_string(),
+        remote: remote.to_string(),
+        git_ref: "v1".to_string(),
+        last_used: 0,
+        path: PathBuf::from("/k"),
+        size_bytes: 0,
+    };
+
+    assert_eq!(
+        quiet_include_line(&entry("https://a:tok1@host/r.git", "k1")),
+        "https://***@host/r.git\tv1\tk1"
+    );
+    assert_eq!(
+        quiet_include_line(&entry("https://b:tok2@host/r.git", "k2")),
+        "https://***@host/r.git\tv1\tk2"
+    );
+}

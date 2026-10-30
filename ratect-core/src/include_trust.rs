@@ -93,6 +93,7 @@ use anyhow::{Context, Result};
 use path_clean::PathClean;
 
 use crate::config::ConfigFormat;
+use crate::git_include::{describe_include, display_remote};
 
 /// What a `type: git` include entry asks for. Built from the entry's own
 /// fields at the single place each walker destructures one, so neither passes
@@ -133,11 +134,28 @@ impl Trust {
 
 /// How a bundle is named back to whoever has to act on an error: exactly the
 /// two things they wrote, and nothing derived (a clone directory is Ratect's
-/// business, not theirs).
-#[derive(Debug, Clone)]
+/// business, not theirs). Displays as [`describe_include`] does, and its
+/// `Debug` hides the remote's credentials too, since a [`Bundle`] or
+/// [`Boundary`] logged whole would print it.
+#[derive(Clone)]
 pub(crate) struct BundleId {
     pub remote: String,
     pub git_ref: String,
+}
+
+impl std::fmt::Display for BundleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&describe_include(&self.remote, &self.git_ref))
+    }
+}
+
+impl std::fmt::Debug for BundleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BundleId")
+            .field("remote", &display_remote(&self.remote))
+            .field("git_ref", &self.git_ref)
+            .finish()
+    }
 }
 
 /// A bundle as the trust rules see it — how it is named, and what it carries.
@@ -242,10 +260,9 @@ impl Boundary {
     /// `relativize` does.
     pub(crate) fn describe(&self, path: &Path) -> String {
         format!(
-            "'{}' from the bundle '{}' at '{}'",
+            "'{}' from the bundle {}",
             relative_to(&self.repo_dir, &path.clean()).display(),
-            self.bundle.id.remote,
-            self.bundle.id.git_ref
+            self.bundle.id
         )
     }
 
@@ -263,8 +280,8 @@ impl Boundary {
         })?;
         let canonical_root = self.repo_dir.canonicalize().with_context(|| {
             format!(
-                "Failed to resolve the checkout of the bundle '{}' at '{}'",
-                self.bundle.id.remote, self.bundle.id.git_ref
+                "Failed to resolve the checkout of the bundle {}",
+                self.bundle.id
             )
         })?;
         if canonical_resolved.starts_with(&canonical_root) {
@@ -331,10 +348,7 @@ impl Boundary {
     /// would be a run of `..` that depends on where the cache lives.
     pub(crate) fn describe_in_checkout(&self, path: &Path) -> Option<String> {
         if path == self.repo_dir {
-            Some(format!(
-                "the checkout of the bundle '{}' at '{}'",
-                self.bundle.id.remote, self.bundle.id.git_ref
-            ))
+            Some(format!("the checkout of the bundle {}", self.bundle.id))
         } else if path.starts_with(&self.repo_dir) {
             Some(self.describe(path))
         } else {
@@ -355,10 +369,9 @@ impl Boundary {
             ),
             None => format!(
                 "Cannot determine where '{}' really points, so the containment for the \
-                     Git repository '{}' at '{}' cannot be checked.",
+                     Git repository {} cannot be checked.",
                 path.display(),
-                self.bundle.id.remote,
-                self.bundle.id.git_ref
+                self.bundle.id
             ),
         })
     }
@@ -380,10 +393,7 @@ impl Boundary {
             Some(described) => (described, "its checkout".to_string()),
             None => (
                 format!("'{}'", resolved.display()),
-                format!(
-                    "the Git repository '{}' at '{}' it was included from",
-                    self.bundle.id.remote, self.bundle.id.git_ref
-                ),
+                format!("the Git repository {} it was included from", self.bundle.id),
             ),
         };
         anyhow::anyhow!(
@@ -393,7 +403,7 @@ impl Boundary {
              to reach that path, set 'allow_host_paths' to true on the include entry for '{}' \
              in your own configuration.",
             project_dir.display(),
-            self.bundle.id.remote
+            display_remote(&self.bundle.id.remote)
         )
     }
 }
@@ -559,6 +569,7 @@ pub(crate) fn check_dialect(
     let Some(batect_file) = batect_file else {
         return Ok(());
     };
+    let repo = display_remote(repo);
     let (field, remark) = if asked.nested_git.is_some() {
         (
             "allow_nested_git_includes",
@@ -581,8 +592,8 @@ pub(crate) fn check_dialect(
     }
     let subject = match declaring {
         Some(declaring) => format!(
-            "The bundle '{}' at '{}' sets '{field}' on its Git include of '{repo}'",
-            declaring.id.remote, declaring.id.git_ref
+            "The bundle {} sets '{field}' on its Git include of '{repo}'",
+            declaring.id
         ),
         None => format!("The Git include of '{repo}' sets '{field}'"),
     };
@@ -612,14 +623,14 @@ pub(crate) fn check_may_declare_git(restricted: Option<&Bundle>, repo: &str) -> 
     let Some(declaring) = refusing_nested_git(restricted) else {
         return Ok(());
     };
+    let repo = display_remote(repo);
     anyhow::bail!(
-        "The bundle '{}' at '{}' declares a Git include of its own \
+        "The bundle {} declares a Git include of its own \
          ('{repo}'), which would fetch and run configuration from a \
          remote you have not named. Set 'allow_nested_git_includes' to \
          true on that bundle's own include entry to accept this; only a \
          TOML file can set it.",
-        declaring.id.remote,
-        declaring.id.git_ref
+        declaring.id
     );
 }
 
@@ -665,6 +676,7 @@ pub(crate) fn hide_clone_detail(
     candidates: &[String],
     restricted: Option<&Bundle>,
 ) -> anyhow::Error {
+    let include = describe_include(repo, git_ref);
     let Some(declaring) = restricted else {
         let files = candidates
             .iter()
@@ -672,21 +684,20 @@ pub(crate) fn hide_clone_detail(
             .collect::<Vec<_>>()
             .join(" or ");
         return error.context(format!(
-            "Failed to resolve Git include {files} from '{repo}' at '{git_ref}'"
+            "Failed to resolve Git include {files} from {include}"
         ));
     };
     tracing::debug!(
         error = format!("{error:#}"),
-        repo,
+        repo = %display_remote(repo),
         git_ref,
         "Failed to resolve a nested Git include"
     );
     anyhow::anyhow!(
-        "Failed to resolve the Git include of '{repo}' at '{git_ref}', declared by the bundle \
-         '{}' at '{}'. The underlying error is not shown here because that remote was named by \
+        "Failed to resolve the Git include of {include}, declared by the bundle \
+         {}. The underlying error is not shown here because that remote was named by \
          the bundle rather than by you — re-run with RUST_LOG=debug to see it.",
-        declaring.id.remote,
-        declaring.id.git_ref
+        declaring.id
     )
 }
 
@@ -765,6 +776,7 @@ impl EffectiveGrants {
             return Ok(());
         }
         let named = lost.join("' and '");
+        let repo = display_remote(repo);
         let (were, permission) = if lost.len() == 1 {
             ("was", "the permission")
         } else {

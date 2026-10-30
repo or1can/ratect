@@ -1816,3 +1816,211 @@ async fn a_load_that_waited_for_another_process_to_clone_does_not_announce_a_clo
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
+
+/// #751: credentials in a remote are shown as `***`; everything else as
+/// written.
+#[test]
+fn display_remote_hides_credentials_and_keeps_everything_else_as_written() {
+    for (remote, shown) in [
+        ("https://u:p@host/x.git", "https://***@host/x.git"),
+        (
+            "https://TOKEN@github.com/o/r.git",
+            "https://***@github.com/o/r.git",
+        ),
+        ("ssh://git@host/r.git", "ssh://***@host/r.git"),
+        ("https://u:p@ss@host/x", "https://***@host/x"),
+        ("https://u:p@host", "https://***@host"),
+        ("https://u:p@host?q", "https://***@host?q"),
+        ("https://u:pa#ss@host/x", "https://***@host/x"),
+        ("https://u:to?ken@host/x", "https://***@host/x"),
+        ("helper::https://u:p@host/x", "helper::https://***@host/x"),
+        ("git@github.com:o/r.git", "git@github.com:o/r.git"),
+        ("/srv/git/r.git", "/srv/git/r.git"),
+        ("https://GitHub.com/O/r", "https://GitHub.com/O/r"),
+        ("https://host/a@b", "https://host/a@b"),
+    ] {
+        assert_eq!(display_remote(remote), shown, "{remote}");
+    }
+}
+
+/// #751: the progress line and the lock notice name the include without its
+/// credentials; the clone itself is given them.
+#[tokio::test]
+async fn the_clone_line_and_lock_notice_hide_a_remotes_credentials() {
+    let remote = "https://u:s3cret@example.com/repo.git";
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let lock_path = root.join(format!("{}.lock", cache_key(remote, "v1.0.0")));
+    tokio::fs::write(&lock_path, b"").await.unwrap();
+    let git = FakeGitClient::new().with_files(
+        remote,
+        "v1.0.0",
+        HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+    );
+    let (output, stderr, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let mut cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
+    cache.lock_timeout = Duration::from_millis(250);
+
+    let timeout = cache
+        .ensure_cached(remote, "v1.0.0")
+        .await
+        .unwrap_err()
+        .to_string();
+    tokio::fs::remove_file(&lock_path).await.unwrap();
+    cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+
+    assert_eq!(git.clone_count(), 1, "cloned with the full remote");
+    for shown in [timeout, stderr.contents(), progress.contents()] {
+        assert!(!shown.contains("s3cret"), "{shown}");
+        assert!(
+            shown.contains("https://***@example.com/repo.git"),
+            "{shown}"
+        );
+    }
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn system_git_client_hides_a_remotes_credentials_in_its_errors() {
+    let destination = unique_temp_dir().join("clone");
+
+    let error = SystemGitClient
+        .clone_repo(
+            "https://u:s3cret@127.0.0.1:9/repo.git",
+            "v1.0.0",
+            &destination,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(!error.contains("s3cret"), "{error}");
+    assert!(
+        error.starts_with("Could not clone repository 'https://***@127.0.0.1:9/repo.git'"),
+        "{error}"
+    );
+    std::fs::remove_dir_all(destination.parent().unwrap()).ok();
+}
+
+/// #751: only what is shown is redacted — the sidecar keeps the remote in
+/// full, so a refresh can clone it again.
+#[tokio::test]
+async fn refresh_reclones_a_credential_bearing_entry_with_its_full_remote() {
+    let remote = "https://u:s3cret@example.com/repo.git";
+    let root = unique_temp_dir();
+    let git = FakeGitClient::new().with_files(
+        remote,
+        "v1.0.0",
+        HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+    );
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000);
+    cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+
+    let refreshed = cache.refresh().await.unwrap();
+
+    assert_eq!(git.clone_count(), 2);
+    assert_eq!(refreshed.len(), 1);
+    assert_eq!(refreshed[0].remote, remote);
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// #751: toml's own error quotes the line it failed on, and serde's type
+/// errors quote the value, either of which in a sidecar can be the remote in
+/// full. A load's error and `list`'s warning carry neither.
+#[tokio::test]
+async fn a_sidecar_that_fails_to_parse_is_reported_without_its_contents() {
+    let remote = "https://u:s3cret@example.com/repo.git";
+    let root = unique_temp_dir();
+    let key = cache_key(remote, "v1.0.0");
+    let sidecar = root.join(format!("{key}.toml"));
+    tokio::fs::create_dir_all(root.join(&key)).await.unwrap();
+    tokio::fs::write(&sidecar, format!("[repo]\nremote = \"{remote}\" oops\n"))
+        .await
+        .unwrap();
+    let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 1000);
+
+    let error = format!(
+        "{:#}",
+        cache.ensure_cached(remote, "v1.0.0").await.unwrap_err()
+    );
+
+    assert_eq!(
+        error,
+        format!(
+            "Failed to parse Git include cache info file {sidecar:?} at line 2; delete it to \
+             have it written again"
+        )
+    );
+    // What `list` reads it as: a value of the wrong type is quoted by serde.
+    let wrong_type = format!("kind = \"git\"\nrepo = \"{remote}\"\n");
+    let parsed = toml::from_str::<CacheInfo>(&wrong_type).unwrap_err();
+    assert!(parsed.to_string().contains("s3cret"), "the case is real");
+    assert_eq!(describe_parse_error(&parsed, &wrong_type), "at line 2");
+    // As the error says: deleted, it is written again.
+    tokio::fs::remove_file(&sidecar).await.unwrap();
+    cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+    assert!(sidecar.exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn system_git_client_hides_credentials_when_refusing_a_remote_starting_with_a_dash() {
+    let error = SystemGitClient
+        .clone_repo(
+            "-https://u:s3cret@example.com/r.git",
+            "v1.0.0",
+            &unique_temp_dir().join("clone"),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(!error.contains("s3cret"), "{error}");
+}
+
+/// #751: a checkout failure names the repository without its credentials.
+/// `file://` accepts userinfo and ignores it, so the clone itself succeeds.
+#[tokio::test]
+async fn system_git_client_hides_credentials_when_a_checkout_fails() {
+    let repo_dir = create_test_repo();
+    let destination = unique_temp_dir().join("clone");
+    let remote = format!("file://u:s3cret@localhost{}", repo_dir.display());
+
+    let error = SystemGitClient
+        .clone_repo(&remote, "does-not-exist", &destination)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(!error.contains("s3cret"), "{error}");
+    assert!(
+        error.starts_with(&format!(
+            "Could not check out reference 'does-not-exist' for repository \
+             'file://***@localhost{}'",
+            repo_dir.display()
+        )),
+        "{error}"
+    );
+
+    std::fs::remove_dir_all(&repo_dir).ok();
+    std::fs::remove_dir_all(destination.parent().unwrap()).ok();
+}
+
+#[test]
+fn a_cached_include_debugs_without_its_credentials() {
+    let entry = CachedInclude {
+        key: "k".to_string(),
+        remote: "https://u:s3cret@host/r.git".to_string(),
+        git_ref: "v1".to_string(),
+        last_used: 0,
+        path: PathBuf::from("/k"),
+        size_bytes: 0,
+    };
+
+    let debugged = format!("{entry:?}");
+    assert!(!debugged.contains("s3cret"), "{debugged}");
+    assert!(debugged.contains("https://***@host/r.git"), "{debugged}");
+}

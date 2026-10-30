@@ -23,6 +23,7 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- `ratect includes list -o quiet` (ratect only) prints a third tab-separated column, the entry's directory name under `~/.ratect/incl`, and shows credentials in a remote URL as `***`.
 - A `--docker-tls-ca-cert`, `--docker-tls-cert` or `--docker-tls-key` that doesn't exist or is a directory is an invalid option value whether or not TLS is used, as in Batect, so `ratect-compat --list-tasks` and `ratect caches` with the directory store refuse one, and a run refuses one before reading its config. `ratect doctor` reports one as a problem.
 - `ratect-compat`: a `--log-file` that is a directory, or exists but isn't a regular file (`/dev/null`), is an invalid option value, as in Batect.
 - `ratect-compat`: a `-f` given explicitly that names no file is refused before any command runs, as in Batect, so `--clean` refuses it too.
@@ -224,6 +225,7 @@ history, from when it was the only binary.
 
 ### Security
 
+- A Git include's `repo` is shown with any credentials in its URL replaced by `***` (`https://***@host/repo.git`) in every message, in `RUST_LOG=debug` records, and in `ratect includes` output, which also gives such an entry the first 12 characters of its cache key, so two that differ only in credentials are told apart. The include is still cloned with the URL as written.
 - Upgraded `rustls-webpki` to 0.103.16, fixing [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) (certificate verification may accept distrusted intermediates).
 - Upgraded `tokio` to 1.54.1, fixing [RUSTSEC-2026-0384](https://rustsec.org/advisories/RUSTSEC-2026-0384) (a race condition in `tokio::time::Interval`). Ratect's own code doesn't use `Interval`; lockfile only.
 

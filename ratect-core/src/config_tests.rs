@@ -18088,3 +18088,47 @@ async fn ratect_compat_refuses_reviewed_ratect_version() {
     std::fs::remove_dir_all(&cache_root).ok();
     std::fs::remove_dir_all(&project).ok();
 }
+
+/// #751: a refusal naming a bundle's include hides its remote's credentials.
+#[tokio::test]
+async fn an_invalid_review_names_the_include_without_its_credentials() {
+    const REMOTE: &str = "https://u:s3cret@example.com/bundle.git";
+    let project = unique_temp_dir();
+    std::fs::write(
+        project.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\nratect_version = \"0.12.0\"\n\n[[include]]\ntype = \"git\"\n\
+             repo = \"{REMOTE}\"\nref = \"v1\"\nreviewed_ratect_version = \"latest\"\n"
+        ),
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git = FakeGitClient::new().with_files(
+        REMOTE,
+        "v1",
+        HashMap::from([("ratect-bundle.toml".to_string(), BUNDLE_TASK.to_string())]),
+    );
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let error = format!(
+        "{:#}",
+        Config::load_from_file_native_written_for(
+            &project.join("ratect.toml"),
+            &git_cache,
+            running_0_12()
+        )
+        .await
+        .unwrap_err()
+    );
+
+    assert!(!error.contains("s3cret"), "{error}");
+    assert!(
+        error.contains(
+            "Invalid 'reviewed_ratect_version' on the Git include of \
+             'https://***@example.com/bundle.git' at 'v1' in"
+        ),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&project).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+}

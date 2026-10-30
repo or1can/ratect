@@ -363,6 +363,53 @@ fn list_tasks_shows_an_unquoted_number_as_written() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// #751: a Git include's credentials appear in nothing the load prints — its
+/// clone line, its error, or `RUST_LOG=debug` — in any style. The port is
+/// closed, so the clone fails at once and leaves nothing in the cache.
+#[test]
+fn a_git_include_remotes_credentials_are_never_printed() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-git-credentials-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ninclude:\n  - type: git\n\
+         \x20   repo: https://ci:s3cret@127.0.0.1:9/b.git\n    ref: compat-751\n",
+    )
+    .unwrap();
+
+    for style in ["simple", "quiet"] {
+        for log in ["off", "debug"] {
+            let output = ratect_command()
+                .current_dir(&dir)
+                .env("RUST_LOG", log)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .args(["-o", style, "--list-tasks"])
+                .output()
+                .expect("failed to run ratect-compat");
+            let printed = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!output.status.success(), "{printed}");
+            assert!(!printed.contains("s3cret"), "{style}, {log}:\n{printed}");
+            assert!(
+                printed.contains("https://***@127.0.0.1:9/b.git"),
+                "{style}, {log}:\n{printed}"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Runs `ratect-compat` with `args` and returns its stdout, failing the test
 /// on a non-zero exit.
 fn help_stdout(command: &mut Command, args: &[&str]) -> String {

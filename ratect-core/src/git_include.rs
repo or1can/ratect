@@ -61,6 +61,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
@@ -69,6 +70,49 @@ use tokio::time::Instant;
 use crate::ui::LoadOutput;
 
 mod entry_lock;
+
+/// `remote` as Ratect shows it, in every message and listing: a URL's
+/// credentials — everything in its authority before the last `@` — as `***`,
+/// so a token in a `repo` never reaches a terminal or a log (#751); the rest
+/// as written, byte for byte, and a remote that isn't a URL (`git@host:path`,
+/// a local path) unchanged. `git`'s own messages already leave credentials
+/// out. What is stored and passed to `git` is the remote in full.
+///
+/// Written out rather than parsed with `url`, which would normalise the rest
+/// (lowercase the host, add a trailing `/`) and can't parse what isn't a URL.
+pub fn display_remote(remote: &str) -> Cow<'_, str> {
+    let Some(scheme_end) = remote.find("://") else {
+        return Cow::Borrowed(remote);
+    };
+    let (head, rest) = remote.split_at(scheme_end + "://".len());
+    // To the first `/` only: a credential may hold an unencoded `?` or `#`,
+    // and taking too much of a URL with neither only hides more of it.
+    let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+    match authority.rfind('@') {
+        Some(at) => Cow::Owned(format!("{head}***{}", &rest[at..])),
+        None => Cow::Borrowed(remote),
+    }
+}
+
+/// A Git include as every message names it — `'<remote>' at '<ref>'`, the
+/// remote through [`display_remote`] — so no message spells the pair, or
+/// forgets to redact it, on its own.
+pub fn describe_include(remote: &str, git_ref: &str) -> String {
+    format!("'{}' at '{git_ref}'", display_remote(remote))
+}
+
+/// Where a sidecar failed to parse — `at line N` — and nothing else: toml's
+/// own `Display` quotes the line, and serde's type errors quote the value,
+/// either of which can be the remote in full (#751).
+fn describe_parse_error(error: &toml::de::Error, content: &str) -> String {
+    match error.span() {
+        Some(span) => format!(
+            "at line {}",
+            content[..span.start].matches('\n').count() + 1
+        ),
+        None => "as TOML".to_string(),
+    }
+}
 
 /// Shells out to the system `git` binary, so tests can inject a fake
 /// instead of needing a real network and a real `git` — same shape as
@@ -105,7 +149,10 @@ impl GitClient for SystemGitClient {
         // before `remote`; `checkout` can't safely use one (see the comment
         // there), so this check is what protects `git_ref` there.
         if remote.starts_with('-') {
-            anyhow::bail!("Git include 'repo' must not start with '-': '{remote}'");
+            anyhow::bail!(
+                "Git include 'repo' must not start with '-': '{}'",
+                display_remote(remote)
+            );
         }
         if git_ref.starts_with('-') {
             anyhow::bail!("Git include 'ref' must not start with '-': '{git_ref}'");
@@ -119,7 +166,8 @@ impl GitClient for SystemGitClient {
             .context("Failed to run 'git clone' — is git installed and on PATH?")?;
         if !clone_output.status.success() {
             anyhow::bail!(
-                "Could not clone repository '{remote}': git exited with {}: {}",
+                "Could not clone repository '{}': git exited with {}: {}",
+                display_remote(remote),
                 clone_output.status,
                 String::from_utf8_lossy(&clone_output.stderr).trim()
             );
@@ -139,7 +187,8 @@ impl GitClient for SystemGitClient {
             .context("Failed to run 'git checkout'")?;
         if !checkout_output.status.success() {
             anyhow::bail!(
-                "Could not check out reference '{git_ref}' for repository '{remote}': git exited with {}: {}",
+                "Could not check out reference '{git_ref}' for repository '{}': git exited with {}: {}",
+                display_remote(remote),
                 checkout_output.status,
                 String::from_utf8_lossy(&checkout_output.stderr).trim()
             );
@@ -171,8 +220,10 @@ struct CacheInfoRepo {
 }
 
 /// One entry in the Git include cache — what `ratect includes list`
-/// reports, and what `clean`/`refresh` return as having acted on.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// reports, and what `clean`/`refresh` return as having acted on. Its `Debug`
+/// shows `remote` through [`display_remote`], so one logged whole can't print
+/// its credentials.
+#[derive(Clone, PartialEq, Eq)]
 pub struct CachedInclude {
     /// The hashed directory name under `~/.ratect/incl`. Not meaningful to
     /// a user, but it's what identifies the entry on disk.
@@ -189,6 +240,19 @@ pub struct CachedInclude {
     /// the only caller that needs it; zero elsewhere rather than paying for
     /// a directory walk nothing reads.
     pub size_bytes: u64,
+}
+
+impl std::fmt::Debug for CachedInclude {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedInclude")
+            .field("key", &self.key)
+            .field("remote", &display_remote(&self.remote))
+            .field("git_ref", &self.git_ref)
+            .field("last_used", &self.last_used)
+            .field("path", &self.path)
+            .field("size_bytes", &self.size_bytes)
+            .finish()
+    }
 }
 
 /// Removes an entry's working copy and sidecar, tolerating either being
@@ -513,7 +577,7 @@ impl<G: GitClient> GitIncludeCache<G> {
         ));
         self.output.progress(&format!(
             "Cloning {} {}...",
-            self.output.progress_bold(remote),
+            self.output.progress_bold(&display_remote(remote)),
             self.output.progress_bold(git_ref)
         ));
         if let Err(e) = self.git.clone_repo(remote, git_ref, &staging).await {
@@ -549,7 +613,7 @@ impl<G: GitClient> GitIncludeCache<G> {
         remote: &str,
         git_ref: &str,
     ) -> Result<entry_lock::EntryLock> {
-        let include = format!("Git include '{remote}' at '{git_ref}'");
+        let include = format!("Git include {}", describe_include(remote, git_ref));
         let limit = describe_wait(self.lock_timeout);
         let start = Instant::now();
         let mut announced = false;
@@ -630,8 +694,12 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// Batect accepts.
     async fn update_info_file(&self, remote: &str, git_ref: &str, info_path: &Path) -> Result<()> {
         let mut info: toml::Table = match tokio::fs::read_to_string(info_path).await {
-            Ok(content) => toml::from_str(&content).with_context(|| {
-                format!("Failed to parse Git include cache info file {info_path:?}")
+            Ok(content) => toml::from_str(&content).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to parse Git include cache info file {info_path:?} {}; delete it \
+                     to have it written again",
+                    describe_parse_error(&e, &content)
+                )
             })?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 toml::Table::try_from(CacheInfo {
@@ -765,9 +833,8 @@ impl<G: GitClient> GitIncludeCache<G> {
             match self.ensure_cached(&entry.remote, &entry.git_ref).await {
                 Ok(_) => refreshed.push(entry),
                 Err(e) => tracing::warn!(
-                    "Failed to re-clone {} at {}: {e:#}",
-                    entry.remote,
-                    entry.git_ref
+                    "Failed to re-clone Git include {}: {e:#}",
+                    describe_include(&entry.remote, &entry.git_ref)
                 ),
             }
         }
@@ -807,7 +874,10 @@ impl<G: GitClient> GitIncludeCache<G> {
             let info: CacheInfo = match toml::from_str(&content) {
                 Ok(info) => info,
                 Err(e) => {
-                    tracing::warn!("Failed to parse Git include cache info file {path:?}: {e}");
+                    tracing::warn!(
+                        "Failed to parse Git include cache info file {path:?} {}",
+                        describe_parse_error(&e, &content)
+                    );
                     continue;
                 }
             };

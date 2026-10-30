@@ -58,6 +58,7 @@ use crate::config::{
     LoadedConfig, LoadedFile, RunAsCurrentUser, Task, VolumeMount,
 };
 use crate::diagnostics::{conversion_checks, ConversionCheck, ConversionCheckKind};
+use crate::git_include::describe_include;
 use crate::include_trust::BundleId;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
@@ -300,9 +301,8 @@ fn owned_file_reaching(loaded: &LoadedConfig, bundle: &BundleId) -> Result<PathB
             .min_by_key(|file| file.boundary.is_some())
             .with_context(|| {
                 format!(
-                    "no file declares the Git include '{}' at '{}' — this is a bug; please \
-                     report it",
-                    wanted.remote, wanted.git_ref
+                    "no file declares the Git include {wanted} — this is a bug; please \
+                     report it"
                 )
             })?;
         match &declaring.boundary {
@@ -311,10 +311,8 @@ fn owned_file_reaching(loaded: &LoadedConfig, bundle: &BundleId) -> Result<PathB
         }
     }
     anyhow::bail!(
-        "the Git include '{}' at '{}' is reached from no owned file — this is a bug; please \
-         report it",
-        bundle.remote,
-        bundle.git_ref
+        "the Git include {bundle} is reached from no owned file — this is a bug; please \
+         report it"
     )
 }
 
@@ -361,11 +359,13 @@ fn convert_include(
             // review can't be automated (decisions/0020).
             reviewed_ratect_version: _,
         } => {
+            // For messages only: the entry written keeps `repo` in full.
+            let include = describe_include(repo, git_ref);
             let clone = loaded
                 .git_clones
                 .get(&(repo.clone(), git_ref.clone()))
                 .with_context(|| {
-                    format!("the load left Git include '{repo}' at '{git_ref}' uncloned — this is a bug; please report it")
+                    format!("the load left Git include {include} uncloned — this is a bug; please report it")
                 })?;
             let path = match path {
                 Some(path) => Some(path.clone()),
@@ -374,7 +374,7 @@ fn convert_include(
                         container: None,
                         kind: ConversionCheckKind::BundleOffersNativeFile,
                         message: format!(
-                            "Git include '{repo}' at '{git_ref}' offers a {NATIVE_BUNDLE_FILE}, \
+                            "Git include {include} offers a {NATIVE_BUNDLE_FILE}, \
                              which ratect would load in place of the {BATECT_BUNDLE_FILE} \
                              batect.yml loads — 'path' was set to {BATECT_BUNDLE_FILE} so the \
                              same file loads; remove 'path' to switch to the native one."
@@ -389,7 +389,7 @@ fn convert_include(
                     container: None,
                     kind: ConversionCheckKind::BundleDeclaresGitIncludes,
                     message: format!(
-                        "Git include '{repo}' at '{git_ref}' declares Git includes of its own, \
+                        "Git include {include} declares Git includes of its own, \
                          which ratect refuses unless 'allow_nested_git_includes' is set to true \
                          on this entry (see https://github.com/or1can/ratect/blob/main/docs/includes.md#nested-git-includes)."
                     ),

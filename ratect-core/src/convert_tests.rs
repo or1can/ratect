@@ -819,3 +819,73 @@ async fn an_inferred_project_name_is_written_into_the_root() {
 fn running_0_12() -> crate::written_for::Version {
     "0.12.0".parse().unwrap()
 }
+
+/// #751: a conversion item names the Git include without its remote's
+/// credentials; the converted entry keeps the remote in full, so it still
+/// clones.
+#[tokio::test]
+async fn a_conversion_item_hides_the_includes_credentials() {
+    const REMOTE: &str = "https://u:s3cret@example.com/bundle.git";
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            &format!(
+                "project_name: demo\ninclude:\n  - type: git\n    repo: {REMOTE}\n    ref: v1\n"
+            ),
+        )],
+    );
+    let git = FakeGitClient::new()
+        .with_files(
+            REMOTE,
+            "v1",
+            HashMap::from([
+                (
+                    "batect-bundle.yml".to_string(),
+                    format!("include:\n  - type: git\n    repo: {BUNDLE}\n    ref: v2\n"),
+                ),
+                (
+                    "ratect-bundle.toml".to_string(),
+                    "[containers.native]\nimage = \"alpine:3.18\"\n".to_string(),
+                ),
+            ]),
+        )
+        .with_files(
+            BUNDLE,
+            "v2",
+            HashMap::from([("batect-bundle.yml".to_string(), BUNDLE_YML.to_string())]),
+        );
+    let converted = convert_with_git(&dir.join("batect.yml"), &git_cache(&scratch, git))
+        .await
+        .unwrap();
+
+    let messages: Vec<&str> = converted.files[0]
+        .checks
+        .iter()
+        .map(|check| check.message.as_str())
+        .collect();
+    assert_eq!(messages.len(), 2, "{messages:#?}");
+    assert!(
+        messages[0].starts_with(
+            "Git include 'https://***@example.com/bundle.git' at 'v1' offers a ratect-bundle.toml"
+        ),
+        "{}",
+        messages[0]
+    );
+    assert!(
+        messages[1].starts_with(
+            "Git include 'https://***@example.com/bundle.git' at 'v1' declares Git includes"
+        ),
+        "{}",
+        messages[1]
+    );
+    assert!(
+        converted.files[0]
+            .toml
+            .contains(&format!("repo = \"{REMOTE}\"")),
+        "{}",
+        converted.files[0].toml
+    );
+}

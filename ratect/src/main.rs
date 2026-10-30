@@ -41,6 +41,7 @@ use ratect_core::diagnostics::{
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::exit_code::Word;
+use ratect_core::git_include::display_remote;
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
@@ -2045,10 +2046,8 @@ async fn manage_includes(
                 return Ok(());
             }
             if quiet {
-                // Machine-readable, same contract as the other `list`
-                // verbs: the identifying pair, tab-separated.
                 for entry in entries {
-                    stdout.println(&format!("{}\t{}", entry.remote, entry.git_ref));
+                    stdout.println(&quiet_include_line(&entry));
                 }
                 return Ok(());
             }
@@ -2059,7 +2058,7 @@ async fn manage_includes(
                 format_size(total)
             ));
             for entry in entries {
-                stdout.println(&format!("\n  {} at {}", entry.remote, entry.git_ref));
+                stdout.println(&format!("\n  {}", named_include(&entry)));
                 stdout.println(&format!(
                     "    {}, last used {} ago",
                     format_size(entry.size_bytes),
@@ -2079,7 +2078,7 @@ async fn manage_includes(
             let removed = cache.clean(minimum_age).await?;
             if !quiet {
                 for entry in &removed {
-                    stdout.println(&format!("Removed {} at {}.", entry.remote, entry.git_ref));
+                    stdout.println(&format!("Removed {}.", named_include(entry)));
                 }
                 stdout.println(&format!("Removed {} cached Git include(s).", removed.len()));
             }
@@ -2088,7 +2087,7 @@ async fn manage_includes(
             let refreshed = cache.refresh().await?;
             if !quiet {
                 for entry in &refreshed {
-                    stdout.println(&format!("Re-cloned {} at {}.", entry.remote, entry.git_ref));
+                    stdout.println(&format!("Re-cloned {}.", named_include(entry)));
                 }
                 stdout.println(&format!(
                     "Re-cloned {} cached Git include(s).",
@@ -2129,6 +2128,34 @@ fn format_size(bytes: u64) -> String {
         b if b >= KIB => format!("{:.1} KiB", b as f64 / KIB as f64),
         b => format!("{b} B"),
     }
+}
+
+/// `includes list -o quiet`'s machine-readable line, tab-separated: the
+/// remote, with any credentials shown as `***` (#751), the ref, then the
+/// entry's whole cache key — its directory under `~/.ratect/incl` — which
+/// tells apart two entries that differ only in credentials.
+fn quiet_include_line(entry: &ratect_core::git_include::CachedInclude) -> String {
+    format!(
+        "{}\t{}\t{}",
+        display_remote(&entry.remote),
+        entry.git_ref,
+        entry.key
+    )
+}
+
+/// A cached Git include as `ratect includes` prints it for a person: its
+/// remote, with any credentials shown as `***` (#751), and its ref. Only when
+/// credentials were hidden can two entries print alike — an entry *is* its
+/// remote and ref — so only then is the start of its cache key added, enough
+/// to tell them apart and to find its directory under `~/.ratect/incl`.
+fn named_include(entry: &ratect_core::git_include::CachedInclude) -> String {
+    let shown = display_remote(&entry.remote);
+    let named = format!("{shown} at {}", entry.git_ref);
+    if shown == entry.remote {
+        return named;
+    }
+    let key = entry.key.get(..12).unwrap_or(&entry.key);
+    format!("{named} (key {key})")
 }
 
 #[cfg(test)]

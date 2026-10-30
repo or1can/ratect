@@ -304,6 +304,46 @@ fn tasks_list_refuses_a_malformed_expression_located_in_the_file() {
     );
 }
 
+/// #751: as `ratect-compat`'s test of the same name — a Git include's
+/// credentials appear in nothing the load prints, in any style.
+#[test]
+fn a_git_include_remotes_credentials_are_never_printed() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\
+         include = [{ type = \"git\", repo = \"https://ci:s3cret@127.0.0.1:9/b.git\", \
+         ref = \"native-751\" }]\n",
+    )
+    .unwrap();
+
+    for style in ["simple", "quiet"] {
+        for log in ["off", "debug"] {
+            let output = ratect_command()
+                .env("RUST_LOG", log)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .arg("-f")
+                .arg(dir.join("ratect.toml"))
+                .args(["-o", style, "tasks", "list"])
+                .output()
+                .expect("failed to run ratect");
+            let printed = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!output.status.success(), "{printed}");
+            assert!(!printed.contains("s3cret"), "{style}, {log}:\n{printed}");
+            assert!(
+                printed.contains("https://***@127.0.0.1:9/b.git"),
+                "{style}, {log}:\n{printed}"
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A run that fails before any task starts — here, a config that doesn't
 /// load — reached no event sink, so `main` prints its `Error:` line, and
 /// exactly once (ratect#334).

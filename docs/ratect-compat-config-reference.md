@@ -189,7 +189,8 @@ policy, etc.) that your normal `git clone` already relies on works the same way 
 A load that clones prints `Cloning <repo> <ref>...` on stdout first, and a blank line
 once the clone has succeeded, in every output style but `quiet`. `git`'s own output is
 shown only if the clone fails, as part of the error; a prompt for credentials still
-reaches the terminal.
+reaches the terminal. Wherever Ratect names a `repo`, credentials in its URL are shown
+as `***` (`https://***@host/repo.git`); the clone is given the URL as written.
 An included repository's submodules are never checked out, here or under Batect: a
 fresh clone has no active submodules for `--recurse-submodules` to update.
 
