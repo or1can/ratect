@@ -193,8 +193,28 @@ is also what makes concurrent `ratect` invocations on the same host safe: each t
 execution names its network and containers with a random six-character suffix of
 its own — `<project>-network-<suffix>` and `<project>-<container>-<suffix>`, as
 Batect names them — so two runs never share a container, nor a network Ratect
-created. In the rare case two draw the same suffix, the second run fails when
-Docker refuses its names.
+created. In the rare case two draw the same suffix, the second run fails
+rather than join the first one's network, but how depends on the daemon:
+
+- **Docker 25 and later** refuse its network when it's created (`network with
+  name <project>-network-<suffix> already exists`), before any of its
+  containers exist.
+- **Docker 20.10 to 24** create a second network with the same name, and the
+  second run then fails at one of two points:
+  - If the first run's containers still exist, creating the second run's
+    containers fails, because their names are taken (`The container name
+    "/<project>-<container>-<suffix>" is already in use`).
+  - If only the first run's network is left — after `--no-cleanup`, say — the
+    second run's containers are created, and starting the first of them fails
+    (`network <project>-network-<suffix> is ambiguous (2 matches found on
+    name)`).
+
+  In both cases the second run's cleanup can't remove its network by name,
+  for the same ambiguity, so it reports that network as left behind. The
+  `docker network rm <project>-network-<suffix>` it suggests is refused too,
+  and removes neither network. Remove each one by the ID `docker network ls`
+  shows, or, under `ratect`, with `ratect resources clean`, which removes by
+  ID.
 
 ## Known limitations
 
