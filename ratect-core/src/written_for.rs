@@ -309,6 +309,82 @@ fn expressions_with_a_backslash(files: &[TomlFile]) -> Vec<Hit> {
     expression_hits(files, |value| value.contains('\\'))
 }
 
+/// The reference row's detector: every expression whose references the
+/// running version reads differently from 0.11.0 — another name, default
+/// or span, or a sigil one reads as a reference and the other as text.
+/// One the running version refuses is left to the trial load, which fails
+/// on it. An escaped sigil counts, so a `\$X` is found by the backslash row
+/// too: it was a reference, and isn't.
+fn expressions_read_differently(files: &[TomlFile]) -> Vec<Hit> {
+    expression_hits(files, |value| {
+        crate::expressions::references(value).is_ok_and(|now| now != references_before_0_12(value))
+    })
+}
+
+/// Every reference in `value` as 0.11.0 read it — its expression reader,
+/// kept here as it was, since the change it measures is from that reader
+/// and the one in `expressions` will go on changing. It had no escape, and
+/// kept as text a `$` or `<` that didn't start a reference it could read:
+/// an unbraced name was an ASCII letter or `_`, then ASCII letters, digits
+/// and `_` — and `.`, after a `<`. A braced one ran to the first `}`, a
+/// `$`'s split at its first `:-`, and the name had to be one an unbraced
+/// reference could have.
+fn references_before_0_12(value: &str) -> Vec<crate::expressions::Token> {
+    let chars: Vec<char> = value.chars().collect();
+    let mut found = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        match reference_before_0_12(&chars, start) {
+            Some(token) => {
+                start += token.len;
+                found.push(token);
+            }
+            None => start += 1,
+        }
+    }
+    found
+}
+
+/// The reference 0.11.0 read at `chars[start]`, if any.
+fn reference_before_0_12(chars: &[char], start: usize) -> Option<crate::expressions::Token> {
+    let sigil = chars[start];
+    if sigil != '$' && sigil != '<' {
+        return None;
+    }
+    let name_start = |c: char| c.is_ascii_alphabetic() || c == '_';
+    let name_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || (sigil == '<' && c == '.');
+    let rest = &chars[start + 1..];
+    let (len, name, default) = match *rest.first()? {
+        '{' => {
+            let close = rest[1..].iter().position(|&c| c == '}')? + 1;
+            let inner: String = rest[1..close].iter().collect();
+            let (name, default) = match inner.split_once(":-") {
+                Some((name, default)) if sigil == '$' => {
+                    (name.to_string(), Some(default.to_string()))
+                }
+                _ => (inner, None),
+            };
+            let valid = name.chars().next().is_some_and(name_start) && name.chars().all(name_char);
+            if !valid {
+                return None;
+            }
+            (close + 2, name, default)
+        }
+        first if name_start(first) => {
+            let name: String = rest.iter().take_while(|&&c| name_char(c)).collect();
+            (name.chars().count() + 1, name, None)
+        }
+        _ => return None,
+    };
+    Some(crate::expressions::Token {
+        start,
+        len,
+        sigil,
+        name,
+        default,
+    })
+}
+
 /// Every breaking change to what a `ratect.toml` means or accepts, oldest
 /// first. See the module documentation before adding one.
 pub const BREAKING_CHANGES: &[BreakingChange] = &[
@@ -323,7 +399,7 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         summary: "every '$' or '<' in an expression starts a reference, so a malformed one \
                   ('$$', 'a < b', '${X:default}') fails the load, and an unbraced name ends at \
                   '.' or '-' (write '<{batect.project_directory}')",
-        check: Check::NotChecked,
+        check: Check::Detected(expressions_read_differently),
     },
     BreakingChange {
         version: "0.12.0",

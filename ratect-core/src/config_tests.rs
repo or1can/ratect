@@ -17175,8 +17175,8 @@ async fn a_yaml_file_in_scope_leaves_a_detected_row_unknown() {
     std::fs::remove_dir_all(&project).ok();
 }
 
-/// A detector reading expressions sees what the trial load read: a use in a
-/// local include is found, naming the include and the field.
+/// The detectors reading expressions see what the trial load read: a use in
+/// a local include is found, naming the include and the field.
 #[tokio::test]
 async fn a_detector_finds_a_use_in_a_local_include() {
     let project = unique_temp_dir();
@@ -17189,8 +17189,9 @@ async fn a_detector_finds_a_use_in_a_local_include() {
     let extra = project.join("extra.toml");
     std::fs::write(
         &extra,
-        "[containers.app]\nimage = \"alpine:3.18\"\n\n\
-         [containers.app.environment]\nBACKSLASH = 'a\\b'\n",
+        "[config_variables.foo]\ndefault = \"f\"\n\n\
+         [containers.app]\nimage = \"alpine:3.18\"\n\n\
+         [containers.app.environment]\nBACKSLASH = 'a\\b'\nREFERENCE = '<foo.txt'\n",
     )
     .unwrap();
     let refusal = crate::written_for::check(&root, running_0_12())
@@ -17218,6 +17219,10 @@ async fn a_detector_finds_a_use_in_a_local_include() {
     assert_eq!(
         outcome("a '\\' in an expression"),
         found("containers.app.environment.BACKSLASH")
+    );
+    assert_eq!(
+        outcome("every '$' or '<'"),
+        found("containers.app.environment.REFERENCE")
     );
 
     std::fs::remove_dir_all(&cache_root).ok();

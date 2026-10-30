@@ -1,6 +1,6 @@
 [1;31mError:[0m Refusing to load ratect.toml: This project was written for ratect 0.11.0, and ratect has changed what a configuration means since:
   - ratect 0.12.0: a '\' in an expression escapes the character after it and is dropped, and a trailing '\' fails the load — none found
-  - ratect 0.12.0: every '$' or '<' in an expression starts a reference, so a malformed one ('$$', 'a < b', '${X:default}') fails the load, and an unbraced name ends at '.' or '-' (write '<{batect.project_directory}') — not checked
+  - ratect 0.12.0: every '$' or '<' in an expression starts a reference, so a malformed one ('$$', 'a < b', '${X:default}') fails the load, and an unbraced name ends at '.' or '-' (write '<{batect.project_directory}') — none found
   - ratect 0.12.0: a task or config variable name Batect refuses fails the load: a task name is letters, digits, ':', '-', '.' and '_', starting and ending with a letter or digit; a config variable name is letters, digits, '-', '.' and '_', starting with a letter and not with 'batect' — doesn't apply: it loads under these rules
   - ratect 0.12.0: 'project_name' and every container name must be a Docker image-name component, or the load fails: lowercase letters and digits, joined by a single '.', one or two '_', or any number of '-' — doesn't apply: it loads under these rules
   - ratect 0.12.0: an included file that sets 'forbid_telemetry' to true fails the load; only the root file may — doesn't apply: it loads under these rules

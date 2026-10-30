@@ -140,13 +140,29 @@ fn escape(input: &str, special: &[char]) -> String {
     escaped
 }
 
+/// Every reference in `input`, in order, as [`interpolate`] reads them —
+/// for a reader comparing that with another reading of the same value
+/// (`written_for`'s). An error where [`check_syntax`] gives one.
+pub(crate) fn references(input: &str) -> Result<Vec<Token>> {
+    let mut found = Vec::new();
+    scan(input, |token| {
+        found.push(token.clone());
+        Ok(String::new())
+    })?;
+    Ok(found)
+}
+
 /// One well-formed reference, as [`parse_token`] read it.
-struct Token {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Token {
+    /// Where its sigil is in the input, in characters.
+    pub(crate) start: usize,
     /// How many characters of the input it spans, sigil included.
-    len: usize,
-    sigil: char,
-    name: String,
-    default: Option<String>,
+    pub(crate) len: usize,
+    pub(crate) sigil: char,
+    pub(crate) name: String,
+    /// A `${VAR:-default}`'s default, its escapes applied.
+    pub(crate) default: Option<String>,
 }
 
 /// Walks `input` as [`interpolate`] does, replacing each reference with what
@@ -230,6 +246,7 @@ fn parse_token(chars: &[char], start: usize) -> Result<Token> {
             )));
         }
         return Ok(Token {
+            start,
             len: end - start,
             sigil,
             name: chars[start + 1..end].iter().collect(),
@@ -310,6 +327,7 @@ fn parse_token(chars: &[char], start: usize) -> Result<Token> {
     }
 
     Ok(Token {
+        start,
         len: i + 1 - start,
         sigil,
         name,

@@ -529,23 +529,18 @@ fn the_home_directory_row_finds_nothing_the_change_leaves_alone() {
     assert_eq!(includes_from_home_directory(&files), []);
 }
 
-/// decisions/0022: the rows changing what a value means that have no
-/// detector yet say so; the bundle, home-directory and backslash rows are
-/// detected; every other row only fails the load.
+/// decisions/0022: the bundle row and the rows changing what a value means
+/// are detected; every other row only fails the load.
 #[test]
 fn every_row_in_the_real_table_declares_how_it_is_checked() {
-    let unchecked = ["every '$' or '<'"];
+    let detected = [
+        "a '\\' in an expression",
+        "every '$' or '<'",
+        "a local include's 'path'",
+        "a Git bundle",
+    ];
     for row in BREAKING_CHANGES {
-        let expected = if unchecked.iter().any(|start| row.summary.starts_with(start)) {
-            "unchecked"
-        } else if [
-            "a Git bundle",
-            "a local include's 'path'",
-            "a '\\' in an expression",
-        ]
-        .iter()
-        .any(|start| row.summary.starts_with(start))
-        {
+        let expected = if detected.iter().any(|start| row.summary.starts_with(start)) {
             "detected"
         } else {
             "load"
@@ -749,4 +744,94 @@ fn the_backslash_row_finds_nothing_outside_an_expression() {
         toml_file("default", "[config_variables.v]\ndefault = 'a\\b'\n"),
     ];
     assert_eq!(expressions_with_a_backslash(&files), []);
+}
+
+/// Each `value` as a file's only expression, and the fields the row reading
+/// `$` and `<` anew finds in it.
+fn reading_changed(value: &str) -> Vec<String> {
+    let mut document = toml::Table::new();
+    let mut environment = toml::Table::new();
+    environment.insert("E".to_string(), value.into());
+    let mut app = toml::Table::new();
+    app.insert("environment".to_string(), environment.into());
+    let mut containers = toml::Table::new();
+    containers.insert("app".to_string(), app.into());
+    document.insert("containers".to_string(), containers.into());
+    fields(expressions_read_differently(&[TomlFile {
+        name: "f".to_string(),
+        document,
+    }]))
+}
+
+/// What 0.12.0 reads differently, each pinned against 0.11.0's own reader:
+/// an unbraced `<` name no longer runs over a `.`; an unbraced name may
+/// start with a digit or hold a non-ASCII letter; a braced name is anything
+/// up to its `}`; and an escaped sigil is no reference at all.
+#[test]
+fn the_reference_row_finds_each_reading_that_changed() {
+    for value in [
+        "<foo.txt",
+        "<batect.project_directory",
+        "$5",
+        "$é",
+        "<5",
+        "$Xé",
+        "${a b}",
+        "${a.b}",
+        "<{my-var}",
+        "<{a:-b}",
+        r"\$X",
+        r"${X:-a\}b}",
+    ] {
+        assert_eq!(
+            reading_changed(value),
+            ["containers.app.environment.E"],
+            "{value}"
+        );
+    }
+}
+
+/// Braced references and plain unbraced names read as they did. So does a
+/// `-` after an unbraced name: 0.11.0 ended one there too, for either sigil,
+/// so `$X-y` was already `X`'s value then `-y`. As does a `.` after a `$`
+/// name, which only a `<` name ran over.
+#[test]
+fn the_reference_row_finds_nothing_read_as_before() {
+    for value in [
+        "plain",
+        "$X",
+        "$_x1",
+        "<name",
+        "${X}",
+        "${X:-default}",
+        "${X:-a:-b}",
+        "<{batect.project_directory}",
+        "<{name}",
+        "$X-y",
+        "<a-b",
+        "$X.y",
+        "a $X and ${Y:-z} and <v",
+    ] {
+        assert_eq!(reading_changed(value), Vec::<String>::new(), "{value}");
+    }
+}
+
+/// A reference 0.12.0 refuses fails the load, which the trial load reports,
+/// so the detector needn't — and a field that isn't an expression is never
+/// one.
+#[test]
+fn the_reference_row_leaves_what_fails_the_load_to_the_trial_load() {
+    for value in [
+        "$",
+        "$$",
+        "a < b",
+        "${}",
+        "${X",
+        "${X:default}",
+        r"trailing\",
+    ] {
+        assert_eq!(reading_changed(value), Vec::<String>::new(), "{value}");
+    }
+    let file = toml_file("f", "[containers.app]\ncommand = 'cat <foo.txt $5'\n");
+    assert_eq!(expressions_read_differently(&[file]), []);
 }
