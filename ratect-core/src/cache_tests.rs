@@ -1048,6 +1048,135 @@ fn a_shared_cache_is_never_removed_without_being_named() {
     );
 }
 
+/// A fake daemon holding exactly `volumes`.
+fn daemon_with(volumes: &[&str]) -> FakeRuntime {
+    FakeRuntime {
+        volumes: volumes.iter().map(|name| name.to_string()).collect(),
+        ..Default::default()
+    }
+}
+
+/// `scope`'s listing of a volume-type project at `project_dir` while the
+/// daemon holds `before`, then a store over the daemon once it holds
+/// `after` — a clean whose storage changed between its `list` and its
+/// `remove`, as when another project creates a cache meanwhile.
+async fn volume_store_changed_after_listing<'a>(
+    project_dir: &Path,
+    scope: Option<CacheScope>,
+    before: &FakeRuntime,
+    after: &'a FakeRuntime,
+) -> (CacheSelection, CacheStore<'a, FakeRuntime>) {
+    write_key_file(project_dir, b"abc123\n");
+    let found = CacheStore::new(
+        CacheType::Volume,
+        Some(before),
+        project_dir.to_path_buf(),
+        None,
+    )
+    .unwrap()
+    .list(scope)
+    .await
+    .unwrap();
+    let store = CacheStore::new(
+        CacheType::Volume,
+        Some(after),
+        project_dir.to_path_buf(),
+        None,
+    )
+    .unwrap();
+    (found, store)
+}
+
+/// ratect#741: a shared volume cache another project creates between a
+/// clean's listing and its removal is never removed without `--scope
+/// shared`, even when the clean names it — the refusal was checked against
+/// the listing, so nothing allowed its removal.
+#[tokio::test]
+async fn a_shared_volume_cache_created_after_listing_survives_an_unscoped_clean() {
+    for scope in [None, Some(CacheScope::Project)] {
+        let project_dir = unique_temp_dir();
+        let before = daemon_with(&["batect-cache-abc123-a"]);
+        let after = daemon_with(&["batect-cache-abc123-a", "ratect-shared-cache-registry"]);
+        let (found, store) =
+            volume_store_changed_after_listing(&project_dir, scope, &before, &after).await;
+
+        let only = HashSet::from(["registry".to_string()]);
+        let removed = store.remove(&found, &only, |_| {}).await.unwrap().unwrap();
+
+        assert!(removed.is_empty(), "{scope:?}: {removed:?}");
+        assert!(
+            after.removed.lock().unwrap().is_empty(),
+            "{scope:?}: no volume may be removed"
+        );
+
+        fs::remove_dir_all(&project_dir).unwrap();
+    }
+}
+
+/// ratect#741's directory-type twin of the volume test above.
+#[tokio::test]
+async fn a_shared_cache_directory_created_after_listing_survives_an_unscoped_clean() {
+    for scope in [None, Some(CacheScope::Project)] {
+        let project_dir = unique_temp_dir();
+        let shared_dir = unique_temp_dir();
+        let store = directory_store(&project_dir, Some(shared_dir.clone()));
+        let found = store.list(scope).await.unwrap();
+        touch_cache(&shared_dir, "registry");
+
+        let only = HashSet::from(["registry".to_string()]);
+        let removed = store.remove(&found, &only, |_| {}).await.unwrap().unwrap();
+
+        assert!(removed.is_empty(), "{scope:?}: {removed:?}");
+        assert!(shared_dir.join("registry").is_dir(), "{scope:?}");
+
+        fs::remove_dir_all(&project_dir).unwrap();
+        fs::remove_dir_all(&shared_dir).unwrap();
+    }
+}
+
+/// ratect#741: under `--scope shared`, a named shared volume cache that
+/// appeared after the listing is still removed — the fix narrows unscoped
+/// cleans only.
+#[tokio::test]
+async fn a_shared_volume_cache_created_after_listing_is_removed_under_scope_shared() {
+    let project_dir = unique_temp_dir();
+    let before = daemon_with(&[]);
+    let after = daemon_with(&["ratect-shared-cache-registry"]);
+    let (found, store) =
+        volume_store_changed_after_listing(&project_dir, Some(CacheScope::Shared), &before, &after)
+            .await;
+
+    let only = HashSet::from(["registry".to_string()]);
+    let removed = store.remove(&found, &only, |_| {}).await.unwrap().unwrap();
+
+    assert_eq!(names(removed), ["registry"]);
+    assert_eq!(
+        *after.removed.lock().unwrap(),
+        ["ratect-shared-cache-registry"]
+    );
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// ratect#741's directory-type twin of the volume test above.
+#[tokio::test]
+async fn a_shared_cache_directory_created_after_listing_is_removed_under_scope_shared() {
+    let project_dir = unique_temp_dir();
+    let shared_dir = unique_temp_dir();
+    let store = directory_store(&project_dir, Some(shared_dir.clone()));
+    let found = store.list(Some(CacheScope::Shared)).await.unwrap();
+    touch_cache(&shared_dir, "registry");
+
+    let only = HashSet::from(["registry".to_string()]);
+    let removed = store.remove(&found, &only, |_| {}).await.unwrap().unwrap();
+
+    assert_eq!(names(removed), ["registry"]);
+    assert!(!shared_dir.join("registry").exists());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+    fs::remove_dir_all(&shared_dir).unwrap();
+}
+
 /// A shared-scope listing and clean, in volume mode, of `project_dir`, with
 /// one shared volume, `registry`, to find and remove. Returns what was
 /// removed.

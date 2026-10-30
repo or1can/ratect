@@ -942,36 +942,27 @@ impl Captured {
     }
 }
 
-/// One project cache volume, `a`, of a project keyed `abc123`. Once `a`
-/// is removed, a shared cache volume `registry` appears, as one another
-/// project creates between a clean's listing and its removals would, and
-/// removing it fails.
-#[derive(Default)]
-struct SharedCacheAppearsAndFails {
-    removed_a: std::sync::atomic::AtomicBool,
-}
+/// Two project cache volumes, `a` and `b`, of a project keyed `abc123`;
+/// removing `b` fails, as it does for a volume a container is using.
+struct SecondVolumeInUse;
 
 #[async_trait::async_trait]
-impl ratect_core::cache::VolumeStore for SharedCacheAppearsAndFails {
+impl ratect_core::cache::VolumeStore for SecondVolumeInUse {
     async fn list_volumes(&self) -> Result<Vec<String>> {
-        let mut volumes = vec!["batect-cache-abc123-a".to_string()];
-        if self.removed_a.load(std::sync::atomic::Ordering::SeqCst) {
-            volumes.push("ratect-shared-cache-registry".to_string());
-        }
-        Ok(volumes)
+        Ok(vec![
+            "batect-cache-abc123-a".to_string(),
+            "batect-cache-abc123-b".to_string(),
+        ])
     }
 
     async fn remove_volume(&self, name: &str) -> Result<()> {
-        anyhow::ensure!(name != "ratect-shared-cache-registry", "{name} is in use");
-        self.removed_a
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+        anyhow::ensure!(name != "batect-cache-abc123-b", "{name} is in use");
         Ok(())
     }
 }
 
-/// ratect#700: a clean removes project caches, then shared ones, and a
-/// failure among the shared ones still leaves each project cache it removed
-/// reported.
+/// ratect#700: a clean that fails part-way still leaves each cache it
+/// removed before the failure reported.
 #[tokio::test]
 async fn caches_clean_reports_what_it_removed_before_failing() {
     let project_dir =
@@ -979,10 +970,9 @@ async fn caches_clean_reports_what_it_removed_before_failing() {
     let caches = ratect_core::cache::cache_directory(&project_dir);
     std::fs::create_dir_all(&caches).unwrap();
     std::fs::write(caches.join("key"), "abc123\n").unwrap();
-    let runtime = SharedCacheAppearsAndFails::default();
     let store = ratect_core::cache::CacheStore::new(
         ratect_core::cache::CacheType::Volume,
-        Some(&runtime),
+        Some(&SecondVolumeInUse),
         project_dir.clone(),
         None,
     )
@@ -993,7 +983,7 @@ async fn caches_clean_reports_what_it_removed_before_failing() {
     let error = remove_caches(
         &store,
         &found,
-        &HashSet::from(["a".to_string(), "registry".to_string()]),
+        &HashSet::new(),
         false,
         &Console::new(Box::new(stdout.clone()), false),
         &Console::new(Box::new(std::io::sink()), false),
@@ -1002,7 +992,7 @@ async fn caches_clean_reports_what_it_removed_before_failing() {
     .unwrap_err();
 
     assert!(
-        format!("{error:#}").contains("ratect-shared-cache-registry is in use"),
+        format!("{error:#}").contains("batect-cache-abc123-b is in use"),
         "{error:#}"
     );
     assert_eq!(stdout.text(), "Removed cache 'a'.\n");

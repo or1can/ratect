@@ -640,11 +640,6 @@ impl CacheSelection {
         names.sort();
         names
     }
-
-    /// Whether this invocation may remove caches of `scope` at all.
-    pub fn covers(&self, scope: CacheScope) -> bool {
-        self.scope.is_none_or(|wanted| wanted == scope)
-    }
 }
 
 /// One cache [`CacheStore::remove`] removes: named in each [`CleanEvent`]
@@ -840,6 +835,12 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
     /// shared half, so a same-named shared cache is correctly not flagged as
     /// ambiguous when the caller has already said which one they mean.
     ///
+    /// Only `--scope shared` reaches shared storage; with no `--scope`, or
+    /// `--scope project`, only this project's own caches are removed. So a
+    /// shared cache that appears after `found` was listed — which the
+    /// refusal, checked against `found`, could not see — is never removed
+    /// without `--scope shared`.
+    ///
     /// `report` receives each [`CleanEvent`] as it happens — a callback, as
     /// [`crate::docker::DockerClient::new`]'s is, since how each is printed
     /// is each binary's own. Removal stops at the first that fails, and that
@@ -861,14 +862,13 @@ impl<'a, D: VolumeStore + Send + Sync> CacheStore<'a, D> {
             }
         }
 
-        let mut removed = Vec::new();
-        if found.covers(CacheScope::Project) {
-            removed.extend(self.remove_project(only, &report).await?);
-        }
-        if found.covers(CacheScope::Shared) {
-            removed.extend(self.remove_shared(only, &report).await?);
-        }
-        Ok(Ok(removed))
+        // Shared storage is read again here, not taken from `found` — see
+        // this function's doc comment for why only `--scope shared` may
+        // reach it (ratect#741).
+        Ok(Ok(match found.scope {
+            Some(CacheScope::Shared) => self.remove_shared(only, &report).await?,
+            _ => self.remove_project(only, &report).await?,
+        }))
     }
 
     async fn remove_project(
