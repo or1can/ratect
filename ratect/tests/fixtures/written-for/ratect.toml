@@ -1,0 +1,19 @@
+# Backs `a_refusal_says_what_each_change_means_for_a_project_that_loads`
+# in tests/cli.rs and the captured refusal on
+# docs/ratect-config-reference.md: a project written for a ratect older
+# than the latest breaking change, which no project under examples/ is —
+# each of those declares the version it was last reviewed against. In its
+# own directory, like convert/, so the capture run from here names
+# ratect.toml with no path in front.
+#
+# It loads under the current rules and declares no Git include, so every
+# change it is refused for that can be checked comes out as not applying.
+ratect_version = "0.11.0"
+project_name = "written-for-fixture"
+
+[containers.app]
+image = "alpine:3.18"
+
+[tasks.hello.run]
+container = "app"
+command = "echo hello"

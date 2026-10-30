@@ -56,6 +56,46 @@ impl Finding {
     }
 }
 
+/// What `doctor` and `config validate` report for a configuration that
+/// doesn't load: the error, as one problem — unless it is a written-for
+/// refusal ([`crate::written_for::Refusal`]), which is reported from the same
+/// result the refusal prints, so the three never disagree about a row
+/// (decisions/0022). Then the refusal is a problem, each row a finding of its
+/// own — fine once its outcome rules it out, a warning otherwise — and the
+/// trial load a finding saying whether the project loads with the check set
+/// aside.
+pub fn load_failure_findings(config_file: &Path, error: &anyhow::Error) -> Vec<Finding> {
+    let does_not_load = |message: String| {
+        Finding::Problem(format!(
+            "{} does not load: {message}",
+            config_file.display()
+        ))
+    };
+    let Some(refusal) = error.downcast_ref::<crate::written_for::Refusal>() else {
+        return vec![does_not_load(format!("{error:#}"))];
+    };
+    let rows = refusal.rows();
+    let mut findings = vec![does_not_load(format!(
+        "{} the {} change(s) below. {}",
+        refusal.opening(),
+        rows.len(),
+        refusal.remedy()
+    ))];
+    findings.extend(rows.into_iter().map(|(line, outcome)| {
+        if outcome.is_some_and(crate::written_for::Outcome::rules_out) {
+            Finding::Fine(line)
+        } else {
+            Finding::Warning(line)
+        }
+    }));
+    match refusal.trial_load() {
+        Some(Ok(loads)) => findings.push(Finding::Fine(loads)),
+        Some(Err(does_not)) => findings.push(Finding::Problem(does_not)),
+        None => {}
+    }
+    findings
+}
+
 /// The checks that need only the configuration — no daemon. `config` is the
 /// project as written; `evaluation` is the same project
 /// [evaluated](crate::config::LoadedProject::evaluate_whole_project) against

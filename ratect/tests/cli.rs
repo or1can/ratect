@@ -735,6 +735,131 @@ fn config_validate_refuses_a_project_written_before_a_breaking_change() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Every line of `text` naming a breaking change, with its outcome — the
+/// `ratect <version>: ` a refusal starts each with, after whatever marks it
+/// as a list item or a finding.
+fn breaking_change_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.find("ratect 0.").map(|start| &line[start..]))
+        .filter(|line| line.contains(" — "))
+        .map(str::to_string)
+        .collect()
+}
+
+/// decisions/0022: a refused project that loads under this version's rules
+/// is told so once, every row that only fails the load says it doesn't
+/// apply, the bundle row finds nothing in a project with no Git include, and
+/// the rows nothing checks say so. `config validate` and `doctor` report
+/// exactly the refusal's outcomes, from the same result. The fixture is
+/// the project `docs/ratect-config-reference.md`'s captured refusal shows.
+#[test]
+fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/written-for/ratect.toml");
+    let run = |args: &[&str]| {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(&fixture)
+            .args(args)
+            .output()
+            .expect("failed to run ratect");
+        assert!(!output.status.success(), "{args:?} should be refused");
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let (_, refusal) = run(&["run", "hello"]);
+    let (validate, _) = run(&["config", "validate"]);
+    let (doctor, _) = run(&["doctor"]);
+
+    let rows = breaking_change_lines(&refusal);
+    assert_eq!(rows.len(), 9, "{refusal}");
+    for row in &rows {
+        let expected = if row.contains("a Git bundle is refused") {
+            "none found"
+        } else if [
+            "a '\\' in an expression",
+            "every '$' or '<'",
+            "a local include's 'path'",
+        ]
+        .iter()
+        .any(|start| row.contains(start))
+        {
+            "not checked"
+        } else {
+            "doesn't apply: it loads under these rules"
+        };
+        assert!(row.ends_with(&format!(" — {expected}")), "{row}");
+    }
+    let loads = "With this check set aside, the project loads under ratect";
+    assert_eq!(refusal.matches(loads).count(), 1, "{refusal}");
+
+    for (command, stdout) in [("config validate", &validate), ("doctor", &doctor)] {
+        assert_eq!(breaking_change_lines(stdout), rows, "{command}:\n{stdout}");
+        assert!(stdout.contains(loads), "{command}:\n{stdout}");
+    }
+    // Ruled out is fine; not checked still wants a look.
+    assert!(
+        validate.contains("  ok      ratect 0.12.0: 'project_name'"),
+        "{validate}"
+    );
+    assert!(
+        validate.contains("  warning ratect 0.12.0: a local include's 'path'"),
+        "{validate}"
+    );
+}
+
+/// One that doesn't load shows the load error once, and the rows that only
+/// fail the load say it doesn't — without claiming which is why. The bundle
+/// row still reads the root, which declares a Git include: the root's own
+/// error stops the load before anything is cloned.
+#[test]
+fn a_refusal_shows_the_trial_loads_error_once() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.11.0\"\nproject_name = \"Demo\"\n\n[[include]]\n\
+         type = \"git\"\nrepo = \"https://example.invalid/bundle.git\"\nref = \"v1\"\n",
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["tasks", "list"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{stderr}");
+
+    assert_eq!(
+        stderr
+            .matches("With this check set aside, the project doesn't load under ratect")
+            .count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("'Demo'").count(), 1, "{stderr}");
+    let rows = breaking_change_lines(&stderr);
+    assert!(
+        rows.iter()
+            .any(|row| row.ends_with(" — may apply: it doesn't load under these rules")),
+        "{stderr}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("doesn't apply")),
+        "{stderr}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("a Git bundle is refused")
+                && row.contains(" — found: 'include' in ")
+                && row.ends_with("ratect.toml\"")),
+        "{stderr}"
+    );
+}
+
 /// A YAML root follows Batect's rules, so it loads whatever the breaking
 /// changes since — unless it includes a TOML file, whose meaning may have
 /// changed and which nothing in a YAML project can say was reviewed.

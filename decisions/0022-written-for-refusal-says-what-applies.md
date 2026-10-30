@@ -1,10 +1,14 @@
 # 0022 — A written-for refusal says which changes touch the project
 
-**Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
+**Status:** Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0,
 [#623](https://github.com/or1can/ratect/issues/623)). Extends
 [0015](0015-native-project-records-its-written-for-version.md) and
 [0020](0020-bundle-records-its-written-for-version.md); the refusal itself
-is unchanged.
+is unchanged. Refined while implementing #623: a detector reads the files
+the trial load found, or, when it fails, the root or a bundle's TOML entry
+file alone, which can report a use but never "none found" — so a row partly
+each kind needs nothing extra. A YAML file in scope, which a detector can't
+read, makes finding nothing "not known" too.
 
 ## Context
 
@@ -50,7 +54,11 @@ happened. That rejection stands.
     "didn't look" can never be confused.
 - **A row that is partly each kind** (some uses change meaning, others now
   fail) is detected. Its outcome counts as "none found" only if the detector
-  finds nothing *and* the project loads.
+  finds nothing *and* the project loads. Every detected row gets that for
+  free: its detector reads the files the trial load found, and when the
+  project doesn't load, which files there are isn't known, so it reads the
+  root (or a bundle's entry file) alone. A use found there is "found";
+  finding nothing there is "not known" — never "none found".
 - **`config validate`, `doctor` and the refusal share one per-row result**,
   so the three commands never disagree about a row.
 
