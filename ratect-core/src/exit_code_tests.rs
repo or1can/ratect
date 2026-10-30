@@ -174,7 +174,7 @@ fn only_a_runs_failure_goes_through_the_mapping() {
 /// `Error:` from `main`; everything else does. Through `anyhow` context too,
 /// since the binaries see the error after the engine's own wrapping.
 #[test]
-fn already_reported_names_exactly_the_five_failures_reported_elsewhere() {
+fn already_reported_names_exactly_the_run_failures_reported_elsewhere() {
     use anyhow::Context;
 
     assert!(already_reported(&anyhow::Error::new(
@@ -205,6 +205,17 @@ fn already_reported_names_exactly_the_five_failures_reported_elsewhere() {
             .context("Failed to pull image alpine")
             .unwrap_err()
     ));
+}
+
+/// #755: a verb that has printed each of its own failures as an `Error:`
+/// line needs no further line from `main`, and still exits as a verb's
+/// failure.
+#[test]
+fn a_verb_whose_failures_are_reported_exits_1_with_no_further_error() {
+    let error = anyhow::Error::new(VerbFailuresReported);
+
+    assert!(already_reported(&error));
+    assert_eq!(for_failure(&error, false), VERB_FAILED);
 }
 
 /// A failure the engine reported early exits as what it wraps: the wrapper

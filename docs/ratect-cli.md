@@ -244,6 +244,11 @@ succeeded, in every style but `quiet`; `includes refresh` prints neither.
 | `includes clean --all` | Everything, regardless of age. |
 | `includes refresh` | Discards every cached clone and fetches it again. |
 
+`clean` and `refresh` carry on past an include they can't remove, or clone again, and
+then print an `Error:` on stderr for each, naming it and why, in every style, and
+exit `1`. A refresh whose clone fails leaves that include removed: the next command
+that needs it clones it again.
+
 **`refresh` is how you pick up a moved `ref`.** A `(repo, ref)` pair is cloned once and
 then never re-fetched, so if `ref` is a branch — or a tag someone re-pushed — your
 project keeps using whatever it pointed at the first time, indefinitely. The automatic

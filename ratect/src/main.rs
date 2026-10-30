@@ -873,7 +873,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
         }
         // Deliberately no `load` call: see `CachesArgs`.
         Command::Caches { command } => manage_caches(command, &global, style, stdout, stderr).await,
-        Command::Includes { command } => manage_includes(command, style, stdout).await,
+        Command::Includes { command } => manage_includes(command, style, stdout, stderr).await,
         Command::Resources { command } => {
             manage_resources(command, &global, style, stdout, stderr).await
         }
@@ -2032,6 +2032,7 @@ async fn manage_includes(
     command: IncludesCommand,
     style: OutputStyle,
     stdout: &Console,
+    stderr: &Console,
 ) -> Result<()> {
     let cache = ratect_core::git_include::GitIncludeCache::new();
     let quiet = style == OutputStyle::Quiet;
@@ -2065,6 +2066,7 @@ async fn manage_includes(
                     format_age(age_of(entry.last_used))
                 ));
             }
+            Ok(())
         }
         IncludesCommand::Clean(args) => {
             // `--all` is really "no minimum age"; the default matches the
@@ -2075,28 +2077,62 @@ async fn manage_includes(
             } else {
                 Some(args.older_than.unwrap_or(DEFAULT_INCLUDE_STALE_AFTER))
             };
-            let removed = cache.clean(minimum_age).await?;
-            if !quiet {
-                for entry in &removed {
-                    stdout.println(&format!("Removed {}.", named_include(entry)));
-                }
-                stdout.println(&format!("Removed {} cached Git include(s).", removed.len()));
-            }
+            let outcome = cache.clean(minimum_age).await?;
+            report_include_outcome(&outcome, IncludesVerb::Clean, quiet, stdout, stderr)
         }
         IncludesCommand::Refresh => {
-            let refreshed = cache.refresh().await?;
-            if !quiet {
-                for entry in &refreshed {
-                    stdout.println(&format!("Re-cloned {}.", named_include(entry)));
-                }
-                stdout.println(&format!(
-                    "Re-cloned {} cached Git include(s).",
-                    refreshed.len()
-                ));
-            }
+            let outcome = cache.refresh().await?;
+            report_include_outcome(&outcome, IncludesVerb::Refresh, quiet, stdout, stderr)
         }
     }
+}
 
+/// Which of `includes clean`/`refresh` an [`Outcome`](ratect_core::git_include::Outcome)
+/// came from — the words its report uses.
+#[derive(Clone, Copy)]
+enum IncludesVerb {
+    Clean,
+    Refresh,
+}
+
+/// Prints what `includes clean`/`refresh` did — each entry and the total on
+/// stdout, unless `quiet` — then each entry it couldn't clean or refresh as
+/// an `Error:` line on stderr, in every style, and fails if there was one
+/// (#755). Every failure is printed here, so the error returned is
+/// [`VerbFailuresReported`](ratect_core::exit_code::VerbFailuresReported): `main`
+/// adds no line of its own and exits `1`.
+fn report_include_outcome(
+    outcome: &ratect_core::git_include::Outcome,
+    verb: IncludesVerb,
+    quiet: bool,
+    stdout: &Console,
+    stderr: &Console,
+) -> Result<()> {
+    let (done, failed) = match verb {
+        // "clean", not "remove": the cause already says what it couldn't
+        // remove.
+        IncludesVerb::Clean => ("Removed", "clean"),
+        IncludesVerb::Refresh => ("Re-cloned", "refresh"),
+    };
+    if !quiet {
+        for entry in &outcome.succeeded {
+            stdout.println(&format!("{done} {}.", named_include(entry)));
+        }
+        stdout.println(&format!(
+            "{done} {} cached Git include(s).",
+            outcome.succeeded.len()
+        ));
+    }
+    for failure in &outcome.failed {
+        stderr.error(&format!(
+            "Could not {failed} {}: {:#}",
+            named_include(&failure.entry),
+            failure.error
+        ));
+    }
+    if !outcome.failed.is_empty() {
+        return Err(ratect_core::exit_code::VerbFailuresReported.into());
+    }
     Ok(())
 }
 

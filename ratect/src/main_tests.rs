@@ -1093,6 +1093,114 @@ fn includes_output_names_an_entry_without_its_credentials() {
     );
 }
 
+/// #755: `includes refresh`/`clean` print what they did as before, then each
+/// entry they couldn't refresh or remove as an `Error:` line on stderr —
+/// naming it without its credentials, with the cause — in every style,
+/// `quiet` included; and fail with nothing left for `main` to print.
+#[test]
+fn includes_reports_each_entry_it_could_not_refresh_as_an_error() {
+    let entry = |remote: &str, git_ref: &str| ratect_core::git_include::CachedInclude {
+        key: "45de9a2d81c0f00dfeedbeef".to_string(),
+        remote: remote.to_string(),
+        git_ref: git_ref.to_string(),
+        last_used: 0,
+        path: PathBuf::from("/k"),
+        size_bytes: 0,
+    };
+    for quiet in [false, true] {
+        let outcome = ratect_core::git_include::Outcome {
+            succeeded: vec![entry("https://host/a.git", "v1")],
+            failed: vec![ratect_core::git_include::Failure {
+                entry: entry("https://u:s3cret@host/b.git", "v2"),
+                error: anyhow::anyhow!("Could not clone repository 'https://***@host/b.git'"),
+            }],
+        };
+        let stdout = Captured::default();
+        let stderr = Captured::default();
+
+        let error = report_include_outcome(
+            &outcome,
+            IncludesVerb::Refresh,
+            quiet,
+            &Console::new(Box::new(stdout.clone()), false),
+            &Console::new(Box::new(stderr.clone()), false),
+        )
+        .unwrap_err();
+
+        let expected_stdout = if quiet {
+            ""
+        } else {
+            "Re-cloned https://host/a.git at v1.\nRe-cloned 1 cached Git include(s).\n"
+        };
+        assert_eq!(stdout.text(), expected_stdout, "quiet: {quiet}");
+        assert_eq!(
+            stderr.text(),
+            "Error: Could not refresh https://***@host/b.git at v2 (key 45de9a2d81c0): \
+             Could not clone repository 'https://***@host/b.git'\n",
+            "quiet: {quiet}"
+        );
+        assert!(ratect_core::exit_code::already_reported(&error));
+        assert_eq!(
+            ratect_core::exit_code::for_failure(&error, false),
+            ratect_core::exit_code::VERB_FAILED
+        );
+    }
+}
+
+/// #755: `includes clean` says "clean" — its cause already says what it
+/// couldn't remove — and succeeds when nothing failed.
+#[test]
+fn includes_clean_reports_an_entry_it_could_not_remove_and_succeeds_otherwise() {
+    let entry = ratect_core::git_include::CachedInclude {
+        key: "k".to_string(),
+        remote: "https://host/a.git".to_string(),
+        git_ref: "v1".to_string(),
+        last_used: 0,
+        path: PathBuf::from("/k"),
+        size_bytes: 0,
+    };
+    let stderr = Captured::default();
+    let failed = ratect_core::git_include::Outcome {
+        succeeded: vec![],
+        failed: vec![ratect_core::git_include::Failure {
+            entry: entry.clone(),
+            error: anyhow::anyhow!("Permission denied")
+                .context("Failed to remove Git include cache clone \"/k\""),
+        }],
+    };
+    report_include_outcome(
+        &failed,
+        IncludesVerb::Clean,
+        true,
+        &Console::new(Box::new(std::io::sink()), false),
+        &Console::new(Box::new(stderr.clone()), false),
+    )
+    .unwrap_err();
+    assert_eq!(
+        stderr.text(),
+        "Error: Could not clean https://host/a.git at v1: Failed to remove Git include \
+         cache clone \"/k\": Permission denied\n"
+    );
+
+    let stdout = Captured::default();
+    let removed = ratect_core::git_include::Outcome {
+        succeeded: vec![entry],
+        failed: vec![],
+    };
+    report_include_outcome(
+        &removed,
+        IncludesVerb::Clean,
+        false,
+        &Console::new(Box::new(stdout.clone()), false),
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .unwrap();
+    assert_eq!(
+        stdout.text(),
+        "Removed https://host/a.git at v1.\nRemoved 1 cached Git include(s).\n"
+    );
+}
+
 /// #751: `includes list -o quiet` adds the cache key, so two entries that
 /// differ only in their credentials stay distinct once redacted.
 #[test]
