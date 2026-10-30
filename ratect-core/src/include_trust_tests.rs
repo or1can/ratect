@@ -436,3 +436,178 @@ fn an_unrecorded_file_is_treated_as_granted_nothing() {
         )
         .is_err());
 }
+
+/// #751: a remote's credentials are never shown, whichever bundle's it is.
+#[test]
+fn clone_failures_and_refusals_hide_a_remotes_credentials() {
+    let declaring = Bundle::granted(
+        None,
+        BundleId {
+            remote: "https://u:outer-token@host/outer.git".to_string(),
+            git_ref: "main".to_string(),
+        },
+        asks(false, Some(false)),
+    );
+    let messages = [
+        hide_clone_detail(
+            anyhow::anyhow!("fatal"),
+            "https://u:inner-token@host/inner.git",
+            "v1",
+            &["1.yml".to_string()],
+            None,
+        ),
+        hide_clone_detail(
+            anyhow::anyhow!("fatal"),
+            "https://u:inner-token@host/inner.git",
+            "v1",
+            &["1.yml".to_string()],
+            Some(&declaring),
+        ),
+        check_may_declare_git(Some(&declaring), "https://u:inner-token@host/inner.git")
+            .unwrap_err(),
+    ]
+    .map(|error| format!("{error:#}"));
+
+    for message in messages {
+        assert!(!message.contains("token"), "{message}");
+        assert!(message.contains("https://***@host/"), "{message}");
+    }
+}
+
+const CREDENTIALED: &str = "https://u:outer-token@host/outer.git";
+const SHOWN: &str = "'https://***@host/outer.git' at 'main'";
+
+fn credentialed_bundle() -> Bundle {
+    Bundle::granted(None, id(CREDENTIALED), asks(false, Some(false)))
+}
+
+/// #751: a bundle named in a message, or logged whole, never shows its
+/// remote's credentials.
+#[test]
+fn a_bundle_id_displays_and_debugs_without_its_credentials() {
+    let id = id(CREDENTIALED);
+
+    assert_eq!(id.to_string(), SHOWN);
+    let debugged = format!("{:?}", credentialed_bundle());
+    assert!(!debugged.contains("token"), "{debugged}");
+    assert!(
+        debugged.contains("https://***@host/outer.git"),
+        "{debugged}"
+    );
+}
+
+/// #751: every message naming a bundle file or a bundle's containment,
+/// pinned with a credential-bearing remote.
+#[test]
+fn boundary_messages_hide_the_bundles_credentials() {
+    let boundary = Boundary {
+        repo_dir: PathBuf::from("/clone"),
+        bundle: credentialed_bundle(),
+    };
+
+    assert_eq!(
+        boundary.describe(Path::new("/clone/ci/a.yml")),
+        format!("'ci/a.yml' from the bundle {SHOWN}")
+    );
+    assert_eq!(
+        boundary.describe_in_checkout(Path::new("/clone")),
+        Some(format!("the checkout of the bundle {SHOWN}"))
+    );
+    let inside = boundary
+        .check_path_allowed(Path::new("/clone/../elsewhere"), Path::new("/project"))
+        .unwrap_err()
+        .to_string();
+    assert!(!inside.contains("token"), "{inside}");
+    let escaped = boundary
+        .check_contains(Path::new("/elsewhere/a.yml"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        escaped.contains(&format!("'../elsewhere/a.yml' from the bundle {SHOWN}")),
+        "{escaped}"
+    );
+    let refused = boundary
+        .check_path_allowed(Path::new("/elsewhere"), Path::new("/project"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.starts_with(&format!(
+            "Path '/elsewhere' escapes both the Git repository {SHOWN} it was included from"
+        )),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("include entry for 'https://***@host/outer.git' in your own"),
+        "{refused}"
+    );
+    for message in [escaped, refused] {
+        assert!(!message.contains("token"), "{message}");
+    }
+}
+
+/// #751: the three ways `check_dialect` names an include, and the late
+/// grant refusal, pinned with credential-bearing remotes.
+#[test]
+fn dialect_and_late_grant_refusals_hide_credentials() {
+    let inner = "https://u:inner-token@host/inner.git";
+    let declaring = credentialed_bundle();
+    let refuse = |declaring: Option<&Bundle>, format: ConfigFormat| {
+        check_dialect(
+            asks(false, Some(true)),
+            false,
+            declaring,
+            YAML_ROOT,
+            Some(BatectFile::Owned),
+            inner,
+            format,
+        )
+        .unwrap_err()
+        .to_string()
+    };
+
+    let native = refuse(None, ConfigFormat::Native);
+    assert!(
+        native.contains(
+            "sets 'allow_nested_git_includes' on its Git include of 'https://***@host/inner.git'"
+        ),
+        "{native}"
+    );
+    let from_bundle = refuse(Some(&declaring), ConfigFormat::Compat);
+    assert!(
+        from_bundle.starts_with(&format!(
+            "The bundle {SHOWN} sets 'allow_nested_git_includes' on its Git include of \
+             'https://***@host/inner.git'"
+        )),
+        "{from_bundle}"
+    );
+    let owned = refuse(None, ConfigFormat::Compat);
+    assert!(
+        owned.starts_with(
+            "The Git include of 'https://***@host/inner.git' sets 'allow_nested_git_includes'"
+        ),
+        "{owned}"
+    );
+
+    let file = PathBuf::from("/clone/bundle.toml");
+    let mut effective = EffectiveGrants::default();
+    effective.record(file.clone(), Some(Trust::NONE));
+    let late = effective
+        .check(
+            &file,
+            Trust {
+                host_paths: true,
+                nested_git: false,
+            },
+            inner,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        late.contains("set on the include of 'https://***@host/inner.git'"),
+        "{late}"
+    );
+
+    for message in [native, from_bundle, owned, late] {
+        assert!(!message.contains("token"), "{message}");
+    }
+}
