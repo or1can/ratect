@@ -186,6 +186,10 @@ out to it (`git clone --quiet --no-checkout` followed by
 `git checkout --recurse-submodules <ref>`, as Batect does) rather than embedding a Git
 library, so any Git configuration (credentials, `.gitconfig` rewrites, protocol
 policy, etc.) that your normal `git clone` already relies on works the same way here.
+A load that clones prints `Cloning <repo> <ref>...` on stdout first, and a blank line
+once the clone has succeeded, in every output style but `quiet`. `git`'s own output is
+shown only if the clone fails, as part of the error; a prompt for credentials still
+reaches the terminal.
 An included repository's submodules are never checked out, here or under Batect: a
 fresh clone has no active submodules for `--recurse-submodules` to update.
 

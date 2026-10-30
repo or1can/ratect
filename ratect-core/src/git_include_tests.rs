@@ -1683,3 +1683,136 @@ fn a_lock_whose_holder_process_was_killed_is_taken_over() {
 
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// #420: a clone is announced as progress before it starts, and followed by a
+/// blank line once it has succeeded, as Batect's
+/// `DefaultGitRepositoryCacheNotificationListener` does.
+#[tokio::test]
+async fn a_clone_is_announced_as_progress_and_followed_by_a_blank_line() {
+    let root = unique_temp_dir();
+    let (output, stderr, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let cache =
+        GitIncludeCache::for_test(root.clone(), fake_with_the_entry(), 1000).with_output(output);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        progress.contents(),
+        "Cloning https://example.com/repo.git v1.0.0...\n\n"
+    );
+    assert_eq!(stderr.contents(), "");
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn a_load_that_finds_the_entry_cloned_prints_nothing() {
+    let root = unique_temp_dir();
+    let git = fake_with_the_entry();
+    GitIncludeCache::for_test(root.clone(), git.clone(), 1000)
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+    let (output, stderr, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(git.clone_count(), 1);
+    assert_eq!(progress.contents(), "");
+    assert_eq!(stderr.contents(), "");
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// A failed clone is reported as an error, so it gets no blank line.
+#[tokio::test]
+async fn a_failed_clone_is_announced_but_not_followed_by_a_blank_line() {
+    let root = unique_temp_dir();
+    let (output, _, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new().failing("boom"), 1000)
+        .with_output(output);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        progress.contents(),
+        "Cloning https://example.com/repo.git v1.0.0...\n"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// The clone ran, so it is announced, even though the working copy that ends
+/// up in place is the one a concurrent clone renamed there first.
+#[tokio::test]
+async fn a_clone_that_loses_its_rename_is_still_announced_as_complete() {
+    let root = unique_temp_dir();
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let git = fake_with_the_entry().losing_the_rename_to(root.join(&key));
+    let (output, _, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let cache = GitIncludeCache::for_test(root.clone(), git, 1000).with_output(output);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        progress.contents(),
+        "Cloning https://example.com/repo.git v1.0.0...\n\n"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// Unlike Batect, which announces the clone before its lock re-check: a load
+/// that waited while another process cloned the entry announces only its
+/// wait, not a clone it then skips.
+#[tokio::test]
+async fn a_load_that_waited_for_another_process_to_clone_does_not_announce_a_clone() {
+    let root = unique_temp_dir();
+    let (lock_path, held) = lock_held_by_a_running_holder(&root).await;
+    let working_copy = root.join(cache_key("https://example.com/repo.git", "v1.0.0"));
+    let (output, stderr, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    // Finishes its clone only once the load has announced its wait, so the
+    // load can't find the working copy before it has waited.
+    let announced = stderr.clone();
+    let holder = tokio::spawn(async move {
+        while announced.contents().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::fs::create_dir_all(&working_copy).await.unwrap();
+        drop(held);
+        tokio::fs::remove_file(&lock_path).await.unwrap();
+    });
+    let git = fake_with_the_entry();
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+    holder.await.unwrap();
+
+    assert_eq!(git.clone_count(), 0);
+    assert!(
+        stderr
+            .contents()
+            .starts_with("Waiting for another ratect process"),
+        "{}",
+        stderr.contents()
+    );
+    assert_eq!(progress.contents(), "");
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}

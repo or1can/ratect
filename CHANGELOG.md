@@ -67,6 +67,7 @@ history, from when it was the only binary.
 - `ratect doctor` and `ratect config validate` (ratect only) warn when a container's `dependencies`, a task's `dependencies` or a task's `prerequisites` gives the same entry more than once, naming the container or task, the field and the entry. The project still loads, and the entry still starts or runs once.
 - `ratect doctor` (ratect only) reports a `DOCKER_TLS_VERIFY` or `DOCKER_BUILDKIT` that is neither true nor false as a problem, naming the variable and its value.
 - After a `--no-cleanup*` run, a line per kept container says how to see its output (`docker logs`) and run a command in it (`docker exec -it`, after `docker start` for a container that isn't running).
+- A load that has to clone a Git include prints `Cloning <repo> <ref>...` before the clone and a blank line after a successful one, as in Batect, in every output style but `quiet`: on stdout for `ratect-compat`, on stderr for `ratect`. A load that waited while another process cloned the include prints neither.
 - A `ratect_version` refusal (ratect only), for a project or a Git bundle, says for each change whether it touches the project: whether the project loads under the running version's rules, or which field in which file uses what changed. The refusal still stands. `ratect doctor` and `ratect config validate` report the same, one finding per change.
 
 ### Changed

@@ -877,8 +877,8 @@ impl EventSink for QuietEventLogger {
 /// and styles as the sink (decisions/0017): a notice goes to stderr in every
 /// style, `-o quiet` included; progress goes to the binary's progress
 /// console, and nowhere under `quiet`. Waiting on a Git include's entry lock
-/// (decisions/0023) is a notice. Cheap to clone: every clone writes through
-/// the same two consoles.
+/// (decisions/0023) is a notice; cloning one is progress. Cheap to clone:
+/// every clone writes through the same two consoles.
 #[derive(Clone)]
 pub struct LoadOutput {
     stderr: Arc<Console>,
@@ -888,10 +888,20 @@ pub struct LoadOutput {
 impl LoadOutput {
     /// `style` as the binary selected it, `progress` its progress stream.
     pub fn new(style: OutputStyle, color_mode: ColorMode, progress: ProgressStream) -> Self {
+        Self::from_consoles(style, Console::stderr(color_mode), || {
+            Console::for_stream(progress, color_mode)
+        })
+    }
+
+    /// `progress` is made, and used, only for a style that shows progress.
+    fn from_consoles(
+        style: OutputStyle,
+        stderr: Console,
+        progress: impl FnOnce() -> Console,
+    ) -> Self {
         Self {
-            stderr: Arc::new(Console::stderr(color_mode)),
-            progress: (style != OutputStyle::Quiet)
-                .then(|| Arc::new(Console::for_stream(progress, color_mode))),
+            stderr: Arc::new(stderr),
+            progress: (style != OutputStyle::Quiet).then(|| Arc::new(progress())),
         }
     }
 
@@ -905,6 +915,16 @@ impl LoadOutput {
         }
     }
 
+    /// `text` as [`Console::bold`] renders it on the progress console, for
+    /// the user's own names in a [`progress`](Self::progress) line
+    /// (decisions/0017).
+    pub fn progress_bold(&self, text: &str) -> String {
+        match &self.progress {
+            Some(progress) => progress.bold(text),
+            None => text.to_string(),
+        }
+    }
+
     /// Writes to the two buffers it returns, stderr's then progress's.
     #[cfg(test)]
     pub(crate) fn capturing(
@@ -912,11 +932,10 @@ impl LoadOutput {
     ) -> (Self, test_support::SharedBuffer, test_support::SharedBuffer) {
         let stderr = test_support::SharedBuffer::default();
         let progress = test_support::SharedBuffer::default();
-        let output = Self {
-            stderr: Arc::new(Console::new(Box::new(stderr.clone()), false)),
-            progress: (style != OutputStyle::Quiet)
-                .then(|| Arc::new(Console::new(Box::new(progress.clone()), false))),
-        };
+        let output =
+            Self::from_consoles(style, Console::new(Box::new(stderr.clone()), false), || {
+                Console::new(Box::new(progress.clone()), false)
+            });
         (output, stderr, progress)
     }
 }

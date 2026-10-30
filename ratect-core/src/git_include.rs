@@ -55,8 +55,9 @@
 //! it, and the `entry_lock` submodule takes it. A lock whose **holder** has
 //! exited — killed during a first clone, say — is taken over by the next
 //! load that needs the entry, rather than blocking it until someone deletes
-//! the file, which Batect's would; a wait on a lock says so on stderr. See
-//! [decisions/0023](https://github.com/or1can/ratect/blob/main/decisions/0023-git-include-entry-lock.md).
+//! the file, which Batect's would; a wait on a lock says so on stderr, and
+//! a clone, once under the lock and still needed, is announced as progress.
+//! See [decisions/0023](https://github.com/or1can/ratect/blob/main/decisions/0023-git-include-entry-lock.md).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -429,8 +430,8 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
     }
 
-    /// Where a wait on an entry lock is announced — the loading binary's own,
-    /// rather than [`LoadOutput::default`].
+    /// Where a wait on an entry lock and a clone are announced — the loading
+    /// binary's own, rather than [`LoadOutput::default`].
     pub fn with_output(mut self, output: LoadOutput) -> Self {
         self.output = output;
         self
@@ -484,7 +485,11 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// Under the entry lock. Removes every `<key>.tmp-*` first: under the
     /// lock, any of them was left by an interrupted clone (decisions/0023's
     /// Decision 7) — nothing else removes one, and nothing judges one by its
-    /// age. Then clones into a fresh one and renames it into place. Losing
+    /// age. Then clones into a fresh one and renames it into place, announcing
+    /// the clone as progress before it starts and following a successful one
+    /// with a blank line, as Batect does — though only once the re-check has
+    /// found it still needed, so a load that waited out another process's
+    /// clone doesn't announce one it then skips, as Batect's would. Losing
     /// that rename to a clone that finished first — one by a holder whose lock
     /// this process took over, or by a waiter on a filesystem whose OS lock
     /// works per host only — is not an error: the winner's working copy is as
@@ -506,23 +511,27 @@ impl<G: GitClient> GitIncludeCache<G> {
             "{key}{STAGING_INFIX}{}",
             uuid::Uuid::new_v4().simple()
         ));
+        self.output.progress(&format!(
+            "Cloning {} {}...",
+            self.output.progress_bold(remote),
+            self.output.progress_bold(git_ref)
+        ));
         if let Err(e) = self.git.clone_repo(remote, git_ref, &staging).await {
             remove_staging_directory(&staging).await;
             return Err(e);
         }
         match tokio::fs::rename(&staging, destination).await {
-            Ok(()) => Ok(()),
-            Err(_) if destination.is_dir() => {
-                remove_staging_directory(&staging).await;
-                Ok(())
-            }
+            Ok(()) => {}
+            Err(_) if destination.is_dir() => remove_staging_directory(&staging).await,
             Err(e) => {
                 remove_staging_directory(&staging).await;
-                Err(e).with_context(|| {
+                return Err(e).with_context(|| {
                     format!("Failed to move {staging:?} into place at {destination:?}")
-                })
+                });
             }
         }
+        self.output.progress("");
+        Ok(())
     }
 
     /// Waits for the entry lock at `lock_path` until it is free or abandoned

@@ -233,6 +233,10 @@ Unlike [`caches`](#caches-options) and [`resources`](#resources-options), this c
 includes as well as your own. That matters less than it sounds: everything here is
 re-cloneable, so the worst case is a fetch.
 
+A command that loads the project and has to clone an include for it prints
+`Cloning <repo> <ref>...` on stderr first, and a blank line once the clone has
+succeeded, in every style but `quiet`; `includes refresh` prints neither.
+
 | Command | Description |
 | --- | --- |
 | `includes clean` | Removes includes nothing has used for 30 days — the same threshold the [automatic sweep](ratect-compat-config-reference.md#git-includes) applies, done on demand. |

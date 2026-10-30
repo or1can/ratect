@@ -881,7 +881,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
                 validate_config(args, &global, style, &load_output, stdout).await
             }
             ConfigCommand::Convert(args) => {
-                convert_config(args, &global, style, stdout, stderr).await
+                convert_config(args, &global, style, &load_output, stdout, stderr).await
             }
         },
         Command::Doctor(args) => diagnose(args, &global, style, &load_output, stdout).await,
@@ -1759,6 +1759,7 @@ async fn convert_config(
     args: ConfigConvertArgs,
     global: &GlobalArgs,
     style: OutputStyle,
+    load_output: &LoadOutput,
     stdout: &Console,
     stderr: &Console,
 ) -> Result<()> {
@@ -1772,7 +1773,9 @@ async fn convert_config(
         global.config_file.as_path()
     };
     ratect_core::config::check_config_file(source)?;
-    let loaded = Config::load_from_file(source)
+    let git_cache =
+        ratect_core::git_include::GitIncludeCache::new().with_output(load_output.clone());
+    let loaded = Config::load_from_file_with_git_cache(source, &git_cache)
         .await
         .with_context(|| format!("Failed to load {} for conversion", source.display()))?;
     let converted = ratect_core::convert::convert_project(&loaded, running_version())
