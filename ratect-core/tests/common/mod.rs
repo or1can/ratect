@@ -14,10 +14,11 @@
 
 //! What `ratect-core`'s integration tests share about the format twins
 //! corpus, `tests/twins/` — where its cases and files are, a scratch copy of
-//! one, and how a document's properties are found by walking it alongside a
-//! committed schema. A module of `tests/`, not a test crate of its own, so
-//! Cargo compiles it into each test that declares `mod common`, and an item
-//! one of them doesn't use is dead code there.
+//! one, and how a document's properties, and the places it holds a string,
+//! are found by walking it alongside a committed schema. A module of
+//! `tests/`, not a test crate of its own, so Cargo compiles it into each
+//! test that declares `mod common`, and an item one of them doesn't use is
+//! dead code there.
 #![allow(dead_code)]
 
 use serde_json::Value;
@@ -78,28 +79,151 @@ pub fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+/// What a schema declares, or a document uses, by location.
+#[derive(Default)]
+struct Locations {
+    /// Each property's label.
+    properties: BTreeSet<String>,
+    /// Each location a string can be: a property's label, or a map's values',
+    /// an array's items' or an alternative's, labelled as their own.
+    strings: BTreeSet<String>,
+    /// Each location a schema admits any value at — no `type`, fixed value,
+    /// `$ref` or alternatives of its own, nor a typed node's alternative, or
+    /// a map's values or an array's items given as `true` — labelled as a
+    /// string location is.
+    untyped: BTreeSet<String>,
+    /// Each keyword, with where it sits, that [`declared`]'s walk doesn't
+    /// read, so a location inside it would go unseen.
+    unhandled: BTreeSet<String>,
+}
+
+/// Every keyword [`declared`]'s walk reads, or can pass over because it holds
+/// no subschema of a value: an annotation, a constraint on a value, or
+/// `propertyNames`, which constrains only a map's keys. [`ROOT_ONLY`]'s are
+/// read only at the root.
+const HANDLED: &[&str] = &[
+    "$ref",
+    "additionalProperties",
+    "anyOf",
+    "const",
+    "default",
+    "description",
+    "enum",
+    "examples",
+    "format",
+    "items",
+    "maximum",
+    "minimum",
+    "oneOf",
+    "pattern",
+    "properties",
+    "propertyNames",
+    "required",
+    "title",
+    "type",
+    "uniqueItems",
+];
+
+/// The keywords [`declared`] reads at the schema's root and nowhere else —
+/// so a nested `definitions`, whose definitions it wouldn't walk, is
+/// unhandled.
+const ROOT_ONLY: &[&str] = &["$schema", "definitions"];
+
+/// Whether the schema `node` admits a string other than a fixed one — a
+/// `const` or `enum` value is a choice, not a place a value is written.
+fn admits_string(node: &Value) -> bool {
+    if node.get("const").is_some() || node.get("enum").is_some() {
+        return false;
+    }
+    match node.get("type") {
+        Some(Value::String(t)) => t == "string",
+        Some(Value::Array(ts)) => ts.iter().any(|t| t == "string"),
+        _ => false,
+    }
+}
+
 /// Every property `schema` declares, labelled by where it sits: a
 /// definition's name or `root`, then `.name` for a property, `[]` for an
 /// array's items, `{}` for a map's values and `#i` for the `i`th `oneOf`/
 /// `anyOf` alternative. A `$ref` is labelled by the definition it names.
 pub fn schema_properties(schema: &Value) -> BTreeSet<String> {
-    fn walk(node: &Value, location: &str, out: &mut BTreeSet<String>) {
-        if node.get("$ref").is_some() {
+    declared(schema).properties
+}
+
+/// Every location `schema` admits a string at, labelled as
+/// [`schema_properties`] labels a property.
+pub fn schema_string_locations(schema: &Value) -> BTreeSet<String> {
+    declared(schema).strings
+}
+
+/// Every location `schema` admits any value at, so neither does nor doesn't
+/// admit a string — labelled as [`schema_string_locations`] labels one. An
+/// alternative with no `type` of its own, such as a `format`, narrows its
+/// typed parent's, so isn't one.
+pub fn schema_untyped_locations(schema: &Value) -> BTreeSet<String> {
+    declared(schema).untyped
+}
+
+/// Every keyword `schema` uses that its walk here doesn't read, as
+/// `location: keyword` — a `$ref` with anything beside it but a
+/// `description`, or an `items` neither a schema nor `true`, included.
+pub fn schema_unhandled_keywords(schema: &Value) -> BTreeSet<String> {
+    declared(schema).unhandled
+}
+
+fn declared(schema: &Value) -> Locations {
+    fn walk(node: &Value, location: &str, typed_parent: bool, out: &mut Locations) {
+        let is_ref = node.get("$ref").is_some();
+        for keyword in node.as_object().into_iter().flat_map(|node| node.keys()) {
+            let handled = if is_ref {
+                ["$ref", "description"].contains(&keyword.as_str())
+            } else {
+                HANDLED.contains(&keyword.as_str())
+                    || (location == "root" && ROOT_ONLY.contains(&keyword.as_str()))
+            };
+            if !handled {
+                out.unhandled.insert(format!("{location}: {keyword}"));
+            }
+        }
+        if is_ref {
             return;
+        }
+        let constrained = ["type", "const", "enum", "oneOf", "anyOf"]
+            .iter()
+            .any(|keyword| node.get(keyword).is_some());
+        if !constrained && !typed_parent {
+            out.untyped.insert(location.to_string());
+        }
+        if admits_string(node) {
+            out.strings.insert(location.to_string());
         }
         if let Some(properties) = node.get("properties").and_then(Value::as_object) {
             for (name, child) in properties {
                 let label = format!("{location}.{name}");
-                out.insert(label.clone());
-                walk(child, &label, out);
+                out.properties.insert(label.clone());
+                walk(child, &label, false, out);
             }
         }
-        if let Some(values) = node.get("additionalProperties").filter(|v| v.is_object()) {
-            walk(values, &format!("{location}{{}}"), out);
+        match node.get("additionalProperties") {
+            Some(Value::Bool(true)) => {
+                out.untyped.insert(format!("{location}{{}}"));
+            }
+            Some(values) if values.is_object() => {
+                walk(values, &format!("{location}{{}}"), false, out);
+            }
+            _ => {}
         }
-        if let Some(items) = node.get("items") {
-            walk(items, &format!("{location}[]"), out);
+        match node.get("items") {
+            Some(Value::Bool(true)) => {
+                out.untyped.insert(format!("{location}[]"));
+            }
+            Some(items) if items.is_object() => walk(items, &format!("{location}[]"), false, out),
+            Some(_) => {
+                out.unhandled.insert(format!("{location}: items"));
+            }
+            None => {}
         }
+        let typed = typed_parent || node.get("type").is_some();
         for keyword in ["oneOf", "anyOf"] {
             for (index, alternative) in node
                 .get(keyword)
@@ -108,14 +232,14 @@ pub fn schema_properties(schema: &Value) -> BTreeSet<String> {
                 .flatten()
                 .enumerate()
             {
-                walk(alternative, &format!("{location}#{index}"), out);
+                walk(alternative, &format!("{location}#{index}"), typed, out);
             }
         }
     }
-    let mut out = BTreeSet::new();
-    walk(schema, "root", &mut out);
+    let mut out = Locations::default();
+    walk(schema, "root", false, &mut out);
     for (name, definition) in schema["definitions"].as_object().unwrap() {
-        walk(definition, name, &mut out);
+        walk(definition, name, false, &mut out);
     }
     out
 }
@@ -124,6 +248,16 @@ pub fn schema_properties(schema: &Value) -> BTreeSet<String> {
 /// walking it alongside `schema`. A key the schema doesn't declare — a YAML
 /// anchor's `.extension`, a `<<` merge key — is skipped.
 pub fn properties_used(schema: &Value, document: &Value) -> BTreeSet<String> {
+    used(schema, document).properties
+}
+
+/// Every location (see [`schema_string_locations`]) `document` holds a
+/// string at, found as [`properties_used`] finds a property.
+pub fn string_locations_used(schema: &Value, document: &Value) -> BTreeSet<String> {
+    used(schema, document).strings
+}
+
+fn used(schema: &Value, document: &Value) -> Locations {
     fn resolve<'s>(schema: &'s Value, node: &'s Value, location: &str) -> (&'s Value, String) {
         match node.get("$ref").and_then(Value::as_str) {
             Some(reference) => {
@@ -181,13 +315,7 @@ pub fn properties_used(schema: &Value, document: &Value) -> BTreeSet<String> {
                 }
             })
     }
-    fn walk(
-        schema: &Value,
-        node: &Value,
-        location: &str,
-        value: &Value,
-        out: &mut BTreeSet<String>,
-    ) {
+    fn walk(schema: &Value, node: &Value, location: &str, value: &Value, out: &mut Locations) {
         let (node, location) = resolve(schema, node, location);
         for keyword in ["oneOf", "anyOf"] {
             for (index, alternative) in node
@@ -210,13 +338,16 @@ pub fn properties_used(schema: &Value, document: &Value) -> BTreeSet<String> {
             }
         }
         match value {
+            Value::String(_) if admits_string(node) => {
+                out.strings.insert(location);
+            }
             Value::Object(object) => {
                 let properties = node.get("properties").and_then(Value::as_object);
                 let values = node.get("additionalProperties").filter(|v| v.is_object());
                 for (key, child) in object {
                     if let Some(property) = properties.and_then(|p| p.get(key)) {
                         let label = format!("{location}.{key}");
-                        out.insert(label.clone());
+                        out.properties.insert(label.clone());
                         walk(schema, property, &label, child, out);
                     } else if let Some(values) = values {
                         walk(schema, values, &format!("{location}{{}}"), child, out);
@@ -233,7 +364,7 @@ pub fn properties_used(schema: &Value, document: &Value) -> BTreeSet<String> {
             _ => {}
         }
     }
-    let mut out = BTreeSet::new();
+    let mut out = Locations::default();
     walk(schema, schema, "root", document, &mut out);
     out
 }

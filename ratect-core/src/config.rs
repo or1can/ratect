@@ -4921,7 +4921,8 @@ fn evaluate_value(
 /// only judge on a literal. Each of these fields' readers checks its syntax
 /// as the file is read ([`checked_expression`]), so a field added here needs
 /// one too — and a place in `written_for::expressions`, or the written-for
-/// detectors reading expressions don't look in it.
+/// detectors reading expressions don't look in it, which
+/// `tests/written_for_fields.rs` fails on once a format twin sets the field.
 ///
 /// Each path-bearing field is anchored on its **supplier**: the container in
 /// the `extends` chain whose value it is ([`Provenance::suppliers`]), so an
