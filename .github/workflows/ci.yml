@@ -228,7 +228,34 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p ratect -p ratect-compat
+      # Every example's image is pulled here, all at once and while cargo
+      # builds, rather than by each example when its turn comes: one after
+      # another, the pulls were most of this job's time (#767). No example
+      # sets a pull policy, so each then finds its image already present
+      # under the default, `IfNotPresent`. Read from the configs rather than
+      # listed here, so a new example or a bumped tag can't be missed. The
+      # `curlimages/curl` companion an `external_health_check` generates is
+      # in no config, so the run still pulls that one itself.
+      - name: Build, pulling every example's image meanwhile
+        shell: bash
+        run: |
+          images=$(sed -nE 's/^[[:space:]]*image[[:space:]]*[=:][[:space:]]*"?([^"[:space:]#]+)"?.*$/\1/p' \
+            examples/*/ratect.toml examples/*/batect.yml | sort -u)
+          if [ -z "$images" ]; then
+            echo "::error::Found no image in any example's config, so this search is broken."
+            exit 1
+          fi
+          pids=()
+          for image in $images; do
+            docker pull --quiet "$image" &
+            pids+=($!)
+          done
+          cargo build -p ratect -p ratect-compat
+          # `wait` returns each pull's own status, so a failed one fails the
+          # step under the runner's `bash -e`.
+          for pid in "${pids[@]}"; do
+            wait "$pid"
+          done
       - name: Run build/test/run/lint/shell for every worked example
         shell: bash
         run: |
