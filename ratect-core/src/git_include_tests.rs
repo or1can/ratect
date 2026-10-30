@@ -2218,3 +2218,28 @@ fn a_cached_include_debugs_without_its_credentials() {
     assert!(!debugged.contains("s3cret"), "{debugged}");
     assert!(debugged.contains("https://***@host/r.git"), "{debugged}");
 }
+
+/// #752: a bundle-chosen remote and ref print escaped in the clone's
+/// announcement, which every cold-cache load prints.
+#[tokio::test]
+async fn a_clone_announcement_escapes_the_remote_and_ref() {
+    let root = unique_temp_dir();
+    let (output, _, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new().failing("boom"), 1000)
+        .with_output(output);
+
+    cache
+        .ensure_cached(
+            &Remote::from("https://example.com/\x1b]0;pwned\x07.git"),
+            "v1\r",
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        progress.contents(),
+        "Cloning https://example.com/\\u{1b}]0;pwned\\u{7}.git v1\\r...\n"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}

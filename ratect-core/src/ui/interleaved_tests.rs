@@ -1151,3 +1151,81 @@ fn cleanup_names_a_failure_it_follows() {
         "test | Cleaning up after test failed...\n"
     );
 }
+
+/// #752: a hostile task or container name prints escaped, in its prefix and
+/// in the lines naming it — while the container's own output, which is the
+/// user's program's and not configuration, still passes through as written.
+#[test]
+fn a_hostile_name_prints_escaped_but_container_output_does_not() {
+    use super::super::tests::{assert_nothing_raw, HOSTILE};
+
+    let (logger, buffer, _, result) = logger_with_streams(true);
+    logger.post(TaskEvent::TaskStarting {
+        task: HOSTILE.into(),
+    });
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![
+            TaskContainerInfo {
+                is_task_container: true,
+                ..info(HOSTILE, Some(HOSTILE), None)
+            },
+            info("db", Some("postgres"), None),
+        ],
+    });
+    logger.post(TaskEvent::ImagePullStarting {
+        image: HOSTILE.into(),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: HOSTILE.into(),
+        command: Some(HOSTILE.into()),
+    });
+    logger.post(TaskEvent::ContainerOutput {
+        container: "db".into(),
+        line: "\x1b[32mgreen\x1b[0m".into(),
+    });
+    logger.post(TaskEvent::ContainerOutput {
+        container: HOSTILE.into(),
+        line: "\x1b[32mgreen\x1b[0m".into(),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: HOSTILE.into(),
+        exit_code: 0,
+        duration: Duration::from_secs(1),
+    });
+    let progress = buffer.contents();
+    assert_nothing_raw(&progress);
+    // Padded to the escaped name's width, as it prints.
+    let padding = " ".repeat(super::super::tests::HOSTILE_ESCAPED.len() - "db".len());
+    assert!(
+        progress.contains(&format!("db{padding}\x1b[0m |")),
+        "{progress:?}"
+    );
+    assert!(
+        progress.contains("| \x1b[32mgreen\x1b[0m\n"),
+        "{progress:?}"
+    );
+    assert!(
+        result.contents().ends_with("| \x1b[32mgreen\x1b[0m\n"),
+        "{:?}",
+        result.contents()
+    );
+}
+
+/// #752: a build line is escaped, keeping its tabs — a `Dockerfile` can come
+/// from a Git bundle, and BuildKit echoes each `RUN` line.
+#[test]
+fn a_build_line_is_escaped_but_keeps_its_tabs() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("app", None, Some("proj-app"))]);
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "proj-app".into(),
+        message: "#5 a\tb \x1b]0;pwned\x07".into(),
+    });
+    assert!(
+        buffer
+            .contents()
+            .ends_with("app  | Image build | #5 a\tb \\u{1b}]0;pwned\\u{7}\n"),
+        "{:?}",
+        buffer.contents()
+    );
+}

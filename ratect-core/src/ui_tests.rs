@@ -78,18 +78,23 @@ fn console_bold_wraps_text_in_the_bold_sgr_only_when_enabled() {
 /// gets no escape at all.
 #[test]
 fn console_styles_multi_line_text_one_line_at_a_time() {
+    // Multi-line `Text`: a `str` is a name, whose line breaks are escaped.
+    let lines = |text: &str| Text::from(text);
     let console = Console::new(Box::new(std::io::sink()), true);
-    assert_eq!(console.bold("a\n\nb"), "\x1b[1ma\x1b[0m\n\n\x1b[1mb\x1b[0m");
     assert_eq!(
-        console.colored(Color::Red, "a\nb\n"),
+        console.bold(&lines("a\n\nb")),
+        "\x1b[1ma\x1b[0m\n\n\x1b[1mb\x1b[0m"
+    );
+    assert_eq!(
+        console.colored(Color::Red, &lines("a\nb\n")),
         "\x1b[31ma\x1b[0m\n\x1b[31mb\x1b[0m\n"
     );
     assert_eq!(
-        console.bold_colored(Color::Red, "a\nb"),
+        console.bold_colored(Color::Red, &lines("a\nb")),
         "\x1b[1;31ma\x1b[0m\n\x1b[1;31mb\x1b[0m"
     );
     let plain = Console::new(Box::new(std::io::sink()), false);
-    assert_eq!(plain.bold("a\n\nb"), "a\n\nb");
+    assert_eq!(plain.bold(&lines("a\n\nb")), "a\n\nb");
 }
 
 #[test]
@@ -232,7 +237,7 @@ fn console_remembers_a_reader_that_has_gone() {
         Box::new(FailingWriter(std::io::ErrorKind::BrokenPipe)),
         false,
     );
-    console.write_raw("hello");
+    console.print("hello");
     assert!(console.reader_gone());
 
     let console = Console::new(Box::new(FailingWriter(std::io::ErrorKind::Other)), false);
@@ -681,4 +686,116 @@ fn a_load_prints_its_notices_on_stderr_in_every_style_and_progress_except_under_
         };
         assert_eq!(progress.contents(), expected, "{style:?}");
     }
+}
+
+/// #752: a name holding an OSC title sequence, a BEL and a carriage return
+/// — what a config file or a Git bundle could use to retitle the terminal
+/// or overwrite the line it is printed on.
+pub(crate) const HOSTILE: &str = "app\x1b]0;pwned\x07\r";
+
+/// [`HOSTILE`] as it prints: every control character escaped.
+pub(crate) const HOSTILE_ESCAPED: &str = "app\\u{1b}]0;pwned\\u{7}\\r";
+
+/// No raw ESC, BEL or CR from [`HOSTILE`] reached `printed` — the ESC test
+/// is for the OSC introducer, since Ratect's own styling and cursor movement
+/// are allowed theirs.
+pub(crate) fn assert_nothing_raw(printed: &str) {
+    assert!(printed.contains(HOSTILE_ESCAPED), "{printed:?}");
+    assert!(!printed.contains("\x1b]"), "{printed:?}");
+    assert!(!printed.contains('\x07'), "{printed:?}");
+    assert!(!printed.contains('\r'), "{printed:?}");
+}
+
+/// #752: the one escaping rule — every control character as
+/// `char::escape_debug` writes it, everything else as written.
+#[test]
+fn printable_escapes_every_control_character_and_nothing_else() {
+    assert_eq!(printable(HOSTILE), HOSTILE_ESCAPED);
+    assert_eq!(printable("a\nb\tc"), "a\\nb\\tc");
+    assert_eq!(
+        printable("café-测试 \"x\" 'y' \\"),
+        "café-测试 \"x\" 'y' \\"
+    );
+}
+
+/// #752: a console escapes the user's text it is handed, as a name to style
+/// or as a whole line, while its own styling still renders — and a line
+/// keeps its line breaks, which are Ratect's own message structure.
+#[test]
+fn a_console_escapes_the_text_it_is_given_but_not_its_own_styling() {
+    let buffer = test_support::SharedBuffer::default();
+    let console = Console::new(Box::new(buffer.clone()), true);
+    console.println(text!("Running {}...", console.bold(HOSTILE)));
+    console.println(text!("{} and {}", HOSTILE, 3));
+    console.error(format!("{HOSTILE} failed:\nsecond line"));
+    console.println("café-测试");
+    assert_eq!(
+        buffer.contents(),
+        format!(
+            "Running \x1b[1m{HOSTILE_ESCAPED}\x1b[0m...\n\
+             {HOSTILE_ESCAPED} and 3\n\
+             \x1b[1;31mError:\x1b[0m {HOSTILE_ESCAPED} failed:\nsecond line\n\
+             café-测试\n"
+        )
+    );
+}
+
+/// #752: `quiet` prints only the stderr classes, so a hostile name reaches
+/// it through an error message — escaped there too.
+#[test]
+fn the_quiet_logger_escapes_a_name_in_an_error() {
+    let buffer = test_support::SharedBuffer::default();
+    let logger = QuietEventLogger::new(Console::new(Box::new(buffer.clone()), false));
+    logger.post(TaskEvent::TaskStarting {
+        task: HOSTILE.into(),
+    });
+    logger.post(TaskEvent::Error {
+        message: format!("Container {HOSTILE} did not become healthy.").into(),
+    });
+    assert_nothing_raw(&buffer.contents());
+}
+
+/// #752: a message keeps its tabs as well as its line breaks — the layout of
+/// program output an error quotes, such as a failed build's — while every
+/// other control character in it is escaped. A name escapes both.
+#[test]
+fn a_message_keeps_its_tabs_and_line_breaks_but_a_name_does_not() {
+    let buffer = test_support::SharedBuffer::default();
+    let console = Console::new(Box::new(buffer.clone()), false);
+    console.error("Build output:\n\tstep\x1b[31m\r");
+    console.println(text!("- {}", "a\tb\nc"));
+    assert_eq!(
+        buffer.contents(),
+        "Error: Build output:\n\tstep\\u{1b}[31m\\r\n- a\\tb\\nc\n"
+    );
+}
+
+/// #752: `text!`'s guard finds a name captured inline whatever letter it
+/// starts with, and lets every argument form through.
+#[test]
+fn an_inline_capture_is_found_whatever_its_first_letter() {
+    for format in ["{name}", "{_x}", "{名前}", "{é:>4}", "a {b} c"] {
+        assert!(captures_inline(format), "{format}");
+    }
+    for format in ["{}", "{:>4}", "{0}", "{{name}}", "plain", "{} and {1}"] {
+        assert!(!captures_inline(format), "{format}");
+    }
+}
+
+/// #752: a warning and a notice are one line, so a line break in one —
+/// a value's — is escaped and can't add a line of its own; an error keeps
+/// its line breaks, which are its chain's layout.
+#[test]
+fn a_warning_or_notice_escapes_a_line_break_and_an_error_keeps_one() {
+    let buffer = test_support::SharedBuffer::default();
+    let console = Console::new(Box::new(buffer.clone()), false);
+    console.warning(format!("No cache named '{}'", "a\nError: forged"));
+    console.notice("left a\nb");
+    console.error("failed\n\nCaused by:\n    x");
+    assert_eq!(
+        buffer.contents(),
+        "Warning: No cache named 'a\\nError: forged'\n\
+         left a\\nb\n\
+         Error: failed\n\nCaused by:\n    x\n"
+    );
 }

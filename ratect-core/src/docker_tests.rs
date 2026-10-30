@@ -5121,6 +5121,7 @@ fn a_terminal_left_in_raw_mode_is_a_warning_naming_the_fix() {
     let [TaskEvent::Warning { message }] = events.as_slice() else {
         panic!("expected exactly one warning, got {events:?}");
     };
+    let message = message.as_str();
     assert!(
         message.contains("raw mode") && message.contains("reset") && message.contains("stty sane"),
         "{message}"

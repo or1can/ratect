@@ -644,7 +644,7 @@ impl<G: GitClient> GitIncludeCache<G> {
             "{key}{STAGING_INFIX}{}",
             uuid::Uuid::new_v4().simple()
         ));
-        self.output.progress(&format!(
+        self.output.progress(crate::text!(
             "Cloning {} {}...",
             self.output.progress_bold(&remote.to_string()),
             self.output.progress_bold(git_ref)

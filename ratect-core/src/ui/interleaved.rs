@@ -62,7 +62,8 @@
 //! terminal. So `ratect run x -o all 2>/dev/null` is the task's own lines
 //! and nothing else, and `ratect-compat -o all` is unchanged.
 
-use super::{Color, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent};
+use super::{Color, Console, ContainerIoStreaming, EventSink, OnceFlag, TaskEvent, Text};
+use crate::text;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use unicode_width::UnicodeWidthStr;
@@ -122,6 +123,12 @@ struct State {
     started_cleanup: OnceFlag,
 }
 
+/// `name`'s width in display columns as it prints — escaped (#752), so a
+/// name holding a control character is padded by what is actually shown.
+fn shown_width(name: &str) -> usize {
+    super::printable(name).width()
+}
+
 impl InterleavedEventLogger {
     pub fn new(console: Console, stderr: Console, result: Console) -> Self {
         Self {
@@ -144,7 +151,7 @@ impl InterleavedEventLogger {
         state: &State,
         name: &str,
         color: Option<Color>,
-        text: &str,
+        text: &Text,
     ) {
         // Padded by hand (not `format!("{name:width$}")`, which pads by
         // `char` count) — `prefix_width` is a display-column measurement,
@@ -152,29 +159,29 @@ impl InterleavedEventLogger {
         // characters. A CJK container name is 2 display columns per
         // character but 1 `char` each, so `{:width$}` would under-pad it
         // and break alignment with every other column.
-        let padding = " ".repeat(state.prefix_width.saturating_sub(name.width()));
-        let padded = format!("{name}{padding}");
+        let padding = " ".repeat(state.prefix_width.saturating_sub(shown_width(name)));
+        let padded = text!("{}{}", name, padding);
         // One span, one reset; the separator outside it, unstyled
         // (decisions/0017) where Batect bolds and colours it too.
         let prefix = match color {
             Some(color) => console.bold_colored(color, &padded),
             None => console.bold(&padded),
         };
-        for line in text.split('\n') {
-            console.println(&format!("{prefix} | {line}"));
+        for line in text.as_str().split('\n') {
+            console.println(text!("{} | {}", prefix, Text::raw(line)));
         }
     }
 
     /// A milestone line belonging to `container`, on the progress console.
-    fn print_for_container(&self, state: &State, container: &str, line: &str) {
+    fn print_for_container(&self, state: &State, container: &str, line: impl Into<Text>) {
         let color = state.colors.get(container).copied();
-        self.print_prefixed(&self.console, state, container, color, line);
+        self.print_prefixed(&self.console, state, container, color, &line.into());
     }
 
     /// A task-level line (the task's own prefix), on the progress console.
-    fn print_for_task(&self, state: &State, line: &str) {
+    fn print_for_task(&self, state: &State, line: impl Into<Text>) {
         let task = state.task.clone().unwrap_or_default();
-        self.print_prefixed(&self.console, state, &task, None, line);
+        self.print_prefixed(&self.console, state, &task, None, &line.into());
     }
 
     /// Prints the deferred "Running `<task>`..." preamble if it hasn't
@@ -188,7 +195,7 @@ impl InterleavedEventLogger {
         }
         state.preamble_pending = false;
         let task = state.task.clone().unwrap_or_default();
-        self.print_for_task(state, &format!("Running {}...", self.console.bold(&task)));
+        self.print_for_task(state, text!("Running {}...", self.console.bold(&task)));
     }
 
     /// Every container using `image`, sorted — a pull belongs to all of
@@ -246,21 +253,21 @@ impl EventSink for InterleavedEventLogger {
             // containers, so its own name is the whole column.
             TaskEvent::PrerequisitesOnly { task } => {
                 *state = State {
-                    prefix_width: task.width(),
+                    prefix_width: shown_width(&task),
                     task: Some(task.clone()),
                     ..State::default()
                 };
-                self.print_for_task(&state, &super::nothing_more_to_do(&self.console, &task));
+                self.print_for_task(&state, super::nothing_more_to_do(&self.console, &task));
             }
             TaskEvent::TaskGraphResolved { containers } => {
                 state.task_container = containers
                     .iter()
                     .find(|info| info.is_task_container)
                     .map(|info| info.name.clone());
-                let task_width = state.task.as_deref().map_or(0, UnicodeWidthStr::width);
+                let task_width = state.task.as_deref().map_or(0, shown_width);
                 state.prefix_width = containers
                     .iter()
-                    .map(|info| info.name.width())
+                    .map(|info| shown_width(&info.name))
                     .chain([task_width])
                     .max()
                     .unwrap_or(0);
@@ -295,7 +302,7 @@ impl EventSink for InterleavedEventLogger {
                     self.print_for_container(
                         &state,
                         &container,
-                        &format!("Pulling {}...", self.console.bold(&image)),
+                        text!("Pulling {}...", self.console.bold(&image)),
                     );
                 }
             }
@@ -321,7 +328,7 @@ impl EventSink for InterleavedEventLogger {
                     self.print_for_container(
                         &state,
                         &container,
-                        &format!("Pulled {}.", self.console.bold(&image)),
+                        text!("Pulled {}.", self.console.bold(&image)),
                     );
                 }
             }
@@ -336,7 +343,7 @@ impl EventSink for InterleavedEventLogger {
                         self.print_for_container(
                             &state,
                             &container,
-                            &format!("Image build | {line}"),
+                            text!("Image build | {}", Text::from(line)),
                         );
                     }
                 }
@@ -366,13 +373,16 @@ impl EventSink for InterleavedEventLogger {
                 // The line is already prefixed with `container`, so only the
                 // container it runs *in* needs naming, and only when that
                 // isn't the same one.
-                let elsewhere = run_in.map_or(String::new(), |run_in| format!(" in {run_in}"));
+                let elsewhere = run_in.map_or(Text::default(), |run_in| text!(" in {}", run_in));
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!(
-                        "Running setup command {} ({index} of {total}){elsewhere}...",
-                        self.console.bold(&command)
+                    text!(
+                        "Running setup command {} ({} of {}){}...",
+                        super::command(&self.console, &command),
+                        index,
+                        total,
+                        elsewhere
                     ),
                 );
             }
@@ -384,7 +394,7 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!("Setup command {index} | {line}"),
+                    text!("Setup command {} | {}", index, Text::raw(line)),
                 );
             }
             TaskEvent::SetupCommandsCompleted { container } => {
@@ -401,30 +411,34 @@ impl EventSink for InterleavedEventLogger {
                 self.print_for_container(
                     &state,
                     &container,
-                    &format!("{}.", super::exited_unexpectedly(&self.console, exit_code)),
+                    text!("{}.", super::exited_unexpectedly(&self.console, exit_code)),
                 );
             }
             TaskEvent::RunningTaskContainer { container, command } => {
                 let line = match command {
-                    Some(command) => format!("Running {}...", self.console.bold(&command)),
-                    None => "Running...".to_string(),
+                    Some(command) => {
+                        text!("Running {}...", super::command(&self.console, &command))
+                    }
+                    None => Text::raw("Running..."),
                 };
-                self.print_for_container(&state, &container, &line);
+                self.print_for_container(&state, &container, line);
             }
             TaskEvent::ContainerOutput { container, line } => {
                 // The task container's lines are the result — stdout, in
                 // both binaries (see the module docs); a dependency's go
-                // with the progress.
+                // with the progress. Either way the line is the container's
+                // own program's, so it passes through as written (#752).
+                let line = Text::raw(line);
                 if state.task_container.as_deref() == Some(container.as_str()) {
                     let color = state.colors.get(&container).copied();
                     self.print_prefixed(&self.result, &state, &container, color, &line);
                 } else {
-                    self.print_for_container(&state, &container, &line);
+                    self.print_for_container(&state, &container, line);
                 }
             }
             TaskEvent::CleanupStarting { cause } => {
                 if state.started_cleanup.fire_once() {
-                    self.print_for_task(&state, &super::cleaning_up(&self.console, cause.as_ref()));
+                    self.print_for_task(&state, super::cleaning_up(&self.console, cause.as_ref()));
                 }
             }
             TaskEvent::ContainerStopped { container } => {
@@ -446,7 +460,7 @@ impl EventSink for InterleavedEventLogger {
             } => {
                 self.print_for_task(
                     &state,
-                    &super::format_task_summary(&self.console, &task, exit_code, duration),
+                    super::format_task_summary(&self.console, &task, exit_code, duration),
                 );
             }
             // Nothing to show of its own — `all` has no live display to
@@ -467,7 +481,7 @@ impl EventSink for InterleavedEventLogger {
             TaskEvent::TaskFailed { task, duration } => {
                 self.print_for_task(
                     &state,
-                    &super::format_task_failed_summary(&self.console, &task, duration),
+                    super::format_task_failed_summary(&self.console, &task, duration),
                 );
             }
             // `CleanupStarting`'s line already said cleanup began.

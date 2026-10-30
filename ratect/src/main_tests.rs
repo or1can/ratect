@@ -1093,6 +1093,39 @@ fn includes_output_names_an_entry_without_its_credentials() {
     );
 }
 
+/// #752: `includes list` prints an entry's remote and ref escaped, in its
+/// human listing and its quiet one, whose tabs are its own and stay tabs.
+#[test]
+fn includes_list_escapes_an_entrys_remote_and_ref() {
+    let entry = ratect_core::git_include::CachedInclude {
+        key: "45de9a2d81c0f00dfeedbeef".to_string(),
+        remote: "https://host/\x1b]0;pwned\x07b.git".into(),
+        git_ref: "v1\r".to_string(),
+        last_used: 0,
+        path: PathBuf::from("/k"),
+        size_bytes: 0,
+    };
+    let escaped = "https://host/\\u{1b}]0;pwned\\u{7}b.git";
+    for quiet in [false, true] {
+        let stdout = Captured::default();
+        list_includes(
+            vec![entry.clone()],
+            quiet,
+            &Console::new(Box::new(stdout.clone()), false),
+        );
+        let printed = stdout.text();
+        let expected = if quiet {
+            format!("{escaped}\tv1\\r\t45de9a2d81c0f00dfeedbeef\n")
+        } else {
+            format!("  {escaped} at v1\\r\n")
+        };
+        assert!(printed.contains(&expected), "quiet: {quiet}: {printed:?}");
+        assert!(!printed.contains('\x1b'), "{printed:?}");
+        assert!(!printed.contains('\x07'), "{printed:?}");
+        assert!(!printed.contains('\r'), "{printed:?}");
+    }
+}
+
 /// #755: `includes refresh`/`clean` print what they did as before, then each
 /// entry they couldn't refresh or remove as an `Error:` line on stderr —
 /// naming it without its credentials, with the cause — in every style,

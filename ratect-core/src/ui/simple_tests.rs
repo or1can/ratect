@@ -552,3 +552,35 @@ fn cleanup_steps_add_nothing_after_the_cleanup_line() {
     logger.post(TaskEvent::CleanupFinished);
     assert_eq!(buffer.contents(), "\nCleaning up...\n");
 }
+
+/// #752: a hostile task or container name prints escaped in every progress
+/// line that names it.
+#[test]
+fn a_hostile_name_prints_escaped() {
+    use super::super::tests::{assert_nothing_raw, HOSTILE};
+
+    let (logger, buffer) = colored_logger();
+    logger.post(TaskEvent::TaskStarting {
+        task: HOSTILE.into(),
+    });
+    logger.post(TaskEvent::DependencyStarting {
+        container: HOSTILE.into(),
+    });
+    logger.post(TaskEvent::RunningSetupCommand {
+        container: HOSTILE.into(),
+        command: HOSTILE.into(),
+        index: 1,
+        total: 1,
+        run_in: Some(HOSTILE.into()),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: HOSTILE.into(),
+        command: Some(HOSTILE.into()),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: HOSTILE.into(),
+        exit_code: 0,
+        duration: Duration::from_secs(1),
+    });
+    assert_nothing_raw(&buffer.contents());
+}

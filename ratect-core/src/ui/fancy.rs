@@ -44,7 +44,8 @@
 //! - A multi-line setup command is drawn on one row, each line break a
 //!   space, like the task's own command; Batect fails the task instead.
 
-use super::{Console, EventSink, TaskContainerInfo, TaskEvent};
+use super::{Console, EventSink, TaskContainerInfo, TaskEvent, Text};
+use crate::text;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
@@ -248,29 +249,33 @@ enum Stage {
 }
 
 impl ContainerLine {
-    fn description(&self, console: &Console) -> String {
+    fn description(&self, console: &Console) -> Text {
         match &self.stage {
             Stage::Pending => match (&self.info.image, &self.info.build_tag) {
-                (Some(image), _) => format!("ready to pull image {}", console.bold(image)),
-                (None, Some(_)) => "ready to build image".to_string(),
-                (None, None) => "ready".to_string(),
+                (Some(image), _) => text!("ready to pull image {}", console.bold(image)),
+                (None, Some(_)) => Text::raw("ready to build image"),
+                (None, None) => Text::raw("ready"),
             },
             Stage::Pulling(None) => match &self.info.image {
-                Some(image) => format!("pulling image {}...", console.bold(image)),
-                None => "pulling image...".to_string(),
+                Some(image) => text!("pulling image {}...", console.bold(image)),
+                None => Text::raw("pulling image..."),
             },
             Stage::Pulling(Some(status)) => match &self.info.image {
-                Some(image) => format!("pulling {}: {status}", console.bold(image)),
-                None => format!("pulling image: {status}"),
+                Some(image) => text!("pulling {}: {}", console.bold(image), status),
+                None => text!("pulling image: {}", status),
             },
-            Stage::Building(None) => "building image...".to_string(),
-            Stage::Building(Some(line)) => format!("building image: {line}"),
-            Stage::ImageBuilt => "image built, ready to create container".to_string(),
-            Stage::Creating => "creating container...".to_string(),
-            Stage::WaitingForDependencies(remaining) if remaining.is_empty() => {
-                "ready to start".to_string()
+            Stage::Building(None) => Text::raw("building image..."),
+            Stage::Building(Some(line)) => {
+                // Program output, so its layout is flattened as `fit_row`
+                // would, and only what's left is escaped (#752).
+                text!("building image: {}", line.replace(['\n', '\r', '\t'], " "))
             }
-            Stage::WaitingForDependencies(remaining) => format!(
+            Stage::ImageBuilt => Text::raw("image built, ready to create container"),
+            Stage::Creating => Text::raw("creating container..."),
+            Stage::WaitingForDependencies(remaining) if remaining.is_empty() => {
+                Text::raw("ready to start")
+            }
+            Stage::WaitingForDependencies(remaining) => text!(
                 "waiting for {} {} to be ready...",
                 if remaining.len() == 1 {
                     "dependency"
@@ -279,11 +284,11 @@ impl ContainerLine {
                 },
                 names_list(console, remaining.iter())
             ),
-            Stage::StartingContainer => "starting container...".to_string(),
+            Stage::StartingContainer => Text::raw("starting container..."),
             Stage::WaitingToBecomeHealthy => {
-                "container started, waiting for it to become healthy...".to_string()
+                Text::raw("container started, waiting for it to become healthy...")
             }
-            Stage::AboutToRunSetupCommands => "running setup commands...".to_string(),
+            Stage::AboutToRunSetupCommands => Text::raw("running setup commands..."),
             Stage::RunningSetupCommand {
                 command,
                 index,
@@ -292,23 +297,28 @@ impl ContainerLine {
             } => {
                 // This row already names the declaring container, so only
                 // a command running somewhere else names anything more.
-                let elsewhere = run_in.as_ref().map_or(String::new(), |run_in| {
-                    format!(" in {}", console.bold(run_in))
+                let elsewhere = run_in.as_ref().map_or(Text::default(), |run_in| {
+                    text!(" in {}", console.bold(run_in))
                 });
-                format!(
-                    "running setup command {} ({index} of {total}){elsewhere}...",
-                    console.bold(command)
+                text!(
+                    "running setup command {} ({} of {}){}...",
+                    super::command(console, command),
+                    index,
+                    total,
+                    elsewhere
                 )
             }
-            Stage::Ready => "ready".to_string(),
-            Stage::RunningCommand(Some(command)) => format!("running {}", console.bold(command)),
-            Stage::RunningCommand(None) => "running".to_string(),
+            Stage::Ready => Text::raw("ready"),
+            Stage::RunningCommand(Some(command)) => {
+                text!("running {}", super::command(console, command))
+            }
+            Stage::RunningCommand(None) => Text::raw("running"),
             Stage::ExitedUnexpectedly(exit_code) => super::exited_unexpectedly(console, *exit_code),
         }
     }
 
-    fn render(&self, console: &Console) -> String {
-        format!(
+    fn render(&self, console: &Console) -> Text {
+        text!(
             "{}: {}",
             console.bold(&self.info.name),
             self.description(console)
@@ -318,9 +328,13 @@ impl ContainerLine {
 
 /// `names` as Batect's `humanReadableList` gives them — `a`, `a and b`,
 /// `a, b and c` — each name bold and the separators not.
-fn names_list<'name>(console: &Console, names: impl Iterator<Item = &'name String>) -> String {
-    let names: Vec<String> = names.map(|name| console.bold(name)).collect();
-    crate::engine::human_readable_list(&names, "and")
+fn names_list<'name>(console: &Console, names: impl Iterator<Item = &'name String>) -> Text {
+    let mut names: Vec<Text> = names.map(|name| console.bold(name)).collect();
+    match names.pop() {
+        None => Text::default(),
+        Some(last) if names.is_empty() => last,
+        Some(last) => text!("{} and {}", Text::join(names, ", "), last),
+    }
 }
 
 /// Whether a build line is blank: empty, or a BuildKit step's `#N` label
@@ -333,12 +347,13 @@ fn is_blank_build_line(message: &str) -> bool {
 }
 
 /// `text` as one painted row of the live display, fitted to `width`: every
-/// line break (`\n` or `\r`) a space, then clipped. Every row the display
-/// paints goes through here, so whatever a stage puts in its text — a
-/// multi-line command, build output — can never take a second terminal row
-/// that the repaint's row count doesn't know about.
+/// line break (`\n` or `\r`) and tab a space, then clipped. Every row the
+/// display paints goes through here, so whatever a stage puts in its text —
+/// a multi-line command, one indented with tabs — can never take a second
+/// terminal row that the repaint's row count doesn't know about: a tab
+/// counts for no columns here, but the terminal expands it to up to eight.
 fn fit_row(text: &str, width: Option<u16>) -> String {
-    clip_to_width(&text.replace(['\n', '\r'], " "), width)
+    clip_to_width(&text.replace(['\n', '\r', '\t'], " "), width)
 }
 
 /// Fits `text` into `width` *display columns*, as Batect's
@@ -504,7 +519,7 @@ impl FancyEventLogger {
 
     /// Repaints the whole startup block in place: cursor up over the
     /// previous frame, then clear-and-rewrite every line — emitted as one
-    /// atomic `write_raw` so nothing can interleave mid-frame.
+    /// atomic `print` so nothing can interleave mid-frame.
     ///
     /// The cursor-up is only safe when the terminal's *reported* width
     /// still matches what it was at the last paint (ratect#73): a counted
@@ -580,7 +595,7 @@ impl FancyEventLogger {
         let mut rendered = String::new();
         for line in &state.lines {
             rendered.push_str("\r\x1b[2K");
-            rendered.push_str(&fit_row(&line.render(&self.console), width));
+            rendered.push_str(&fit_row(line.render(&self.console).as_str(), width));
             rendered.push('\n');
         }
         if state.last_rendered.as_deref() == Some(rendered.as_str()) {
@@ -615,21 +630,22 @@ impl FancyEventLogger {
         state.painted_lines = state.lines.len();
         state.painted_width = width;
         state.last_rendered = Some(rendered);
-        self.console.write_raw(&frame);
+        self.console.print(Text::raw(frame));
     }
 
-    fn cleanup_text(&self, state: &State) -> String {
+    fn cleanup_text(&self, state: &State) -> Text {
         if !state.created_containers.is_empty() {
             let count = state.created_containers.len();
-            format!(
-                "Cleaning up: {count} container{} ({}) left to remove...",
+            text!(
+                "Cleaning up: {} container{} ({}) left to remove...",
+                count,
                 if count == 1 { "" } else { "s" },
                 names_list(&self.console, state.created_containers.iter())
             )
         } else if state.removing_network {
-            "Cleaning up: removing task network...".to_string()
+            Text::raw("Cleaning up: removing task network...")
         } else {
-            "Cleaning up...".to_string()
+            Text::raw("Cleaning up...")
         }
     }
 
@@ -664,11 +680,11 @@ impl FancyEventLogger {
             frame.push('\n');
             state.separator_owed = false;
         }
-        frame.push_str(&fit_row(&self.cleanup_text(state), width));
+        frame.push_str(&fit_row(self.cleanup_text(state).as_str(), width));
         frame.push('\n');
         state.cleanup_shown = true;
         state.cleanup_width = width;
-        self.console.write_raw(&frame);
+        self.console.print(Text::raw(frame));
     }
 
     /// Removes the countdown, if it is the line directly above the cursor —
@@ -678,7 +694,7 @@ impl FancyEventLogger {
     fn clear_cleanup_line(&self, state: &mut State) {
         if state.cleanup_shown {
             if state.cleanup_width == self.current_width() {
-                self.console.write_raw(CURSOR_UP_ONE_AND_CLEAR);
+                self.console.print(Text::raw(CURSOR_UP_ONE_AND_CLEAR));
             } else {
                 self.console.println("");
             }
@@ -752,7 +768,7 @@ impl EventSink for FancyEventLogger {
                     self.console.println("");
                 }
                 self.console
-                    .println(&format!("Running {}...", self.console.bold(&task)));
+                    .println(text!("Running {}...", self.console.bold(&task)));
             }
             // In place of a task's `Running` line, so separated the same
             // way; nothing live to draw, since nothing starts.
@@ -766,7 +782,7 @@ impl EventSink for FancyEventLogger {
                     self.console.println("");
                 }
                 self.console
-                    .println(&super::nothing_more_to_do(&self.console, &task));
+                    .println(super::nothing_more_to_do(&self.console, &task));
             }
             TaskEvent::TaskGraphResolved { containers } => {
                 state.lines = dependency_post_order(containers)
@@ -966,8 +982,9 @@ impl EventSink for FancyEventLogger {
                     // always starts with its own fresh leading newline
                     // regardless of what's already on screen below the
                     // frozen block.
-                    self.console.println(&format!(
-                        "{container} {}.",
+                    self.console.println(text!(
+                        "{} {}.",
+                        container,
                         super::exited_unexpectedly(&self.console, exit_code)
                     ));
                     // Printed below whatever was last painted — possibly the
@@ -1076,7 +1093,7 @@ impl EventSink for FancyEventLogger {
                 // on a fresh line below.
                 self.clear_cleanup_line(&mut state);
                 self.pay_separator(&mut state);
-                self.console.println(&super::format_task_summary(
+                self.console.println(super::format_task_summary(
                     &self.console,
                     &task,
                     exit_code,
@@ -1088,7 +1105,7 @@ impl EventSink for FancyEventLogger {
             TaskEvent::TaskFailed { task, duration } => {
                 self.clear_cleanup_line(&mut state);
                 self.pay_separator(&mut state);
-                self.console.println(&super::format_task_failed_summary(
+                self.console.println(super::format_task_failed_summary(
                     &self.console,
                     &task,
                     duration,
