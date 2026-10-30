@@ -26,3 +26,10 @@ ratect-core = { path = "../ratect-core" }
 # reusable pattern worth reaching for again for any other feature that's
 # only meaningfully testable from a real terminal.
 portable-pty = "0.9.0"
+# **`async-trait`** (tests only): `ratect_core::cache::VolumeStore` is an
+# `#[async_trait]` trait, so a test fake implementing it needs the macro —
+# what `remove_project_caches`' tests use to make a volume removal fail
+# without a daemon. Already in the lockfile through `ratect-core`, so this
+# adds no crate to the build. Drop it if that trait stops being
+# `async_trait`, or if those tests move into `ratect-core`.
+async-trait = "0.1"

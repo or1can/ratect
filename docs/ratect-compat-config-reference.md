@@ -524,6 +524,18 @@ containers:
   more than one, or that can't be read, fails the run or `--clean`, as in Batect,
   and is left as it is — replacing it would orphan every cache volume named after
   the key it held.
+
+**The cache root, `.batect/caches`, belongs to the project.** If it, or
+`.batect`, is a symbolic link, Ratect follows it, as Batect does: the key file
+and every `--cache-type=directory` cache are created wherever it points, a run
+bind-mounts the cache directory there, and a directory-type `--clean` removes
+every cache directory it finds there. A link only moves storage the project's
+own configuration could already reach, since a `local` mount can name any host
+path, so it's trusted as that configuration is. Link the root to storage shared
+with something else, and a clean removes what it finds there. An entry under the
+root that is itself a symbolic link is different: a clean skips it, with a
+warning, though a run's mount of that cache still follows it.
+
 `--clean` removes every one of this project's own cache volumes/directories (per
 `--cache-type` or `BATECT_CACHE_TYPE`) and exits, without running anything; `--clean-cache <NAME>` (repeatable)
 restricts this to the named cache(s) instead of all of them — see

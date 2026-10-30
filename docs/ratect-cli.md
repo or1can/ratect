@@ -162,7 +162,9 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 for both `list` and `clean` — a cache in one is invisible to the other, so this has to
 match how the project runs its tasks. Under `directory`, this project's caches are
 host directories under `<project>/.batect/caches/<name>` and shared ones live at
-`~/.ratect/caches/<name>`.
+`~/.ratect/caches/<name>`. A `.batect/caches` or `.batect` that is a symbolic link
+is followed, as in Batect, so `caches clean` removes the cache directories wherever
+it points — see [Cache volumes](ratect-compat-config-reference.md#cache-volumes).
 
 `caches` never reads the configuration file. A cache belongs to the project
 *directory*, so both commands work on a project whose configuration is broken or
@@ -177,7 +179,9 @@ the output can be piped straight back. Naming a cache that doesn't
 exist warns on stderr rather than passing silently, since the likeliest cause is
 a typo. Under `--cache-type directory`, `caches clean` also warns when the project
 has no `.batect/caches` directory, and names each entry there that it skips
-because it is a symbolic link, which is never followed.
+because it is a symbolic link, which is never followed. `caches clean` reports
+each cache as it is removed, so a removal that fails, which stops the clean,
+leaves everything removed before it already reported above the error.
 
 `--scope <project|shared>` restricts both commands to one kind of cache. A
 [shared cache](ratect-config-reference.md#shared-caches) is one every project on
@@ -207,7 +211,9 @@ same state:
 Both scopes are read from *storage*, not from the configuration — a project cache
 is found by its `batect-cache-<key>-` prefix, a shared one by
 `ratect-shared-cache-`. That is what keeps these commands working on a project
-whose configuration is broken.
+whose configuration is broken. With `--scope shared`, they never read or create
+the project's key file, `.batect/caches/key`, since only a project cache is
+named after it.
 
 ## `includes` options
 

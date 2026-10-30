@@ -376,6 +376,21 @@ fn list_directory_caches_is_empty_for_a_project_with_no_caches() {
     fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The cache names in `removed`, in order.
+fn names(removed: Vec<RemovedCache>) -> Vec<String> {
+    removed.into_iter().map(|cache| cache.name).collect()
+}
+
+/// A `report` callback collecting every warning into `warnings`, ignoring
+/// every other event.
+fn warnings_into(warnings: &std::cell::RefCell<Vec<String>>) -> impl Fn(CleanEvent<'_>) + '_ {
+    |event| {
+        if let CleanEvent::Warning(warning) = event {
+            warnings.borrow_mut().push(warning);
+        }
+    }
+}
+
 #[test]
 fn clean_directory_caches_removes_matching_subdirectories_and_leaves_others() {
     let dir = unique_temp_dir();
@@ -384,7 +399,7 @@ fn clean_directory_caches_removes_matching_subdirectories_and_leaves_others() {
     fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
     fs::write(caches_dir.join("key"), "abc123\n").unwrap();
 
-    let removed = clean_directory_caches(&dir, &HashSet::new(), |_| {}).unwrap();
+    let removed = names(clean_directory_caches(&dir, &HashSet::new(), &|_| {}).unwrap());
 
     let mut removed = removed;
     removed.sort();
@@ -406,7 +421,7 @@ fn clean_directory_caches_restricts_to_only_when_given() {
     fs::create_dir_all(caches_dir.join("npm-cache")).unwrap();
 
     let only = HashSet::from(["npm-cache".to_string()]);
-    let removed = clean_directory_caches(&dir, &only, |_| {}).unwrap();
+    let removed = names(clean_directory_caches(&dir, &only, &|_| {}).unwrap());
 
     assert_eq!(removed, vec!["npm-cache"]);
     assert!(caches_dir.join("gradle-cache").is_dir());
@@ -421,7 +436,7 @@ fn clean_directory_caches_does_nothing_when_the_cache_directory_does_not_exist()
 
     let warnings = std::cell::RefCell::new(Vec::new());
     let removed =
-        clean_directory_caches(&dir, &HashSet::new(), |w| warnings.borrow_mut().push(w)).unwrap();
+        names(clean_directory_caches(&dir, &HashSet::new(), &warnings_into(&warnings)).unwrap());
 
     assert!(removed.is_empty());
     // A divergence from Batect, which fails here (ratect#459) — said out
@@ -453,7 +468,7 @@ fn clean_directory_caches_skips_a_symbolic_link_and_warns_about_it() {
 
     let warnings = std::cell::RefCell::new(Vec::new());
     let removed =
-        clean_directory_caches(&dir, &HashSet::new(), |w| warnings.borrow_mut().push(w)).unwrap();
+        names(clean_directory_caches(&dir, &HashSet::new(), &warnings_into(&warnings)).unwrap());
 
     assert_eq!(removed, ["real"]);
     assert!(caches_dir.join("linked").is_symlink());
@@ -470,7 +485,7 @@ fn clean_directory_caches_skips_a_symbolic_link_and_warns_about_it() {
     // it isn't warned about.
     let warnings = std::cell::RefCell::new(Vec::new());
     let only = HashSet::from(["other".to_string()]);
-    clean_directory_caches(&dir, &only, |w| warnings.borrow_mut().push(w)).unwrap();
+    clean_directory_caches(&dir, &only, &warnings_into(&warnings)).unwrap();
     assert!(warnings.into_inner().is_empty());
 
     fs::remove_dir_all(&dir).unwrap();
@@ -835,8 +850,11 @@ async fn a_volume_removal_that_fails_fails_the_clean_and_stops_it() {
         CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
 
     let found = store.list(None).await.unwrap();
+    let events = std::sync::Mutex::new(Vec::new());
     let err = store
-        .remove(&found, &HashSet::new(), |_| {})
+        .remove(&found, &HashSet::new(), |event| {
+            events.lock().unwrap().push(format!("{event:?}"))
+        })
         .await
         .unwrap_err();
 
@@ -849,6 +867,21 @@ async fn a_volume_removal_that_fails_fails_the_clean_and_stops_it() {
         vec![
             "batect-cache-abc123-a".to_string(),
             "batect-cache-abc123-b".to_string(),
+        ]
+    );
+    // ratect#700: `a`'s removal was reported before the clean failed, and
+    // so was the attempt on `b`, before it was made — as Batect prints its
+    // `Deleting volume` line first.
+    let cache = |name: &str| RemovedCache {
+        name: name.to_string(),
+        storage: format!("batect-cache-abc123-{name}"),
+    };
+    assert_eq!(
+        events.into_inner().unwrap(),
+        [
+            format!("{:?}", CleanEvent::Removing(&cache("a"))),
+            format!("{:?}", CleanEvent::Removed(&cache("a"))),
+            format!("{:?}", CleanEvent::Removing(&cache("b"))),
         ]
     );
 
@@ -1013,4 +1046,243 @@ fn a_shared_cache_is_never_removed_without_being_named() {
         vec!["ratect-shared-cache-registry"],
         "and naming one must not also match the project cache of the same name"
     );
+}
+
+/// A shared-scope listing and clean, in volume mode, of `project_dir`, with
+/// one shared volume, `registry`, to find and remove. Returns what was
+/// removed.
+async fn shared_scope_list_and_clean(project_dir: &Path) -> Vec<RemovedCache> {
+    let runtime = FakeRuntime {
+        volumes: vec!["ratect-shared-cache-registry".to_string()],
+        ..Default::default()
+    };
+    let store = CacheStore::new(
+        CacheType::Volume,
+        Some(&runtime),
+        project_dir.to_path_buf(),
+        None,
+    )
+    .unwrap();
+
+    let found = store.list(Some(CacheScope::Shared)).await.unwrap();
+    assert_eq!(found.shared, ["registry"]);
+    let only = HashSet::from(["registry".to_string()]);
+    store.remove(&found, &only, |_| {}).await.unwrap().unwrap()
+}
+
+/// ratect#697: a shared-scope `caches list`/`clean` never looks at a
+/// project cache, so it has no reason to create the project's key file.
+#[tokio::test]
+async fn a_shared_scope_volume_list_and_clean_create_no_key_file() {
+    let project_dir = unique_temp_dir();
+
+    let removed = shared_scope_list_and_clean(&project_dir).await;
+
+    assert_eq!(removed[0].name, "registry");
+    assert!(!cache_directory(&project_dir).join("key").exists());
+    assert!(!cache_directory(&project_dir).exists());
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// ratect#697: nor does a key file it can't use stop it.
+#[tokio::test]
+async fn a_shared_scope_volume_list_and_clean_ignore_a_malformed_key_file() {
+    let project_dir = unique_temp_dir();
+    write_key_file(&project_dir, b"abc123\ndef456\n");
+
+    let removed = shared_scope_list_and_clean(&project_dir).await;
+
+    assert_eq!(removed[0].name, "registry");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// ratect#697's other half: a listing that includes project caches still
+/// needs the key, so a malformed key file fails it, before anything is
+/// removed — whether `--scope project` or no scope at all.
+#[tokio::test]
+async fn a_project_scope_volume_clean_with_a_malformed_key_file_fails_before_removing() {
+    for scope in [None, Some(CacheScope::Project)] {
+        let project_dir = unique_temp_dir();
+        write_key_file(&project_dir, b"abc123\ndef456\n");
+        let runtime = FakeRuntime {
+            volumes: vec![
+                "batect-cache-abc123-a".to_string(),
+                "ratect-shared-cache-registry".to_string(),
+            ],
+            ..Default::default()
+        };
+        let store =
+            CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
+
+        let Err(err) = store.list(scope).await else {
+            panic!("{scope:?}: a malformed key file was ignored");
+        };
+
+        assert!(
+            format!("{err:#}").contains("has more than one key line"),
+            "{scope:?}: {err:#}"
+        );
+        // `remove` resolves the key for itself, so it fails the same way
+        // even given a selection no `list` call produced.
+        let found = CacheSelection {
+            owned: vec!["a".to_string()],
+            shared: Vec::new(),
+            scope,
+        };
+        let Err(err) = store.remove(&found, &HashSet::new(), |_| {}).await else {
+            panic!("{scope:?}: a malformed key file was ignored by remove");
+        };
+        assert!(
+            format!("{err:#}").contains("has more than one key line"),
+            "{scope:?}: {err:#}"
+        );
+        assert!(runtime.removed.lock().unwrap().is_empty(), "{scope:?}");
+
+        fs::remove_dir_all(&project_dir).unwrap();
+    }
+}
+
+/// The property `CacheStore` resolved the key eagerly for, kept now that it
+/// doesn't: one invocation reads the key file once, so a `remove` after a
+/// `list` uses the key the `list` read, not the file as it is by then.
+#[tokio::test]
+async fn a_volume_store_reads_the_key_once_per_invocation() {
+    let project_dir = unique_temp_dir();
+    let key_file = write_key_file(&project_dir, b"abc123\n");
+    let runtime = FakeRuntime {
+        volumes: vec!["batect-cache-abc123-a".to_string()],
+        ..Default::default()
+    };
+    let store =
+        CacheStore::new(CacheType::Volume, Some(&runtime), project_dir.clone(), None).unwrap();
+
+    let found = store.list(None).await.unwrap();
+    fs::write(&key_file, "abc123\ndef456\n").unwrap();
+    let removed = store
+        .remove(&found, &HashSet::new(), |_| {})
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(removed[0].storage, "batect-cache-abc123-a");
+
+    fs::remove_dir_all(&project_dir).unwrap();
+}
+
+/// A project whose cache root, `.batect/caches`, is a symbolic link to
+/// `elsewhere`, a directory outside it. With `link_batect`, `.batect`
+/// itself is the link instead, so the root resolves to `elsewhere/caches`.
+#[cfg(unix)]
+struct LinkedCacheRoot {
+    project_dir: PathBuf,
+    elsewhere: PathBuf,
+    /// Where the cache root resolves to.
+    target: PathBuf,
+}
+
+#[cfg(unix)]
+impl LinkedCacheRoot {
+    fn new(link_batect: bool) -> Self {
+        let project_dir = unique_temp_dir();
+        let elsewhere = unique_temp_dir();
+        let target = if link_batect {
+            std::os::unix::fs::symlink(&elsewhere, project_dir.join(".batect")).unwrap();
+            elsewhere.join("caches")
+        } else {
+            fs::create_dir_all(project_dir.join(".batect")).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, cache_directory(&project_dir)).unwrap();
+            elsewhere.clone()
+        };
+        Self {
+            project_dir,
+            elsewhere,
+            target,
+        }
+    }
+
+    /// Removes the two directories `new` created, and nothing else.
+    fn remove(self) {
+        fs::remove_dir_all(&self.project_dir).unwrap();
+        fs::remove_dir_all(&self.elsewhere).unwrap();
+    }
+}
+
+/// CONTEXT.md's **Cache root** (ratect#698): a link at or above the cache
+/// root relocates it, as in Batect, so a new key file is written where the
+/// link points — whether the link is `.batect/caches` or `.batect`.
+#[cfg(unix)]
+#[test]
+fn project_cache_key_follows_a_linked_cache_root() {
+    for link_batect in [false, true] {
+        let linked = LinkedCacheRoot::new(link_batect);
+
+        let key = project_cache_key(&linked.project_dir).unwrap();
+
+        let written = fs::read_to_string(linked.target.join("key")).unwrap();
+        assert!(written.ends_with(&format!("{key}\n")), "{written}");
+
+        linked.remove();
+    }
+}
+
+/// The same for a directory-type cache: it's created at the link's target,
+/// and the path through the link is what's bind-mounted, which a daemon on
+/// this host resolves to the same directory.
+#[cfg(unix)]
+#[test]
+fn resolve_cache_mount_follows_a_linked_cache_root_for_directory_type() {
+    let linked = LinkedCacheRoot::new(false);
+    let options = CacheOptions {
+        cache_type: CacheType::Directory,
+        project_directory: linked.project_dir.clone(),
+    };
+    let mount = CacheVolumeMount {
+        name: "gradle-cache".to_string(),
+        container: "/root/.gradle".to_string(),
+        options: None,
+        scope: Default::default(),
+    };
+
+    let resolved = resolve_cache_mount(&options, || unreachable!(), &mount).unwrap();
+
+    let through_link = cache_directory(&linked.project_dir).join("gradle-cache");
+    assert_eq!(
+        resolved.source,
+        BindSource::Host(through_link.display().to_string())
+    );
+    assert!(linked.target.join("gradle-cache").is_dir());
+    assert_eq!(
+        through_link.canonicalize().unwrap(),
+        linked.target.join("gradle-cache").canonicalize().unwrap()
+    );
+
+    linked.remove();
+}
+
+/// And a directory-type clean removes the cache directories it finds
+/// wherever the root resolves to — what someone linking the root to storage
+/// shared with something else accepts.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_directory_clean_follows_a_linked_cache_root() {
+    let linked = LinkedCacheRoot::new(false);
+    touch_cache(&linked.target, "gradle-cache");
+    touch_cache(&linked.target, "npm-cache");
+    let store = directory_store(&linked.project_dir, None);
+
+    let found = store.list(None).await.unwrap();
+    let removed = store
+        .remove(&found, &HashSet::new(), |_| {})
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(names(removed), ["gradle-cache", "npm-cache"]);
+    assert!(!linked.target.join("gradle-cache").exists());
+    assert!(!linked.target.join("npm-cache").exists());
+    assert!(cache_directory(&linked.project_dir).is_symlink());
+
+    linked.remove();
 }

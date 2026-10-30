@@ -1136,27 +1136,46 @@ async fn clean_caches(
     };
 
     // `ratect-compat` never has a `--scope` of its own — Batect has no
-    // shared cache — so this always asks `CacheStore` for `Project` and
-    // never resolves a shared root at all.
+    // shared cache — so this never resolves a shared root at all.
     let store =
         ratect_core::cache::CacheStore::new(cache_type, docker.as_ref(), project_directory, None)?;
+    remove_project_caches(&store, cache_type, &only, stdout, stderr).await
+}
+
+/// [`clean_caches`] once it has a store: removes this project's caches that
+/// `only` names, or every one if it's empty. Always asks `CacheStore` for
+/// `Project`, since Batect has no shared cache.
+///
+/// Each cache's line is printed before its removal is attempted, as Batect
+/// prints it, so a clean that fails partway has already shown every cache
+/// it removed and the one it failed on (ratect#700).
+async fn remove_project_caches<D: ratect_core::cache::VolumeStore + Send + Sync>(
+    store: &ratect_core::cache::CacheStore<'_, D>,
+    cache_type: CacheType,
+    only: &HashSet<String>,
+    stdout: &Console,
+    stderr: &Console,
+) -> Result<()> {
     let found = store
         .list(Some(ratect_core::config::CacheScope::Project))
         .await?;
     let removed = store
-        .remove(&found, &only, |message| stderr.warning(&message))
+        .remove(&found, only, |event| match event {
+            ratect_core::cache::CleanEvent::Removing(cache) => {
+                stdout.println(&deleting_line(cache_type, &cache.storage))
+            }
+            ratect_core::cache::CleanEvent::Removed(_) => {}
+            ratect_core::cache::CleanEvent::Warning(message) => stderr.warning(&message),
+        })
         .await?
         .expect("a Project-scoped selection can never trigger CacheStore's shared-cache refusal");
 
-    for cache in &removed {
-        stdout.println(&deleting_line(cache_type, &cache.storage));
-    }
     stdout.println(&done_line(cache_type, removed.len()));
 
     Ok(())
 }
 
-/// The line printed for each cache actually removed — Batect's own
+/// The line printed for each cache as its removal begins — Batect's own
 /// `CleanupCachesCommand` wording, kept byte-for-byte since replacing it
 /// without divergence is this binary's entire job. `storage` is the full
 /// identifier Batect itself prints: a Docker volume name under

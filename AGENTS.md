@@ -135,8 +135,8 @@ local `dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends
 `tokio::task::spawn_blocking` (it used to be a `ratect-core` dev-dependency only, for
 `#[tokio::test]` in its unit tests). `portable-pty` is `ratect-compat`'s first
 `[dev-dependencies]` entry. `ratect` shares `ratect-compat`'s CLI-side set
-(`clap`, `tokio`, `anyhow`, `tracing`, `tracing-subscriber`) plus `clap_complete`, and
-has `async-trait` as a dev-dependency (see its own `Cargo.toml`).
+(`clap`, `tokio`, `anyhow`, `tracing`, `tracing-subscriber`) plus `clap_complete`.
+Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.toml`).
 
 ## Tooling & CI
 
