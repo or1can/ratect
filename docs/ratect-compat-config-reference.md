@@ -768,7 +768,7 @@ tasks:
 | `prerequisites` | list of strings | no* | Names of other tasks to run first, in order. Each prerequisite (and its own prerequisites, transitively) runs at most once per `ratect` invocation, even if shared by multiple tasks. A circular dependency is detected and reported as an error. A name containing `*` is a wildcard, expanded against every task name at run time (see [Wildcard prerequisites](#wildcard-prerequisites) below) rather than looked up literally. |
 | `dependencies` | list of strings | no** | Sidecar containers scoped to this task specifically — see below. Requires `run`. Each must name a container declared under `containers`; one that doesn't is rejected when the file loads. |
 | `description` | string | no | Shown next to the task's name in `--list-tasks` output — see below. Purely informational. |
-| `group` | string | no | Groups this task under a heading in `--list-tasks` output, together with every other task sharing the same `group` — see below. Purely a display grouping; has no effect on execution order or prerequisites. |
+| `group` | string | no | Groups this task under a heading in `--list-tasks` output, together with every other task sharing the same `group` — see below. An empty `group` is the same as none. Purely a display grouping; has no effect on execution order or prerequisites. |
 | `customise` | map of string → [TaskContainerCustomisation](#taskcontainercustomisation) | no | Per-task `environment`/`ports`/`working_directory` overrides, keyed by container name — see below. |
 
 \* At least one of `run`/`prerequisites` is required. A task with only `prerequisites` and no `run` is valid — its prerequisites still run, then Ratect stops, since there's no container of the task's own left to run.
@@ -854,7 +854,7 @@ because the name doesn't exist at all, or exists but isn't reachable from
 
 ### List-tasks output
 
-With no task declaring a `group`, `--list-tasks` prints a single flat, alphabetically
+With no task declaring a non-empty `group`, `--list-tasks` prints a single flat, alphabetically
 sorted list — each task's name, plus its `description` unless that is empty or
 only whitespace. Against
 [`ratect-compat/tests/fixtures/smoke.yml`](https://github.com/or1can/ratect/blob/main/ratect-compat/tests/fixtures/smoke.yml),
@@ -870,9 +870,10 @@ Tasks in ratect-test:
 - test-task
 ```
 
-Once *any* task in the project declares a `group`, every task is listed under a
+Once *any* task in the project declares a non-empty `group`, every task is listed under a
 heading instead — one per distinct `group` value (sorted alphabetically), plus a
-trailing `Ungrouped tasks:` heading for any task that doesn't set `group`.
+trailing `Ungrouped tasks:` heading for any task that doesn't set `group`, or
+sets it to the empty string — Batect treats the two alike.
 Against
 [`examples/jvm/batect.yml`](https://github.com/or1can/ratect/blob/main/examples/jvm/batect.yml)
 (every task there sets a `group`, so there's no `Ungrouped tasks:` heading to
