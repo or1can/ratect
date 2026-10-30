@@ -3754,7 +3754,9 @@ fn evaluate_path(
         boundary,
         batect_shaped: false,
     };
-    Ok(anchor_path(&evaluated, &anchor)?.display().to_string())
+    Ok(anchor_path(&evaluated, &anchor, HostPathField::Volumes)?
+        .display()
+        .to_string())
 }
 
 #[test]
@@ -12466,7 +12468,15 @@ tasks: {}
         .await
         .unwrap();
     let result = loaded.check_and_evaluate(&dir, &HashMap::new());
-    assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
+    let message = format!("{:?}", result.unwrap_err());
+    assert!(
+        message.contains("escapes both the Git repository"),
+        "{message}"
+    );
+    assert!(
+        message.contains("a 'build_directory' path of a container"),
+        "{message}"
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).unwrap();
@@ -12509,7 +12519,125 @@ tasks: {}
         .await
         .unwrap();
     let result = loaded.check_and_evaluate(&dir, &HashMap::new());
-    assert!(format!("{:?}", result.unwrap_err()).contains("escapes both the Git repository"));
+    let message = format!("{:?}", result.unwrap_err());
+    assert!(
+        message.contains("escapes both the Git repository"),
+        "{message}"
+    );
+    assert!(
+        message.contains("a 'build_secrets' path of a container"),
+        "{message}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// #180: the refusal names the field that escaped, not a fixed list of
+/// two others.
+#[tokio::test]
+async fn a_git_included_containers_build_ssh_path_escaping_via_dot_dot_traversal_names_build_ssh() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+    )
+    .unwrap();
+
+    let mut files = HashMap::new();
+    files.insert(
+        "batect-bundle.yml".to_string(),
+        r#"
+containers:
+  bundled:
+    build_directory: .
+    build_ssh:
+      - id: default
+        paths:
+          - ../../../../../../etc/ssh-key
+tasks: {}
+"#
+        .to_string(),
+    );
+    let git = FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .unwrap();
+    let result = loaded.check_and_evaluate(&dir, &HashMap::new());
+    let message = format!("{:?}", result.unwrap_err());
+    assert!(
+        message.contains("escapes both the Git repository"),
+        "{message}"
+    );
+    assert!(
+        message.contains("a 'build_ssh' path of a container"),
+        "{message}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// #180's rule on the deferred side: a path judged only once evaluated names
+/// its field too.
+#[tokio::test]
+async fn a_git_included_containers_build_ssh_expression_escaping_after_evaluation_names_build_ssh()
+{
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+    )
+    .unwrap();
+
+    let mut files = HashMap::new();
+    files.insert(
+        "batect-bundle.yml".to_string(),
+        r#"
+containers:
+  bundled:
+    build_directory: .
+    build_ssh:
+      - id: default
+        paths:
+          - <{batect.project_directory}/../../../../../../etc/ssh-key
+tasks: {}
+"#
+        .to_string(),
+    );
+    let git = FakeGitClient::new().with_files("https://example.com/bundle.git", "v1.0.0", files);
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+    let mut loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+        .await
+        .unwrap();
+    let result = loaded.check_and_evaluate(&dir, &HashMap::new());
+    let message = format!("{:?}", result.unwrap_err());
+    assert!(
+        message.contains("escapes both the Git repository"),
+        "{message}"
+    );
+    assert!(
+        message.contains("a 'build_ssh' path of a container"),
+        "{message}"
+    );
+    assert!(message.contains("'build_ssh' entry 'default'"), "{message}");
 
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).unwrap();

@@ -523,7 +523,11 @@ fn boundary_messages_hide_the_bundles_credentials() {
         Some(format!("the checkout of the bundle {SHOWN}"))
     );
     let inside = boundary
-        .check_path_allowed(Path::new("/clone/../elsewhere"), Path::new("/project"))
+        .check_path_allowed(
+            Path::new("/clone/../elsewhere"),
+            Path::new("/project"),
+            HostPathField::Volumes,
+        )
         .unwrap_err()
         .to_string();
     assert!(!inside.contains("token"), "{inside}");
@@ -536,7 +540,11 @@ fn boundary_messages_hide_the_bundles_credentials() {
         "{escaped}"
     );
     let refused = boundary
-        .check_path_allowed(Path::new("/elsewhere"), Path::new("/project"))
+        .check_path_allowed(
+            Path::new("/elsewhere"),
+            Path::new("/project"),
+            HostPathField::Volumes,
+        )
         .unwrap_err()
         .to_string();
     assert!(
