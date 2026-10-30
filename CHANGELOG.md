@@ -98,7 +98,8 @@ history, from when it was the only binary.
 - A Docker daemon that can't be reached at all is reported as unreachable, naming the host tried and what chose it, instead of as a failed API version negotiation.
 - A Docker daemon running Windows containers is refused on connecting, before any task, cache or resource work, naming the operating system it reports.
 - A config-load error about a file inside a Git include names it by its path within the repository plus the remote and ref (`'1.yml' from the bundle '<repo>' at '<ref>'`) instead of its path in the `~/.ratect/incl` clone cache. A missing include also gives the path as written.
-- Cleaning directory caches (`ratect-compat --clean`/`--clean-cache` and `ratect caches clean` with `--cache-type directory`) warns when it skips a cache entry that is a symbolic link, naming the link,, and when the project has no `.batect/caches` directory.
+- Refusals of a Git-included container's `volumes` or `build_directory`, including a build refusal naming its `build_directory`, name a path inside the bundle's checkout the same way instead of by its clone-cache path. A path refused for leading out through a symlink also gives where it really points.
+- Cleaning directory caches (`ratect-compat --clean`/`--clean-cache` and `ratect caches clean` with `--cache-type directory`) warns when it skips a cache entry that is a symbolic link, naming the link, and when the project has no `.batect/caches` directory.
 - Dependency containers with nothing left depending on them are stopped concurrently during cleanup, as in Batect, so independent dependencies wait out their grace periods together rather than one after another.
 - The pinned `bollard` tracks upstream `master`, picking up its changes since the previous pin, plus the build cancelling that Ratect's own fix needs.
 

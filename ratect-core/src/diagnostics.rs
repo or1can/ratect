@@ -182,7 +182,11 @@ pub fn config_findings(config: &Config, evaluation: &WholeProjectEvaluation) -> 
             continue;
         };
         let dockerfile = container.dockerfile.as_deref();
-        match crate::container_spec::check_build_files(Path::new(directory), dockerfile) {
+        match crate::container_spec::check_build_files(
+            Path::new(directory),
+            container.build_directory_in_bundle.as_deref(),
+            dockerfile,
+        ) {
             Err(reason) => unbuildable.push(format!("container '{name}': {reason}")),
             // Batect builds it, so a run does too; but it only works where
             // the project is checked out at that same path.

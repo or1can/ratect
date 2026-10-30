@@ -869,12 +869,7 @@ impl<G: GitClient> GitIncludeCache<G> {
     }
 }
 
-/// A `GitClient` fake for tests: `clone_repo` writes pre-configured file
-/// contents into `destination` instead of touching the network or a real
-/// `git` binary, matching `engine.rs`'s `FakeContainerRuntime` pattern.
-/// `pub(crate)` (not module-private) so `config.rs`'s own tests, which drive
-/// git includes end-to-end through `Config::load_from_file_with_git_cache`,
-/// can use it too.
+/// Per `(remote, ref)`, each file's path within the clone and its contents.
 #[cfg(test)]
 type FakeGitClientResponses = std::sync::Arc<
     std::sync::Mutex<
@@ -882,10 +877,24 @@ type FakeGitClientResponses = std::sync::Arc<
     >,
 >;
 
+/// Per `(remote, ref)`, each symlink's path within the clone and its target,
+/// written as given.
+#[cfg(test)]
+type FakeGitClientSymlinks = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<(String, String), Vec<(String, PathBuf)>>>,
+>;
+
+/// A `GitClient` fake for tests: `clone_repo` writes pre-configured files
+/// and symlinks into `destination` instead of touching the network or a real
+/// `git` binary, matching `engine.rs`'s `FakeContainerRuntime` pattern.
+/// `pub(crate)` (not module-private) so `config.rs`'s own tests, which drive
+/// git includes end-to-end through `Config::load_from_file_with_git_cache`,
+/// can use it too.
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct FakeGitClient {
     responses: FakeGitClientResponses,
+    symlinks: FakeGitClientSymlinks,
     fail: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     clone_calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
     winner: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>,
@@ -909,6 +918,25 @@ impl FakeGitClient {
             .lock()
             .unwrap()
             .insert((remote.to_string(), git_ref.to_string()), files);
+        self
+    }
+
+    /// Also has `clone_repo(remote, git_ref, ...)` create a symlink at `link`,
+    /// a relative path within the clone, pointing at `target` exactly as
+    /// given — what a bundle that commits a symlink leaves in its checkout.
+    pub(crate) fn with_symlink(
+        self,
+        remote: &str,
+        git_ref: &str,
+        link: &str,
+        target: impl Into<PathBuf>,
+    ) -> Self {
+        self.symlinks
+            .lock()
+            .unwrap()
+            .entry((remote.to_string(), git_ref.to_string()))
+            .or_default()
+            .push((link.to_string(), target.into()));
         self
     }
 
@@ -963,6 +991,23 @@ impl GitClient for FakeGitClient {
                 tokio::fs::create_dir_all(parent).await?;
             }
             tokio::fs::write(&path, content).await?;
+        }
+        let symlinks = self
+            .symlinks
+            .lock()
+            .unwrap()
+            .get(&(remote.to_string(), git_ref.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        for (link, target) in symlinks {
+            let path = destination.join(&link);
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            #[cfg(unix)]
+            tokio::fs::symlink(&target, &path).await?;
+            #[cfg(not(unix))]
+            anyhow::bail!("FakeGitClient: symlinks need a Unix host ('{link}' -> {target:?})");
         }
 
         let winner = self.winner.lock().unwrap().clone();

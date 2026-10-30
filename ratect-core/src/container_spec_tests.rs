@@ -23,6 +23,7 @@ fn sample_container() -> Container {
         image: Some("alpine:3.18".to_string()),
         image_pull_policy: None,
         build_directory: None,
+        build_directory_in_bundle: None,
         dockerfile: None,
         build_target: None,
         build_secrets: None,
@@ -995,7 +996,7 @@ fn check_build_files_gives_the_dockerfile_relative_to_the_build_context() {
         (absolute.to_str().unwrap(), "docker/Dockerfile"),
     ] {
         assert_eq!(
-            check_build_files(&directory, Some(written)).as_deref(),
+            check_build_files(&directory, None, Some(written)).as_deref(),
             Ok(sent),
             "{written}"
         );
@@ -1004,7 +1005,7 @@ fn check_build_files_gives_the_dockerfile_relative_to_the_build_context() {
 }
 
 fn refusal(directory: &Path, dockerfile: &str) -> String {
-    check_build_files(directory, Some(dockerfile)).unwrap_err()
+    check_build_files(directory, None, Some(dockerfile)).unwrap_err()
 }
 
 #[test]
@@ -1103,7 +1104,7 @@ fn check_build_files_refuses_a_dockerfile_in_a_linked_directory() {
 fn check_build_files_defaults_to_a_dockerfile_at_the_root() {
     let directory = build_directory_with_dockerfile();
     assert_eq!(
-        check_build_files(&directory, None).as_deref(),
+        check_build_files(&directory, None, None).as_deref(),
         Ok("Dockerfile")
     );
     std::fs::remove_dir_all(&directory).unwrap();

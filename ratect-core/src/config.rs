@@ -205,6 +205,20 @@ pub struct Container {
     /// required.
     #[serde(default, deserialize_with = "deserialize_optional_expression")]
     pub build_directory: Option<String>,
+    /// How a message names `build_directory` when it lies inside the
+    /// checkout of the Git-included bundle that supplied it — that bundle's
+    /// `Boundary::describe_in_checkout`, quotes included — rather than by the
+    /// `~/.ratect/incl` clone-cache path it resolved to, which nobody wrote
+    /// (#639). Set by evaluation, which is where the bundle is known; `None`
+    /// for any other `build_directory`, which is named as it is.
+    ///
+    /// Never written in a config file and never read from one
+    /// (`serde(skip)`), like `reports_readiness_for`: it exists because the
+    /// build check that names the directory runs where only the evaluated
+    /// container is at hand.
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub build_directory_in_bundle: Option<String>,
     /// Build arguments (Docker's own `--build-arg`) for a
     /// `build_directory` build, matched to the Dockerfile's own `ARG`
     /// instructions. Values support expressions. Ignored for an `image`
@@ -4979,11 +4993,16 @@ fn evaluate_container(
         }
     }
     if let Some(build_directory) = &mut container.build_directory {
+        let build_directory_anchor = anchor(&suppliers.build_directory);
         let resolved = resolve(
             "'build_directory'",
             build_directory,
-            &anchor(&suppliers.build_directory),
+            &build_directory_anchor,
         );
+        if let (Ok(resolved), Some((boundary, _))) = (&resolved, build_directory_anchor.boundary) {
+            container.build_directory_in_bundle =
+                boundary.describe_in_checkout(Path::new(resolved));
+        }
         store_or_record(build_directory, resolved, &mut failures);
     }
     for (key, value) in container.build_args.iter_mut().flatten() {
@@ -7272,6 +7291,9 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         // Set only on a generated companion, which is created after
         // inheritance has run and can never be an `extends` parent.
         reports_readiness_for: _,
+        // Set by evaluation, which runs after inheritance and names the
+        // inherited `build_directory` by its supplier's own bundle.
+        build_directory_in_bundle: _,
         image,
         image_pull_policy,
         build_directory,

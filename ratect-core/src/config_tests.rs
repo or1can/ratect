@@ -3992,7 +3992,7 @@ fn evaluate_path_rejects_a_symlink_inside_the_clone_that_points_outside_both_roo
     );
 
     assert!(
-        format!("{:?}", result).contains("escapes both the Git repository"),
+        format!("{:?}", result).contains("escapes both its checkout"),
         "a symlink out of the clone must not pass containment: {result:?}"
     );
 }
@@ -4162,6 +4162,7 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         image: None,
         image_pull_policy: None,
         build_directory: Some(build_directory.to_string()),
+        build_directory_in_bundle: None,
         build_args: Some(build_args),
         dockerfile: None,
         build_target: None,
@@ -4997,6 +4998,7 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         image: Some("alpine:3.18".to_string()),
         image_pull_policy: None,
         build_directory: None,
+        build_directory_in_bundle: None,
         build_args: None,
         dockerfile: None,
         build_target: None,
@@ -12288,6 +12290,94 @@ extends = "base"
     std::fs::remove_dir_all(&cache_root).unwrap();
 }
 
+/// #639 through `extends`: an inherited `build_directory` is named by the
+/// bundle that supplied it, and a child's own is named as it is, though
+/// both extend the same bundle container.
+#[tokio::test]
+async fn an_inherited_build_directory_is_named_by_its_suppliers_bundle() {
+    let dir = unique_temp_dir();
+    std::fs::create_dir(dir.join("local")).unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        r#"
+project_name = "demo"
+include = [{ type = "git", repo = "https://example.com/bundle.git", ref = "v1.0.0" }]
+
+[containers.inherits]
+extends = "base"
+
+[containers.overrides]
+extends = "base"
+build_directory = "local"
+"#,
+    )
+    .unwrap();
+    let git = FakeGitClient::new().with_files(
+        "https://example.com/bundle.git",
+        "v1.0.0",
+        HashMap::from([
+            (
+                "ratect-bundle.toml".to_string(),
+                "[containers.base]\nbuild_directory = \"docker\"\n\
+                 dockerfile = \"Missing.Dockerfile\"\n"
+                    .to_string(),
+            ),
+            ("docker/README".to_string(), String::new()),
+        ]),
+    );
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+    let loaded = Config::load_from_file_native_with_git_cache(&dir.join("ratect.toml"), &git_cache)
+        .await
+        .unwrap();
+    // `load_project_impl`'s own sequence, minus the real Git cache.
+    let project_directory = project_directory_path(&dir).unwrap();
+    let mut provenance = loaded.provenance();
+    check_values(&loaded.config, &provenance, &project_directory).unwrap();
+    let mut config = loaded.config;
+    provenance.suppliers = resolve_extends(&mut config.containers).unwrap();
+    let project = LoadedProject {
+        config,
+        project_directory: project_directory.clone(),
+        dialect: Dialect::Native,
+        provenance,
+        toml_files: Vec::new(),
+        toml_sources: Vec::new(),
+        other_sources: Vec::new(),
+    };
+
+    let whole = project
+        .evaluate_whole_project(&HashMap::new(), |_| None)
+        .unwrap();
+    let problems: Vec<String> = crate::diagnostics::config_findings(&project.config, &whole)
+        .into_iter()
+        .filter_map(|finding| match finding {
+            crate::diagnostics::Finding::Problem(message) => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        problems,
+        [
+            "container 'base': dockerfile 'Missing.Dockerfile' doesn't exist in build_directory \
+             'docker' from the bundle 'https://example.com/bundle.git' at 'v1.0.0'"
+                .to_string(),
+            "container 'inherits': dockerfile 'Missing.Dockerfile' doesn't exist in \
+             build_directory 'docker' from the bundle 'https://example.com/bundle.git' at \
+             'v1.0.0'"
+                .to_string(),
+            format!(
+                "container 'overrides': dockerfile 'Missing.Dockerfile' doesn't exist in \
+                 build_directory '{}'",
+                project_directory.join("local").display()
+            ),
+        ]
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
 #[tokio::test]
 async fn a_git_included_containers_build_directory_escaping_via_dot_dot_traversal_is_rejected() {
     let dir = unique_temp_dir();
@@ -12704,6 +12794,297 @@ include:
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&outside).unwrap();
     std::fs::remove_dir_all(&repo_dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// A project whose only include is the bundle `https://example.com/bundle.git`
+/// at `v1.0.0`, its checkout holding `files` and `symlinks` — for the tests
+/// below, which pin how a refusal names a path reached through it. Returns
+/// the project directory, the clone cache's root, and the load.
+async fn load_with_a_bundle(
+    files: &[(&str, &str)],
+    symlinks: &[(&str, PathBuf)],
+) -> (PathBuf, PathBuf, Result<LoadedConfig>) {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        r#"
+project_name: demo
+include:
+  - type: git
+    repo: https://example.com/bundle.git
+    ref: v1.0.0
+"#,
+    )
+    .unwrap();
+    let mut git = FakeGitClient::new().with_files(
+        "https://example.com/bundle.git",
+        "v1.0.0",
+        files
+            .iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect(),
+    );
+    for (link, target) in symlinks {
+        git = git.with_symlink(
+            "https://example.com/bundle.git",
+            "v1.0.0",
+            link,
+            target.clone(),
+        );
+    }
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+    let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache).await;
+    (dir, cache_root, loaded)
+}
+
+/// Neither spelling of `cache_root` appears in `message` — `/tmp` is itself
+/// a symlink on macOS, so the canonical form is checked too.
+fn assert_names_no_clone_cache_path(message: &str, cache_root: &Path) {
+    for root in [cache_root.to_path_buf(), cache_root.canonicalize().unwrap()] {
+        assert!(
+            !message.contains(&root.display().to_string()),
+            "a refusal must not name the clone cache ('{}'): {message}",
+            root.display()
+        );
+    }
+}
+
+/// #639: a bundle's volume reached through a symlink in its own checkout is
+/// lexically inside the clone, so the path as resolved is a clone-cache path
+/// nobody wrote. The refusal names it as the bundle does, and says where it
+/// really leads, which is what has to be fixed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_bundles_symlink_escape_names_the_path_within_the_bundle_and_its_real_target() {
+    let outside = unique_temp_dir();
+    let (dir, cache_root, loaded) = load_with_a_bundle(
+        &[(
+            "batect-bundle.yml",
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+    volumes:
+      - escape/data:/data
+tasks: {}
+"#,
+        )],
+        &[("escape", outside.clone())],
+    )
+    .await;
+
+    let error = loaded
+        .unwrap()
+        .check_and_evaluate(&dir, &HashMap::new())
+        .expect_err("a symlink out of the clone must not pass containment");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(
+            "Path 'escape/data' from the bundle 'https://example.com/bundle.git' at 'v1.0.0' \
+             escapes both its checkout and the project directory"
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "(via a symlink, to '{}')",
+            outside.canonicalize().unwrap().join("data").display()
+        )),
+        "{message}"
+    );
+    assert_names_no_clone_cache_path(&message, &cache_root);
+
+    for path in [dir, outside, cache_root] {
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+/// The other half of #639's rule: a path already outside the checkout is
+/// something the bundle wrote, so it is named as written — describing it
+/// relative to the clone would print a run of `..` that depends on where the
+/// cache lives.
+#[tokio::test]
+async fn a_bundles_lexical_escape_names_the_path_as_written() {
+    let (dir, cache_root, loaded) = load_with_a_bundle(
+        &[(
+            "batect-bundle.yml",
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+    volumes:
+      - /:/hostroot
+tasks: {}
+"#,
+        )],
+        &[],
+    )
+    .await;
+
+    let error = loaded
+        .unwrap()
+        .check_and_evaluate(&dir, &HashMap::new())
+        .expect_err("a host path outside both roots is refused");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(&format!(
+            "Path '/' escapes both the Git repository 'https://example.com/bundle.git' at \
+             'v1.0.0' it was included from and the project directory '{}' — ",
+            project_directory_path(&dir).unwrap().display()
+        )),
+        "{message}"
+    );
+    assert_names_no_clone_cache_path(&message, &cache_root);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// #639: a bundle path whose real location can't be found — a symlink loop
+/// here — is named as the bundle names it, not by its clone-cache path.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_bundle_path_that_cannot_be_resolved_is_named_within_the_bundle() {
+    let (dir, cache_root, loaded) = load_with_a_bundle(
+        &[(
+            "batect-bundle.yml",
+            r#"
+containers:
+  bundled:
+    image: alpine:3.18
+    volumes:
+      - loop/data:/data
+tasks: {}
+"#,
+        )],
+        &[("loop", PathBuf::from("loop"))],
+    )
+    .await;
+
+    let error = loaded
+        .unwrap()
+        .check_and_evaluate(&dir, &HashMap::new())
+        .expect_err("an unresolvable path is refused");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(
+            "Cannot determine where 'loop/data' from the bundle \
+             'https://example.com/bundle.git' at 'v1.0.0' really points, so its containment \
+             cannot be checked."
+        ),
+        "{message}"
+    );
+    assert_names_no_clone_cache_path(&message, &cache_root);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&cache_root).unwrap();
+}
+
+/// #419's refusal of a bundle file that is a symlink out of its checkout,
+/// pinned now `FakeGitClient` can plant one: named within the bundle, never
+/// by its clone-cache path.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_bundle_file_symlinked_out_of_the_checkout_is_named_within_the_bundle() {
+    let outside = unique_temp_dir();
+    std::fs::write(outside.join("secret.yml"), "tasks: {}\n").unwrap();
+    let (dir, cache_root, loaded) =
+        load_with_a_bundle(&[], &[("batect-bundle.yml", outside.join("secret.yml"))]).await;
+
+    let message = format!(
+        "{:#}",
+        loaded.expect_err("a bundle file linked out of the checkout is refused")
+    );
+    assert!(
+        message.contains(
+            "Included file 'batect-bundle.yml' from the bundle 'https://example.com/bundle.git' \
+             at 'v1.0.0' escapes the Git repository it was included from (via a symlink)"
+        ),
+        "{message}"
+    );
+    assert_names_no_clone_cache_path(&message, &cache_root);
+
+    for path in [dir, outside, cache_root] {
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+/// #639, for #296's build refusals: a bundle container's `build_directory`
+/// is named as the bundle names it in each of them, never by the clone-cache
+/// path it resolved to. `config validate`'s check is the run's own.
+#[tokio::test]
+async fn a_bundles_unbuildable_build_directory_is_named_within_the_bundle() {
+    let (dir, cache_root, loaded) = load_with_a_bundle(
+        &[
+            (
+                "batect-bundle.yml",
+                r#"
+containers:
+  missing:
+    build_directory: missing
+  file:
+    build_directory: batect-bundle.yml
+  no-dockerfile:
+    build_directory: docker
+    dockerfile: Missing.Dockerfile
+  outside:
+    build_directory: docker
+    dockerfile: ../batect-bundle.yml
+tasks: {}
+"#,
+            ),
+            ("docker/README", ""),
+        ],
+        &[],
+    )
+    .await;
+    let loaded = loaded.unwrap();
+    let project = LoadedProject {
+        provenance: loaded.provenance(),
+        config: loaded.config,
+        project_directory: project_directory_path(&dir).unwrap(),
+        dialect: Dialect::BatectCompatible,
+        toml_files: Vec::new(),
+        toml_sources: Vec::new(),
+        other_sources: Vec::new(),
+    };
+
+    let whole = project
+        .evaluate_whole_project(&HashMap::new(), |_| None)
+        .unwrap();
+    let findings = crate::diagnostics::config_findings(&project.config, &whole);
+    let problems: Vec<String> = findings
+        .iter()
+        .filter_map(|finding| match finding {
+            crate::diagnostics::Finding::Problem(message) => Some(message.clone()),
+            _ => None,
+        })
+        .collect();
+    let bundle = "from the bundle 'https://example.com/bundle.git' at 'v1.0.0'";
+    assert_eq!(
+        problems,
+        [
+            format!(
+                "container 'file': build_directory 'batect-bundle.yml' {bundle} isn't a directory"
+            ),
+            format!("container 'missing': build_directory 'missing' {bundle} doesn't exist"),
+            format!(
+                "container 'no-dockerfile': dockerfile 'Missing.Dockerfile' doesn't exist in \
+                 build_directory 'docker' {bundle}"
+            ),
+            format!(
+                "container 'outside': dockerfile '../batect-bundle.yml' isn't inside \
+                 build_directory 'docker' {bundle}"
+            ),
+        ]
+    );
+    for message in &problems {
+        assert_names_no_clone_cache_path(message, &cache_root);
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).unwrap();
 }
 
@@ -13177,6 +13558,7 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         image: Some("alpine:3.18".to_string()),
         image_pull_policy: None,
         build_directory: None,
+        build_directory_in_bundle: None,
         dockerfile: None,
         build_target: None,
         build_secrets: None,

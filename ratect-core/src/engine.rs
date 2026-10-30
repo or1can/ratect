@@ -2167,6 +2167,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         // it, before the daemon is asked anything.
                         let dockerfile = crate::container_spec::check_build_files(
                             std::path::Path::new(build_directory),
+                            container_config.build_directory_in_bundle.as_deref(),
                             container_config.dockerfile.as_deref(),
                         )
                         .map_err(anyhow::Error::msg)?;
