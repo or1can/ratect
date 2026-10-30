@@ -869,12 +869,7 @@ impl<G: GitClient> GitIncludeCache<G> {
     }
 }
 
-/// A `GitClient` fake for tests: `clone_repo` writes pre-configured files
-/// and symlinks into `destination` instead of touching the network or a real
-/// `git` binary, matching `engine.rs`'s `FakeContainerRuntime` pattern.
-/// `pub(crate)` (not module-private) so `config.rs`'s own tests, which drive
-/// git includes end-to-end through `Config::load_from_file_with_git_cache`,
-/// can use it too.
+/// Per `(remote, ref)`, each file's path within the clone and its contents.
 #[cfg(test)]
 type FakeGitClientResponses = std::sync::Arc<
     std::sync::Mutex<
@@ -889,6 +884,12 @@ type FakeGitClientSymlinks = std::sync::Arc<
     std::sync::Mutex<std::collections::HashMap<(String, String), Vec<(String, PathBuf)>>>,
 >;
 
+/// A `GitClient` fake for tests: `clone_repo` writes pre-configured files
+/// and symlinks into `destination` instead of touching the network or a real
+/// `git` binary, matching `engine.rs`'s `FakeContainerRuntime` pattern.
+/// `pub(crate)` (not module-private) so `config.rs`'s own tests, which drive
+/// git includes end-to-end through `Config::load_from_file_with_git_cache`,
+/// can use it too.
 #[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct FakeGitClient {
