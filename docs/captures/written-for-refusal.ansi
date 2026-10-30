@@ -5,7 +5,7 @@
   - ratect 0.12.0: 'project_name' and every container name must be a Docker image-name component, or the load fails: lowercase letters and digits, joined by a single '.', one or two '_', or any number of '-' — doesn't apply: it loads under these rules
   - ratect 0.12.0: an included file that sets 'forbid_telemetry' to true fails the load; only the root file may — doesn't apply: it loads under these rules
   - ratect 0.12.0: a string 'volumes' or 'devices' entry with an empty options segment ('a:b:') fails the load — doesn't apply: it loads under these rules
-  - ratect 0.12.0: a local include's 'path' whose first component is '~' is looked for in the home directory, not in a '~' directory beside the file declaring it — not checked
+  - ratect 0.12.0: a local include's 'path' whose first component is '~' is looked for in the home directory, not in a '~' directory beside the file declaring it — none found
   - ratect 0.12.0: a 'command', 'entrypoint', 'run.command', 'run.entrypoint' or setup command that can't be split into arguments (an unbalanced quote, a trailing '\') fails the load, even where no task runs it — doesn't apply: it loads under these rules
   - ratect 0.12.0: a Git bundle is refused until the 'ratect_version' of the file its include names, or the include's 'reviewed_ratect_version', covers every change since; the root's 'ratect_version' doesn't cover a bundle — none found
 With this check set aside, the project loads under ratect 0.12.0's rules.

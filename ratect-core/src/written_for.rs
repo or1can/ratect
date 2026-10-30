@@ -153,6 +153,44 @@ fn declares_git_include(files: &[TomlFile]) -> Vec<Hit> {
         .collect()
 }
 
+/// The home-directory row's detector: every file declaring a local include
+/// — a bare path, or a table whose `type` is absent or `"file"` — whose
+/// `path` has `~` as its first component, by the loader's own rule
+/// (`config::expand_home_directory`'s): `~` and `~/x`, never `~user/x`. A
+/// Git include's `path` is inside its repository, so the change leaves it
+/// alone.
+fn includes_from_home_directory(files: &[TomlFile]) -> Vec<Hit> {
+    fn local_path(entry: &toml::Value) -> Option<&str> {
+        match entry {
+            toml::Value::String(path) => Some(path),
+            toml::Value::Table(table) => match table.get("type").map(toml::Value::as_str) {
+                None | Some(Some("file")) => table.get("path").and_then(toml::Value::as_str),
+                Some(_) => None,
+            },
+            _ => None,
+        }
+    }
+    let from_home = |path: &str| {
+        matches!(
+            Path::new(path).components().next(),
+            Some(std::path::Component::Normal(first)) if first == "~"
+        )
+    };
+    files
+        .iter()
+        .filter(|file| {
+            file.document
+                .get("include")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|entries| entries.iter().filter_map(local_path).any(from_home))
+        })
+        .map(|file| Hit {
+            field: "include".to_string(),
+            file: file.name.clone(),
+        })
+        .collect()
+}
+
 /// Every breaking change to what a `ratect.toml` means or accepts, oldest
 /// first. See the module documentation before adding one.
 pub const BREAKING_CHANGES: &[BreakingChange] = &[
@@ -200,7 +238,7 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         version: "0.12.0",
         summary: "a local include's 'path' whose first component is '~' is looked for in the \
                   home directory, not in a '~' directory beside the file declaring it",
-        check: Check::NotChecked,
+        check: Check::Detected(includes_from_home_directory),
     },
     BreakingChange {
         version: "0.12.0",

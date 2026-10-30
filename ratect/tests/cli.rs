@@ -748,8 +748,8 @@ fn breaking_change_lines(text: &str) -> Vec<String> {
 
 /// decisions/0022: a refused project that loads under this version's rules
 /// is told so once, every row that only fails the load says it doesn't
-/// apply, the bundle row finds nothing in a project with no Git include, and
-/// the rows nothing checks say so. `config validate` and `doctor` report
+/// apply, each detected row finds nothing in a project with no use of what
+/// it looks for, and the rows nothing checks say so. `config validate` and `doctor` report
 /// exactly the refusal's outcomes, from the same result. The fixture is
 /// the project `docs/ratect-config-reference.md`'s captured refusal shows.
 #[test]
@@ -776,15 +776,13 @@ fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
     let rows = breaking_change_lines(&refusal);
     assert_eq!(rows.len(), 9, "{refusal}");
     for row in &rows {
-        let expected = if row.contains("a Git bundle is refused") {
+        let expected = if row.contains("a Git bundle is refused")
+            || row.contains("a local include's 'path'")
+        {
             "none found"
-        } else if [
-            "a '\\' in an expression",
-            "every '$' or '<'",
-            "a local include's 'path'",
-        ]
-        .iter()
-        .any(|start| row.contains(start))
+        } else if ["a '\\' in an expression", "every '$' or '<'"]
+            .iter()
+            .any(|start| row.contains(start))
         {
             "not checked"
         } else {
@@ -805,7 +803,7 @@ fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
         "{validate}"
     );
     assert!(
-        validate.contains("  warning ratect 0.12.0: a local include's 'path'"),
+        validate.contains("  warning ratect 0.12.0: every '$' or '<'"),
         "{validate}"
     );
 }

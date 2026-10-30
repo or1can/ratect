@@ -481,20 +481,66 @@ fn the_bundle_row_finds_each_file_declaring_a_git_include() {
     assert_eq!(files, ["inline", "tables"]);
 }
 
-/// decisions/0022: the three rows changing what a value means have no
-/// detector yet and say so; the bundle row is detected; every other row
-/// only fails the load.
+/// The home-directory row's detector: a local include whose `path` has `~`
+/// as its first component, in every form a local include takes — a bare
+/// string, an inline table and an `[[include]]` table, with or without
+/// `type = "file"`.
+#[test]
+fn the_home_directory_row_finds_each_local_include_starting_with_a_tilde() {
+    let files = [
+        toml_file("bare", "include = [\"~/shared.toml\"]\n"),
+        toml_file("inline", "include = [{ path = \"~/shared.toml\" }]\n"),
+        toml_file(
+            "typed",
+            "include = [{ type = \"file\", path = \"~/shared.toml\" }]\n",
+        ),
+        toml_file("tables", "[[include]]\npath = \"~/shared.toml\"\n"),
+        toml_file("home", "include = [\"~\"]\n"),
+    ];
+    let found: Vec<Hit> = files
+        .iter()
+        .flat_map(|file| includes_from_home_directory(std::slice::from_ref(file)))
+        .collect();
+    let expected: Vec<Hit> = files
+        .iter()
+        .map(|file| Hit {
+            field: "include".to_string(),
+            file: file.name.clone(),
+        })
+        .collect();
+    assert_eq!(found, expected);
+}
+
+/// What the row doesn't change: a `~` that isn't the whole first component,
+/// and a Git include's `path`, which is inside its repository.
+#[test]
+fn the_home_directory_row_finds_nothing_the_change_leaves_alone() {
+    let files = [
+        toml_file("user", "include = [\"~user/x.toml\"]\n"),
+        toml_file("middle", "include = [\"a/~/b.toml\"]\n"),
+        toml_file("dot", "include = [\"./~/x.toml\"]\n"),
+        toml_file(
+            "git",
+            "[[include]]\ntype = \"git\"\nrepo = \"r\"\nref = \"v1\"\npath = \"~/x.toml\"\n",
+        ),
+        toml_file("plain", "include = [\"shared.toml\"]\n"),
+        toml_file("none", "project_name = \"p\"\n"),
+    ];
+    assert_eq!(includes_from_home_directory(&files), []);
+}
+
+/// decisions/0022: the rows changing what a value means that have no
+/// detector yet say so; the bundle and home-directory rows are detected;
+/// every other row only fails the load.
 #[test]
 fn every_row_in_the_real_table_declares_how_it_is_checked() {
-    let unchecked = [
-        "a '\\' in an expression",
-        "every '$' or '<'",
-        "a local include's 'path'",
-    ];
+    let unchecked = ["a '\\' in an expression", "every '$' or '<'"];
     for row in BREAKING_CHANGES {
         let expected = if unchecked.iter().any(|start| row.summary.starts_with(start)) {
             "unchecked"
-        } else if row.summary.starts_with("a Git bundle") {
+        } else if row.summary.starts_with("a Git bundle")
+            || row.summary.starts_with("a local include's 'path'")
+        {
             "detected"
         } else {
             "load"
