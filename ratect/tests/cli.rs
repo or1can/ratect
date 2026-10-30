@@ -776,14 +776,16 @@ fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
     let rows = breaking_change_lines(&refusal);
     assert_eq!(rows.len(), 9, "{refusal}");
     for row in &rows {
-        let expected = if row.contains("a Git bundle is refused")
-            || row.contains("a local include's 'path'")
+        let expected = if [
+            "a Git bundle is refused",
+            "a local include's 'path'",
+            "a '\\' in an expression",
+        ]
+        .iter()
+        .any(|start| row.contains(start))
         {
             "none found"
-        } else if ["a '\\' in an expression", "every '$' or '<'"]
-            .iter()
-            .any(|start| row.contains(start))
-        {
+        } else if row.contains("every '$' or '<'") {
             "not checked"
         } else {
             "doesn't apply: it loads under these rules"

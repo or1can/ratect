@@ -17175,6 +17175,55 @@ async fn a_yaml_file_in_scope_leaves_a_detected_row_unknown() {
     std::fs::remove_dir_all(&project).ok();
 }
 
+/// A detector reading expressions sees what the trial load read: a use in a
+/// local include is found, naming the include and the field.
+#[tokio::test]
+async fn a_detector_finds_a_use_in_a_local_include() {
+    let project = unique_temp_dir();
+    let root = project.join("ratect.toml");
+    std::fs::write(
+        &root,
+        "project_name = \"demo\"\ninclude = [\"extra.toml\"]\n",
+    )
+    .unwrap();
+    let extra = project.join("extra.toml");
+    std::fs::write(
+        &extra,
+        "[containers.app]\nimage = \"alpine:3.18\"\n\n\
+         [containers.app.environment]\nBACKSLASH = 'a\\b'\n",
+    )
+    .unwrap();
+    let refusal = crate::written_for::check(&root, running_0_12())
+        .expect_err("an unmarked root predates every row")
+        .downcast::<crate::written_for::Refusal>()
+        .unwrap();
+    let cache_root = unique_temp_dir();
+    let trial = trial_load(&root, &cache_root).await;
+    let assessed = refusal.assess(Ok(&trial));
+    let outcome = |row: &str| {
+        assessed
+            .rows()
+            .into_iter()
+            .find(|(line, _)| line.contains(row))
+            .and_then(|(_, outcome)| outcome.cloned())
+            .expect("the row applies")
+    };
+    let found = |field: &str| {
+        crate::written_for::Outcome::Found(vec![crate::written_for::Hit {
+            field: field.to_string(),
+            file: format!("{:?}", absolute_path(&extra).unwrap()),
+        }])
+    };
+
+    assert_eq!(
+        outcome("a '\\' in an expression"),
+        found("containers.app.environment.BACKSLASH")
+    );
+
+    std::fs::remove_dir_all(&cache_root).ok();
+    std::fs::remove_dir_all(&project).ok();
+}
+
 /// A YAML root refused for a bundle's TOML file has no TOML file of its own
 /// in scope, but the root itself is one — so its bundle row isn't "none
 /// found" either.

@@ -530,16 +530,21 @@ fn the_home_directory_row_finds_nothing_the_change_leaves_alone() {
 }
 
 /// decisions/0022: the rows changing what a value means that have no
-/// detector yet say so; the bundle and home-directory rows are detected;
-/// every other row only fails the load.
+/// detector yet say so; the bundle, home-directory and backslash rows are
+/// detected; every other row only fails the load.
 #[test]
 fn every_row_in_the_real_table_declares_how_it_is_checked() {
-    let unchecked = ["a '\\' in an expression", "every '$' or '<'"];
+    let unchecked = ["every '$' or '<'"];
     for row in BREAKING_CHANGES {
         let expected = if unchecked.iter().any(|start| row.summary.starts_with(start)) {
             "unchecked"
-        } else if row.summary.starts_with("a Git bundle")
-            || row.summary.starts_with("a local include's 'path'")
+        } else if [
+            "a Git bundle",
+            "a local include's 'path'",
+            "a '\\' in an expression",
+        ]
+        .iter()
+        .any(|start| row.summary.starts_with(start))
         {
             "detected"
         } else {
@@ -614,4 +619,134 @@ fn a_failed_trial_load_still_reads_a_toml_root() {
             .any(|(_, outcome)| *outcome == Some(&Outcome::Unknown)),
         "{assessed}"
     );
+}
+
+/// The fields a detector reading expressions looks at, each with its field
+/// as a hit names it — every field `config::evaluate_container` and
+/// `evaluate_task` evaluate, as a `ratect.toml` spells it.
+const EVERY_EXPRESSION_FIELD: &str = r#"
+[containers.app]
+image = 'VALUE'
+build_directory = 'VALUE'
+volumes = [
+    'VALUE:/compact',
+    { local = 'VALUE', container = '/object' },
+    { type = 'local', local = 'VALUE', container = '/typed' },
+]
+environment = { E = 'VALUE' }
+build_args = { A = 'VALUE' }
+build_secrets = { s = { path = 'VALUE' } }
+build_ssh = [{ id = 'default', paths = ['VALUE'] }]
+run_as_current_user = { enabled = true, home_directory = 'VALUE' }
+
+[tasks.t.run]
+container = 'app'
+environment = { R = 'VALUE' }
+
+[tasks.t.customise.db]
+environment = { C = 'VALUE' }
+"#;
+
+const EVERY_EXPRESSION_FIELD_NAMED: [&str; 10] = [
+    "containers.app.image",
+    "containers.app.build_directory",
+    "containers.app.volumes",
+    "containers.app.environment.E",
+    "containers.app.build_args.A",
+    "containers.app.build_secrets.s.path",
+    "containers.app.build_ssh.paths",
+    "containers.app.run_as_current_user.home_directory",
+    "tasks.t.run.environment.R",
+    "tasks.t.customise.db.environment.C",
+];
+
+fn fields(hits: Vec<Hit>) -> Vec<String> {
+    hits.into_iter().map(|hit| hit.field).collect()
+}
+
+/// The backslash row's detector looks in every expression field, each of
+/// a volume's forms included, and names each field once.
+#[test]
+fn the_backslash_row_looks_in_every_expression_field() {
+    let file = toml_file("f", &EVERY_EXPRESSION_FIELD.replace("VALUE", r"a\b"));
+    assert_eq!(
+        fields(expressions_with_a_backslash(&[file])),
+        EVERY_EXPRESSION_FIELD_NAMED
+    );
+    let file = toml_file("f", &EVERY_EXPRESSION_FIELD.replace("VALUE", "ab"));
+    assert_eq!(expressions_with_a_backslash(&[file]), []);
+}
+
+/// A volume's host path is an expression in each of its forms — which one
+/// field naming them all can't show.
+#[test]
+fn the_backslash_row_reads_each_form_of_a_volume() {
+    for volume in [
+        r"'a\b:/c'",
+        r"{ local = 'a\b', container = '/c' }",
+        r"{ type = 'local', local = 'a\b', container = '/c' }",
+    ] {
+        let file = toml_file("f", &format!("[containers.app]\nvolumes = [{volume}]\n"));
+        assert_eq!(
+            fields(expressions_with_a_backslash(&[file])),
+            ["containers.app.volumes"],
+            "{volume}"
+        );
+    }
+}
+
+/// Each use of a `\` the 0.12.0 change gave a meaning to, naming the field
+/// and the file — in the root or a local include alike.
+#[test]
+fn the_backslash_row_finds_each_backslash_in_an_expression() {
+    for value in [r"\$X", r"\<x", r"a\b", r"a\\b", r"${X:-a\}b}", r"trailing\"] {
+        let files = [
+            toml_file("\"/p/ratect.toml\"", "project_name = 'p'\n"),
+            toml_file(
+                "\"/p/extra.toml\"",
+                &format!("[containers.app.environment]\nE = '{value}'\n"),
+            ),
+        ];
+        assert_eq!(
+            expressions_with_a_backslash(&files),
+            [Hit {
+                field: "containers.app.environment.E".to_string(),
+                file: "\"/p/extra.toml\"".to_string(),
+            }],
+            "{value}"
+        );
+    }
+}
+
+/// What the row doesn't touch: a value judged after TOML's own escapes, so
+/// a basic string's `\t` holds no backslash; and a backslash in a field
+/// that isn't an expression.
+#[test]
+fn the_backslash_row_finds_nothing_outside_an_expression() {
+    let files = [
+        toml_file("escaped", "[containers.app.environment]\nE = \"a\\tb\"\n"),
+        toml_file("command", "[containers.app]\ncommand = 'echo a\\b'\n"),
+        toml_file(
+            "run",
+            "[tasks.t.run]\ncontainer = 'app'\ncommand = 'echo a\\b'\n",
+        ),
+        toml_file(
+            "volume target",
+            "[containers.app]\nvolumes = ['./src:/c\\d', { local = '.', container = '/c\\d' }]\n",
+        ),
+        toml_file(
+            "cache",
+            "[containers.app]\nvolumes = [{ type = 'cache', name = 'c\\d', container = '/c' }]\n",
+        ),
+        toml_file(
+            "devices",
+            "[containers.app]\ndevices = ['/dev/a\\b:/dev/c']\n",
+        ),
+        toml_file(
+            "secret",
+            "[containers.app.build_secrets.s]\nenvironment = 'A\\B'\n",
+        ),
+        toml_file("default", "[config_variables.v]\ndefault = 'a\\b'\n"),
+    ];
+    assert_eq!(expressions_with_a_backslash(&files), []);
 }

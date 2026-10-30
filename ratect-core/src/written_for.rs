@@ -191,6 +191,124 @@ fn includes_from_home_directory(files: &[TomlFile]) -> Vec<Hit> {
         .collect()
 }
 
+/// Every string a `ratect.toml` reads as an expression, with the field it
+/// is in, in the order the file gives them: the fields
+/// `config::evaluate_container` and `evaluate_task` evaluate, as the file
+/// spells them. A volume's is its host path — a string entry's text up to
+/// its first `:`, or a local object's `local` — and a non-string value is
+/// none, since it holds no `\`, `$` or `<`.
+fn expressions(document: &toml::Table) -> Vec<(String, &str)> {
+    fn table(value: Option<&toml::Value>) -> impl Iterator<Item = (&String, &toml::Value)> {
+        value.and_then(toml::Value::as_table).into_iter().flatten()
+    }
+    fn array(value: Option<&toml::Value>) -> impl Iterator<Item = &toml::Value> {
+        value.and_then(toml::Value::as_array).into_iter().flatten()
+    }
+    fn push<'a>(found: &mut Vec<(String, &'a str)>, field: String, value: Option<&'a toml::Value>) {
+        if let Some(text) = value.and_then(toml::Value::as_str) {
+            found.push((field, text));
+        }
+    }
+    let mut found = Vec::new();
+    for (name, container) in table(document.get("containers")) {
+        let field = |rest: &str| format!("containers.{name}.{rest}");
+        push(&mut found, field("image"), container.get("image"));
+        push(
+            &mut found,
+            field("build_directory"),
+            container.get("build_directory"),
+        );
+        for volume in array(container.get("volumes")) {
+            let local = match volume {
+                toml::Value::String(entry) => entry.split(':').next(),
+                toml::Value::Table(object) => match object.get("type").map(toml::Value::as_str) {
+                    None | Some(Some("local")) => object.get("local").and_then(toml::Value::as_str),
+                    Some(_) => None,
+                },
+                _ => None,
+            };
+            if let Some(local) = local {
+                found.push((field("volumes"), local));
+            }
+        }
+        for (key, value) in table(container.get("environment")) {
+            push(
+                &mut found,
+                field(&format!("environment.{key}")),
+                Some(value),
+            );
+        }
+        for (key, value) in table(container.get("build_args")) {
+            push(&mut found, field(&format!("build_args.{key}")), Some(value));
+        }
+        for (key, secret) in table(container.get("build_secrets")) {
+            push(
+                &mut found,
+                field(&format!("build_secrets.{key}.path")),
+                secret.get("path"),
+            );
+        }
+        for agent in array(container.get("build_ssh")) {
+            for path in array(agent.get("paths")) {
+                push(&mut found, field("build_ssh.paths"), Some(path));
+            }
+        }
+        push(
+            &mut found,
+            field("run_as_current_user.home_directory"),
+            container
+                .get("run_as_current_user")
+                .and_then(|user| user.get("home_directory")),
+        );
+    }
+    for (name, task) in table(document.get("tasks")) {
+        let run = task.get("run");
+        for (key, value) in table(run.and_then(|run| run.get("environment"))) {
+            push(
+                &mut found,
+                format!("tasks.{name}.run.environment.{key}"),
+                Some(value),
+            );
+        }
+        for (container, customisation) in table(task.get("customise")) {
+            for (key, value) in table(customisation.get("environment")) {
+                push(
+                    &mut found,
+                    format!("tasks.{name}.customise.{container}.environment.{key}"),
+                    Some(value),
+                );
+            }
+        }
+    }
+    found
+}
+
+/// Every file's expressions that `uses` picks out, one [`Hit`] per field —
+/// so a container's several `volumes` entries using it make one.
+fn expression_hits(files: &[TomlFile], uses: fn(&str) -> bool) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = files
+        .iter()
+        .flat_map(|file| {
+            expressions(&file.document)
+                .into_iter()
+                .filter(|(_, value)| uses(value))
+                .map(|(field, _)| Hit {
+                    field,
+                    file: file.name.clone(),
+                })
+        })
+        .collect();
+    // A field's values are adjacent, in the order `expressions` gives them.
+    hits.dedup();
+    hits
+}
+
+/// The backslash row's detector: every expression holding a `\`, as the
+/// TOML string decodes — so `"\\$X"` holds one and `"a\tb"` doesn't.
+fn expressions_with_a_backslash(files: &[TomlFile]) -> Vec<Hit> {
+    expression_hits(files, |value| value.contains('\\'))
+}
+
 /// Every breaking change to what a `ratect.toml` means or accepts, oldest
 /// first. See the module documentation before adding one.
 pub const BREAKING_CHANGES: &[BreakingChange] = &[
@@ -198,7 +316,7 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         version: "0.12.0",
         summary: "a '\\' in an expression escapes the character after it and is dropped, and \
                   a trailing '\\' fails the load",
-        check: Check::NotChecked,
+        check: Check::Detected(expressions_with_a_backslash),
     },
     BreakingChange {
         version: "0.12.0",
