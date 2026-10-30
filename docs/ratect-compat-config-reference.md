@@ -348,7 +348,9 @@ task's own container, as a dependency, or by more than one task) — but never r
   `CleanupStagePlanner` have no cache-control flag or image-removal step either.
 - How much of a build's output you see depends on the
   [output style](output-styles.md): `-o all` streams every
-  build log line as `<container> | Image build | ...`; `fancy` shows the latest
+  build log line as `<container> | Image build | ...` — under BuildKit, each
+  labelled with its step's `#N`, as in `app | Image build | #5 cc -o app
+  main.c`; `fancy` shows the latest
   line in the container's status row; `simple` prints only `Building
   <container>...` and `Built <container>.`; `quiet` prints nothing. Independently
   of the style, each build log line is also emitted at `debug` level (set

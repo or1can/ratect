@@ -71,6 +71,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- BuildKit build output labels each line with its step's `#N`, under `-o all`, in `fancy`'s status and in a failed build's `Build output:`, and shows the steps that start together in docker-client's order. A cached step's `CACHED` and a failed step's error are lines of their own.
 - The `claims` documentation gate runs as a git `pre-commit` hook, declared in `.pre-commit-config.yaml`; run `pre-commit install` once per clone to turn it on. No effect on the released binaries; contributor-tooling only.
 - The `claims` documentation checks also run in CI on every pull request. No effect on the released binaries; contributor-tooling only.
 - `ratect-compat`: `--log-file` logs Ratect's own `debug` records unless `RUST_LOG` is set, including why the run failed. With `--log-file`, stderr keeps its colour.

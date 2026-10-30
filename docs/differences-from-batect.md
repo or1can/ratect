@@ -379,11 +379,20 @@ tables above:
   since the previous `\n`. So `10%\r\r20%` prints `10%` and `20%`, and
   Ratect prints as many empty lines as Batect. A setup command's output
   and an image build's `Image build | ` lines follow the same rule; a failed
-  build's `Build output:` keeps each `\r` as Docker sent it.
+  classic build's `Build output:` keeps each `\r` as Docker sent it.
 - **`all` mode prints a container's last line even without a trailing
   newline.** Batect prints a line only once its `\n` arrives, so a container
   whose output ends without one loses that last line. Image build output
   follows the same rule.
+- **BuildKit build output leaves out plain-progress's clock.** Like Batect,
+  Ratect shows a BuildKit build in BuildKit's plain-progress form: a `#N
+  <step>` header as each step starts, steps that start together in
+  docker-client's order, `#N CACHED` and `#N ERROR: …`, and every line of a
+  step's output labelled with its `#N`. It leaves out elapsed times (`#4
+  0.412 …`), `DONE <duration>` lines and status lines (`transferring
+  context: …`), so a build prints the same lines from run to run. A failed
+  BuildKit build's `Build output:` is the same labelled lines, so in it,
+  unlike a classic build's, a lone `\r` ends a line.
 - **Failure messages are Ratect's own.** A task fails at the same step as under
   Batect — an image that won't pull or build, a task network that can't be
   created, a container that can't be created, set up for

@@ -1,0 +1,16 @@
+# Exercises BuildKit's step labels (ratect#538): two stages run at once, and
+# every build line must carry its step's `#N`. `RATECT_BUILD_OUTPUT_CACHE_BUST`
+# must differ on every run, since a cached step prints no output. A non-empty
+# `RATECT_BUILD_OUTPUT_FAIL` fails the last step, for the failure transcript.
+project_name: ratect-build-output-stages-test
+containers:
+  build-env:
+    build_directory: ./build-output-stages
+    build_args:
+      CACHE_BUST: $RATECT_BUILD_OUTPUT_CACHE_BUST
+      FAIL: ${RATECT_BUILD_OUTPUT_FAIL:-}
+tasks:
+  build:
+    run:
+      container: build-env
+      command: "true"
