@@ -647,7 +647,7 @@ async fn clean_removes_an_entry_beside_a_stale_lock_without_waiting_on_it() {
     let (root, key, cache) = cloned_entry_with_a_stale_lock(FakeGitClient::new()).await;
 
     let start = Instant::now();
-    let removed = cache.clean(None).await.unwrap();
+    let removed = cache.clean(None).await.unwrap().succeeded;
 
     assert!(
         start.elapsed() < cache.lock_timeout,
@@ -766,7 +766,7 @@ async fn refresh_takes_over_an_abandoned_lock_and_reports_the_entry_refreshed() 
     cache.lock_timeout = Duration::from_secs(5);
     abandoned_lock(&root).await;
 
-    let refreshed = cache.refresh().await.unwrap();
+    let refreshed = cache.refresh().await.unwrap().succeeded;
 
     assert_eq!(refreshed.len(), 1);
     assert_eq!(git.clone_count(), 1);
@@ -1294,7 +1294,11 @@ async fn clean_with_a_minimum_age_removes_only_entries_older_than_it() {
     let cache = cache_with_two_entries(&root).await;
 
     // At t=5000, the older entry is 4000s unused and the newer 0s.
-    let removed = cache.clean(Some(Duration::from_secs(3_000))).await.unwrap();
+    let removed = cache
+        .clean(Some(Duration::from_secs(3_000)))
+        .await
+        .unwrap()
+        .succeeded;
 
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].remote, "https://example.com/old.git");
@@ -1312,7 +1316,7 @@ async fn clean_without_a_minimum_age_removes_everything() {
     let root = unique_temp_dir();
     let cache = cache_with_two_entries(&root).await;
 
-    let removed = cache.clean(None).await.unwrap();
+    let removed = cache.clean(None).await.unwrap().succeeded;
 
     assert_eq!(removed.len(), 2);
     assert!(cache.list().await.unwrap().is_empty());
@@ -1373,7 +1377,7 @@ async fn refresh_re_clones_and_so_picks_up_a_moved_ref() {
         "ensure_cached must not re-fetch — that's the behaviour refresh exists for"
     );
 
-    let refreshed = cache.refresh().await.unwrap();
+    let refreshed = cache.refresh().await.unwrap().succeeded;
 
     assert_eq!(refreshed.len(), 1);
     assert_eq!(refreshed[0].remote, remote);
@@ -1382,6 +1386,76 @@ async fn refresh_re_clones_and_so_picks_up_a_moved_ref() {
             .await
             .unwrap(),
         "new contents"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// #755: a re-clone that fails is returned as a failure, with its cause, for
+/// the caller to report — not only logged — and the rest are still
+/// refreshed. The failed entry stays removed, as `refresh` documents.
+#[tokio::test]
+async fn refresh_returns_an_entry_it_could_not_re_clone_as_failed() {
+    let root = unique_temp_dir();
+    cache_with_two_entries(&root).await;
+    // The old remote has gone: only the new one can be cloned again.
+    let git = FakeGitClient::new().with_files(
+        "https://example.com/new.git",
+        "v2.0.0",
+        HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+    );
+    let cache = GitIncludeCache::for_test(root.clone(), git, 5_000);
+
+    let outcome = cache.refresh().await.unwrap();
+
+    let succeeded: Vec<_> = outcome.succeeded.iter().map(|e| &e.remote).collect();
+    assert_eq!(succeeded, ["https://example.com/new.git"]);
+    assert_eq!(outcome.failed.len(), 1);
+    assert_eq!(
+        outcome.failed[0].entry.remote,
+        "https://example.com/old.git"
+    );
+    assert_eq!(outcome.failed[0].entry.git_ref, "v1.0.0");
+    let cause = format!("{:#}", outcome.failed[0].error);
+    assert!(cause.contains("no response configured"), "{cause}");
+    assert_eq!(cache.list().await.unwrap().len(), 1);
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// #755: an entry whose files can't be removed is returned as a failure,
+/// with its cause, and the rest are still removed.
+#[cfg(unix)]
+#[tokio::test]
+async fn clean_returns_an_entry_it_could_not_remove_as_failed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = unique_temp_dir();
+    let cache = cache_with_two_entries(&root).await;
+    // A file in a read-only directory can't be deleted, so neither can the
+    // working copy holding it.
+    let sealed = root
+        .join(cache_key("https://example.com/old.git", "v1.0.0"))
+        .join("sealed");
+    std::fs::create_dir(&sealed).unwrap();
+    std::fs::write(sealed.join("file"), "").unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let outcome = cache.clean(None).await;
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let outcome = outcome.unwrap();
+
+    let succeeded: Vec<_> = outcome.succeeded.iter().map(|e| &e.remote).collect();
+    assert_eq!(succeeded, ["https://example.com/new.git"]);
+    assert_eq!(outcome.failed.len(), 1);
+    assert_eq!(
+        outcome.failed[0].entry.remote,
+        "https://example.com/old.git"
+    );
+    let cause = format!("{:#}", outcome.failed[0].error);
+    assert!(
+        cause.starts_with("Failed to remove Git include cache clone"),
+        "{cause}"
     );
 
     tokio::fs::remove_dir_all(&root).await.ok();
@@ -1541,8 +1615,8 @@ async fn cleanup_stale_still_removes_other_stale_entries_when_one_removal_fails(
 
         // The per-entry results the sweep ignores.
         cached_entry_used_at(&root, other, 1_000).await;
-        assert!(!sweeper.remove_entry(&root, &failing_key).await);
-        assert!(sweeper.remove_entry(&root, &other_key).await);
+        assert!(sweeper.remove_entry(&root, &failing_key).await.is_err());
+        sweeper.remove_entry(&root, &other_key).await.unwrap();
 
         tokio::fs::remove_dir_all(&root).await.ok();
     }
@@ -1552,7 +1626,9 @@ async fn cleanup_stale_still_removes_other_stale_entries_when_one_removal_fails(
 async fn remove_entry_files_succeeds_when_neither_file_exists() {
     let root = unique_temp_dir();
 
-    assert!(remove_entry_files(&root.join("absent"), &root.join("absent.toml")).await);
+    remove_entry_files(&root.join("absent"), &root.join("absent.toml"))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1562,7 +1638,9 @@ async fn remove_entry_files_removes_a_sidecar_with_no_working_copy() {
     let info_path = root.join("orphan.toml");
     tokio::fs::write(&info_path, b"").await.unwrap();
 
-    assert!(remove_entry_files(&root.join("orphan"), &info_path).await);
+    remove_entry_files(&root.join("orphan"), &info_path)
+        .await
+        .unwrap();
     assert!(!info_path.exists());
 
     tokio::fs::remove_dir_all(&root).await.ok();
@@ -1917,7 +1995,7 @@ async fn refresh_reclones_a_credential_bearing_entry_with_its_full_remote() {
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000);
     cache.ensure_cached(remote, "v1.0.0").await.unwrap();
 
-    let refreshed = cache.refresh().await.unwrap();
+    let refreshed = cache.refresh().await.unwrap().succeeded;
 
     assert_eq!(git.clone_count(), 2);
     assert_eq!(refreshed.len(), 1);

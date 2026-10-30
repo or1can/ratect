@@ -255,24 +255,43 @@ impl std::fmt::Debug for CachedInclude {
     }
 }
 
+/// What [`GitIncludeCache::clean`]/[`refresh`](GitIncludeCache::refresh) did:
+/// the entries each acted on, and each one it couldn't, for the caller to
+/// report — this module prints nothing of its own (#755).
+#[derive(Debug, Default)]
+pub struct Outcome {
+    pub succeeded: Vec<CachedInclude>,
+    pub failed: Vec<Failure>,
+}
+
+/// An entry `clean` couldn't remove, or `refresh` couldn't remove or clone
+/// again, and why. `error` names no remote but through [`display_remote`].
+#[derive(Debug)]
+pub struct Failure {
+    pub entry: CachedInclude,
+    pub error: anyhow::Error,
+}
+
 /// Removes an entry's working copy and sidecar, tolerating either being
 /// absent already — including when another process removes the same entry
-/// at the same time, since removal takes no lock. `false` if something is
-/// left behind, logged.
-async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> bool {
+/// at the same time, since removal takes no lock. An error if something is
+/// left behind.
+async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> Result<()> {
     if let Err(e) = tokio::fs::remove_dir_all(working_copy).await {
         if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("Failed to remove Git include cache clone {working_copy:?}: {e}");
-            return false;
+            return Err(e).with_context(|| {
+                format!("Failed to remove Git include cache clone {working_copy:?}")
+            });
         }
     }
     if let Err(e) = tokio::fs::remove_file(info_path).await {
         if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("Failed to remove Git include cache info file {info_path:?}: {e}");
-            return false;
+            return Err(e).with_context(|| {
+                format!("Failed to remove Git include cache info file {info_path:?}")
+            });
         }
     }
-    true
+    Ok(())
 }
 
 /// What follows an entry's key in the name of a staging directory a clone of
@@ -778,7 +797,8 @@ impl<G: GitClient> GitIncludeCache<G> {
         Ok(entries)
     }
 
-    /// Removes cached entries, returning the ones actually removed.
+    /// Removes cached entries, returning the ones removed and each one that
+    /// couldn't be, which doesn't stop the rest.
     ///
     /// `minimum_age` of `None` removes everything (`ratect includes clean
     /// --all`); `Some` removes only entries unused for at least that long,
@@ -786,12 +806,12 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// do. Nothing here is unrecoverable — the worst case of removing too
     /// much is a re-clone — which is why this has no confirmation of any
     /// kind, unlike removing containers.
-    pub async fn clean(&self, minimum_age: Option<Duration>) -> Result<Vec<CachedInclude>> {
+    pub async fn clean(&self, minimum_age: Option<Duration>) -> Result<Outcome> {
         let root = self.root.resolve()?;
         let now = (self.clock)();
         let entries = self.read_entries(&root).await?;
 
-        let mut removed = Vec::new();
+        let mut outcome = Outcome::default();
         for entry in entries {
             let old_enough = match minimum_age {
                 Some(age) => now.saturating_sub(entry.last_used) > age.as_secs(),
@@ -800,12 +820,13 @@ impl<G: GitClient> GitIncludeCache<G> {
             if !old_enough {
                 continue;
             }
-            if self.remove_entry(&root, &entry.key).await {
-                removed.push(entry);
+            match self.remove_entry(&root, &entry.key).await {
+                Ok(()) => outcome.succeeded.push(entry),
+                Err(error) => outcome.failed.push(Failure { entry, error }),
             }
         }
 
-        Ok(removed)
+        Ok(outcome)
     }
 
     /// Discards every cached working copy and clones it again from the
@@ -820,26 +841,25 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// A clone that fails leaves that entry removed rather than restoring
     /// it: the next `ensure_cached` will clone it again, and pretending a
     /// failed refresh succeeded would be worse than an entry that has to be
-    /// re-fetched.
-    pub async fn refresh(&self) -> Result<Vec<CachedInclude>> {
+    /// re-fetched. It is returned as failed, as is an entry that couldn't be
+    /// removed, and neither stops the rest.
+    pub async fn refresh(&self) -> Result<Outcome> {
         let root = self.root.resolve()?;
         let entries = self.read_entries(&root).await?;
 
-        let mut refreshed = Vec::new();
+        let mut outcome = Outcome::default();
         for entry in entries {
-            if !self.remove_entry(&root, &entry.key).await {
-                continue;
-            }
-            match self.ensure_cached(&entry.remote, &entry.git_ref).await {
-                Ok(_) => refreshed.push(entry),
-                Err(e) => tracing::warn!(
-                    "Failed to re-clone Git include {}: {e:#}",
-                    describe_include(&entry.remote, &entry.git_ref)
-                ),
+            let refreshed = match self.remove_entry(&root, &entry.key).await {
+                Ok(()) => self.ensure_cached(&entry.remote, &entry.git_ref).await,
+                Err(error) => Err(error),
+            };
+            match refreshed {
+                Ok(_) => outcome.succeeded.push(entry),
+                Err(error) => outcome.failed.push(Failure { entry, error }),
             }
         }
 
-        Ok(refreshed)
+        Ok(outcome)
     }
 
     /// Every sidecar in `root`, parsed. Shared by
@@ -911,9 +931,9 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// this can still return the removed path and write a sidecar for it,
     /// with or without the lock: the next load re-clones it, or once stale
     /// the sweep removes the sidecar.
-    /// `false` if anything went wrong, already logged; a single unremovable
-    /// entry shouldn't abandon the rest.
-    async fn remove_entry(&self, root: &Path, key: &str) -> bool {
+    /// An error if anything was left behind, for the caller to report or log;
+    /// a single unremovable entry shouldn't abandon the rest.
+    async fn remove_entry(&self, root: &Path, key: &str) -> Result<()> {
         remove_entry_files(&root.join(key), &root.join(format!("{key}.toml"))).await
     }
 
@@ -941,7 +961,9 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
 
         for key in stale_keys {
-            self.remove_entry(&root, &key).await;
+            if let Err(e) = self.remove_entry(&root, &key).await {
+                tracing::warn!("{e:#}");
+            }
         }
 
         Ok(())

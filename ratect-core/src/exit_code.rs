@@ -52,7 +52,8 @@
 //! `Error:` line — but *whether* it needs printing is, as [`already_reported`]:
 //! the types [`for_error`] dispatches over, plus the engine's own two for a
 //! failure it has reported as an `Error:` line itself, are the ones a run
-//! has already reported by another route (decisions/0017), and two
+//! has already reported by another route (decisions/0017) — as
+//! [`VerbFailuresReported`] is for a verb that printed its own failures — and two
 //! `main`s deciding that by hand could only ever differ by one being wrong.
 //! This takes an `anyhow::Error` rather than returning one for the same
 //! reason as before: by the time a binary asks, the run is over and it only
@@ -114,6 +115,22 @@ impl std::fmt::Display for InvalidOptionValue {
 }
 
 impl std::error::Error for InvalidOptionValue {}
+
+/// A verb's failure it has already printed itself, as one `Error:` line per
+/// thing that failed: `ratect includes clean`/`refresh`, which carry on past
+/// an entry they couldn't remove or re-clone and report each one (#755).
+/// [`already_reported`] knows it, so `main` prints nothing more, and
+/// [`for_failure`] exits it as any verb's failure, [`VERB_FAILED`].
+#[derive(Debug)]
+pub struct VerbFailuresReported;
+
+impl std::fmt::Display for VerbFailuresReported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("failures already reported")
+    }
+}
+
+impl std::error::Error for VerbFailuresReported {}
 
 /// The process exit code for a failed run.
 ///
@@ -178,6 +195,9 @@ pub fn for_error(error: &anyhow::Error) -> u8 {
 ///   moment it happened, before cleanup ([#334](https://github.com/or1can/ratect/issues/334)),
 ///   as a [`crate::engine::FailureReported`].
 ///
+/// And one that isn't a run's: **a verb's failures it printed itself** — a
+/// [`VerbFailuresReported`].
+///
 /// Every other failure — a config that doesn't load, an unknown task, a
 /// prerequisite list that names a task that doesn't exist, anything else
 /// before a task starts — is reported by nothing else, so `main` prints it,
@@ -189,6 +209,7 @@ pub fn already_reported(error: &anyhow::Error) -> bool {
         || error.is::<crate::docker::StdoutClosed>()
         || error.is::<crate::engine::CleanupFailed>()
         || error.is::<crate::engine::FailureReported>()
+        || error.is::<VerbFailuresReported>()
 }
 
 /// The process exit code for a failed invocation: [`for_error`]'s for a run;
