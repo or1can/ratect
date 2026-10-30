@@ -196,7 +196,9 @@ fn includes_from_home_directory(files: &[TomlFile]) -> Vec<Hit> {
 /// `config::evaluate_container` and `evaluate_task` evaluate, as the file
 /// spells them. A volume's is its host path — a string entry's text up to
 /// its first `:`, or a local object's `local` — and a non-string value is
-/// none, since it holds no `\`, `$` or `<`.
+/// none, since it holds no `\`, `$` or `<`. Kept by hand, since the
+/// detectors read plain TOML (decisions/0022); `tests/written_for_fields.rs`
+/// checks it against the loader.
 fn expressions(document: &toml::Table) -> Vec<(String, &str)> {
     fn table(value: Option<&toml::Value>) -> impl Iterator<Item = (&String, &toml::Value)> {
         value.and_then(toml::Value::as_table).into_iter().flatten()
