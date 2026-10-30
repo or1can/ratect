@@ -50,23 +50,10 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-/// Where the cases live, one directory each.
-fn twins_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("twins")
-}
-
-/// Every case directory, in name order.
-fn cases() -> Vec<PathBuf> {
-    let mut cases: Vec<PathBuf> = std::fs::read_dir(twins_dir())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_dir())
-        .collect();
-    cases.sort();
-    cases
-}
+mod common;
+use common::{
+    case_files, cases, copy_dir, properties_used, running_0_12, schema_properties, scratch_dir,
+};
 
 fn case_name(case: &Path) -> &str {
     case.file_name().unwrap().to_str().unwrap()
@@ -439,42 +426,6 @@ async fn each_twin_pair_evaluates_to_the_same_config_except_listed_divergences()
     );
 }
 
-/// A fresh, empty directory under the system temporary directory, removed
-/// when dropped — so a panic mid-case doesn't leave it behind.
-struct ScratchDir(PathBuf);
-
-impl Drop for ScratchDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn scratch_dir(label: &str) -> ScratchDir {
-    let dir = std::env::temp_dir().join(format!(
-        "ratect-twins-{label}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    ScratchDir(dir)
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    for entry in std::fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), target).unwrap();
-        }
-    }
-}
-
 /// `ratect config convert` checked on its own terms: its output for each
 /// case's `batect.yml` — the root and every converted include — loaded the
 /// way `ratect` loads it, against the hand-written twin. Written into a copy
@@ -545,7 +496,7 @@ const GIT_INCLUDE: &str = "a git include clones into the real ~/.ratect/incl";
 struct Uncoverable {
     /// The schema file, under the repository's `schema/`.
     schema: &'static str,
-    /// The property, labelled as [`schema_properties`] labels it.
+    /// The property, labelled as `common::schema_properties` labels it.
     label: &'static str,
     because: &'static str,
 }
@@ -613,184 +564,6 @@ const UNCOVERABLE: &[Uncoverable] = &[
         because: GIT_INCLUDE,
     },
 ];
-
-/// Every property `schema` declares, labelled by where it sits: a
-/// definition's name or `root`, then `.name` for a property, `[]` for an
-/// array's items, `{}` for a map's values and `#i` for the `i`th `oneOf`/
-/// `anyOf` alternative. A `$ref` is labelled by the definition it names.
-fn schema_properties(schema: &Value) -> BTreeSet<String> {
-    fn walk(node: &Value, location: &str, out: &mut BTreeSet<String>) {
-        if node.get("$ref").is_some() {
-            return;
-        }
-        if let Some(properties) = node.get("properties").and_then(Value::as_object) {
-            for (name, child) in properties {
-                let label = format!("{location}.{name}");
-                out.insert(label.clone());
-                walk(child, &label, out);
-            }
-        }
-        if let Some(values) = node.get("additionalProperties").filter(|v| v.is_object()) {
-            walk(values, &format!("{location}{{}}"), out);
-        }
-        if let Some(items) = node.get("items") {
-            walk(items, &format!("{location}[]"), out);
-        }
-        for keyword in ["oneOf", "anyOf"] {
-            for (index, alternative) in node
-                .get(keyword)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .enumerate()
-            {
-                walk(alternative, &format!("{location}#{index}"), out);
-            }
-        }
-    }
-    let mut out = BTreeSet::new();
-    walk(schema, "root", &mut out);
-    for (name, definition) in schema["definitions"].as_object().unwrap() {
-        walk(definition, name, &mut out);
-    }
-    out
-}
-
-/// Every property label (see [`schema_properties`]) `document` uses, found by
-/// walking it alongside `schema`. A key the schema doesn't declare — a YAML
-/// anchor's `.extension`, a `<<` merge key — is skipped.
-fn properties_used(schema: &Value, document: &Value) -> BTreeSet<String> {
-    fn resolve<'s>(schema: &'s Value, node: &'s Value, location: &str) -> (&'s Value, String) {
-        match node.get("$ref").and_then(Value::as_str) {
-            Some(reference) => {
-                let name = reference.trim_start_matches("#/definitions/");
-                (&schema["definitions"][name], name.to_string())
-            }
-            None => (node, location.to_string()),
-        }
-    }
-    fn type_matches(node: &Value, value: &Value) -> bool {
-        let actual = match value {
-            Value::Null => "null",
-            Value::Bool(_) => "boolean",
-            Value::Number(n) if n.is_i64() || n.is_u64() => "integer",
-            Value::Number(_) => "number",
-            Value::String(_) => "string",
-            Value::Array(_) => "array",
-            Value::Object(_) => "object",
-        };
-        match node.get("type") {
-            None => true,
-            Some(Value::String(t)) => t == actual || (t == "number" && actual == "integer"),
-            Some(Value::Array(ts)) => ts.iter().any(|t| t == actual),
-            Some(_) => true,
-        }
-    }
-    /// Whether `value` could be this alternative: its type, and for an
-    /// object, keys it declares, the ones it requires and any `const`s.
-    fn alternative_matches(node: &Value, value: &Value) -> bool {
-        if !type_matches(node, value) {
-            return false;
-        }
-        if let Some(constant) = node.get("const") {
-            return constant == value;
-        }
-        let (Some(object), Some(properties)) = (
-            value.as_object(),
-            node.get("properties").and_then(Value::as_object),
-        ) else {
-            return true;
-        };
-        let closed = node.get("additionalProperties") == Some(&Value::Bool(false));
-        let required = node
-            .get("required")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str);
-        (!closed || object.keys().all(|key| properties.contains_key(key)))
-            && required.into_iter().all(|key| object.contains_key(key))
-            && properties.iter().all(|(key, property)| {
-                match (property.get("const"), object.get(key)) {
-                    (Some(constant), Some(actual)) => constant == actual,
-                    _ => true,
-                }
-            })
-    }
-    fn walk(
-        schema: &Value,
-        node: &Value,
-        location: &str,
-        value: &Value,
-        out: &mut BTreeSet<String>,
-    ) {
-        let (node, location) = resolve(schema, node, location);
-        for keyword in ["oneOf", "anyOf"] {
-            for (index, alternative) in node
-                .get(keyword)
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .enumerate()
-            {
-                let (resolved, _) = resolve(schema, alternative, "");
-                if alternative_matches(resolved, value) {
-                    walk(
-                        schema,
-                        alternative,
-                        &format!("{location}#{index}"),
-                        value,
-                        out,
-                    );
-                }
-            }
-        }
-        match value {
-            Value::Object(object) => {
-                let properties = node.get("properties").and_then(Value::as_object);
-                let values = node.get("additionalProperties").filter(|v| v.is_object());
-                for (key, child) in object {
-                    if let Some(property) = properties.and_then(|p| p.get(key)) {
-                        let label = format!("{location}.{key}");
-                        out.insert(label.clone());
-                        walk(schema, property, &label, child, out);
-                    } else if let Some(values) = values {
-                        walk(schema, values, &format!("{location}{{}}"), child, out);
-                    }
-                }
-            }
-            Value::Array(items) => {
-                if let Some(item_schema) = node.get("items") {
-                    for item in items {
-                        walk(schema, item_schema, &format!("{location}[]"), item, out);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut out = BTreeSet::new();
-    walk(schema, schema, "root", document, &mut out);
-    out
-}
-
-/// Every file in every case with `extension`, recursively.
-fn case_files(extension: &str) -> Vec<PathBuf> {
-    fn walk(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(&path, extension, out);
-            } else if path.extension().is_some_and(|ext| ext == extension) {
-                out.push(path);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(&twins_dir(), extension, &mut out);
-    out.sort();
-    out
-}
 
 /// Fails unless every property in `schema_file` is used by some case file
 /// parsed by `parse`, or listed in [`UNCOVERABLE`] — and nothing listed there
@@ -878,10 +651,4 @@ fn every_case_file_is_loaded_by_its_case() {
         .filter(|file| !loaded.contains(file))
         .collect();
     assert!(unloaded.is_empty(), "no case loads {unloaded:#?}");
-}
-
-/// The `ratect` version a native load in these tests runs as. No case has a
-/// Git include, so no bundle's written-for version is checked.
-fn running_0_12() -> ratect_core::written_for::Version {
-    "0.12.0".parse().unwrap()
 }
