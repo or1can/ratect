@@ -153,6 +153,238 @@ fn declares_git_include(files: &[TomlFile]) -> Vec<Hit> {
         .collect()
 }
 
+/// The home-directory row's detector: every file declaring a local include
+/// — a bare path, or a table whose `type` is absent or `"file"` — whose
+/// `path` has `~` as its first component, by the loader's own rule
+/// (`config::expand_home_directory`'s): `~` and `~/x`, never `~user/x`. A
+/// Git include's `path` is inside its repository, so the change leaves it
+/// alone.
+fn includes_from_home_directory(files: &[TomlFile]) -> Vec<Hit> {
+    fn local_path(entry: &toml::Value) -> Option<&str> {
+        match entry {
+            toml::Value::String(path) => Some(path),
+            toml::Value::Table(table) => match table.get("type").map(toml::Value::as_str) {
+                None | Some(Some("file")) => table.get("path").and_then(toml::Value::as_str),
+                Some(_) => None,
+            },
+            _ => None,
+        }
+    }
+    let from_home = |path: &str| {
+        matches!(
+            Path::new(path).components().next(),
+            Some(std::path::Component::Normal(first)) if first == "~"
+        )
+    };
+    files
+        .iter()
+        .filter(|file| {
+            file.document
+                .get("include")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|entries| entries.iter().filter_map(local_path).any(from_home))
+        })
+        .map(|file| Hit {
+            field: "include".to_string(),
+            file: file.name.clone(),
+        })
+        .collect()
+}
+
+/// Every string a `ratect.toml` reads as an expression, with the field it
+/// is in, in the order the file gives them: the fields
+/// `config::evaluate_container` and `evaluate_task` evaluate, as the file
+/// spells them. A volume's is its host path — a string entry's text up to
+/// its first `:`, or a local object's `local` — and a non-string value is
+/// none, since it holds no `\`, `$` or `<`.
+fn expressions(document: &toml::Table) -> Vec<(String, &str)> {
+    fn table(value: Option<&toml::Value>) -> impl Iterator<Item = (&String, &toml::Value)> {
+        value.and_then(toml::Value::as_table).into_iter().flatten()
+    }
+    fn array(value: Option<&toml::Value>) -> impl Iterator<Item = &toml::Value> {
+        value.and_then(toml::Value::as_array).into_iter().flatten()
+    }
+    fn push<'a>(found: &mut Vec<(String, &'a str)>, field: String, value: Option<&'a toml::Value>) {
+        if let Some(text) = value.and_then(toml::Value::as_str) {
+            found.push((field, text));
+        }
+    }
+    let mut found = Vec::new();
+    for (name, container) in table(document.get("containers")) {
+        let field = |rest: &str| format!("containers.{name}.{rest}");
+        push(&mut found, field("image"), container.get("image"));
+        push(
+            &mut found,
+            field("build_directory"),
+            container.get("build_directory"),
+        );
+        for volume in array(container.get("volumes")) {
+            let local = match volume {
+                toml::Value::String(entry) => entry.split(':').next(),
+                toml::Value::Table(object) => match object.get("type").map(toml::Value::as_str) {
+                    None | Some(Some("local")) => object.get("local").and_then(toml::Value::as_str),
+                    Some(_) => None,
+                },
+                _ => None,
+            };
+            if let Some(local) = local {
+                found.push((field("volumes"), local));
+            }
+        }
+        for (key, value) in table(container.get("environment")) {
+            push(
+                &mut found,
+                field(&format!("environment.{key}")),
+                Some(value),
+            );
+        }
+        for (key, value) in table(container.get("build_args")) {
+            push(&mut found, field(&format!("build_args.{key}")), Some(value));
+        }
+        for (key, secret) in table(container.get("build_secrets")) {
+            push(
+                &mut found,
+                field(&format!("build_secrets.{key}.path")),
+                secret.get("path"),
+            );
+        }
+        for agent in array(container.get("build_ssh")) {
+            for path in array(agent.get("paths")) {
+                push(&mut found, field("build_ssh.paths"), Some(path));
+            }
+        }
+        push(
+            &mut found,
+            field("run_as_current_user.home_directory"),
+            container
+                .get("run_as_current_user")
+                .and_then(|user| user.get("home_directory")),
+        );
+    }
+    for (name, task) in table(document.get("tasks")) {
+        let run = task.get("run");
+        for (key, value) in table(run.and_then(|run| run.get("environment"))) {
+            push(
+                &mut found,
+                format!("tasks.{name}.run.environment.{key}"),
+                Some(value),
+            );
+        }
+        for (container, customisation) in table(task.get("customise")) {
+            for (key, value) in table(customisation.get("environment")) {
+                push(
+                    &mut found,
+                    format!("tasks.{name}.customise.{container}.environment.{key}"),
+                    Some(value),
+                );
+            }
+        }
+    }
+    found
+}
+
+/// Every file's expressions that `uses` picks out, one [`Hit`] per field —
+/// so a container's several `volumes` entries using it make one.
+fn expression_hits(files: &[TomlFile], uses: fn(&str) -> bool) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = files
+        .iter()
+        .flat_map(|file| {
+            expressions(&file.document)
+                .into_iter()
+                .filter(|(_, value)| uses(value))
+                .map(|(field, _)| Hit {
+                    field,
+                    file: file.name.clone(),
+                })
+        })
+        .collect();
+    // A field's values are adjacent, in the order `expressions` gives them.
+    hits.dedup();
+    hits
+}
+
+/// The backslash row's detector: every expression holding a `\`, as the
+/// TOML string decodes — so `"\\$X"` holds one and `"a\tb"` doesn't.
+fn expressions_with_a_backslash(files: &[TomlFile]) -> Vec<Hit> {
+    expression_hits(files, |value| value.contains('\\'))
+}
+
+/// The reference row's detector: every expression whose references the
+/// running version reads differently from 0.11.0 — another name, default
+/// or span, or a sigil one reads as a reference and the other as text.
+/// One the running version refuses is left to the trial load, which fails
+/// on it. An escaped sigil counts, so a `\$X` is found by the backslash row
+/// too: it was a reference, and isn't.
+fn expressions_read_differently(files: &[TomlFile]) -> Vec<Hit> {
+    expression_hits(files, |value| {
+        crate::expressions::references(value).is_ok_and(|now| now != references_before_0_12(value))
+    })
+}
+
+/// Every reference in `value` as 0.11.0 read it — its expression reader,
+/// kept here as it was, since the change it measures is from that reader
+/// and the one in `expressions` will go on changing. It had no escape, and
+/// kept as text a `$` or `<` that didn't start a reference it could read:
+/// an unbraced name was an ASCII letter or `_`, then ASCII letters, digits
+/// and `_` — and `.`, after a `<`. A braced one ran to the first `}`, a
+/// `$`'s split at its first `:-`, and the name had to be one an unbraced
+/// reference could have.
+fn references_before_0_12(value: &str) -> Vec<crate::expressions::Token> {
+    let chars: Vec<char> = value.chars().collect();
+    let mut found = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        match reference_before_0_12(&chars, start) {
+            Some(token) => {
+                start += token.len;
+                found.push(token);
+            }
+            None => start += 1,
+        }
+    }
+    found
+}
+
+/// The reference 0.11.0 read at `chars[start]`, if any.
+fn reference_before_0_12(chars: &[char], start: usize) -> Option<crate::expressions::Token> {
+    let sigil = chars[start];
+    if sigil != '$' && sigil != '<' {
+        return None;
+    }
+    let name_start = |c: char| c.is_ascii_alphabetic() || c == '_';
+    let name_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || (sigil == '<' && c == '.');
+    let rest = &chars[start + 1..];
+    let (len, name, default) = match *rest.first()? {
+        '{' => {
+            let close = rest[1..].iter().position(|&c| c == '}')? + 1;
+            let inner: String = rest[1..close].iter().collect();
+            let (name, default) = match inner.split_once(":-") {
+                Some((name, default)) if sigil == '$' => {
+                    (name.to_string(), Some(default.to_string()))
+                }
+                _ => (inner, None),
+            };
+            let valid = name.chars().next().is_some_and(name_start) && name.chars().all(name_char);
+            if !valid {
+                return None;
+            }
+            (close + 2, name, default)
+        }
+        first if name_start(first) => {
+            let name: String = rest.iter().take_while(|&&c| name_char(c)).collect();
+            (name.chars().count() + 1, name, None)
+        }
+        _ => return None,
+    };
+    Some(crate::expressions::Token {
+        start,
+        len,
+        sigil,
+        name,
+        default,
+    })
+}
+
 /// Every breaking change to what a `ratect.toml` means or accepts, oldest
 /// first. See the module documentation before adding one.
 pub const BREAKING_CHANGES: &[BreakingChange] = &[
@@ -160,14 +392,14 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         version: "0.12.0",
         summary: "a '\\' in an expression escapes the character after it and is dropped, and \
                   a trailing '\\' fails the load",
-        check: Check::NotChecked,
+        check: Check::Detected(expressions_with_a_backslash),
     },
     BreakingChange {
         version: "0.12.0",
         summary: "every '$' or '<' in an expression starts a reference, so a malformed one \
                   ('$$', 'a < b', '${X:default}') fails the load, and an unbraced name ends at \
                   '.' or '-' (write '<{batect.project_directory}')",
-        check: Check::NotChecked,
+        check: Check::Detected(expressions_read_differently),
     },
     BreakingChange {
         version: "0.12.0",
@@ -200,7 +432,7 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         version: "0.12.0",
         summary: "a local include's 'path' whose first component is '~' is looked for in the \
                   home directory, not in a '~' directory beside the file declaring it",
-        check: Check::NotChecked,
+        check: Check::Detected(includes_from_home_directory),
     },
     BreakingChange {
         version: "0.12.0",

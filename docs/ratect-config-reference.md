@@ -102,20 +102,19 @@ Each change's outcome depends on how it can be checked:
   error, and each such change *may apply*, since the error doesn't say which
   one caused it.
 - **A change with a detector** — one Ratect can recognise by looking, such
-  as the one refusing a Git bundle — is looked for in each of the project's
-  `.toml` files, read as plain TOML: *none found*, or *found* with the field
-  and file it was found in. Its `.yml` files aren't looked in, so a project
+  as the one refusing a Git bundle, or one to what an expression means — is
+  looked for in each of the project's `.toml` files, read as plain TOML:
+  *none found*, or *found* with the field and file it was found in. Its `.yml` files aren't looked in, so a project
   with one reads *not known* rather than *none found*. Nor is it *none found*
   when the project doesn't load: which files there are isn't known then, so
   only the root file is looked in, and a use there is still *found*.
-- **A change nothing checks** says *not checked*. So far that includes each
-  change to what a value means.
+- **A change nothing checks** would say *not checked*. Every change so far
+  has a check.
 
-So for the project above, the review is the three changes marked *not
-checked*: look through its values for a `\`, a `$` or a `<`, and through its
-local includes for a `path` starting with `~`, and check each use against the
-change. The rest are ruled out — it loads, and declares no Git include. Once
-that's done, set `ratect_version` to 0.12.0 and it loads.
+So for the project above, every change is ruled out: it loads, and declares
+no Git include, no local include starting with `~`, and no expression a
+change reads differently. Once you've read the changes and agree, set
+`ratect_version` to 0.12.0 and it loads.
 
 `ratect doctor` and `ratect config validate` report a refusal the same way:
 the refusal is a `problem`, each change a finding of its own — `ok` once it's

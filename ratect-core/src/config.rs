@@ -4908,7 +4908,8 @@ fn evaluate_value(
 /// against the file that declared it and judges what [`check_values`] could
 /// only judge on a literal. Each of these fields' readers checks its syntax
 /// as the file is read ([`checked_expression`]), so a field added here needs
-/// one too.
+/// one too — and a place in `written_for::expressions`, or the written-for
+/// detectors reading expressions don't look in it.
 ///
 /// Each path-bearing field is anchored on its **supplier**: the container in
 /// the `extends` chain whose value it is ([`Provenance::suppliers`]), so an
@@ -5032,8 +5033,9 @@ fn evaluate_container(
 
 /// Evaluates a task's own expression-bearing values: its `run.environment`
 /// and each `customise.<container>.environment` (#373), whose syntax is
-/// checked as the file is read ([`checked_expression`]). Returns every value
-/// that failed, as [`evaluate_container`] does.
+/// checked as the file is read ([`checked_expression`]) — and which
+/// `written_for::expressions` lists, as it does `evaluate_container`'s.
+/// Returns every value that failed, as [`evaluate_container`] does.
 fn evaluate_task(
     task: &mut Task,
     host_env: &impl Fn(&str) -> Option<String>,
