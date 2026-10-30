@@ -775,6 +775,54 @@ fn format_task_list_groups_tasks_with_the_ungrouped_bucket_sorted_last() {
     );
 }
 
+/// #465: Batect reads an explicit `group: ""` as the same value an omitted
+/// group defaults to, so both share the trailing `Ungrouped tasks:` bucket
+/// rather than the empty string getting a bare `:` heading of its own.
+#[test]
+fn format_task_list_lists_an_empty_group_as_ungrouped() {
+    let tasks = IndexMap::from([
+        (
+            "a".to_string(),
+            task_with_description_and_group(None, Some("")),
+        ),
+        (
+            "b".to_string(),
+            task_with_description_and_group(None, Some("G")),
+        ),
+        ("d".to_string(), task_with_description_and_group(None, None)),
+    ]);
+
+    assert_eq!(
+        format_task_list("demo", &tasks),
+        "Tasks in demo:\n\
+             \n\
+             G:\n\
+             - b\n\
+             \n\
+             Ungrouped tasks:\n\
+             - a\n\
+             - d\n"
+    );
+}
+
+/// #465: a project whose only `group` values are empty declares no group, so
+/// it gets the flat list rather than a single `Ungrouped tasks:` heading.
+#[test]
+fn format_task_list_is_a_flat_list_when_every_group_is_empty() {
+    let tasks = IndexMap::from([
+        (
+            "b".to_string(),
+            task_with_description_and_group(None, Some("")),
+        ),
+        ("a".to_string(), task_with_description_and_group(None, None)),
+    ]);
+
+    assert_eq!(
+        format_task_list("demo", &tasks),
+        "Tasks in demo:\n- a\n- b\n"
+    );
+}
+
 #[test]
 fn format_task_list_quiet_is_sorted_tab_separated_and_ignores_groups() {
     let tasks = IndexMap::from([

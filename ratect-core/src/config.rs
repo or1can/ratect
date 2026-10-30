@@ -2620,8 +2620,8 @@ pub struct Task {
     pub description: Option<String>,
     /// Groups this task under a heading in `--list-tasks` output, together
     /// with every other task sharing the same `group` — see
-    /// [`format_task_list`]. Purely a display grouping; has no effect on
-    /// execution order or prerequisites.
+    /// [`format_task_list`]. An empty `group` is the same as none. Purely a
+    /// display grouping; has no effect on execution order or prerequisites.
     pub group: Option<String>,
     /// Per-task overrides for a *non-main* container used somewhere in this
     /// task's own container graph (a task-level or container-level
@@ -2720,20 +2720,21 @@ pub fn format_task_list_quiet(tasks: &IndexMap<String, Task>) -> String {
 /// Formats `--list-tasks` output: every task's name (and `description`,
 /// unless blank) under a `Tasks in {project_name}:` header, every line
 /// ending in a newline — the whole output, written as is. Groups tasks under a
-/// `{group}:` heading — with a task that declares no `group` falling into a
-/// trailing `Ungrouped tasks:` bucket — but only once *some* task in the
-/// project actually declares one; a project with no `group` usage at all
-/// (the common case, and Ratect's pre-0.14.0 behavior) stays a single flat
-/// list with no extra headings. Matches Batect's own `ListTasksCommand`
-/// human-readable format in its grouping and order — groups sorted
-/// alphabetically with the ungrouped bucket last, tasks sorted
-/// alphabetically within a group — but not its header: Batect opens a flat
-/// list with `Available tasks:` and a grouped one with its first group
-/// heading, a divergence recorded in `docs/differences-from-batect.md`.
+/// `{group}:` heading — with a task that declares no `group`, or an empty
+/// one, falling into a trailing `Ungrouped tasks:` bucket — but only once
+/// *some* task in the project actually declares a non-empty one; a project
+/// with no `group` usage at all (the common case, and Ratect's pre-0.14.0
+/// behavior) stays a single flat list with no extra headings. Matches
+/// Batect's own `ListTasksCommand` human-readable format in its grouping
+/// and order — groups sorted alphabetically with the ungrouped bucket last,
+/// tasks sorted alphabetically within a group — but not its header: Batect
+/// opens a flat list with `Available tasks:` and a grouped one with its
+/// first group heading, a divergence recorded in
+/// `docs/differences-from-batect.md`.
 pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> String {
     let mut lines = vec![format!("Tasks in {}:", project_name)];
 
-    if tasks.values().all(|task| task.group.is_none()) {
+    if tasks.values().all(|task| listed_group(task).is_none()) {
         let mut names: Vec<_> = tasks.keys().collect();
         names.sort();
         for name in names {
@@ -2744,7 +2745,7 @@ pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> S
 
     let mut groups: HashMap<Option<&str>, Vec<&String>> = HashMap::new();
     for (name, task) in tasks {
-        groups.entry(task.group.as_deref()).or_default().push(name);
+        groups.entry(listed_group(task)).or_default().push(name);
     }
     for names in groups.values_mut() {
         names.sort();
@@ -2773,6 +2774,14 @@ pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> S
     }
 
     lines.join("\n") + "\n"
+}
+
+/// The heading `task` is listed under, `None` being the ungrouped bucket. An
+/// empty `group` is ungrouped too: Batect's `Task.group` defaults to `""`, so
+/// it reads `group: ""` and an omitted `group` as the same value. Only the
+/// exact empty string — Batect compares with `== ""`, not `isBlank`.
+fn listed_group(task: &Task) -> Option<&str> {
+    task.group.as_deref().filter(|group| !group.is_empty())
 }
 
 fn format_task_line(name: &str, description: Option<&str>) -> String {
