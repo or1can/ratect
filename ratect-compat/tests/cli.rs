@@ -664,6 +664,24 @@ fn build_failure_buildkit_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-failure-buildkit.yml")
 }
 
+fn build_output_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-output.yml")
+}
+
+/// A `RATECT_BUILD_OUTPUT_CACHE_BUST` no earlier run used, since a cached
+/// step prints no output.
+fn build_output_cache_bust() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        .to_string()
+}
+
+fn build_output_stages_config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-output-stages.yml")
+}
+
 fn build_buildkit_default_config_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build-buildkit-default.yml")
 }
@@ -6490,6 +6508,137 @@ fn failing_buildkit_build_output_reaches_the_error() {
             < position("this buildkit line should reach the user"),
         "step output should appear in execution order in the transcript: {stderr}"
     );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// `-o all` prints a build step's output a line at a time, on both builders,
+/// each line its own `Image build | ` line (ratect#518): indentation kept, a
+/// blank line kept as a prefixed empty one, and a carriage-return redraw
+/// split rather than overwriting the prefix. The cache is busted per run,
+/// since a cached step prints nothing.
+#[test]
+#[ignore]
+fn build_output_keeps_indentation_and_blank_lines_under_output_all() {
+    for buildkit in ["0", "1"] {
+        let cache_bust = build_output_cache_bust();
+        let output = ratect_command()
+            .arg("-f")
+            .arg(build_output_config_path())
+            .args(["-o", "all", "build"])
+            .env("DOCKER_BUILDKIT", buildkit)
+            .env("RATECT_BUILD_OUTPUT_CACHE_BUST", &cache_bust)
+            .env_remove("RATECT_BUILD_OUTPUT_FAIL")
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "DOCKER_BUILDKIT={buildkit}: the build should have succeeded: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // BuildKit labels each line with its step's `#N` (ratect#538), a
+        // number this test can't know in advance.
+        let label = match buildkit {
+            "1" => {
+                let first = stdout
+                    .lines()
+                    .find(|line| line.ends_with(" first"))
+                    .unwrap_or_else(|| panic!("no `first` line: {stdout}"));
+                let label = first
+                    .trim_start_matches("build-env | Image build | ")
+                    .trim_end_matches("first");
+                assert!(label.starts_with('#'), "unlabelled: {first}");
+                label.to_string()
+            }
+            _ => String::new(),
+        };
+        let expected = [
+            format!("build-env | Image build | {label}first"),
+            format!("build-env | Image build | {label}  --> src/main.rs:3:5"),
+            format!("build-env | Image build | {}", label.trim_end()),
+            format!("build-env | Image build | {label}after-blank"),
+            format!("build-env | Image build | {label}a"),
+            format!("build-env | Image build | {label}b"),
+        ]
+        .join("\n");
+        assert!(
+            stdout.contains(&format!("{expected}\n")),
+            "DOCKER_BUILDKIT={buildkit}: the step's output should be line for line: {stdout}"
+        );
+    }
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A BuildKit build labels every line with its step's `#N` (ratect#538), so
+/// two stages running at once, their lines interleaved, can be told apart —
+/// under `-o all`, and in a failed build's transcript. The numbers depend on
+/// BuildKit, so only their consistency is pinned.
+#[test]
+#[ignore]
+fn buildkit_build_lines_are_labelled_with_their_step() {
+    for fail in ["", "1"] {
+        let cache_bust = build_output_cache_bust();
+        let output = ratect_command()
+            .arg("-f")
+            .arg(build_output_stages_config_path())
+            .args(["--enable-buildkit", "-o", "all", "build"])
+            .env("RATECT_BUILD_OUTPUT_CACHE_BUST", &cache_bust)
+            .env("RATECT_BUILD_OUTPUT_FAIL", fail)
+            .output()
+            .expect("failed to run ratect");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.success(),
+            fail.is_empty(),
+            "RATECT_BUILD_OUTPUT_FAIL={fail:?}: {stdout}\n{stderr}"
+        );
+
+        let build_lines: Vec<&str> = stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("build-env | Image build | "))
+            .collect();
+        assert!(!build_lines.is_empty(), "no build output: {stdout}");
+        for line in &build_lines {
+            assert!(
+                line.starts_with('#'),
+                "unlabelled build line {line:?}: {stdout}"
+            );
+        }
+        // The label every line of `stage`'s loop carries, which must be one.
+        let label_of = |stage: &str| {
+            let mut labels: Vec<&str> = build_lines
+                .iter()
+                // Not the step's own `RUN …` header, which quotes the loop.
+                .filter(|line| line.contains(&format!(" {stage} says ")) && !line.contains(" RUN "))
+                .map(|line| line.split_once(' ').unwrap().0)
+                .collect();
+            assert_eq!(labels.len(), 3, "{stage}'s three lines: {stdout}");
+            labels.dedup();
+            assert_eq!(labels.len(), 1, "{stage}'s lines share one label: {stdout}");
+            labels[0]
+        };
+        assert_ne!(label_of("one"), label_of("two"), "{stdout}");
+
+        if !fail.is_empty() {
+            let transcript = stderr
+                .split_once("Build output:")
+                .unwrap_or_else(|| panic!("no transcript: {stderr}"))
+                .1;
+            assert!(
+                transcript.contains(&format!("{} {cache_bust} one says 1", label_of("one"))),
+                "the transcript is labelled too: {stderr}"
+            );
+            assert!(
+                transcript.contains(" ERROR: "),
+                "the failed step's error is labelled: {stderr}"
+            );
+        }
+    }
 }
 
 /// Requires a running Docker daemon that advertises BuildKit as its default

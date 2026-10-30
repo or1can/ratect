@@ -1062,68 +1062,17 @@ async fn build_image_via_buildkit(
     let mut image_id = None;
     // The full build transcript — same purpose as the classic path's (see
     // `build_image` below), just assembled from BuildKit's structured status
-    // messages: each vertex (build step) name once, its raw log output, and
-    // any per-vertex error.
-    let mut output = String::new();
-    let mut seen_vertexes = std::collections::HashSet::new();
-    let mut seen_vertex_errors = std::collections::HashSet::new();
+    // messages — and the progress lines, both framed by `BuildKitOutput`.
+    let mut output = build_output::BuildKitOutput::new();
     // Skipped entirely (not just discarded downstream) when the active
     // logger doesn't render it — see `EventSink::wants_progress_detail`.
     let wants_progress = event_sink.wants_progress_detail();
+    let post = |lines| post_build_lines(event_sink, wants_progress, tag, lines);
     while let Some(result) = stream.next().await {
         match result {
             Ok(info) => match info.aux {
                 Some(bollard::models::BuildInfoAux::BuildKit(status)) => {
-                    for vertex in &status.vertexes {
-                        // Vertexes are re-sent on every state change — and
-                        // the very first status message announces the *whole*
-                        // build graph upfront, before anything runs, in graph
-                        // (not execution) order. So a step's name is recorded
-                        // when it first reports *started* — execution order,
-                        // matching the docker CLI — not on first sight, which
-                        // would dump the entire plan at once (and reversed).
-                        // Errors are recorded once, when they appear.
-                        if vertex.started.is_some()
-                            && seen_vertexes.insert(vertex.digest.clone())
-                            && !vertex.name.is_empty()
-                        {
-                            let cached_suffix = if vertex.cached { " CACHED" } else { "" };
-                            tracing::debug!(image = tag, "{}{}", vertex.name, cached_suffix);
-                            output.push_str(&vertex.name);
-                            output.push_str(cached_suffix);
-                            output.push('\n');
-                            if wants_progress {
-                                event_sink.post(TaskEvent::ImageBuildProgress {
-                                    tag: tag.to_string(),
-                                    message: format!("{}{}", vertex.name, cached_suffix),
-                                });
-                            }
-                        }
-                        if !vertex.error.is_empty()
-                            && seen_vertex_errors.insert(vertex.digest.clone())
-                        {
-                            tracing::debug!(image = tag, "{}", vertex.error);
-                            output.push_str(&vertex.error);
-                            output.push('\n');
-                        }
-                    }
-                    for log in &status.logs {
-                        // Raw output chunks from a step — not necessarily
-                        // whole lines, so appended verbatim rather than
-                        // line-trimmed like the classic path's stream lines.
-                        let msg = String::from_utf8_lossy(&log.msg);
-                        output.push_str(&msg);
-                        let trimmed = msg.trim_end();
-                        if !trimmed.is_empty() {
-                            tracing::debug!(image = tag, "{trimmed}");
-                            if wants_progress {
-                                event_sink.post(TaskEvent::ImageBuildProgress {
-                                    tag: tag.to_string(),
-                                    message: trimmed.to_string(),
-                                });
-                            }
-                        }
-                    }
+                    post(output.push(&status));
                 }
                 Some(bollard::models::BuildInfoAux::Default(aux_image_id)) => {
                     if let Some(id) = aux_image_id.id {
@@ -1133,14 +1082,16 @@ async fn build_image_via_buildkit(
                 None => {}
             },
             Err(e) => {
+                post(output.finish());
                 return Err(e).context(format!(
                     "Failed to build image '{}'{}",
                     tag,
-                    build_output_suffix(&output)
+                    build_output_suffix(output.transcript())
                 ));
             }
         }
     }
+    post(output.finish());
 
     // Explicit rather than incidental: every `RUN --mount=type=ssh` in the
     // build is served over these sockets, so they have to outlive the
@@ -1153,6 +1104,26 @@ async fn build_image_via_buildkit(
     })?;
 
     Ok(image_id)
+}
+
+/// Logs each of a build's output `lines` at `debug`, and posts each as an
+/// [`TaskEvent::ImageBuildProgress`] when `wants_progress` — both builders'
+/// shared last step.
+fn post_build_lines(
+    event_sink: &dyn EventSink,
+    wants_progress: bool,
+    tag: &str,
+    lines: Vec<String>,
+) {
+    for line in lines {
+        tracing::debug!(image = tag, "{line}");
+        if wants_progress {
+            event_sink.post(TaskEvent::ImageBuildProgress {
+                tag: tag.to_string(),
+                message: line,
+            });
+        }
+    }
 }
 
 /// Formats `output` (the build log accumulated so far) as a "Build output:"
@@ -2459,6 +2430,7 @@ async fn resolve_build_credentials(
 }
 
 pub(crate) mod boolean_variable;
+mod build_output;
 mod connection;
 mod stdin;
 pub use connection::DockerConnectionOptions;
@@ -3225,32 +3197,23 @@ impl ContainerRuntime for DockerClient {
         // always built regardless of output mode; the progress *event*
         // below is the one part skipped when the active logger doesn't
         // render it (see `EventSink::wants_progress_detail`).
-        let mut output = String::new();
+        let mut output = build_output::ClassicBuildOutput::new();
         let wants_progress = self.event_sink.wants_progress_detail();
+        let post = |lines| post_build_lines(self.event_sink.as_ref(), wants_progress, tag, lines);
         while let Some(result) = stream.next().await {
             match result {
                 Ok(info) => {
                     if let Some(message) = info.error_detail.and_then(|detail| detail.message) {
+                        post(output.finish());
                         return Err(anyhow::anyhow!(
                             "Failed to build image '{}': {}{}",
                             tag,
                             message,
-                            build_output_suffix(&output)
+                            build_output_suffix(output.transcript())
                         ));
                     }
-                    if let Some(stream_line) = info.stream {
-                        let trimmed = stream_line.trim();
-                        if !trimmed.is_empty() {
-                            tracing::debug!(image = tag, "{trimmed}");
-                            output.push_str(trimmed);
-                            output.push('\n');
-                            if wants_progress {
-                                self.event_sink.post(TaskEvent::ImageBuildProgress {
-                                    tag: tag.to_string(),
-                                    message: trimmed.to_string(),
-                                });
-                            }
-                        }
+                    if let Some(chunk) = info.stream {
+                        post(output.push(&chunk));
                     }
                     // Classic (non-BuildKit) builds always report `Default`
                     // aux info — `BuildKit` is the other variant, only ever
@@ -3265,14 +3228,16 @@ impl ContainerRuntime for DockerClient {
                     }
                 }
                 Err(e) => {
+                    post(output.finish());
                     return Err(e).context(format!(
                         "Failed to build image '{}'{}",
                         tag,
-                        build_output_suffix(&output)
+                        build_output_suffix(output.transcript())
                     ));
                 }
             }
         }
+        post(output.finish());
 
         let image_id = image_id.ok_or_else(|| {
             anyhow::anyhow!("Docker did not report an image ID after building '{}'", tag)

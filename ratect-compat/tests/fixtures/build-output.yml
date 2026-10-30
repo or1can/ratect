@@ -1,0 +1,18 @@
+# Exercises image build output under `-o all` (ratect#518): an indented line,
+# a blank line and a carriage-return redraw, each of which must come out as
+# its own `Image build | ` line. `RATECT_BUILD_OUTPUT_CACHE_BUST` must differ
+# on every run, since a cached step prints no output. A non-empty
+# `RATECT_BUILD_OUTPUT_FAIL` fails the step after its output, for the
+# failure transcript.
+project_name: ratect-build-output-test
+containers:
+  build-env:
+    build_directory: ./build-output
+    build_args:
+      CACHE_BUST: $RATECT_BUILD_OUTPUT_CACHE_BUST
+      FAIL: ${RATECT_BUILD_OUTPUT_FAIL:-}
+tasks:
+  build:
+    run:
+      container: build-env
+      command: "true"

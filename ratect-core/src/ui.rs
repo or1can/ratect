@@ -170,7 +170,9 @@ pub enum TaskEvent {
         container: String,
     },
     /// One line of build output — a classic builder stream line, or a
-    /// BuildKit step name/log chunk. `tag` is the image tag being built
+    /// BuildKit step's header, `CACHED`, `ERROR:` or log line, labelled with
+    /// the step's `#N` (`docker::build_output`) — with no line terminator:
+    /// possibly blank, possibly indented. `tag` is the image tag being built
     /// (`<project>-<container>`), the reference `docker.rs` has at this
     /// depth.
     ImageBuildProgress {

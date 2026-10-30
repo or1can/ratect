@@ -323,6 +323,15 @@ fn names_list<'name>(console: &Console, names: impl Iterator<Item = &'name Strin
     crate::engine::human_readable_list(&names, "and")
 }
 
+/// Whether a build line is blank: empty, or a BuildKit step's `#N` label
+/// with nothing after it (`docker::build_output`).
+fn is_blank_build_line(message: &str) -> bool {
+    match message.strip_prefix('#') {
+        Some(number) => !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()),
+        None => message.is_empty(),
+    }
+}
+
 /// `text` as one painted row of the live display, fitted to `width`: every
 /// line break (`\n` or `\r`) a space, then clipped. Every row the display
 /// paints goes through here, so whatever a stage puts in its text — a
@@ -824,7 +833,10 @@ impl EventSink for FancyEventLogger {
                 self.repaint_startup(&mut state);
             }
             TaskEvent::ImageBuildProgress { tag, message } => {
-                if !state.keep_updating_startup {
+                // A blank line of build output would blank the status, so
+                // the last line with content stays shown instead — a
+                // BuildKit one being its step's bare `#N` label.
+                if !state.keep_updating_startup || is_blank_build_line(&message) {
                     return;
                 }
                 for line in &mut state.lines {

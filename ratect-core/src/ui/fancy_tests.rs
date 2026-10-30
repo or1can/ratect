@@ -1324,6 +1324,50 @@ fn a_build_line_tracks_its_own_build_and_no_other() {
     );
 }
 
+/// A blank build line (ratect#518 posts one per blank line of output)
+/// leaves the last line with content as the build's status.
+#[test]
+fn an_empty_build_line_keeps_the_previous_status() {
+    let (logger, buffer) = two_builds_and_a_task();
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "build-a".into(),
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-build-a".into(),
+        message: "compiling".into(),
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-build-a".into(),
+        message: String::new(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3)[0],
+        "build-a: building image: compiling"
+    );
+}
+
+/// A BuildKit build's blank line arrives as its step's bare label
+/// (ratect#538), which is as blank as an empty one.
+#[test]
+fn a_blank_labelled_build_line_keeps_the_previous_status() {
+    let (logger, buffer) = two_builds_and_a_task();
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "build-a".into(),
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-build-a".into(),
+        message: "#4 compiling".into(),
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-build-a".into(),
+        message: "#4".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3)[0],
+        "build-a: building image: #4 compiling"
+    );
+}
+
 /// CSPLA-7, -10, -11, -16, -21, CSPLB-3, -6, -8, -10: every event about
 /// another container leaves a still-pending build line as it was.
 #[test]

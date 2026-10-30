@@ -71,6 +71,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- BuildKit build output labels each line with its step's `#N`, under `-o all`, in `fancy`'s status and in a failed build's `Build output:`, and shows the steps that start together in docker-client's order. A cached step's `CACHED` and a failed step's error are lines of their own.
 - The `claims` documentation gate runs as a git `pre-commit` hook, declared in `.pre-commit-config.yaml`; run `pre-commit install` once per clone to turn it on. No effect on the released binaries; contributor-tooling only.
 - The `claims` documentation checks also run in CI on every pull request. No effect on the released binaries; contributor-tooling only.
 - `ratect-compat`: `--log-file` logs Ratect's own `debug` records unless `RUST_LOG` is set, including why the run failed. With `--log-file`, stderr keeps its colour.
@@ -108,6 +109,7 @@ history, from when it was the only binary.
 ### Fixed
 
 - A run whose task's command exited `0` but whose cleanup failed ends with `<task> failed after <duration>.` instead of `<task> finished with exit code 0 in <duration>.`, in every style but `quiet`.
+- Image build output keeps its indentation and blank lines, in `-o all` and in a failed build's `Build output:`. Under `-o all`, a build line Docker sends in pieces prints as one line, and a lone `\r` ends a line, as in a container's output.
 - `-o all` output no longer prints an empty line for a carriage return (`\r`) with nothing before it — at the start of a container's output, right after a newline, or after another `\r` — or after a `\r` that already ended a line, as in Batect. A setup command's output drops a leading `\r` and splits on a lone one, the same as a container's.
 - On a colour terminal, `simple` output bolds the task, container and image names, the task's command and setup commands, and the summary's task name, as Batect does — and the container in its ratect-only lines too.
 - `fancy` output with cleanup off: the summary line no longer runs onto the end of task output that lacks a trailing newline, and follows a blank line otherwise, as in Batect.
