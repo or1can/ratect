@@ -75,20 +75,31 @@ mod entry_lock;
 /// model, the cache's entries and sidecars, a bundle's identity (#756).
 ///
 /// `Display` and `Debug` both show it as Ratect shows a remote in every
-/// message and listing: a URL's credentials — everything in its authority
-/// before the last `@` — as `***`, so a token in a `repo` never reaches a
-/// terminal or a log (#751); the rest as written, byte for byte, and a remote
-/// that isn't a URL (`git@host:path`, a local path) unchanged. `git`'s own
-/// messages already leave credentials out. So a new message, log record or
-/// `{:?}` naming one hides them without its author having to remember to.
+/// message and listing: everything after a URL's `://` and before the last
+/// `@` in the rest of it, which holds any credentials, as `***`, so a token
+/// in a `repo` never reaches a terminal or a log (#751); the rest as written,
+/// byte for byte, and a remote that isn't a URL (`git@host:path`, a local path)
+/// unchanged. `git`'s own messages already leave credentials out. So a new
+/// message, log record or `{:?}` naming one hides them without its author
+/// having to remember to.
+///
+/// That hides too much of a URL whose path holds an `@` — `https://host/a@b`
+/// shows as `https://***@b` — deliberately (#760), and unlike a URL parser.
+/// RFC 3986 ends the authority at the first `/`, `?` or `#` and allows `@` in
+/// a path (§3.2, §3.3), and `git` reads a remote the same way
+/// (`credential_from_url`). To them `https://u:ab/cd@host/r` holds no
+/// credentials, since the unencoded `/` in its mistyped one ends the
+/// authority. That remote can't clone, but it parses exactly like a path
+/// holding an `@`, so following the grammar would show the secret in the
+/// error reporting the failed clone.
 ///
 /// The remote in full is `Remote::unredacted`, crate-private so neither
 /// binary can print it, and only what must have it reads it: the `git`
 /// invocation (its argv, and the leading-`-` refusal that guards it), the
 /// cache key, and serialisation — which is transparent, so a sidecar and
 /// `ratect config convert`'s output keep the URL that clones. Equality and hashing compare it in full too, so two
-/// remotes differing only in credentials are different remotes that display
-/// alike.
+/// remotes differing only in what `Display` hides are different remotes that
+/// display alike.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Remote(String);
@@ -99,9 +110,10 @@ impl Remote {
         &self.0
     }
 
-    /// Whether `Display` leaves credentials out — the only way two different
-    /// remotes can show alike, so what tells `ratect includes` to add an
-    /// entry's cache key to tell them apart.
+    /// Whether `Display` leaves anything out — credentials, or a path's `@`
+    /// and what precedes it — the only way two different remotes can show
+    /// alike, so what tells `ratect includes` to add an entry's cache key to
+    /// tell them apart.
     pub fn hides_credentials(&self) -> bool {
         matches!(self.redacted(), Cow::Owned(_))
     }
@@ -115,10 +127,7 @@ impl Remote {
             return Cow::Borrowed(remote);
         };
         let (head, rest) = remote.split_at(scheme_end + "://".len());
-        // To the first `/` only: a credential may hold an unencoded `?` or `#`,
-        // and taking too much of a URL with neither only hides more of it.
-        let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
-        match authority.rfind('@') {
+        match rest.rfind('@') {
             Some(at) => Cow::Owned(format!("{head}***{}", &rest[at..])),
             None => Cow::Borrowed(remote),
         }

@@ -2168,15 +2168,16 @@ fn format_size(bytes: u64) -> String {
 /// `includes list -o quiet`'s machine-readable line, tab-separated: the
 /// remote, with any credentials shown as `***` (#751), the ref, then the
 /// entry's whole cache key — its directory under `~/.ratect/incl` — which
-/// tells apart two entries that differ only in credentials.
+/// tells apart two entries that differ only in what `Display` hid.
 fn quiet_include_line(entry: &ratect_core::git_include::CachedInclude) -> String {
     format!("{}\t{}\t{}", entry.remote, entry.git_ref, entry.key)
 }
 
 /// A cached Git include as `ratect includes` prints it for a person: its
-/// remote, with any credentials shown as `***` (#751), and its ref. Only when
-/// credentials were hidden can two entries print alike — an entry *is* its
-/// remote and ref — so only then is the start of its cache key added, enough
+/// remote, with any credentials shown as `***` (#751), and its ref. An entry
+/// *is* its remote and ref, so two can print alike only when part of a remote
+/// was hidden (credentials, or a path's `@` and what precedes it, #760) — so
+/// only then is the start of its cache key added, enough
 /// to tell them apart and to find its directory under `~/.ratect/incl`.
 fn named_include(entry: &ratect_core::git_include::CachedInclude) -> String {
     let named = format!("{} at {}", entry.remote, entry.git_ref);

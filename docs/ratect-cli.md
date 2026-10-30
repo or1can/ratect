@@ -258,10 +258,11 @@ better answer; `refresh` is for when it isn't.
 
 Under `-o quiet`, `list` prints `repo<TAB>ref<TAB>key` per line and nothing else, where
 `key` is the entry's directory under `~/.ratect/incl`. In every style, credentials in a
-`repo` URL are shown as `***`, as everywhere Ratect names one. Two entries can then look
-alike only if their remotes differ in nothing but those credentials, so in the other
-styles an entry whose credentials were hidden is also named by the first 12 characters
-of its key: `https://***@host/repo.git at v1 (key 45de9a2d81c0)`.
+`repo` URL are shown as `***`, as everywhere Ratect names one — and so is anything else
+between its `://` and last `@`, so `https://host/a@b` shows as `https://***@b`. Two entries
+can then look alike only if their remotes differ in nothing but what was hidden, so in
+the other styles an entry with part of its `repo` hidden is also named by the first 12
+characters of its key: `https://***@host/repo.git at v1 (key 45de9a2d81c0)`.
 
 ## `resources` options
 

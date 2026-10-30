@@ -1952,7 +1952,9 @@ async fn a_load_that_waited_for_another_process_to_clone_does_not_announce_a_clo
 }
 
 /// #751: credentials in a remote are shown as `***`; everything else as
-/// written. #756: by `Display` and `Debug` alike.
+/// written. #756: by `Display` and `Debug` alike. #760: up to the last `@`
+/// anywhere after `://`, so a credential holding an unencoded `/` is hidden
+/// too, at the cost of hiding a path's own `@` and what precedes it.
 #[test]
 fn a_remote_shows_without_credentials_and_keeps_everything_else_as_written() {
     for (remote, shown) in [
@@ -1971,7 +1973,10 @@ fn a_remote_shows_without_credentials_and_keeps_everything_else_as_written() {
         ("git@github.com:o/r.git", "git@github.com:o/r.git"),
         ("/srv/git/r.git", "/srv/git/r.git"),
         ("https://GitHub.com/O/r", "https://GitHub.com/O/r"),
-        ("https://host/a@b", "https://host/a@b"),
+        ("https://user:ab/cd@host/r.git", "https://***@host/r.git"),
+        ("https://u:a/b?c#d@host/r", "https://***@host/r"),
+        ("https://host/a@b", "https://***@b"),
+        ("https://u:p@host/a@b", "https://***@b"),
     ] {
         let hides = remote != shown;
         let remote = Remote::from(remote);
