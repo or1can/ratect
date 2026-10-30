@@ -61,9 +61,13 @@ async fn project_from(file_name: &str, text: &str) -> LoadedProject {
     let path = directory.join(file_name);
     std::fs::write(&path, text).unwrap();
 
-    let project = crate::config::load_project_native(&path, running_0_12())
-        .await
-        .expect("fixture config should load");
+    let project = crate::config::load_project_native(
+        &path,
+        running_0_12(),
+        &crate::ui::LoadOutput::default(),
+    )
+    .await
+    .expect("fixture config should load");
     std::fs::remove_dir_all(&directory).unwrap();
     project
 }

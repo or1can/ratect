@@ -9519,9 +9519,10 @@ run = { container = "app", command = "echo test" }
     )
     .unwrap();
     let running: crate::written_for::Version = "0.12.0".parse().unwrap();
-    let project = crate::config::load_project_native(&file, running)
-        .await
-        .unwrap();
+    let project =
+        crate::config::load_project_native(&file, running, &crate::ui::LoadOutput::default())
+            .await
+            .unwrap();
     std::fs::remove_dir_all(&directory).unwrap();
     let dialect = project.dialect;
     assert_eq!(dialect, Dialect::Native);

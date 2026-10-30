@@ -263,6 +263,12 @@ schema = ["dep:schemars", "dep:jsonschema"]
 # `bollard`/`hyper`'s own dependency graph) — same low-risk-addition
 # reasoning as `nix`/`url` above.
 bytes = "1.12.1"
+# **`nix`** feature `fs` (`ratect-core` dev-dependency only, on top of the
+# normal dependency's `user`): `fcntl(F_GETFD)`, which `git_include.rs`'s
+# tests read to pin that an entry lock's file is opened close-on-exec
+# (decisions/0023) — `std` exposes no way to ask. A dev-dependency so the
+# feature stays out of the shipped binaries' build.
+nix = { version = "0.31.3", features = ["fs"] }
 tokio = { version = "1.52", features = ["test-util"] }
 # **`rcgen`**, **`tokio-rustls`**, **`time`** (`ratect-core`
 # dev-dependencies only): generate a throwaway self-signed CA + leaf

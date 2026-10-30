@@ -44,7 +44,7 @@ use ratect_core::exit_code::Word;
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
-    Console, OutputStyle, ProgressStream, TaskEvent, TerminalFacts,
+    Console, LoadOutput, OutputStyle, ProgressStream, TaskEvent, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -836,6 +836,8 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
     let terminal = TerminalFacts::gather();
     let requested_style = global.output.map(OutputStyle::from);
     let style = select_output_style(requested_style, global.no_color, &terminal, PROGRESS);
+    // What a load prints before `create_event_sink` has made the sink.
+    let load_output = LoadOutput::new(style, color_mode, PROGRESS);
 
     // Arms follow the `Command` enum's own order (see there).
     match command {
@@ -845,7 +847,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
             ratect_core::engine::check_tag_and_override(&args.tag_image, &args.override_image)?;
             DockerConnectionOptions::from(args.docker.clone()).check_options()?;
             let (project, config_var_overrides) =
-                load_with_overrides(&global, &args.config_vars).await?;
+                load_with_overrides(&global, &args.config_vars, &load_output).await?;
             run_task(
                 project,
                 config_var_overrides,
@@ -860,7 +862,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
             command: TasksCommand::List(args),
         } => {
             args.warn_about_deprecated_options(stderr);
-            let project = load(&global).await?;
+            let project = load(&global, &load_output).await?;
             let listing = match style {
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
                 _ => format_task_list(&project.config.project_name, &project.config.tasks),
@@ -875,12 +877,14 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
             manage_resources(command, &global, style, stdout, stderr).await
         }
         Command::Config { command } => match command {
-            ConfigCommand::Validate(args) => validate_config(args, &global, style, stdout).await,
+            ConfigCommand::Validate(args) => {
+                validate_config(args, &global, style, &load_output, stdout).await
+            }
             ConfigCommand::Convert(args) => {
                 convert_config(args, &global, style, stdout, stderr).await
             }
         },
-        Command::Doctor(args) => diagnose(args, &global, style, stdout).await,
+        Command::Doctor(args) => diagnose(args, &global, style, &load_output, stdout).await,
         Command::Completions(args) => generate_completions(args, stdout),
     }
 }
@@ -960,8 +964,11 @@ fn completion_config_file() -> PathBuf {
 
 /// Loads the configuration. Evaluates nothing (see
 /// `LoadedProject::evaluate`), so it needs no config-variable values.
-async fn load(global: &GlobalArgs) -> Result<ratect_core::config::LoadedProject> {
-    Ok(load_around(global, || Ok(())).await?.0)
+async fn load(
+    global: &GlobalArgs,
+    output: &LoadOutput,
+) -> Result<ratect_core::config::LoadedProject> {
+    Ok(load_around(global, output, || Ok(())).await?.0)
 }
 
 /// The one way this binary loads a project: the written-for check's two
@@ -973,23 +980,24 @@ async fn load(global: &GlobalArgs) -> Result<ratect_core::config::LoadedProject>
 /// either half, or from a bundle's check during the load, is [`assessed`].
 async fn load_around<T>(
     global: &GlobalArgs,
+    output: &LoadOutput,
     between: impl FnOnce() -> Result<T>,
 ) -> Result<(ratect_core::config::LoadedProject, T)> {
     let config_file = &global.config_file;
     if let Err(error) = ratect_core::written_for::check(config_file, running_version()) {
-        return Err(assessed(error, config_file, None).await);
+        return Err(assessed(error, config_file, None, output).await);
     }
     let between = between()?;
-    let project = match load_project_native(config_file, running_version()).await {
+    let project = match load_project_native(config_file, running_version(), output).await {
         Ok(project) => project,
-        Err(error) => return Err(assessed(error, config_file, None).await),
+        Err(error) => return Err(assessed(error, config_file, None, output).await),
     };
     if let Err(error) = ratect_core::written_for::check_yaml_root(
         config_file,
         project.toml_files(),
         running_version(),
     ) {
-        return Err(assessed(error, config_file, Some(&project)).await);
+        return Err(assessed(error, config_file, Some(&project), output).await);
     }
     Ok((project, between))
 }
@@ -1004,6 +1012,7 @@ async fn assessed(
     error: anyhow::Error,
     config_file: &Path,
     loaded: Option<&ratect_core::config::LoadedProject>,
+    output: &LoadOutput,
 ) -> anyhow::Error {
     let Some(refusal) = error.downcast_ref::<ratect_core::written_for::Refusal>() else {
         return error;
@@ -1011,7 +1020,7 @@ async fn assessed(
     match loaded {
         Some(project) => refusal.assess(Ok(project)),
         None => refusal.assess(
-            ratect_core::config::load_project_native_for_trial(config_file)
+            ratect_core::config::load_project_native_for_trial(config_file, output)
                 .await
                 .as_ref(),
         ),
@@ -1054,10 +1063,11 @@ fn config_var_overrides(
 async fn load_with_overrides(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
+    output: &LoadOutput,
 ) -> Result<(ratect_core::config::LoadedProject, HashMap<String, String>)> {
     // The config-vars file between the written-for check and the load, so
     // a malformed one is reported before anything the config holds.
-    load_around(global, || config_var_overrides(global, config_vars)).await
+    load_around(global, output, || config_var_overrides(global, config_vars)).await
 }
 
 /// Loads as [`load_with_overrides`] does, then evaluates every container and
@@ -1067,11 +1077,12 @@ async fn load_with_overrides(
 async fn load_and_evaluate(
     global: &GlobalArgs,
     config_vars: &ConfigVarArgs,
+    output: &LoadOutput,
 ) -> Result<(
     ratect_core::config::LoadedProject,
     ratect_core::config::WholeProjectEvaluation,
 )> {
-    let (project, overrides) = load_with_overrides(global, config_vars).await?;
+    let (project, overrides) = load_with_overrides(global, config_vars, output).await?;
     let evaluation = project.evaluate_whole_project(&overrides, |name| std::env::var(name).ok())?;
     Ok((project, evaluation))
 }
@@ -1569,6 +1580,7 @@ async fn diagnose(
     args: DoctorArgs,
     global: &GlobalArgs,
     style: OutputStyle,
+    load_output: &LoadOutput,
     stdout: &Console,
 ) -> Result<()> {
     let mut findings = Vec::new();
@@ -1621,7 +1633,7 @@ async fn diagnose(
         &global.config_file,
     )));
 
-    match load_and_evaluate(global, &args.config_vars).await {
+    match load_and_evaluate(global, &args.config_vars, load_output).await {
         Ok((project, evaluation)) => {
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",
@@ -1701,10 +1713,11 @@ async fn validate_config(
     args: ConfigValidateArgs,
     global: &GlobalArgs,
     style: OutputStyle,
+    load_output: &LoadOutput,
     stdout: &Console,
 ) -> Result<()> {
     let mut findings = Vec::new();
-    match load_and_evaluate(global, &args.config_vars).await {
+    match load_and_evaluate(global, &args.config_vars, load_output).await {
         Ok((project, evaluation)) => {
             findings.push(Finding::Fine(format!(
                 "{} loads ({} container(s), {} task(s))",

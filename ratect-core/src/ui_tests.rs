@@ -659,3 +659,26 @@ fn cleaning_up_names_what_it_follows() {
         assert_eq!(cleaning_up(&console, cause.as_ref()), expected);
     }
 }
+
+#[test]
+fn a_load_prints_its_notices_on_stderr_in_every_style_and_progress_except_under_quiet() {
+    for style in [
+        OutputStyle::Fancy,
+        OutputStyle::Simple,
+        OutputStyle::Quiet,
+        OutputStyle::All,
+    ] {
+        let (output, stderr, progress) = LoadOutput::capturing(style);
+
+        output.notice("a notice");
+        output.progress("some progress");
+
+        assert_eq!(stderr.contents(), "a notice\n", "{style:?}");
+        let expected = if style == OutputStyle::Quiet {
+            ""
+        } else {
+            "some progress\n"
+        };
+        assert_eq!(progress.contents(), expected, "{style:?}");
+    }
+}

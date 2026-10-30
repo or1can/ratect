@@ -1,6 +1,6 @@
 # 0023 — A Git include's entry lock proves its holder dead, and correctness doesn't depend on it
 
-**Status:** Accepted — planned
+**Status:** Accepted — implemented
 ([#733](https://github.com/or1can/ratect/issues/733), ratect-compat 0.33.0 ·
 ratect 0.12.0).
 
@@ -132,6 +132,10 @@ can be proved.**
    as [0017](0017-output-streams-and-styles.md) requires of notices. It names
    the Git include as written (its remote and ref), says whether the holder is
    running or ratect can't tell (Decision 3), and when the wait will give up.
+   A holder ratect can't tell is running is announced on the second attempt
+   rather than the first: a new holder creates the file before taking its OS
+   lock and writing its marker, and a first look in that moment can't tell
+   it from an older binary's lock.
    A wait that ends because the lock was released prints nothing more.
 9. **A wait that can't recover still gives up after `lock_timeout`, still 5
    minutes.** The failure says what it found. If the holder was running, it
