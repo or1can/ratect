@@ -90,3 +90,4 @@ record refined this way.
 | [0020](0020-bundle-records-its-written-for-version.md) | A bundle records the Ratect version it was written for | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0021](0021-native-field-follows-its-file.md) | A native field follows its file, on include entries as on containers | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0022](0022-written-for-refusal-says-what-applies.md) | A written-for refusal says which changes touch the project | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
+| [0023](0023-git-include-entry-lock.md) | A Git include's entry lock proves its holder dead, and correctness doesn't depend on it | Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0) |
