@@ -3163,6 +3163,14 @@ fn all_projects_never_reaches_containers_ratect_did_not_create() {
     let survived = String::from_utf8_lossy(&survived.stdout).trim().to_string();
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
 
+    // A failed listing prints nothing, so the `ids` assertion below would
+    // pass without having tested anything.
+    assert!(
+        listed.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&listed.stdout),
+        String::from_utf8_lossy(&listed.stderr)
+    );
     assert!(
         cleaned.status.success(),
         "stdout:\n{}\nstderr:\n{}",
