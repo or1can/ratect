@@ -156,7 +156,7 @@ the same rule as a [volume's host path](#volume-path-resolution); a Git include'
 | `repo` | string | yes | A Git remote — anything `git clone` itself accepts (an HTTPS/SSH URL, a local path, or a remote helper's `<helper>::<address>`). |
 | `ref` | string | yes | The tag, branch, or commit to check out. **Must be a value that never changes** (in practice, an immutable tag or a pinned commit SHA, not a branch) — see below. |
 | `path` | string | no, default `batect-bundle.yml` | The path, within the repository, of the file to include — resolved relative to the repository's own root, not the file that declared the `include`. |
-| `allow_host_paths` | boolean | no, default `false` | Vouches for this bundle: lets a container it defines mount a host path outside both the clone and your project directory. Honoured only on an entry in your own configuration — see [Vouching for a bundle](includes.md#vouching-for-a-bundle). |
+| `allow_host_paths` | boolean | no, default `false` | Vouches for this bundle: lets a container it defines use a host path outside both the clone and your project directory. Honoured only on an entry in your own configuration — see [Vouching for a bundle](includes.md#vouching-for-a-bundle). |
 
 A `(repo, ref)` pair is cloned **once and cached forever** at
 `~/.ratect/incl/<hash>`, keyed by a hash of the pair — it is never re-fetched, even if
