@@ -2849,7 +2849,7 @@ pub(crate) enum IncludeEntry {
         path: String,
     },
     Git {
-        repo: String,
+        repo: crate::git_include::Remote,
         git_ref: String,
         path: Option<String>,
         /// Vouches for this bundle, letting its containers resolve host paths
@@ -2966,7 +2966,7 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                     #[serde(rename = "type", default, deserialize_with = "present")]
                     include_type: Option<String>,
                     #[serde(default, deserialize_with = "present")]
-                    repo: Option<String>,
+                    repo: Option<crate::git_include::Remote>,
                     #[serde(rename = "ref", default, deserialize_with = "present")]
                     git_ref: Option<String>,
                     #[serde(default, deserialize_with = "present")]
@@ -3205,7 +3205,7 @@ fn deserialize_optional_named<
 }
 
 /// The repository an include entry names, or `None` for a local file include.
-fn include_repo(include: &IncludeEntry) -> Option<&str> {
+fn include_repo(include: &IncludeEntry) -> Option<&crate::git_include::Remote> {
     match include {
         IncludeEntry::Git { repo, .. } => Some(repo),
         IncludeEntry::File { .. } => None,
@@ -4059,7 +4059,7 @@ pub struct LoadedConfig {
     /// Where each `type: git` include's `(repo, ref)` was cloned — for
     /// [`crate::convert`], which looks in the clone for the bundle file a
     /// native load would pick.
-    pub(crate) git_clones: HashMap<(String, String), PathBuf>,
+    pub(crate) git_clones: HashMap<(crate::git_include::Remote, String), PathBuf>,
 }
 
 /// One file as the load parsed it, before merging.
@@ -4251,7 +4251,8 @@ impl Config {
 
         let mut effective_grants = EffectiveGrants::default();
 
-        let mut git_repo_paths: HashMap<(String, String), PathBuf> = HashMap::new();
+        let mut git_repo_paths: HashMap<(crate::git_include::Remote, String), PathBuf> =
+            HashMap::new();
 
         // Each entry with the file declaring it, which a written-for
         // refusal names.
@@ -4421,11 +4422,8 @@ impl Config {
                 // Both are `None` together, for an owned file's own local
                 // include: no boundary, so no trust arrived and no repository
                 // is involved to name.
-                let repo = include_repo(&include).or_else(|| {
-                    boundary
-                        .as_ref()
-                        .map(|boundary| boundary.bundle.id.remote.as_str())
-                });
+                let repo = include_repo(&include)
+                    .or_else(|| boundary.as_ref().map(|boundary| &boundary.bundle.id.remote));
                 if let (Some(repo), Some(wanted)) = (repo, effective) {
                     effective_grants.check(&resolved, wanted, repo)?;
                 }

@@ -93,7 +93,7 @@ use anyhow::{Context, Result};
 use path_clean::PathClean;
 
 use crate::config::ConfigFormat;
-use crate::git_include::{describe_include, display_remote};
+use crate::git_include::{describe_include, Remote};
 
 /// What a `type: git` include entry asks for. Built from the entry's own
 /// fields at the single place each walker destructures one, so neither passes
@@ -134,27 +134,17 @@ impl Trust {
 
 /// How a bundle is named back to whoever has to act on an error: exactly the
 /// two things they wrote, and nothing derived (a clone directory is Ratect's
-/// business, not theirs). Displays as [`describe_include`] does, and its
-/// `Debug` hides the remote's credentials too, since a [`Bundle`] or
-/// [`Boundary`] logged whole would print it.
-#[derive(Clone)]
+/// business, not theirs). Displays as [`describe_include`] does; its
+/// `Debug` hides the remote's credentials too, as [`Remote`]'s does.
+#[derive(Debug, Clone)]
 pub(crate) struct BundleId {
-    pub remote: String,
+    pub remote: Remote,
     pub git_ref: String,
 }
 
 impl std::fmt::Display for BundleId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&describe_include(&self.remote, &self.git_ref))
-    }
-}
-
-impl std::fmt::Debug for BundleId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BundleId")
-            .field("remote", &display_remote(&self.remote))
-            .field("git_ref", &self.git_ref)
-            .finish()
     }
 }
 
@@ -403,7 +393,7 @@ impl Boundary {
              to reach that path, set 'allow_host_paths' to true on the include entry for '{}' \
              in your own configuration.",
             project_dir.display(),
-            display_remote(&self.bundle.id.remote)
+            self.bundle.id.remote
         )
     }
 }
@@ -563,13 +553,12 @@ pub(crate) fn check_dialect(
     declaring: Option<&Bundle>,
     declared_in: &str,
     batect_file: Option<BatectFile>,
-    repo: &str,
+    repo: &Remote,
     format: ConfigFormat,
 ) -> Result<()> {
     let Some(batect_file) = batect_file else {
         return Ok(());
     };
-    let repo = display_remote(repo);
     let (field, remark) = if asked.nested_git.is_some() {
         (
             "allow_nested_git_includes",
@@ -619,11 +608,10 @@ pub(crate) fn refusing_nested_git(restricted: Option<&Bundle>) -> Option<&Bundle
 ///
 /// Called *before* the clone, so a bundle naming an unreachable remote cannot
 /// even be used to probe for one.
-pub(crate) fn check_may_declare_git(restricted: Option<&Bundle>, repo: &str) -> Result<()> {
+pub(crate) fn check_may_declare_git(restricted: Option<&Bundle>, repo: &Remote) -> Result<()> {
     let Some(declaring) = refusing_nested_git(restricted) else {
         return Ok(());
     };
-    let repo = display_remote(repo);
     anyhow::bail!(
         "The bundle {} declares a Git include of its own \
          ('{repo}'), which would fetch and run configuration from a \
@@ -671,7 +659,7 @@ pub(crate) fn refuse_read(check: Result<()>) -> bool {
 /// entry is the bundle's, and the bundle it names is what the owner chose.
 pub(crate) fn hide_clone_detail(
     error: anyhow::Error,
-    repo: &str,
+    repo: &Remote,
     git_ref: &str,
     candidates: &[String],
     restricted: Option<&Bundle>,
@@ -689,7 +677,7 @@ pub(crate) fn hide_clone_detail(
     };
     tracing::debug!(
         error = format!("{error:#}"),
-        repo = %display_remote(repo),
+        repo = %repo,
         git_ref,
         "Failed to resolve a nested Git include"
     );
@@ -751,7 +739,7 @@ impl EffectiveGrants {
     /// The one rule in this module that shell completion deliberately does
     /// *not* mirror, because it fires on an already-loaded file and so changes
     /// no file's contents — see [`crate::config::task_names_for_completion`].
-    pub(crate) fn check(&self, file: &Path, wanted: Trust, repo: &str) -> Result<()> {
+    pub(crate) fn check(&self, file: &Path, wanted: Trust, repo: &Remote) -> Result<()> {
         let effective = match self.0.get(file) {
             // Loaded outside every boundary, so it is contained by nothing and
             // a grant would only ever have narrowed it. Nothing to lose.
@@ -776,7 +764,6 @@ impl EffectiveGrants {
             return Ok(());
         }
         let named = lost.join("' and '");
-        let repo = display_remote(repo);
         let (were, permission) = if lost.len() == 1 {
             ("was", "the permission")
         } else {

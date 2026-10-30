@@ -41,7 +41,6 @@ use ratect_core::diagnostics::{
 use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::exit_code::Word;
-use ratect_core::git_include::display_remote;
 use ratect_core::resources::Leftover;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
@@ -2171,12 +2170,7 @@ fn format_size(bytes: u64) -> String {
 /// entry's whole cache key — its directory under `~/.ratect/incl` — which
 /// tells apart two entries that differ only in credentials.
 fn quiet_include_line(entry: &ratect_core::git_include::CachedInclude) -> String {
-    format!(
-        "{}\t{}\t{}",
-        display_remote(&entry.remote),
-        entry.git_ref,
-        entry.key
-    )
+    format!("{}\t{}\t{}", entry.remote, entry.git_ref, entry.key)
 }
 
 /// A cached Git include as `ratect includes` prints it for a person: its
@@ -2185,9 +2179,8 @@ fn quiet_include_line(entry: &ratect_core::git_include::CachedInclude) -> String
 /// remote and ref — so only then is the start of its cache key added, enough
 /// to tell them apart and to find its directory under `~/.ratect/incl`.
 fn named_include(entry: &ratect_core::git_include::CachedInclude) -> String {
-    let shown = display_remote(&entry.remote);
-    let named = format!("{shown} at {}", entry.git_ref);
-    if shown == entry.remote {
+    let named = format!("{} at {}", entry.remote, entry.git_ref);
+    if !entry.remote.hides_credentials() {
         return named;
     }
     let key = entry.key.get(..12).unwrap_or(&entry.key);

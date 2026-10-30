@@ -77,7 +77,11 @@ async fn system_git_client_clones_and_checks_out_a_real_local_repository() {
     let destination = unique_temp_dir().join("clone");
 
     SystemGitClient
-        .clone_repo(&repo_dir.to_string_lossy(), "v1.0.0", &destination)
+        .clone_repo(
+            &Remote::from(&*repo_dir.to_string_lossy()),
+            "v1.0.0",
+            &destination,
+        )
         .await
         .unwrap();
 
@@ -96,7 +100,11 @@ async fn system_git_client_surfaces_a_clear_error_for_an_unknown_ref() {
     let destination = unique_temp_dir().join("clone");
 
     let result = SystemGitClient
-        .clone_repo(&repo_dir.to_string_lossy(), "does-not-exist", &destination)
+        .clone_repo(
+            &Remote::from(&*repo_dir.to_string_lossy()),
+            "does-not-exist",
+            &destination,
+        )
         .await;
 
     let message = result.unwrap_err().to_string();
@@ -114,7 +122,11 @@ async fn system_git_client_rejects_a_remote_starting_with_a_dash() {
     let destination = unique_temp_dir().join("clone");
 
     let result = SystemGitClient
-        .clone_repo("--upload-pack=touch pwned", "v1.0.0", &destination)
+        .clone_repo(
+            &Remote::from("--upload-pack=touch pwned"),
+            "v1.0.0",
+            &destination,
+        )
         .await;
 
     assert!(result.is_err());
@@ -132,7 +144,7 @@ async fn system_git_client_rejects_a_ref_starting_with_a_dash() {
 
     let result = SystemGitClient
         .clone_repo(
-            &repo_dir.to_string_lossy(),
+            &Remote::from(&*repo_dir.to_string_lossy()),
             "--upload-pack=touch pwned",
             &destination,
         )
@@ -160,7 +172,7 @@ async fn system_git_client_refuses_the_ext_transport() {
 
     let result = SystemGitClient
         .clone_repo(
-            &format!("ext::sh -c touch\\ {}", marker.display()),
+            &Remote::from(format!("ext::sh -c touch\\ {}", marker.display())),
             "v1.0.0",
             &destination,
         )
@@ -181,7 +193,7 @@ async fn system_git_client_leaves_transport_policy_to_git_itself() {
     // not by refusing it.
     let destination = unique_temp_dir().join("clone");
     let helper_error = SystemGitClient
-        .clone_repo("foo::bar", "v1.0.0", &destination)
+        .clone_repo(&Remote::from("foo::bar"), "v1.0.0", &destination)
         .await
         .unwrap_err()
         .to_string();
@@ -193,7 +205,7 @@ async fn system_git_client_leaves_transport_policy_to_git_itself() {
     assert!(!destination.exists());
 
     let ftp_error = SystemGitClient
-        .clone_repo("ftp://127.0.0.1:1/x", "v1.0.0", &destination)
+        .clone_repo(&Remote::from("ftp://127.0.0.1:1/x"), "v1.0.0", &destination)
         .await
         .unwrap_err()
         .to_string();
@@ -251,7 +263,11 @@ async fn system_git_client_does_not_fetch_a_file_url_submodule() {
     // uninitialized. The security property under test is that the
     // submodule's *content* was never fetched, checked below.
     SystemGitClient
-        .clone_repo(&repo_dir.to_string_lossy(), "v1.0.0", &destination)
+        .clone_repo(
+            &Remote::from(&*repo_dir.to_string_lossy()),
+            "v1.0.0",
+            &destination,
+        )
         .await
         .unwrap();
 
@@ -272,7 +288,7 @@ async fn ensure_cached_end_to_end_with_the_real_git_binary() {
     let cache = GitIncludeCache::for_test(cache_root.clone(), SystemGitClient, 1000);
 
     let working_copy = cache
-        .ensure_cached(&repo_dir.to_string_lossy(), "v1.0.0")
+        .ensure_cached(&Remote::from(&*repo_dir.to_string_lossy()), "v1.0.0")
         .await
         .unwrap();
 
@@ -287,10 +303,10 @@ async fn ensure_cached_end_to_end_with_the_real_git_binary() {
 
 #[test]
 fn cache_key_is_stable_and_distinguishes_remote_and_ref() {
-    let a = cache_key("https://example.com/repo.git", "v1.0.0");
-    let b = cache_key("https://example.com/repo.git", "v1.0.0");
-    let c = cache_key("https://example.com/repo.git", "v2.0.0");
-    let d = cache_key("https://example.com/other.git", "v1.0.0");
+    let a = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
+    let b = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
+    let c = cache_key(&Remote::from("https://example.com/repo.git"), "v2.0.0");
+    let d = cache_key(&Remote::from("https://example.com/other.git"), "v1.0.0");
 
     assert_eq!(a, b);
     assert_ne!(a, c);
@@ -303,8 +319,14 @@ fn cache_key_does_not_collide_across_the_remote_ref_boundary() {
     // joined the two fields with a bare `" @"` separator, so a
     // `remote` containing that separator could collide with a
     // differently-split (remote, ref) pair.
-    let a = cache_key("https://example.com/repo.git @evil-ref", "main");
-    let b = cache_key("https://example.com/repo.git", "evil-ref @main");
+    let a = cache_key(
+        &Remote::from("https://example.com/repo.git @evil-ref"),
+        "main",
+    );
+    let b = cache_key(
+        &Remote::from("https://example.com/repo.git"),
+        "evil-ref @main",
+    );
     assert_ne!(a, b);
 }
 
@@ -317,11 +339,11 @@ async fn ensure_cached_clones_once_and_reuses_the_cache_on_a_second_call() {
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000);
 
     let first = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
     let second = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -340,10 +362,10 @@ async fn ensure_cached_writes_an_info_sidecar_preserving_repo_and_bumping_last_u
     let cache = GitIncludeCache::for_test(root.clone(), git, 1000).with_version("4.5.6");
 
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     assert_eq!(working_copy, root.join(&key));
 
     let info = read_sidecar(&root, &key).await;
@@ -361,7 +383,7 @@ async fn ensure_cached_writes_an_info_sidecar_preserving_repo_and_bumping_last_u
     let cache2 =
         GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 2000).with_version("1.2.3");
     cache2
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
     let info2 = read_sidecar(&root, &key).await;
@@ -400,7 +422,7 @@ future_nested = 42
 /// Lays out one cache entry's files by hand: a working copy (if asked for)
 /// and a sidecar (if given), returning the entry's key.
 async fn prepare_entry(root: &Path, working_copy: bool, sidecar: Option<&str>) -> String {
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     tokio::fs::create_dir_all(root).await.unwrap();
     if working_copy {
         tokio::fs::create_dir_all(root.join(&key)).await.unwrap();
@@ -427,7 +449,7 @@ async fn ensure_cached_keeps_sidecar_keys_it_does_not_recognise() {
         GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 2000).with_version("1.2.3");
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -447,7 +469,7 @@ async fn ensure_cached_writes_a_fresh_sidecar_beside_a_working_copy_that_has_non
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 2000).with_version("1.2.3");
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -476,7 +498,7 @@ async fn ensure_cached_re_clones_a_missing_working_copy_and_keeps_its_sidecar() 
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 2000).with_version("1.2.3");
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -496,7 +518,7 @@ async fn ensure_cached_merges_last_used_into_a_sidecar_missing_a_known_field() {
     let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), 2000);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -518,7 +540,10 @@ async fn list_reads_a_sidecar_carrying_keys_it_does_not_recognise() {
 
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].key, key);
-    assert_eq!(listed[0].remote, "https://example.com/repo.git");
+    assert_eq!(
+        listed[0].remote.unredacted(),
+        "https://example.com/repo.git"
+    );
     assert_eq!(listed[0].git_ref, "v1.0.0");
     assert_eq!(listed[0].last_used, 1);
 
@@ -532,7 +557,7 @@ async fn ensure_cached_surfaces_a_clone_failure_and_does_not_leave_a_lock_file_b
     let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
 
     let result = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await;
 
     assert!(result.is_err());
@@ -541,7 +566,7 @@ async fn ensure_cached_surfaces_a_clone_failure_and_does_not_leave_a_lock_file_b
         .to_string()
         .contains("simulated clone failure"));
 
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     assert!(!root.join(format!("{key}.lock")).exists());
     assert!(!root.join(&key).exists());
 
@@ -559,7 +584,7 @@ async fn cloned_entry_with_a_stale_lock(
     git: FakeGitClient,
 ) -> (PathBuf, String, GitIncludeCache<FakeGitClient>) {
     let root = unique_temp_dir();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     tokio::fs::create_dir_all(root.join(&key)).await.unwrap();
     tokio::fs::write(root.join(format!("{key}.lock")), LOCK_CONTENT)
         .await
@@ -567,7 +592,7 @@ async fn cloned_entry_with_a_stale_lock(
     let info = CacheInfo {
         kind: "git".to_string(),
         repo: CacheInfoRepo {
-            remote: "https://example.com/repo.git".to_string(),
+            remote: Remote::from("https://example.com/repo.git"),
             git_ref: "v1.0.0".to_string(),
         },
         cloned_with_version: "0.0.0-earlier".to_string(),
@@ -591,7 +616,7 @@ async fn ensure_cached_ignores_a_stale_lock_beside_an_already_cloned_working_cop
     let (root, key, cache) = cloned_entry_with_a_stale_lock(git.clone()).await;
 
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -611,7 +636,7 @@ async fn ensure_cached_bumps_last_used_for_an_already_cloned_working_copy_beside
     let (root, key, cache) = cloned_entry_with_a_stale_lock(FakeGitClient::new()).await;
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -680,7 +705,7 @@ async fn cleanup_stale_removes_an_entry_beside_a_stale_lock_without_waiting_on_i
 /// carrying the current marker, as a holder that has since exited leaves it:
 /// its OS lock released with the process.
 async fn abandoned_lock(root: &Path) -> PathBuf {
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     tokio::fs::create_dir_all(root).await.unwrap();
     let lock_path = root.join(format!("{key}.lock"));
     tokio::fs::write(&lock_path, format!("{}\n", entry_lock::MARKER))
@@ -716,7 +741,7 @@ async fn ensure_cached_takes_over_an_abandoned_lock_and_clones_without_waiting()
 
     let start = Instant::now();
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -748,7 +773,7 @@ async fn a_load_after_clean_takes_over_the_abandoned_lock_clean_left() {
     );
     let start = Instant::now();
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -786,7 +811,7 @@ async fn a_lock_whose_holder_is_running_is_waited_on_announced_once_and_timed_ou
     cache.lock_timeout = Duration::from_millis(350);
 
     let error = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap_err()
         .to_string();
@@ -818,7 +843,7 @@ async fn a_lock_whose_holder_is_running_is_waited_on_announced_once_and_timed_ou
 async fn an_unmarked_lock_is_never_taken_over_and_its_timeout_names_the_file() {
     let root = unique_temp_dir();
     tokio::fs::create_dir_all(&root).await.unwrap();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let lock_path = root.join(format!("{key}.lock"));
     tokio::fs::write(&lock_path, b"").await.unwrap();
     std::fs::File::open(&lock_path)
@@ -831,7 +856,7 @@ async fn an_unmarked_lock_is_never_taken_over_and_its_timeout_names_the_file() {
     cache.lock_timeout = Duration::from_millis(250);
 
     let error = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap_err()
         .to_string();
@@ -867,7 +892,7 @@ async fn an_unmarked_lock_is_never_taken_over_and_its_timeout_names_the_file() {
 async fn a_first_look_at_a_lock_not_yet_marked_does_not_announce_an_unknown_holder() {
     let root = unique_temp_dir();
     tokio::fs::create_dir_all(&root).await.unwrap();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let lock_path = root.join(format!("{key}.lock"));
     tokio::fs::write(&lock_path, b"").await.unwrap();
     let holder_path = lock_path.clone();
@@ -888,7 +913,7 @@ async fn a_first_look_at_a_lock_not_yet_marked_does_not_announce_an_unknown_hold
     cache.lock_timeout = Duration::from_millis(350);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap_err();
 
@@ -929,9 +954,10 @@ async fn two_waiters_on_one_abandoned_lock_clone_once() {
     let git = fake_with_the_entry();
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000);
 
+    let remote = Remote::from("https://example.com/repo.git");
     let (first, second) = tokio::join!(
-        cache.ensure_cached("https://example.com/repo.git", "v1.0.0"),
-        cache.ensure_cached("https://example.com/repo.git", "v1.0.0"),
+        cache.ensure_cached(&remote, "v1.0.0"),
+        cache.ensure_cached(&remote, "v1.0.0"),
     );
 
     assert_eq!(first.unwrap(), second.unwrap());
@@ -1046,12 +1072,12 @@ fn staging_directories(root: &Path, key: &str) -> Vec<String> {
 #[tokio::test]
 async fn a_clone_that_loses_the_rename_uses_the_winners_working_copy() {
     let root = unique_temp_dir();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let git = fake_with_the_entry().losing_the_rename_to(root.join(&key));
     let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
 
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -1069,11 +1095,11 @@ async fn a_failed_clone_leaves_no_staging_directory() {
     let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new().failing("no"), 1000);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap_err();
 
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     assert_eq!(staging_directories(&root, &key), Vec::<String>::new());
 
     tokio::fs::remove_dir_all(&root).await.ok();
@@ -1085,8 +1111,8 @@ async fn a_failed_clone_leaves_no_staging_directory() {
 #[tokio::test]
 async fn the_next_holder_removes_its_entrys_leftover_staging_directories() {
     let root = unique_temp_dir();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
-    let other = cache_key("https://example.com/other.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
+    let other = cache_key(&Remote::from("https://example.com/other.git"), "v1.0.0");
     for name in [
         format!("{key}.tmp-leftover"),
         format!("{other}.tmp-leftover"),
@@ -1098,7 +1124,7 @@ async fn the_next_holder_removes_its_entrys_leftover_staging_directories() {
     let cache = GitIncludeCache::for_test(root.clone(), fake_with_the_entry(), 1000);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -1133,15 +1159,19 @@ async fn sidecar_left_by_a_load_racing_a_removal(
     let root = unique_temp_dir();
     let cache = GitIncludeCache::for_test(root.clone(), git, 1_000);
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let info_path = root.join(format!("{key}.toml"));
 
     cache.clean(None).await.unwrap();
     cache
-        .update_info_file("https://example.com/repo.git", "v1.0.0", &info_path)
+        .update_info_file(
+            &Remote::from("https://example.com/repo.git"),
+            "v1.0.0",
+            &info_path,
+        )
         .await
         .unwrap();
 
@@ -1160,7 +1190,7 @@ async fn the_next_load_re_clones_an_entry_removed_beneath_a_load() {
     let (root, key, cache) = sidecar_left_by_a_load_racing_a_removal(git.clone()).await;
 
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -1203,11 +1233,11 @@ async fn cache_with_two_entries(root: &std::path::Path) -> GitIncludeCache<FakeG
 
     // Cached at different times, so `last_used` differs.
     let old = GitIncludeCache::for_test(root.to_path_buf(), git.clone(), 1_000);
-    old.ensure_cached("https://example.com/old.git", "v1.0.0")
+    old.ensure_cached(&Remote::from("https://example.com/old.git"), "v1.0.0")
         .await
         .unwrap();
     let new = GitIncludeCache::for_test(root.to_path_buf(), git.clone(), 5_000);
-    new.ensure_cached("https://example.com/new.git", "v2.0.0")
+    new.ensure_cached(&Remote::from("https://example.com/new.git"), "v2.0.0")
         .await
         .unwrap();
 
@@ -1223,10 +1253,10 @@ async fn list_reports_each_entry_oldest_first_with_its_size() {
 
     assert_eq!(listed.len(), 2);
     // Oldest first: the order someone clearing space reads down.
-    assert_eq!(listed[0].remote, "https://example.com/old.git");
+    assert_eq!(listed[0].remote.unredacted(), "https://example.com/old.git");
     assert_eq!(listed[0].git_ref, "v1.0.0");
     assert_eq!(listed[0].last_used, 1_000);
-    assert_eq!(listed[1].remote, "https://example.com/new.git");
+    assert_eq!(listed[1].remote.unredacted(), "https://example.com/new.git");
     assert_eq!(listed[1].last_used, 5_000);
     // The fake writes a real file into each clone, so a size of zero
     // would mean the walk never happened.
@@ -1260,7 +1290,10 @@ async fn entries_sharing_a_second_are_listed_in_a_stable_order() {
     // One cache, so one clock reading: every entry lands on the same second.
     let cache = GitIncludeCache::for_test(root.clone(), git, 1_000);
     for remote in &remotes {
-        cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+        cache
+            .ensure_cached(&Remote::from(remote.as_str()), "v1.0.0")
+            .await
+            .unwrap();
     }
 
     let listed = cache.list().await.unwrap();
@@ -1301,10 +1334,13 @@ async fn clean_with_a_minimum_age_removes_only_entries_older_than_it() {
         .succeeded;
 
     assert_eq!(removed.len(), 1);
-    assert_eq!(removed[0].remote, "https://example.com/old.git");
+    assert_eq!(
+        removed[0].remote.unredacted(),
+        "https://example.com/old.git"
+    );
     let left = cache.list().await.unwrap();
     assert_eq!(left.len(), 1);
-    assert_eq!(left[0].remote, "https://example.com/new.git");
+    assert_eq!(left[0].remote.unredacted(), "https://example.com/new.git");
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
@@ -1348,7 +1384,10 @@ async fn refresh_re_clones_and_so_picks_up_a_moved_ref() {
         HashMap::from([("bundle.yml".to_string(), "old contents".to_string())]),
     );
     let cache = GitIncludeCache::for_test(root.clone(), before, 1_000);
-    let working_copy = cache.ensure_cached(remote, "main").await.unwrap();
+    let working_copy = cache
+        .ensure_cached(&Remote::from(remote), "main")
+        .await
+        .unwrap();
     assert_eq!(
         tokio::fs::read_to_string(working_copy.join("bundle.yml"))
             .await
@@ -1366,7 +1405,7 @@ async fn refresh_re_clones_and_so_picks_up_a_moved_ref() {
     assert_eq!(
         tokio::fs::read_to_string(
             cache
-                .ensure_cached(remote, "main")
+                .ensure_cached(&Remote::from(remote), "main")
                 .await
                 .unwrap()
                 .join("bundle.yml")
@@ -1380,7 +1419,7 @@ async fn refresh_re_clones_and_so_picks_up_a_moved_ref() {
     let refreshed = cache.refresh().await.unwrap().succeeded;
 
     assert_eq!(refreshed.len(), 1);
-    assert_eq!(refreshed[0].remote, remote);
+    assert_eq!(refreshed[0].remote.unredacted(), remote);
     assert_eq!(
         tokio::fs::read_to_string(working_copy.join("bundle.yml"))
             .await
@@ -1408,11 +1447,15 @@ async fn refresh_returns_an_entry_it_could_not_re_clone_as_failed() {
 
     let outcome = cache.refresh().await.unwrap();
 
-    let succeeded: Vec<_> = outcome.succeeded.iter().map(|e| &e.remote).collect();
+    let succeeded: Vec<_> = outcome
+        .succeeded
+        .iter()
+        .map(|e| e.remote.unredacted())
+        .collect();
     assert_eq!(succeeded, ["https://example.com/new.git"]);
     assert_eq!(outcome.failed.len(), 1);
     assert_eq!(
-        outcome.failed[0].entry.remote,
+        outcome.failed[0].entry.remote.unredacted(),
         "https://example.com/old.git"
     );
     assert_eq!(outcome.failed[0].entry.git_ref, "v1.0.0");
@@ -1435,7 +1478,10 @@ async fn clean_returns_an_entry_it_could_not_remove_as_failed() {
     // A file in a read-only directory can't be deleted, so neither can the
     // working copy holding it.
     let sealed = root
-        .join(cache_key("https://example.com/old.git", "v1.0.0"))
+        .join(cache_key(
+            &Remote::from("https://example.com/old.git"),
+            "v1.0.0",
+        ))
         .join("sealed");
     std::fs::create_dir(&sealed).unwrap();
     std::fs::write(sealed.join("file"), "").unwrap();
@@ -1445,11 +1491,15 @@ async fn clean_returns_an_entry_it_could_not_remove_as_failed() {
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
     let outcome = outcome.unwrap();
 
-    let succeeded: Vec<_> = outcome.succeeded.iter().map(|e| &e.remote).collect();
+    let succeeded: Vec<_> = outcome
+        .succeeded
+        .iter()
+        .map(|e| e.remote.unredacted())
+        .collect();
     assert_eq!(succeeded, ["https://example.com/new.git"]);
     assert_eq!(outcome.failed.len(), 1);
     assert_eq!(
-        outcome.failed[0].entry.remote,
+        outcome.failed[0].entry.remote.unredacted(),
         "https://example.com/old.git"
     );
     let cause = format!("{:#}", outcome.failed[0].error);
@@ -1468,10 +1518,10 @@ async fn cleanup_stale_removes_an_entry_unused_for_more_than_30_days() {
         FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
     let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let info_path = root.join(format!("{key}.toml"));
 
     let now = 1000 + STALE_AFTER.as_secs() + 1;
@@ -1491,10 +1541,10 @@ async fn cleanup_stale_keeps_an_entry_used_within_the_last_30_days() {
         FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
     let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let info_path = root.join(format!("{key}.toml"));
 
     let now = 1000 + STALE_AFTER.as_secs() - 1;
@@ -1527,7 +1577,7 @@ async fn cleanup_stale_skips_an_unparsable_info_file_and_removes_other_stale_ent
         FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
     let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
     let working_copy = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -1550,8 +1600,11 @@ async fn cached_entry_used_at(
 ) -> (String, PathBuf, PathBuf) {
     let git = FakeGitClient::new().with_files(remote, "v1.0.0", HashMap::new());
     let cache = GitIncludeCache::for_test(root.to_path_buf(), git, last_used);
-    let working_copy = cache.ensure_cached(remote, "v1.0.0").await.unwrap();
-    let key = cache_key(remote, "v1.0.0");
+    let working_copy = cache
+        .ensure_cached(&Remote::from(remote), "v1.0.0")
+        .await
+        .unwrap();
+    let key = cache_key(&Remote::from(remote), "v1.0.0");
     let info_path = root.join(format!("{key}.toml"));
     (key, working_copy, info_path)
 }
@@ -1676,7 +1729,7 @@ async fn a_directory_without_a_sidecar_is_neither_listed_nor_swept() {
         cached_entry_used_at(&root, "https://example.com/repo.git", 1_000).await;
     let in_progress = root.join(format!(
         "{}.tmp",
-        cache_key("https://example.com/other.git", "v1.0.0")
+        cache_key(&Remote::from("https://example.com/other.git"), "v1.0.0")
     ));
     tokio::fs::create_dir_all(&in_progress).await.unwrap();
 
@@ -1773,7 +1826,7 @@ async fn a_clone_is_announced_as_progress_and_followed_by_a_blank_line() {
         GitIncludeCache::for_test(root.clone(), fake_with_the_entry(), 1000).with_output(output);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -1791,14 +1844,14 @@ async fn a_load_that_finds_the_entry_cloned_prints_nothing() {
     let root = unique_temp_dir();
     let git = fake_with_the_entry();
     GitIncludeCache::for_test(root.clone(), git.clone(), 1000)
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
     let (output, stderr, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -1818,7 +1871,7 @@ async fn a_failed_clone_is_announced_but_not_followed_by_a_blank_line() {
         .with_output(output);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap_err();
 
@@ -1835,13 +1888,13 @@ async fn a_failed_clone_is_announced_but_not_followed_by_a_blank_line() {
 #[tokio::test]
 async fn a_clone_that_loses_its_rename_is_still_announced_as_complete() {
     let root = unique_temp_dir();
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let git = fake_with_the_entry().losing_the_rename_to(root.join(&key));
     let (output, _, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
     let cache = GitIncludeCache::for_test(root.clone(), git, 1000).with_output(output);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
 
@@ -1860,7 +1913,10 @@ async fn a_clone_that_loses_its_rename_is_still_announced_as_complete() {
 async fn a_load_that_waited_for_another_process_to_clone_does_not_announce_a_clone() {
     let root = unique_temp_dir();
     let (lock_path, held) = lock_held_by_a_running_holder(&root).await;
-    let working_copy = root.join(cache_key("https://example.com/repo.git", "v1.0.0"));
+    let working_copy = root.join(cache_key(
+        &Remote::from("https://example.com/repo.git"),
+        "v1.0.0",
+    ));
     let (output, stderr, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
     // Finishes its clone only once the load has announced its wait, so the
     // load can't find the working copy before it has waited.
@@ -1877,7 +1933,7 @@ async fn a_load_that_waited_for_another_process_to_clone_does_not_announce_a_clo
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
 
     cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1.0.0")
         .await
         .unwrap();
     holder.await.unwrap();
@@ -1896,9 +1952,9 @@ async fn a_load_that_waited_for_another_process_to_clone_does_not_announce_a_clo
 }
 
 /// #751: credentials in a remote are shown as `***`; everything else as
-/// written.
+/// written. #756: by `Display` and `Debug` alike.
 #[test]
-fn display_remote_hides_credentials_and_keeps_everything_else_as_written() {
+fn a_remote_shows_without_credentials_and_keeps_everything_else_as_written() {
     for (remote, shown) in [
         ("https://u:p@host/x.git", "https://***@host/x.git"),
         (
@@ -1917,8 +1973,44 @@ fn display_remote_hides_credentials_and_keeps_everything_else_as_written() {
         ("https://GitHub.com/O/r", "https://GitHub.com/O/r"),
         ("https://host/a@b", "https://host/a@b"),
     ] {
-        assert_eq!(display_remote(remote), shown, "{remote}");
+        let hides = remote != shown;
+        let remote = Remote::from(remote);
+        assert_eq!(remote.to_string(), shown, "{remote:?}");
+        assert_eq!(remote.hides_credentials(), hides, "{remote:?}");
+        assert_eq!(format!("{remote:?}"), format!("{shown:?}"));
     }
+}
+
+/// #756: what is stored, cloned and written out is the remote in full.
+#[test]
+fn a_remote_serialises_and_deserialises_in_full() {
+    #[derive(Serialize, Deserialize)]
+    struct Holder {
+        remote: Remote,
+    }
+    let full = "https://u:s3cret@host/r.git";
+
+    let written = toml::to_string(&Holder {
+        remote: Remote::from(full),
+    })
+    .unwrap();
+    assert_eq!(written, format!("remote = \"{full}\"\n"));
+    let read: Holder = toml::from_str(&written).unwrap();
+    assert_eq!(read.remote.unredacted(), full);
+}
+
+/// #756: the key is computed from the remote in full, exactly as before the
+/// remote had a type of its own, so an existing `~/.ratect/incl` entry is
+/// still found. The literal is from the release before that change.
+#[test]
+fn cache_key_of_a_credentialed_remote_is_unchanged() {
+    assert_eq!(
+        cache_key(
+            &Remote::from("https://u:s3cret@example.com/repo.git"),
+            "v1.0.0"
+        ),
+        "cec9a8a4477506dbdcb0efd5fbae6fc59bffdb8487eca0da9b59f51ee825f355"
+    );
 }
 
 /// #751: the progress line and the lock notice name the include without its
@@ -1928,7 +2020,10 @@ async fn the_clone_line_and_lock_notice_hide_a_remotes_credentials() {
     let remote = "https://u:s3cret@example.com/repo.git";
     let root = unique_temp_dir();
     tokio::fs::create_dir_all(&root).await.unwrap();
-    let lock_path = root.join(format!("{}.lock", cache_key(remote, "v1.0.0")));
+    let lock_path = root.join(format!(
+        "{}.lock",
+        cache_key(&Remote::from(remote), "v1.0.0")
+    ));
     tokio::fs::write(&lock_path, b"").await.unwrap();
     let git = FakeGitClient::new().with_files(
         remote,
@@ -1940,12 +2035,15 @@ async fn the_clone_line_and_lock_notice_hide_a_remotes_credentials() {
     cache.lock_timeout = Duration::from_millis(250);
 
     let timeout = cache
-        .ensure_cached(remote, "v1.0.0")
+        .ensure_cached(&Remote::from(remote), "v1.0.0")
         .await
         .unwrap_err()
         .to_string();
     tokio::fs::remove_file(&lock_path).await.unwrap();
-    cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+    cache
+        .ensure_cached(&Remote::from(remote), "v1.0.0")
+        .await
+        .unwrap();
 
     assert_eq!(git.clone_count(), 1, "cloned with the full remote");
     for shown in [timeout, stderr.contents(), progress.contents()] {
@@ -1965,7 +2063,7 @@ async fn system_git_client_hides_a_remotes_credentials_in_its_errors() {
 
     let error = SystemGitClient
         .clone_repo(
-            "https://u:s3cret@127.0.0.1:9/repo.git",
+            &Remote::from("https://u:s3cret@127.0.0.1:9/repo.git"),
             "v1.0.0",
             &destination,
         )
@@ -1993,13 +2091,16 @@ async fn refresh_reclones_a_credential_bearing_entry_with_its_full_remote() {
         HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
     );
     let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000);
-    cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+    cache
+        .ensure_cached(&Remote::from(remote), "v1.0.0")
+        .await
+        .unwrap();
 
     let refreshed = cache.refresh().await.unwrap().succeeded;
 
     assert_eq!(git.clone_count(), 2);
     assert_eq!(refreshed.len(), 1);
-    assert_eq!(refreshed[0].remote, remote);
+    assert_eq!(refreshed[0].remote.unredacted(), remote);
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
@@ -2011,7 +2112,7 @@ async fn refresh_reclones_a_credential_bearing_entry_with_its_full_remote() {
 async fn a_sidecar_that_fails_to_parse_is_reported_without_its_contents() {
     let remote = "https://u:s3cret@example.com/repo.git";
     let root = unique_temp_dir();
-    let key = cache_key(remote, "v1.0.0");
+    let key = cache_key(&Remote::from(remote), "v1.0.0");
     let sidecar = root.join(format!("{key}.toml"));
     tokio::fs::create_dir_all(root.join(&key)).await.unwrap();
     tokio::fs::write(&sidecar, format!("[repo]\nremote = \"{remote}\" oops\n"))
@@ -2021,7 +2122,10 @@ async fn a_sidecar_that_fails_to_parse_is_reported_without_its_contents() {
 
     let error = format!(
         "{:#}",
-        cache.ensure_cached(remote, "v1.0.0").await.unwrap_err()
+        cache
+            .ensure_cached(&Remote::from(remote), "v1.0.0")
+            .await
+            .unwrap_err()
     );
 
     assert_eq!(
@@ -2038,7 +2142,10 @@ async fn a_sidecar_that_fails_to_parse_is_reported_without_its_contents() {
     assert_eq!(describe_parse_error(&parsed, &wrong_type), "at line 2");
     // As the error says: deleted, it is written again.
     tokio::fs::remove_file(&sidecar).await.unwrap();
-    cache.ensure_cached(remote, "v1.0.0").await.unwrap();
+    cache
+        .ensure_cached(&Remote::from(remote), "v1.0.0")
+        .await
+        .unwrap();
     assert!(sidecar.exists());
 
     tokio::fs::remove_dir_all(&root).await.ok();
@@ -2048,7 +2155,7 @@ async fn a_sidecar_that_fails_to_parse_is_reported_without_its_contents() {
 async fn system_git_client_hides_credentials_when_refusing_a_remote_starting_with_a_dash() {
     let error = SystemGitClient
         .clone_repo(
-            "-https://u:s3cret@example.com/r.git",
+            &Remote::from("-https://u:s3cret@example.com/r.git"),
             "v1.0.0",
             &unique_temp_dir().join("clone"),
         )
@@ -2068,7 +2175,11 @@ async fn system_git_client_hides_credentials_when_a_checkout_fails() {
     let remote = format!("file://u:s3cret@localhost{}", repo_dir.display());
 
     let error = SystemGitClient
-        .clone_repo(&remote, "does-not-exist", &destination)
+        .clone_repo(
+            &Remote::from(remote.clone()),
+            "does-not-exist",
+            &destination,
+        )
         .await
         .unwrap_err()
         .to_string();
@@ -2091,7 +2202,7 @@ async fn system_git_client_hides_credentials_when_a_checkout_fails() {
 fn a_cached_include_debugs_without_its_credentials() {
     let entry = CachedInclude {
         key: "k".to_string(),
-        remote: "https://u:s3cret@host/r.git".to_string(),
+        remote: Remote::from("https://u:s3cret@host/r.git"),
         git_ref: "v1".to_string(),
         last_used: 0,
         path: PathBuf::from("/k"),
