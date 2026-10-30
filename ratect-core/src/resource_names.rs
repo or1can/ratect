@@ -25,9 +25,10 @@
 //! [decisions/0002](../../decisions/0002-runtime-ownership-labels.md)), and
 //! nothing parses a name to recover any of it. That is also why the suffix is
 //! not the run id — six characters is Batect's format, and the `run` label
-//! keeps the full one. A collision between two executions' suffixes is a
-//! Docker name conflict at creation, accepted as Batect accepts it, not
-//! retried.
+//! keeps the full one. A collision between two executions' suffixes is
+//! accepted as Batect accepts it, not retried: Docker refuses the second
+//! execution, at a point that depends on the daemon's version
+//! (`docs/task-lifecycle.md`'s Cross-task isolation, ratect#690).
 //!
 //! Neither the project name nor a container name is truncated or checked
 //! here: Batect's `limitTo` truncation has no production caller for these

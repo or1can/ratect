@@ -478,6 +478,18 @@ tables above:
   daemon too old for it, or without experimental features turned on, apply
   only below Docker 18.09, so none could fire on a daemon Ratect accepts, and
   they aren't ported.
+- **A task network name collision on Docker 20.10 to 24 fails later, and
+  leaves the second run's network behind.** Batect sets the network create
+  request's `CheckDuplicate` option, which has the daemon refuse a second
+  network with the same name. Ratect's Docker client has no such option: API
+  1.44 deprecated it, since Docker 25's daemon refuses a duplicate name
+  without being asked. So on an older daemon a run that draws another run's
+  suffix creates a second network of that name, then fails at container
+  creation or start rather than at network creation. Its network
+  stays, and `docker network rm <name>` refuses to remove either. Docker 25
+  and later refuse the duplicate network under Batect and Ratect alike. See
+  [Cross-task
+  isolation](task-lifecycle.md#cross-task-isolation).
 - **The daemon is first asked for its version, not pinged.** Ratect's first
   request is `/version`; Batect sends `/_ping` and then asks for the version,
   before running anything. The image builder — BuildKit or the classic one — is
