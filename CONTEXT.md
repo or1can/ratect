@@ -168,6 +168,20 @@ it relocates it, and every cache operation follows that link, as Batect's do:
 creating, mounting and removing alike. Someone who links it to storage shared
 with something else accepts that a clean removes what it finds there.
 
+**Entry lock** — what guards cloning one Git include into the Git include
+cache, so that only one process at a time writes that entry.
+
+**Holder** — the process that took an entry lock. A `git` it started is not
+part of it: a clone that outlives its holder can't be mistaken for a finished
+one, so nothing waits for it.
+
+**Abandoned lock** — an entry lock whose holder has exited. Defined
+by the holder, never by the lock's age: an old lock can still have a holder.
+"Stale" means something else — an entry nobody has used for 30 days, which
+the sweep removes — and is never said of a lock.
+
+The entry lock is [0023](decisions/0023-git-include-entry-lock.md)'s.
+
 ## Built images
 
 **Built image** — the image a container's `build_directory` produces, as
