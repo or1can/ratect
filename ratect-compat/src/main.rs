@@ -27,8 +27,8 @@ use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::exit_code::{InvalidOptionValue, Word};
 use ratect_core::git_include::GitIncludeCache;
 use ratect_core::ui::{
-    create_event_sink, select_output_style, ColorMode, Console, OutputStyle, ProgressStream,
-    TaskEvent, TerminalFacts,
+    create_event_sink, select_output_style, ColorMode, Console, LoadOutput, OutputStyle,
+    ProgressStream, TaskEvent, TerminalFacts,
 };
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -973,15 +973,16 @@ async fn run(
         return clean_caches(&args, cache_type, stdout, stderr).await;
     }
 
-    let project = load_project(&args.config_file).await?;
-
-    // Gathered once, here, and reused for both the `--list-tasks` quiet-
-    // format decision below and (inside `create_event_sink`) the real
-    // logger construction — rather than each querying stdout/TERM/console
-    // dimensions again on top of the other.
+    // Gathered once, here, and reused for the load's own output, the
+    // `--list-tasks` quiet-format decision below and (inside
+    // `create_event_sink`) the real logger construction — rather than each
+    // querying stdout/TERM/console dimensions again on top of the other.
     let terminal = TerminalFacts::gather();
     let requested_style = args.output.map(OutputStyle::from);
     let output_style = select_output_style(requested_style, args.no_color, &terminal, PROGRESS);
+
+    let load_output = LoadOutput::new(output_style, color_mode, PROGRESS);
+    let project = load_project(&args.config_file, &load_output).await?;
 
     if args.list_tasks {
         let listing = match output_style {

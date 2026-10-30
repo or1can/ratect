@@ -412,10 +412,19 @@ fn unlisted_differences(between: Between, case: &str, left: &Value, right: &Valu
 async fn each_twin_pair_evaluates_to_the_same_config_except_listed_divergences() {
     let mut problems = Vec::new();
     for case in cases() {
-        let yaml = load_project(&case.join("batect.yml")).await.unwrap();
-        let toml = load_project_native(&case.join("ratect.toml"), running_0_12())
-            .await
-            .unwrap();
+        let yaml = load_project(
+            &case.join("batect.yml"),
+            &ratect_core::ui::LoadOutput::default(),
+        )
+        .await
+        .unwrap();
+        let toml = load_project_native(
+            &case.join("ratect.toml"),
+            running_0_12(),
+            &ratect_core::ui::LoadOutput::default(),
+        )
+        .await
+        .unwrap();
         problems.extend(unlisted_differences(
             Between::Twins,
             case_name(&case),
@@ -497,12 +506,20 @@ async fn converting_each_twins_yaml_gives_its_toml_twins_config() {
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
             std::fs::write(target, &file.toml).unwrap();
         }
-        let from_converted = load_project_native(&copy.join("ratect.toml"), running_0_12())
-            .await
-            .unwrap();
-        let twin = load_project_native(&case.join("ratect.toml"), running_0_12())
-            .await
-            .unwrap();
+        let from_converted = load_project_native(
+            &copy.join("ratect.toml"),
+            running_0_12(),
+            &ratect_core::ui::LoadOutput::default(),
+        )
+        .await
+        .unwrap();
+        let twin = load_project_native(
+            &case.join("ratect.toml"),
+            running_0_12(),
+            &ratect_core::ui::LoadOutput::default(),
+        )
+        .await
+        .unwrap();
 
         problems.extend(unlisted_differences(
             Between::Converted,

@@ -871,6 +871,68 @@ impl EventSink for QuietEventLogger {
     }
 }
 
+/// What a config load prints itself. A load runs before either binary has
+/// created its event sink — the sink is built from the loaded project — so
+/// the load can't post [`TaskEvent`]s, and gets this instead. Same streams
+/// and styles as the sink (decisions/0017): a notice goes to stderr in every
+/// style, `-o quiet` included; progress goes to the binary's progress
+/// console, and nowhere under `quiet`. Waiting on a Git include's entry lock
+/// (decisions/0023) is a notice. Cheap to clone: every clone writes through
+/// the same two consoles.
+#[derive(Clone)]
+pub struct LoadOutput {
+    stderr: Arc<Console>,
+    progress: Option<Arc<Console>>,
+}
+
+impl LoadOutput {
+    /// `style` as the binary selected it, `progress` its progress stream.
+    pub fn new(style: OutputStyle, color_mode: ColorMode, progress: ProgressStream) -> Self {
+        Self {
+            stderr: Arc::new(Console::stderr(color_mode)),
+            progress: (style != OutputStyle::Quiet)
+                .then(|| Arc::new(Console::for_stream(progress, color_mode))),
+        }
+    }
+
+    pub fn notice(&self, message: &str) {
+        self.stderr.notice(message);
+    }
+
+    pub fn progress(&self, line: &str) {
+        if let Some(progress) = &self.progress {
+            progress.println(line);
+        }
+    }
+
+    /// Writes to the two buffers it returns, stderr's then progress's.
+    #[cfg(test)]
+    pub(crate) fn capturing(
+        style: OutputStyle,
+    ) -> (Self, test_support::SharedBuffer, test_support::SharedBuffer) {
+        let stderr = test_support::SharedBuffer::default();
+        let progress = test_support::SharedBuffer::default();
+        let output = Self {
+            stderr: Arc::new(Console::new(Box::new(stderr.clone()), false)),
+            progress: (style != OutputStyle::Quiet)
+                .then(|| Arc::new(Console::new(Box::new(progress.clone()), false))),
+        };
+        (output, stderr, progress)
+    }
+}
+
+/// For a load no binary chose a style for —
+/// [`Config::load_from_file`](crate::config::Config::load_from_file) and the
+/// Git include verbs: notices on stderr, no progress.
+impl Default for LoadOutput {
+    fn default() -> Self {
+        Self {
+            stderr: Arc::new(Console::stderr(ColorMode::Auto)),
+            progress: None,
+        }
+    }
+}
+
 /// Why cleanup began, when it isn't the task simply finishing — what the
 /// opening cleanup line names (decisions/0017): the task's own non-zero
 /// exit, or the step that failed and the container it failed for. The

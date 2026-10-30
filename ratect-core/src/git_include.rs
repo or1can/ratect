@@ -47,6 +47,16 @@
 //! `~/.ratect/incl` path and returns it only if the clone already exists —
 //! never cloning, locking, or touching the network — for offline callers
 //! (`config::task_names_for_completion`) that must not stall a shell `<TAB>`.
+//!
+//! A clone is staged in a `<key>.tmp-<unique>` directory of its own and
+//! renamed into place once complete, so no lock is needed for a working copy
+//! to be whole. The **entry lock** (CONTEXT.md's **Caches**) only stops two
+//! processes cloning the same entry at once: [`GitIncludeCache`] describes
+//! it, and the `entry_lock` submodule takes it. A lock whose **holder** has
+//! exited — killed during a first clone, say — is taken over by the next
+//! load that needs the entry, rather than blocking it until someone deletes
+//! the file, which Batect's would; a wait on a lock says so on stderr. See
+//! [decisions/0023](https://github.com/or1can/ratect/blob/main/decisions/0023-git-include-entry-lock.md).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -55,22 +65,27 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::Instant;
 
+use crate::ui::LoadOutput;
+
+mod entry_lock;
+
 /// Shells out to the system `git` binary, so tests can inject a fake
 /// instead of needing a real network and a real `git` — same shape as
 /// `docker.rs`'s `ContainerRuntime`.
 #[async_trait::async_trait]
 pub trait GitClient: Send + Sync {
     /// Clones `remote` at `ref`, checked out at `destination`.
-    /// `destination` is guaranteed not to exist yet — the caller
-    /// (`GitIncludeCache`) only calls this once, under its own lock, after
-    /// confirming that.
+    /// `destination` doesn't exist yet: it is a staging directory fresh to
+    /// this attempt, which the caller (`GitIncludeCache`) renames into place
+    /// once this returns, and removes if it fails.
     async fn clone_repo(&self, remote: &str, git_ref: &str, destination: &Path) -> Result<()>;
 }
 
-/// The real `GitClient`: `git clone --quiet --no-checkout` into a sibling
-/// temporary directory, `git checkout --recurse-submodules <ref>`, then an
-/// atomic rename into `destination` — the same argv sequence as Batect's
-/// own `GitClient` (no embedded Git library, kept dependency-light), with
+/// The real `GitClient`: `git clone --quiet --no-checkout` into
+/// `destination`, then `git checkout --recurse-submodules <ref>` — the same
+/// argv sequence as Batect's own `GitClient` (no embedded Git library, kept
+/// dependency-light), and like Batect's into a directory fresh to each
+/// attempt, renamed into place only once both have finished, with
 /// no transport restriction of its own, so git's protocol defaults and the
 /// user's own Git configuration apply as they do under Batect. It differs
 /// in refusing a `remote` or `ref` that starts with `-`, and in capturing
@@ -95,29 +110,9 @@ impl GitClient for SystemGitClient {
             anyhow::bail!("Git include 'ref' must not start with '-': '{git_ref}'");
         }
 
-        let parent = destination
-            .parent()
-            .context("Git include cache destination has no parent directory")?;
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("Failed to create directory {parent:?}"))?;
-
-        let temp_dir = parent.join(format!(
-            "{}.tmp",
-            destination
-                .file_name()
-                .context("Git include cache destination has no file name")?
-                .to_string_lossy()
-        ));
-        if temp_dir.exists() {
-            tokio::fs::remove_dir_all(&temp_dir)
-                .await
-                .with_context(|| format!("Failed to clean up stale directory {temp_dir:?}"))?;
-        }
-
         let clone_output = Command::new("git")
             .args(["clone", "--quiet", "--no-checkout", "--", remote])
-            .arg(&temp_dir)
+            .arg(destination)
             .output()
             .await
             .context("Failed to run 'git clone' — is git installed and on PATH?")?;
@@ -131,7 +126,7 @@ impl GitClient for SystemGitClient {
 
         let checkout_output = Command::new("git")
             .args(["-c", "advice.detachedHead=false", "-C"])
-            .arg(&temp_dir)
+            .arg(destination)
             // No `--` here: unlike `clone`, `checkout`'s `--` means "the
             // rest are pathspecs, not a ref" — adding one would break every
             // checkout (verified: `git checkout <ref> --` errors with
@@ -148,12 +143,6 @@ impl GitClient for SystemGitClient {
                 String::from_utf8_lossy(&checkout_output.stderr).trim()
             );
         }
-
-        tokio::fs::rename(&temp_dir, destination)
-            .await
-            .with_context(|| {
-                format!("Failed to move {temp_dir:?} into place at {destination:?}")
-            })?;
 
         Ok(())
     }
@@ -219,6 +208,45 @@ async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> bool {
         }
     }
     true
+}
+
+/// What follows an entry's key in the name of a staging directory a clone of
+/// it is made in: `<key>.tmp-<unique>`.
+const STAGING_INFIX: &str = ".tmp-";
+
+/// Removes every staging directory of the entry `key` in `root`. Only ever
+/// called under that entry's lock. Best-effort: one left behind is removed by
+/// the next holder.
+async fn remove_staging_directories(root: &Path, key: &str) {
+    let prefix = format!("{key}{STAGING_INFIX}");
+    let Ok(mut entries) = tokio::fs::read_dir(root).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+            remove_staging_directory(&entry.path()).await;
+        }
+    }
+}
+
+async fn remove_staging_directory(staging: &Path) {
+    if let Err(e) = tokio::fs::remove_dir_all(staging).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!("Failed to remove Git include staging directory {staging:?}: {e}");
+        }
+    }
+}
+
+/// `timeout` as a wait's notice and failure say it: whole minutes in words,
+/// anything else as `Duration` prints it.
+fn describe_wait(timeout: Duration) -> String {
+    match timeout.as_secs() {
+        60 if timeout.subsec_nanos() == 0 => "1 minute".to_string(),
+        secs if secs % 60 == 0 && timeout.subsec_nanos() == 0 && secs > 0 => {
+            format!("{} minutes", secs / 60)
+        }
+        _ => format!("{timeout:?}"),
+    }
 }
 
 /// Bytes on disk under `path`, following no symlinks and giving up quietly
@@ -348,15 +376,23 @@ impl CacheRoot {
 /// key) is never re-fetched; this is why users are expected to pin
 /// immutable tags/refs, not a corner being cut here.
 ///
-/// Guards the clone step with a per-cache-entry lock file (create-exclusive,
-/// polled, with a timeout), so concurrent `ratect` invocations targeting the
-/// same repo/ref are safe — matching Batect's own `LockingRepositoryCloner`.
+/// Correctness doesn't depend on any lock: each clone attempt stages into a
+/// directory of its own, renamed into place only once complete, so two clones
+/// of one entry at once can't mix, and an interrupted one is never used. The
+/// clone step is still guarded by the **entry lock**, `<key>.lock`, so that
+/// concurrent invocations don't clone the same repo/ref twice: an existence
+/// lock (create-exclusive, polled, given up after `lock_timeout`), as Batect's
+/// `LockingRepositoryCloner` takes and every older Ratect still does, carrying
+/// an OS lock and a format marker, so that a lock whose holder has exited is
+/// taken over rather than waited on. Removal never touches it. See
+/// [decisions/0023](https://github.com/or1can/ratect/blob/main/decisions/0023-git-include-entry-lock.md).
 pub struct GitIncludeCache<G: GitClient> {
     root: CacheRoot,
     git: G,
     clock: Clock,
     version: String,
     lock_timeout: Duration,
+    output: LoadOutput,
 }
 
 impl GitIncludeCache<SystemGitClient> {
@@ -369,6 +405,7 @@ impl GitIncludeCache<SystemGitClient> {
             clock: Box::new(real_now),
             version: env!("CARGO_PKG_VERSION").to_string(),
             lock_timeout: Duration::from_secs(5 * 60),
+            output: LoadOutput::default(),
         }
     }
 }
@@ -388,7 +425,15 @@ impl<G: GitClient> GitIncludeCache<G> {
             clock: Box::new(move || now),
             version: "0.0.0-test".to_string(),
             lock_timeout: Duration::from_secs(5),
+            output: LoadOutput::default(),
         }
+    }
+
+    /// Where a wait on an entry lock is announced — the loading binary's own,
+    /// rather than [`LoadOutput::default`].
+    pub fn with_output(mut self, output: LoadOutput) -> Self {
+        self.output = output;
+        self
     }
 
     /// Stands in for a different ratect version sharing the same cache, so a
@@ -402,7 +447,10 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// Ensures `remote` at `ref` is cloned into this cache, returning the
     /// clone's directory. Safe to call repeatedly (across processes, or
     /// concurrently) for the same `(remote, ref)` — later calls are no-ops
-    /// beyond bumping `last_used`.
+    /// beyond bumping `last_used`. A call that has to clone takes the entry
+    /// lock first: it takes over a lock whose holder has exited, and waits on
+    /// any other — announcing the wait on this cache's [`LoadOutput`] — for
+    /// up to `lock_timeout` (see `acquire_lock`).
     pub async fn ensure_cached(&self, remote: &str, git_ref: &str) -> Result<PathBuf> {
         let root = self.root.resolve()?;
         tokio::fs::create_dir_all(&root)
@@ -420,9 +468,11 @@ impl<G: GitClient> GitIncludeCache<G> {
         // `clone_if_missing` re-checks under the lock, for two callers racing
         // to clone the same entry.
         if !working_copy.exists() {
-            self.acquire_lock(&lock_path).await?;
-            let clone_result = self.clone_if_missing(remote, git_ref, &working_copy).await;
-            self.release_lock(&lock_path).await;
+            let lock = self.acquire_lock(&lock_path, remote, git_ref).await?;
+            let clone_result = self
+                .clone_if_missing(remote, git_ref, &root, &key, &working_copy)
+                .await;
+            self.release_lock(lock, &lock_path).await;
             clone_result?;
         }
 
@@ -431,54 +481,128 @@ impl<G: GitClient> GitIncludeCache<G> {
         Ok(working_copy)
     }
 
+    /// Under the entry lock. Removes every `<key>.tmp-*` first: under the
+    /// lock, any of them was left by an interrupted clone (decisions/0023's
+    /// Decision 7) — nothing else removes one, and nothing judges one by its
+    /// age. Then clones into a fresh one and renames it into place. Losing
+    /// that rename to a clone that finished first — one by a holder whose lock
+    /// this process took over, or by a waiter on a filesystem whose OS lock
+    /// works per host only — is not an error: the winner's working copy is as
+    /// good as this one, which is discarded.
     async fn clone_if_missing(
         &self,
         remote: &str,
         git_ref: &str,
+        root: &Path,
+        key: &str,
         destination: &Path,
     ) -> Result<()> {
         if destination.exists() {
             return Ok(());
         }
-        self.git.clone_repo(remote, git_ref, destination).await
-    }
+        remove_staging_directories(root, key).await;
 
-    async fn acquire_lock(&self, lock_path: &Path) -> Result<()> {
-        let start = Instant::now();
-        loop {
-            match tokio::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(lock_path)
-                .await
-            {
-                Ok(_) => return Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if start.elapsed() > self.lock_timeout {
-                        anyhow::bail!(
-                            "Timed out after {:?} waiting for lock file {:?} — another process may \
-                             be cloning the same repository.",
-                            self.lock_timeout,
-                            lock_path
-                        );
-                    }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-                Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("Failed to create lock file {lock_path:?}"))
-                }
+        let staging = root.join(format!(
+            "{key}{STAGING_INFIX}{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        if let Err(e) = self.git.clone_repo(remote, git_ref, &staging).await {
+            remove_staging_directory(&staging).await;
+            return Err(e);
+        }
+        match tokio::fs::rename(&staging, destination).await {
+            Ok(()) => Ok(()),
+            Err(_) if destination.is_dir() => {
+                remove_staging_directory(&staging).await;
+                Ok(())
+            }
+            Err(e) => {
+                remove_staging_directory(&staging).await;
+                Err(e).with_context(|| {
+                    format!("Failed to move {staging:?} into place at {destination:?}")
+                })
             }
         }
     }
 
-    /// Best-effort: a failure here just leaves a stale lock file behind.
-    /// Only cloning takes the lock — not a load once the working copy exists,
-    /// nor `remove_entry` — so that only times out a caller that still needs
-    /// to clone, as Batect's would.
-    async fn release_lock(&self, lock_path: &Path) {
-        if let Err(e) = tokio::fs::remove_file(lock_path).await {
-            tracing::warn!("Failed to remove Git include lock file {lock_path:?}: {e}");
+    /// Waits for the entry lock at `lock_path` until it is free or abandoned
+    /// — in either case taking it — or until `lock_timeout` has passed. The
+    /// first look that finds it held prints a notice saying so (Decision 8);
+    /// a wait that ends because the lock was released prints nothing more.
+    /// Except that a holder that can't be told running is announced on the
+    /// second look, not the first: a new holder creates its file before
+    /// taking the OS lock and marking it, and a first look in that gap would
+    /// otherwise announce a running holder as one that might be gone.
+    /// `remote` and `git_ref` name the include in what is printed.
+    async fn acquire_lock(
+        &self,
+        lock_path: &Path,
+        remote: &str,
+        git_ref: &str,
+    ) -> Result<entry_lock::EntryLock> {
+        let include = format!("Git include '{remote}' at '{git_ref}'");
+        let limit = describe_wait(self.lock_timeout);
+        let start = Instant::now();
+        let mut announced = false;
+        let mut held_looks = 0;
+        loop {
+            let path = lock_path.to_path_buf();
+            let found = tokio::task::spawn_blocking(move || entry_lock::attempt(&path))
+                .await
+                .context("Git include lock check panicked")?
+                .with_context(|| format!("Failed to create lock file {lock_path:?}"))?;
+            let holder_running = match found {
+                entry_lock::Attempt::Acquired(lock) => return Ok(lock),
+                entry_lock::Attempt::HeldByRunningHolder => true,
+                entry_lock::Attempt::HeldByUnknownHolder => false,
+            };
+            held_looks += 1;
+            if !announced && (holder_running || held_looks > 1) {
+                announced = true;
+                self.output.notice(&if holder_running {
+                    format!(
+                        "Waiting for another ratect process to finish cloning {include} \
+                         (giving up after {limit})."
+                    )
+                } else {
+                    format!(
+                        "Waiting for lock file {lock_path:?} on {include}: ratect can't tell \
+                         whether the process that holds it is still running (giving up \
+                         after {limit})."
+                    )
+                });
+            }
+            if start.elapsed() > self.lock_timeout {
+                if holder_running {
+                    anyhow::bail!(
+                        "Timed out after {limit} waiting for another ratect process to finish \
+                         cloning {include}. It is still running: wait for it to finish, or \
+                         try again."
+                    );
+                }
+                anyhow::bail!(
+                    "Timed out after {limit} waiting for lock file {lock_path:?} on {include}. \
+                     ratect can't tell whether the process that holds it is still running; \
+                     once no ratect process is cloning that include, it is safe to delete \
+                     that file."
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Best-effort: a failure here just leaves a lock file behind, which the
+    /// next waiter takes over once this process has exited (its OS lock goes
+    /// with it). Only cloning takes the lock — not a load once the working
+    /// copy exists, nor `remove_entry` — so that only times out a caller that
+    /// still needs to clone, as Batect's would.
+    async fn release_lock(&self, lock: entry_lock::EntryLock, lock_path: &Path) {
+        match tokio::task::spawn_blocking(move || lock.release()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("Failed to remove Git include lock file {lock_path:?}: {e}")
+            }
+            Err(e) => tracing::warn!("Git include lock release panicked for {lock_path:?}: {e}"),
         }
     }
 
@@ -696,13 +820,15 @@ impl<G: GitClient> GitIncludeCache<G> {
     }
 
     /// Removes one entry's working copy and sidecar, without taking the
-    /// per-entry lock `ensure_cached` clones under — as Batect's
+    /// entry lock `ensure_cached` clones under — as Batect's
     /// `GitRepositoryCache.delete` takes none either — and leaving any lock
-    /// file in place. Waiting for a clone in progress would only remove the
-    /// finished clone afterwards, and `SystemGitClient` builds one in
-    /// `<key>.tmp`, which this never touches, so there is nothing mid-clone to
-    /// protect; while a lock file left beside a complete clone would stall
-    /// every removal of that entry for the whole lock timeout. A load racing
+    /// file in place (decisions/0023's Decision 6): a lock whose holder has
+    /// exited is the next load's to take over, not removal's to guess at.
+    /// Waiting for a clone in progress would only remove the finished clone
+    /// afterwards, and a clone is built in a `<key>.tmp-*` staging directory,
+    /// which this never touches, so there is nothing mid-clone to protect;
+    /// while a lock file left beside a complete clone would stall every
+    /// removal of that entry for the whole lock timeout. A load racing
     /// this can still return the removed path and write a sidecar for it,
     /// with or without the lock: the next load re-clones it, or once stale
     /// the sweep removes the sidecar.
@@ -762,6 +888,7 @@ pub(crate) struct FakeGitClient {
     responses: FakeGitClientResponses,
     fail: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     clone_calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    winner: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>,
 }
 
 #[cfg(test)]
@@ -788,6 +915,14 @@ impl FakeGitClient {
     /// Makes every `clone_repo` call fail with `message`.
     pub(crate) fn failing(self, message: &str) -> Self {
         *self.fail.lock().unwrap() = Some(message.to_string());
+        self
+    }
+
+    /// Makes every `clone_repo` call lose its rename into place, as if a
+    /// concurrent clone had finished first: before returning, it also writes
+    /// `working_copy` holding a single file, `winner`.
+    pub(crate) fn losing_the_rename_to(self, working_copy: PathBuf) -> Self {
+        *self.winner.lock().unwrap() = Some(working_copy);
         self
     }
 
@@ -828,6 +963,12 @@ impl GitClient for FakeGitClient {
                 tokio::fs::create_dir_all(parent).await?;
             }
             tokio::fs::write(&path, content).await?;
+        }
+
+        let winner = self.winner.lock().unwrap().clone();
+        if let Some(working_copy) = winner {
+            tokio::fs::create_dir_all(&working_copy).await?;
+            tokio::fs::write(working_copy.join("winner"), "").await?;
         }
 
         Ok(())

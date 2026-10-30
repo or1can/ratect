@@ -125,6 +125,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use crate::include_trust::{self, Boundary, Bundle, BundleId, EffectiveGrants, Grants};
+use crate::ui::LoadOutput;
 
 /// Batect's one built-in config variable, resolvable via
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
@@ -5786,9 +5787,13 @@ fn collect_completion_task_names(
 /// A missing file is an error here rather than an empty config: every
 /// caller so far wants to fail fast, and doing it in one place means the
 /// message is identical whichever binary is running.
-pub async fn load_project(config_file: &Path) -> Result<LoadedProject> {
+///
+/// `output` is where the load prints what it has to say before the binary's
+/// event sink exists — a wait on a Git include's entry lock, say.
+pub async fn load_project(config_file: &Path, output: &LoadOutput) -> Result<LoadedProject> {
     check_config_file(config_file)?;
-    let loaded = Config::load_from_file(config_file).await?;
+    let git_cache = crate::git_include::GitIncludeCache::new().with_output(output.clone());
+    let loaded = Config::load_from_file_with_git_cache(config_file, &git_cache).await?;
     load_project_impl(config_file, ConfigFormat::Compat, loaded)
 }
 
@@ -5799,12 +5804,14 @@ pub async fn load_project(config_file: &Path) -> Result<LoadedProject> {
 /// (`written_for::check_bundle`). The root's own checks are the caller's,
 /// either side of this: [`crate::written_for::check`] before it, and
 /// [`crate::written_for::check_yaml_root`] after it for a YAML root.
+/// `output` as for [`load_project`].
 pub async fn load_project_native(
     config_file: &Path,
     running: crate::written_for::Version,
+    output: &LoadOutput,
 ) -> Result<LoadedProject> {
     check_config_file(config_file)?;
-    let git_cache = crate::git_include::GitIncludeCache::new();
+    let git_cache = crate::git_include::GitIncludeCache::new().with_output(output.clone());
     let loaded =
         Config::load_from_file_native_written_for(config_file, &git_cache, running).await?;
     load_project_impl(config_file, ConfigFormat::Native, loaded)
@@ -5816,9 +5823,12 @@ pub async fn load_project_native(
 /// ([decisions/0022](../../decisions/0022-written-for-refusal-says-what-applies.md)).
 /// It runs nothing, but fetches whatever a normal load would, Git bundles
 /// included.
-pub async fn load_project_native_for_trial(config_file: &Path) -> Result<LoadedProject> {
+pub async fn load_project_native_for_trial(
+    config_file: &Path,
+    output: &LoadOutput,
+) -> Result<LoadedProject> {
     check_config_file(config_file)?;
-    let git_cache = crate::git_include::GitIncludeCache::new();
+    let git_cache = crate::git_include::GitIncludeCache::new().with_output(output.clone());
     let loaded = Config::load_from_file_native_with_git_cache(config_file, &git_cache).await?;
     load_project_impl(config_file, ConfigFormat::Native, loaded)
 }

@@ -208,9 +208,13 @@ async fn each_owned_file_converts_beside_itself_with_its_includes_rewritten() {
     // Loaded natively, every path in the converted include resolves under
     // its own directory.
     write_converted(&converted);
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &crate::ui::LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     let whole = project
         .evaluate_whole_project(&HashMap::new(), |_| None)
         .unwrap();
@@ -531,9 +535,13 @@ async fn an_include_entry_names_the_converted_file_however_it_is_spelled() {
         converted.files[1].toml
     );
     write_converted(&converted);
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &crate::ui::LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     assert!(project.config.containers.contains_key("c"));
 }
 
@@ -656,9 +664,13 @@ async fn a_malformed_literal_converts_escaped_and_keeps_its_value() {
         .collect();
     assert_eq!(checks, vec![ConversionCheckKind::CompactVolumeExpression]);
 
-    let native = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let native = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &crate::ui::LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     let evaluated = native
         .evaluate(["app"], [], &HashMap::new(), |name: &str| {
             (name == "HOME").then(|| "/h".to_string())
@@ -724,9 +736,13 @@ async fn a_backslash_in_a_literal_field_converts_escaped_and_keeps_its_value() {
         ]
     );
 
-    let native = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let native = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &crate::ui::LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     let evaluated = native
         .evaluate(
             ["app", "tagged", "escaped"],

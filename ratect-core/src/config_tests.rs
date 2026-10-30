@@ -1437,13 +1437,19 @@ async fn a_refused_null_in_an_included_file_names_the_file_and_its_path() {
     for message in [
         format!(
             "{:#}",
-            load_project(&dir.join("batect.yml")).await.unwrap_err()
+            load_project(&dir.join("batect.yml"), &LoadOutput::default())
+                .await
+                .unwrap_err()
         ),
         format!(
             "{:#}",
-            load_project_native(&dir.join("ratect.toml"), running_0_12())
-                .await
-                .unwrap_err()
+            load_project_native(
+                &dir.join("ratect.toml"),
+                running_0_12(),
+                &LoadOutput::default()
+            )
+            .await
+            .unwrap_err()
         ),
     ] {
         assert!(
@@ -1741,7 +1747,12 @@ async fn an_error_in_an_included_file_is_located_in_the_include() {
     )
     .unwrap();
 
-    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    let message = format!(
+        "{:#}",
+        load_project(&config_path, &LoadOutput::default())
+            .await
+            .unwrap_err()
+    );
     assert!(
         message.contains("containers.yml")
             && message.contains("line 5, column 16")
@@ -1844,7 +1855,12 @@ async fn a_repeated_key_in_an_included_file_fails_the_project() {
     )
     .unwrap();
 
-    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    let message = format!(
+        "{:#}",
+        load_project(&config_path, &LoadOutput::default())
+            .await
+            .unwrap_err()
+    );
     assert!(
         message.contains("containers.yml") && message.contains("duplicate key \"app\""),
         "{message}"
@@ -2447,7 +2463,12 @@ async fn a_string_device_with_an_empty_options_segment_fails_to_load() {
     )
     .unwrap();
 
-    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    let message = format!(
+        "{:#}",
+        load_project(&config_path, &LoadOutput::default())
+            .await
+            .unwrap_err()
+    );
     assert!(
         message.contains(&invalid_mount_message("Device", "thing:thing:")),
         "{message}"
@@ -3145,7 +3166,12 @@ async fn a_string_volume_with_an_empty_options_segment_fails_to_load() {
     )
     .unwrap();
 
-    let message = format!("{:#}", load_project(&config_path).await.unwrap_err());
+    let message = format!(
+        "{:#}",
+        load_project(&config_path, &LoadOutput::default())
+            .await
+            .unwrap_err()
+    );
     assert!(
         message.contains(&invalid_mount_message("Volume", "thing:thing:")),
         "{message}"
@@ -4552,7 +4578,7 @@ async fn a_shared_cache_is_rejected_in_a_batect_yml() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"))
+    let err = load_project(&dir.join("batect.yml"), &LoadOutput::default())
         .await
         .expect_err("scope is native-only");
     std::fs::remove_dir_all(&dir).ok();
@@ -4795,7 +4821,7 @@ async fn even_a_project_scope_is_rejected_in_a_batect_yml() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"))
+    let err = load_project(&dir.join("batect.yml"), &LoadOutput::default())
         .await
         .expect_err("the field itself is native-only");
     std::fs::remove_dir_all(&dir).ok();
@@ -6023,7 +6049,7 @@ async fn load_compat_yaml(yaml: &str) -> Result<LoadedProject> {
     let dir = unique_temp_dir();
     let path = dir.join("batect.yml");
     std::fs::write(&path, yaml).unwrap();
-    let result = load_project(&path).await;
+    let result = load_project(&path, &LoadOutput::default()).await;
     std::fs::remove_dir_all(&dir).ok();
     result
 }
@@ -6605,7 +6631,7 @@ async fn load_native_toml(body: &str) -> Result<LoadedProject> {
     let dir = unique_temp_dir();
     let path = dir.join("ratect.toml");
     std::fs::write(&path, body).unwrap();
-    let result = load_project_native(&path, running_0_12()).await;
+    let result = load_project_native(&path, running_0_12(), &LoadOutput::default()).await;
     std::fs::remove_dir_all(&dir).ok();
     result
 }
@@ -6740,7 +6766,9 @@ run = { container = "app" }
 "#,
     )
     .unwrap();
-    let project = load_project_native(&path, running_0_12()).await.unwrap();
+    let project = load_project_native(&path, running_0_12(), &LoadOutput::default())
+        .await
+        .unwrap();
     let evaluated = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
@@ -6783,9 +6811,13 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     let evaluated = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
@@ -6835,7 +6867,12 @@ async fn load_native_including(
         ),
     )
     .unwrap();
-    let result = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
+    let result = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
     std::fs::remove_dir_all(&dir).ok();
     (fragment_path, result)
 }
@@ -6941,7 +6978,7 @@ async fn a_yaml_root_file_is_batect_shaped_even_under_the_native_binary() {
          stop_signal: SIGINT\ntasks:\n  t:\n    run:\n      container: app\n",
     )
     .unwrap();
-    let error = load_project_native(&path, running_0_12())
+    let error = load_project_native(&path, running_0_12(), &LoadOutput::default())
         .await
         .expect_err("a YAML root file keeps Batect's rules");
     let error = format!("{error:#}");
@@ -7075,7 +7112,9 @@ async fn a_batect_compatible_project_is_batect_compatible() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).ok();
     assert_eq!(project.dialect, Dialect::BatectCompatible);
 }
@@ -7114,9 +7153,13 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     let app = &project.config.containers["app"];
     assert_eq!(app.image.as_deref(), Some("alpine:3.18"));
     assert_eq!(app.working_directory.as_deref(), Some("/base"));
@@ -7222,7 +7265,9 @@ async fn extends_is_rejected_in_compat_mode() {
             "project_name: demo\ncontainers:\n  app:\n    extends: base\n    image: alpine\ntasks: {}\n",
         )
         .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'extends'"),
@@ -7475,7 +7520,9 @@ async fn setup_command_run_in_is_rejected_in_compat_mode() {
          command: ./seed.sh\n        run_in: seed-client\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("has a setup command using 'run_in'"),
@@ -7495,7 +7542,9 @@ async fn run_to_completion_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  migrate:\n    image: alpine\n    run_to_completion: true\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'run_to_completion'"),
@@ -7600,7 +7649,9 @@ async fn stop_signal_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    stop_signal: SIGINT\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'stop_signal'"),
@@ -7619,7 +7670,9 @@ async fn stop_grace_period_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    stop_grace_period: 30s\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'stop_grace_period'"),
@@ -7670,7 +7723,9 @@ async fn ulimits_are_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    ulimits:\n      - name: nofile\n        soft: 1024\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'ulimits'"),
@@ -7848,7 +7903,9 @@ async fn a_dns_entry_that_is_not_an_ip_address_is_rejected_as_native_only_in_com
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    dns:\n      - resolver.example.com\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'dns'"),
@@ -7875,7 +7932,9 @@ async fn dns_fields_are_rejected_in_compat_mode() {
             ),
         )
         .unwrap();
-        let err = load_project(&path).await.unwrap_err();
+        let err = load_project(&path, &LoadOutput::default())
+            .await
+            .unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
         assert!(
             format!("{err:#}").contains(&format!("uses '{field}'")),
@@ -8455,7 +8514,9 @@ async fn network_mode_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    network_mode: host\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'network_mode'"),
@@ -8927,7 +8988,9 @@ async fn external_health_check_is_rejected_in_compat_mode() {
         "project_name: demo\ncontainers:\n  api:\n    image: alpine\n    external_health_check:\n      type: tcp\n      port: 8080\ntasks: {}\n",
     )
     .unwrap();
-    let err = load_project(&path).await.unwrap_err();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         format!("{err:#}").contains("uses 'external_health_check'"),
@@ -9647,7 +9710,9 @@ tasks:
     .unwrap();
 
     let overrides = HashMap::from([("greeting".to_string(), "from-the-override".to_string())]);
-    let project = load_project(&config_path).await.unwrap();
+    let project = load_project(&config_path, &LoadOutput::default())
+        .await
+        .unwrap();
     let evaluated = project
         .evaluate(["build-env"], [], &overrides, no_host_env)
         .unwrap();
@@ -9714,7 +9779,9 @@ async fn load_project_evaluates_no_expression() {
     let config_path = dir.join("batect.yml");
     std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
 
-    let project = load_project(&config_path).await.unwrap();
+    let project = load_project(&config_path, &LoadOutput::default())
+        .await
+        .unwrap();
 
     let deploy = &project.config.containers["deploy"];
     assert_eq!(deploy.environment.as_ref().unwrap()["REGION"], "<region");
@@ -9741,7 +9808,9 @@ async fn evaluate_leaves_containers_it_was_not_asked_for_alone() {
     let dir = unique_temp_dir();
     let config_path = dir.join("batect.yml");
     std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
-    let project = load_project(&config_path).await.unwrap();
+    let project = load_project(&config_path, &LoadOutput::default())
+        .await
+        .unwrap();
 
     let evaluated = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
@@ -9769,7 +9838,9 @@ async fn an_unevaluable_value_names_its_container_field_and_expression() {
     let dir = unique_temp_dir();
     let config_path = dir.join("batect.yml");
     std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
-    let project = load_project(&config_path).await.unwrap();
+    let project = load_project(&config_path, &LoadOutput::default())
+        .await
+        .unwrap();
     let region = HashMap::from([("region".to_string(), "eu-west-2".to_string())]);
 
     // Each case supplies every variable but the one under test, so the
@@ -9827,7 +9898,9 @@ async fn evaluate_rejects_an_override_for_an_undeclared_config_variable() {
     let dir = unique_temp_dir();
     let config_path = dir.join("batect.yml");
     std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
-    let project = load_project(&config_path).await.unwrap();
+    let project = load_project(&config_path, &LoadOutput::default())
+        .await
+        .unwrap();
 
     let overrides = HashMap::from([("nope".to_string(), "x".to_string())]);
     let err = project
@@ -9864,7 +9937,7 @@ container = "app"
     };
 
     std::fs::write(&path, config("relative/home")).unwrap();
-    let err = load_project_native(&path, running_0_12())
+    let err = load_project_native(&path, running_0_12(), &LoadOutput::default())
         .await
         .unwrap_err();
     assert!(
@@ -9873,7 +9946,7 @@ container = "app"
     );
 
     std::fs::write(&path, config("$HOME_DIR")).unwrap();
-    let project = load_project_native(&path, running_0_12())
+    let project = load_project_native(&path, running_0_12(), &LoadOutput::default())
         .await
         .expect("an expression can't be judged before it is evaluated");
     let relative = |_: &str| Some("relative/home".to_string());
@@ -9909,7 +9982,9 @@ async fn evaluating_the_whole_project_reports_every_failure_and_keeps_the_rest()
     let dir = unique_temp_dir();
     let config_path = dir.join("batect.yml");
     std::fs::write(&config_path, ONE_CONTAINER_NEEDS_THE_MACHINE).unwrap();
-    let project = load_project(&config_path).await.unwrap();
+    let project = load_project(&config_path, &LoadOutput::default())
+        .await
+        .unwrap();
     let region = HashMap::from([("region".to_string(), "eu-west-2".to_string())]);
     // Everything but `$AWS_PROFILE` and `$CREDENTIALS`, two fields of one
     // container, and `$CI_TOKEN`, a task's.
@@ -9985,7 +10060,9 @@ run_as_current_user = { enabled = true, home_directory = "$HOME_DIR" }
 "#,
     )
     .unwrap();
-    let project = load_project_native(&path, running_0_12()).await.unwrap();
+    let project = load_project_native(&path, running_0_12(), &LoadOutput::default())
+        .await
+        .unwrap();
 
     let relative = |_: &str| Some("relative/home".to_string());
     let whole = project
@@ -10011,7 +10088,7 @@ run_as_current_user = { enabled = true, home_directory = "$HOME_DIR" }
 
 #[tokio::test]
 async fn load_project_fails_fast_when_the_config_file_is_missing() {
-    let error = load_project(Path::new("/nonexistent/batect.yml"))
+    let error = load_project(Path::new("/nonexistent/batect.yml"), &LoadOutput::default())
         .await
         .expect_err("a missing config file should be an error, not an empty config");
     assert!(
@@ -10349,7 +10426,10 @@ async fn load_compat_with(
     for (name, body) in files {
         std::fs::write(dir.join(name), body).unwrap();
     }
-    (load_project(&dir.join("batect.yml")).await, dir)
+    (
+        load_project(&dir.join("batect.yml"), &LoadOutput::default()).await,
+        dir,
+    )
 }
 
 /// Batect's `checkForConfigurationOnlyAllowedInRootFile`, run on every
@@ -10468,9 +10548,13 @@ async fn native_includes_follow_the_same_rules() {
         "project_name = \"demo\"\ninclude = [{ path = \"extra.toml\" }]\n",
     )
     .unwrap();
-    load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -10521,7 +10605,9 @@ async fn ratect_version_in_a_yaml_file_is_an_error() {
     .unwrap();
     let error = format!(
         "{:#}",
-        load_project(&dir.join("batect.yml")).await.unwrap_err()
+        load_project(&dir.join("batect.yml"), &LoadOutput::default())
+            .await
+            .unwrap_err()
     );
     assert!(error.contains("'ratect_version'"), "{error}");
     std::fs::remove_dir_all(&dir).unwrap();
@@ -13551,9 +13637,13 @@ run = { container = "app" }
     )
     .unwrap();
 
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     let defaulted = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap();
@@ -13587,7 +13677,7 @@ async fn an_image_expression_is_rejected_in_a_batect_yml() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"))
+    let err = load_project(&dir.join("batect.yml"), &LoadOutput::default())
         .await
         .expect_err("an expression here would not survive a move back to batect");
     let err = format!("{err:#}");
@@ -13613,7 +13703,7 @@ async fn an_ordinary_image_still_loads_in_a_batect_yml() {
         )
         .unwrap();
 
-        let project = load_project(&dir.join("batect.yml"))
+        let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
             .await
             .unwrap_or_else(|e| panic!("{image} should still load: {e:#}"));
         assert_eq!(
@@ -13640,7 +13730,7 @@ async fn the_reported_image_expression_does_not_depend_on_hashmap_order() {
 
     let mut messages = std::collections::HashSet::new();
     for _ in 0..32 {
-        let err = load_project(&dir.join("batect.yml"))
+        let err = load_project(&dir.join("batect.yml"), &LoadOutput::default())
             .await
             .expect_err("both containers use an expression");
         messages.insert(format!("{err:#}"));
@@ -13672,7 +13762,7 @@ async fn an_image_expression_is_rejected_even_on_an_unreferenced_container() {
     )
     .unwrap();
 
-    let err = load_project(&dir.join("batect.yml"))
+    let err = load_project(&dir.join("batect.yml"), &LoadOutput::default())
         .await
         .expect_err("the check is whole-file, not per-used-container");
     let err = format!("{err:#}");
@@ -13995,7 +14085,9 @@ async fn a_reference_to_an_undeclared_container_is_rejected_when_the_file_loads(
         let dir = unique_temp_dir();
         let path = dir.join("batect.yml");
         std::fs::write(&path, format!("project_name: demo\n{yaml}")).unwrap();
-        let err = load_project(&path).await.unwrap_err();
+        let err = load_project(&path, &LoadOutput::default())
+            .await
+            .unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(format!("{err:#}"), expected, "compat, for:\n{yaml}");
     }
@@ -14157,7 +14249,9 @@ async fn a_batect_format_home_directory_is_not_an_expression() {
          home_directory: /home/$RATECT_462_UNSET\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
@@ -14193,9 +14287,13 @@ async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
          run_as_current_user = { enabled = true, home_directory = \"/home/<user\" }\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
@@ -14230,9 +14328,13 @@ async fn an_inherited_batect_format_home_directory_stays_literal() {
          [containers.child]\nextends = \"base\"\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["child"], [], &HashMap::new(), no_host_env)
@@ -14261,7 +14363,9 @@ async fn a_literal_batect_format_home_directory_is_still_checked() {
     .unwrap();
     let error = format!(
         "{:#}",
-        load_project(&dir.join("batect.yml")).await.unwrap_err()
+        load_project(&dir.join("batect.yml"), &LoadOutput::default())
+            .await
+            .unwrap_err()
     );
     std::fs::remove_dir_all(&dir).unwrap();
     assert!(error.contains("'$HOME/me'"), "{error}");
@@ -14280,7 +14384,9 @@ async fn a_batect_format_compact_volume_host_path_is_not_an_expression() {
          - $RATECT_379_UNSET/x:/c\n      - <undeclared:/d:ro\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
@@ -14308,7 +14414,9 @@ async fn a_batect_format_object_volume_host_path_is_still_an_expression() {
          - local: $RATECT_379_SET/x\n        container: /c\n      - ~/.cache/tool:/cache\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let host_env = |name: &str| (name == "RATECT_379_SET").then(|| "set".to_string());
     let evaluated = project
@@ -14344,9 +14452,13 @@ async fn a_compact_volume_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
          [containers.from-toml]\nimage = \"alpine:3.18\"\nvolumes = [\"<sub:/c\"]\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
@@ -14478,7 +14590,9 @@ async fn a_literal_volume_path_containing_a_nul_is_not_a_valid_path() {
          volumes:\n      - \"/tmp/ab\\0cd:/data\"\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let err = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
@@ -14503,7 +14617,9 @@ async fn an_expression_volume_path_evaluating_to_a_nul_is_not_a_valid_path() {
          volumes:\n      - local: <badpath\n        container: /data\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let err = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
@@ -14527,7 +14643,9 @@ async fn a_build_directory_containing_a_nul_is_not_a_valid_path() {
         "project_name: demo\ncontainers:\n  app:\n    build_directory: \"ab\\0cd\"\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let err = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
@@ -14554,7 +14672,9 @@ async fn an_include_path_containing_a_nul_is_not_a_valid_path() {
         "project_name: demo\ninclude:\n  - \"ab\\0cd.yml\"\n",
     )
     .unwrap();
-    let err = load_project(&dir.join("batect.yml")).await.unwrap_err();
+    let err = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).unwrap();
     let message = format!("{err:#}");
     assert!(
@@ -14574,7 +14694,9 @@ async fn an_expression_holding_a_nul_is_escaped_where_it_is_quoted() {
          volumes:\n      - local: \"/tmp/ab\\0$RATECT_365\"\n        container: /data\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let env = |_: &str| Some("cd".to_string());
     let err = project
@@ -14602,7 +14724,9 @@ async fn a_home_directory_refused_for_a_control_character_quotes_it_escaped() {
          run_as_current_user:\n      enabled: true\n      home_directory: \"/home/a\\nb\"\n",
     )
     .unwrap();
-    let err = load_project(&dir.join("batect.yml")).await.unwrap_err();
+    let err = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap_err();
     std::fs::remove_dir_all(&dir).unwrap();
     let message = format!("{err:#}");
     assert!(
@@ -14621,7 +14745,9 @@ async fn a_value_that_cannot_be_evaluated_is_quoted_escaped() {
          volumes:\n      - local: \"/tmp/ab\\0$RATECT_365_UNSET\"\n        container: /data\n",
     )
     .unwrap();
-    let project = load_project(&dir.join("batect.yml")).await.unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let err = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
@@ -14722,9 +14848,13 @@ async fn an_inherited_compact_volume_keeps_its_suppliers_format() {
          [containers.from-toml]\nextends = \"toml-base\"\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
@@ -14814,9 +14944,9 @@ async fn the_load_error(file_name: &str, body: &str) -> String {
     std::fs::write(&path, body).unwrap();
     let load = || async {
         let result = if file_name == "ratect.toml" {
-            load_project_native(&path, running_0_12()).await
+            load_project_native(&path, running_0_12(), &LoadOutput::default()).await
         } else {
-            load_project(&path).await
+            load_project(&path, &LoadOutput::default()).await
         };
         format!("{:#}", result.unwrap_err())
     };
@@ -14874,7 +15004,12 @@ async fn a_container_without_an_image_source_is_one_sentence_before_its_origin()
         let path = dir.join("batect.yml");
         std::fs::write(&path, yaml).unwrap();
 
-        let error = format!("{:#}", load_project(&path).await.unwrap_err());
+        let error = format!(
+            "{:#}",
+            load_project(&path, &LoadOutput::default())
+                .await
+                .unwrap_err()
+        );
 
         assert_eq!(
             error,
@@ -14924,7 +15059,7 @@ async fn a_task_without_run_may_customise_its_prerequisites_containers() {
     let dir = unique_temp_dir();
     let path = dir.join("batect.yml");
     std::fs::write(&path, yaml).unwrap();
-    let result = load_project(&path).await;
+    let result = load_project(&path, &LoadOutput::default()).await;
     std::fs::remove_dir_all(&dir).ok();
     result.expect("a run-less task's customisations aren't checked against a main container");
 }
@@ -14941,7 +15076,7 @@ async fn evaluating_several_bad_values_reports_the_first_declared() {
         "project_name: demo\ncontainers:\n  main: {image: alpine, dependencies: [zz, aa]}\n  zz: {image: alpine, environment: {A: $UNSET}}\n  aa: {image: alpine, environment: {A: $UNSET}}\ntasks:\n  t:\n    run: {container: main}\n    customise:\n      zz: {environment: {B: $UNSET}}\n      aa: {environment: {B: $UNSET}}\n",
     )
     .unwrap();
-    let project = load_project(&path).await.unwrap();
+    let project = load_project(&path, &LoadOutput::default()).await.unwrap();
     std::fs::remove_dir_all(&dir).ok();
 
     let error = project
@@ -15093,8 +15228,13 @@ impl Twin {
         let dir = unique_temp_dir();
         std::fs::write(dir.join("batect.yml"), self.yaml).unwrap();
         std::fs::write(dir.join("ratect.toml"), self.toml).unwrap();
-        let yaml = load_project(&dir.join("batect.yml")).await;
-        let toml = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
+        let yaml = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
+        let toml = load_project_native(
+            &dir.join("ratect.toml"),
+            running_0_12(),
+            &LoadOutput::default(),
+        )
+        .await;
         std::fs::remove_dir_all(&dir).unwrap();
         [("batect.yml", yaml), ("ratect.toml", toml)]
     }
@@ -15213,10 +15353,25 @@ async fn a_malformed_value_in_a_literal_field_loads() {
         "project_name = \"demo\"\n\n[containers.app]\nimage = 'img'\nvolumes = ['a$:/x']\n",
     )
     .unwrap();
-    let compat = load_project(&dir.join("batect.yml")).await;
-    let native = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
-    let image = load_project_native(&dir.join("image.toml"), running_0_12()).await;
-    let volume = load_project_native(&dir.join("volume.toml"), running_0_12()).await;
+    let compat = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
+    let native = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
+    let image = load_project_native(
+        &dir.join("image.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
+    let volume = load_project_native(
+        &dir.join("volume.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
     std::fs::remove_dir_all(&dir).unwrap();
 
     for (format, loaded) in [("batect.yml", compat), ("included .yml", native)] {
@@ -15356,9 +15511,13 @@ async fn an_inherited_batect_format_image_stays_literal() {
          [containers.child]\nextends = \"base\"\n",
     )
     .unwrap();
-    let project = load_project_native(&dir.join("ratect.toml"), running_0_12())
-        .await
-        .unwrap();
+    let project = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
         .evaluate(["child"], [], &HashMap::new(), no_host_env)
@@ -15424,12 +15583,20 @@ async fn a_loaded_project_lists_the_toml_files_it_read() {
     )
     .unwrap();
     std::fs::write(dir.join("alone.yml"), "project_name: demo\n").unwrap();
-    let with_toml = load_project_native(&dir.join("batect.yml"), running_0_12())
-        .await
-        .unwrap();
-    let yaml_alone = load_project_native(&dir.join("alone.yml"), running_0_12())
-        .await
-        .unwrap();
+    let with_toml = load_project_native(
+        &dir.join("batect.yml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
+    let yaml_alone = load_project_native(
+        &dir.join("alone.yml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let [first, second] = with_toml.toml_files() else {
         panic!("{:?}", with_toml.toml_files());
@@ -15591,8 +15758,13 @@ async fn a_name_batect_refuses_in_an_included_file_fails_the_load() {
     )
     .unwrap();
     std::fs::write(dir.join("1.toml"), "[tasks.'a!a']\n").unwrap();
-    let yaml = load_project(&dir.join("batect.yml")).await;
-    let toml = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
+    let yaml = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
+    let toml = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
     std::fs::remove_dir_all(&dir).ok();
 
     let yaml = format!("{:#}", yaml.expect_err("batect.yml loaded"));
@@ -15657,7 +15829,12 @@ async fn a_refused_name_in_a_native_projects_yaml_include_is_located_at_its_valu
         "tasks:\n  'a*':\n    description: x\n",
     )
     .unwrap();
-    let error = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
+    let error = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
     std::fs::remove_dir_all(&dir).ok();
 
     let error = format!("{:#}", error.expect_err("ratect.toml loaded"));
@@ -16210,8 +16387,13 @@ async fn a_container_name_that_isnt_an_image_name_component_in_an_included_file_
         "[containers.'a:b']\nimage = \"alpine\"\n",
     )
     .unwrap();
-    let yaml = load_project(&dir.join("batect.yml")).await;
-    let toml = load_project_native(&dir.join("ratect.toml"), running_0_12()).await;
+    let yaml = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
+    let toml = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
     std::fs::remove_dir_all(&dir).ok();
 
     let yaml = format!("{:#}", yaml.expect_err("batect.yml loaded"));
@@ -16287,7 +16469,7 @@ async fn a_null_project_name_is_left_out_rather_than_checked() {
     )
     .unwrap();
     std::fs::write(dir.join("1.yml"), "project_name:\n").unwrap();
-    let included = load_project(&dir.join("batect.yml")).await;
+    let included = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
     std::fs::remove_dir_all(&dir).ok();
     included.unwrap_or_else(|e| panic!("a null project_name in an include: {e:#}"));
 
@@ -16304,7 +16486,7 @@ async fn load_project_in(dir_name: &str, yaml: &str) -> Result<LoadedProject> {
     let dir = scratch.join(dir_name);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("batect.yml"), yaml).unwrap();
-    let result = load_project(&dir.join("batect.yml")).await;
+    let result = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
     std::fs::remove_dir_all(&scratch).ok();
     result
 }
@@ -16357,7 +16539,11 @@ async fn an_inferred_project_name_comes_from_the_cleaned_path() {
     let dir = scratch.join("myproj");
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     std::fs::write(dir.join("batect.yml"), NAMELESS_PROJECT).unwrap();
-    let dotted = load_project(&dir.join("sub").join("..").join(".").join("batect.yml")).await;
+    let dotted = load_project(
+        &dir.join("sub").join("..").join(".").join("batect.yml"),
+        &LoadOutput::default(),
+    )
+    .await;
     std::fs::remove_dir_all(&scratch).ok();
     let project = dotted.unwrap_or_else(|e| panic!("{e:#}"));
     assert_eq!(project.config.project_name, "myproj");
@@ -16412,7 +16598,7 @@ async fn an_explicit_project_name_wins_over_the_directory_name() {
     )
     .unwrap();
     std::fs::write(dir.join("extra.yml"), NAMELESS_PROJECT).unwrap();
-    let loaded = load_project(&dir.join("batect.yml")).await;
+    let loaded = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
     std::fs::remove_dir_all(&scratch).ok();
     assert_eq!(
         loaded
@@ -16661,7 +16847,7 @@ async fn an_unparseable_command_in_an_included_file_fails_the_load() {
         "containers:\n  extra:\n    image: alpine:3.18\n    command: \"'\"\n",
     )
     .unwrap();
-    let result = load_project(&dir.join("batect.yml")).await;
+    let result = load_project(&dir.join("batect.yml"), &LoadOutput::default()).await;
     std::fs::remove_dir_all(&dir).ok();
 
     let message = format!("{:#}", result.unwrap_err());

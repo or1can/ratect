@@ -99,8 +99,11 @@ async fn system_git_client_surfaces_a_clear_error_for_an_unknown_ref() {
         .clone_repo(&repo_dir.to_string_lossy(), "does-not-exist", &destination)
         .await;
 
-    assert!(result.is_err());
-    assert!(!destination.exists());
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains("Could not check out reference 'does-not-exist'"),
+        "{message}"
+    );
 
     std::fs::remove_dir_all(&repo_dir).ok();
     std::fs::remove_dir_all(destination.parent().unwrap()).ok();
@@ -545,28 +548,6 @@ async fn ensure_cached_surfaces_a_clone_failure_and_does_not_leave_a_lock_file_b
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
-#[tokio::test]
-async fn acquire_lock_times_out_if_the_lock_file_is_never_released() {
-    let root = unique_temp_dir();
-    tokio::fs::create_dir_all(&root).await.unwrap();
-    let git = FakeGitClient::new();
-    let mut cache = GitIncludeCache::for_test(root.clone(), git, 1000);
-    cache.lock_timeout = Duration::from_millis(250);
-
-    let key = cache_key("https://example.com/repo.git", "v1.0.0");
-    let lock_path = root.join(format!("{key}.lock"));
-    tokio::fs::write(&lock_path, b"").await.unwrap();
-
-    let result = cache
-        .ensure_cached("https://example.com/repo.git", "v1.0.0")
-        .await;
-
-    assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Timed out"));
-
-    tokio::fs::remove_dir_all(&root).await.ok();
-}
-
 const LOCK_CONTENT: &[u8] = b"left behind by a killed process";
 
 /// A cache whose entry `https://example.com/repo.git`@`v1.0.0` is already
@@ -695,23 +676,449 @@ async fn cleanup_stale_removes_an_entry_beside_a_stale_lock_without_waiting_on_i
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
-/// Removal doesn't wait on the lock, but the re-clone still does: a leftover
-/// lock blocks a clone of its entry, as Batect's does, so the entry is left
-/// removed and not reported as refreshed — the next load clones it once the
-/// lock is gone. That wait rules out timing the removal, so the files being
-/// gone stands in for it: a removal that waited on the lock would time out
-/// and leave them.
+/// A lock file at `root`'s entry for `https://example.com/repo.git`@`v1.0.0`
+/// carrying the current marker, as a holder that has since exited leaves it:
+/// its OS lock released with the process.
+async fn abandoned_lock(root: &Path) -> PathBuf {
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    tokio::fs::create_dir_all(root).await.unwrap();
+    let lock_path = root.join(format!("{key}.lock"));
+    tokio::fs::write(&lock_path, format!("{}\n", entry_lock::MARKER))
+        .await
+        .unwrap();
+    lock_path
+}
+
+/// The same lock with its holder still running: the returned file holds its
+/// OS lock until dropped.
+async fn lock_held_by_a_running_holder(root: &Path) -> (PathBuf, std::fs::File) {
+    let lock_path = abandoned_lock(root).await;
+    let file = std::fs::File::open(&lock_path).unwrap();
+    file.lock().unwrap();
+    (lock_path, file)
+}
+
+fn fake_with_the_entry() -> FakeGitClient {
+    FakeGitClient::new().with_files(
+        "https://example.com/repo.git",
+        "v1.0.0",
+        HashMap::from([("bundle.yml".to_string(), "tasks: {}".to_string())]),
+    )
+}
+
 #[tokio::test]
-async fn refresh_removes_an_entry_beside_a_stale_lock_but_its_re_clone_is_blocked_by_it() {
-    let git =
-        FakeGitClient::new().with_files("https://example.com/repo.git", "v1.0.0", HashMap::new());
-    let (root, key, cache) = cloned_entry_with_a_stale_lock(git.clone()).await;
+async fn ensure_cached_takes_over_an_abandoned_lock_and_clones_without_waiting() {
+    let root = unique_temp_dir();
+    let lock_path = abandoned_lock(&root).await;
+    let git = fake_with_the_entry();
+    let (output, stderr, _) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
+
+    let start = Instant::now();
+    let working_copy = cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert!(start.elapsed() < cache.lock_timeout, "waited on the lock");
+    assert_eq!(git.clone_count(), 1);
+    assert!(working_copy.join("bundle.yml").exists());
+    assert!(
+        !lock_path.exists(),
+        "the taken-over lock should be released"
+    );
+    assert_eq!(stderr.contents(), "", "a takeover is not a wait");
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// #733: removal leaves the lock (Decision 6), and the next load takes it
+/// over rather than timing out.
+#[tokio::test]
+async fn a_load_after_clean_takes_over_the_abandoned_lock_clean_left() {
+    let git = fake_with_the_entry();
+    let (root, key, mut cache) = cloned_entry_with_a_stale_lock(git.clone()).await;
+    cache.lock_timeout = Duration::from_secs(5);
+    abandoned_lock(&root).await;
+
+    cache.clean(None).await.unwrap();
+    assert!(
+        root.join(format!("{key}.lock")).exists(),
+        "clean kept the lock"
+    );
+    let start = Instant::now();
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert!(start.elapsed() < cache.lock_timeout, "waited on the lock");
+    assert_eq!(git.clone_count(), 1);
+    assert!(!root.join(format!("{key}.lock")).exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn refresh_takes_over_an_abandoned_lock_and_reports_the_entry_refreshed() {
+    let git = fake_with_the_entry();
+    let (root, key, mut cache) = cloned_entry_with_a_stale_lock(git.clone()).await;
+    cache.lock_timeout = Duration::from_secs(5);
+    abandoned_lock(&root).await;
 
     let refreshed = cache.refresh().await.unwrap();
 
-    assert!(refreshed.is_empty());
+    assert_eq!(refreshed.len(), 1);
+    assert_eq!(git.clone_count(), 1);
+    assert!(root.join(&key).join("bundle.yml").exists());
+    assert!(!root.join(format!("{key}.lock")).exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn a_lock_whose_holder_is_running_is_waited_on_announced_once_and_timed_out() {
+    let root = unique_temp_dir();
+    let (lock_path, _held) = lock_held_by_a_running_holder(&root).await;
+    let git = fake_with_the_entry();
+    let (output, stderr, progress) = LoadOutput::capturing(crate::ui::OutputStyle::Quiet);
+    let mut cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
+    cache.lock_timeout = Duration::from_millis(350);
+
+    let error = cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap_err()
+        .to_string();
+
     assert_eq!(git.clone_count(), 0);
-    assert_removed_beside_its_untouched_lock(&root, &key).await;
+    assert!(lock_path.exists());
+    assert_eq!(
+        stderr.contents(),
+        "Waiting for another ratect process to finish cloning Git include \
+         'https://example.com/repo.git' at 'v1.0.0' (giving up after 350ms).\n",
+        "announced once, on stderr, under -o quiet"
+    );
+    assert_eq!(progress.contents(), "");
+    assert!(
+        error.starts_with("Timed out after 350ms waiting for another ratect process"),
+        "{error}"
+    );
+    assert!(
+        error.ends_with("It is still running: wait for it to finish, or try again."),
+        "{error}"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// An older binary's lock: empty, so its holder can't be proved to have
+/// exited, however old it is.
+#[tokio::test]
+async fn an_unmarked_lock_is_never_taken_over_and_its_timeout_names_the_file() {
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let lock_path = root.join(format!("{key}.lock"));
+    tokio::fs::write(&lock_path, b"").await.unwrap();
+    std::fs::File::open(&lock_path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let git = fake_with_the_entry();
+    let (output, stderr, _) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let mut cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000).with_output(output);
+    cache.lock_timeout = Duration::from_millis(250);
+
+    let error = cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(git.clone_count(), 0);
+    assert_eq!(tokio::fs::read(&lock_path).await.unwrap(), b"");
+    assert_eq!(
+        stderr.contents(),
+        format!(
+            "Waiting for lock file {lock_path:?} on Git include 'https://example.com/repo.git' \
+             at 'v1.0.0': ratect can't tell whether the process that holds it is still running \
+             (giving up after 250ms).\n"
+        )
+    );
+    assert!(
+        error.starts_with(&format!(
+            "Timed out after 250ms waiting for lock file {lock_path:?}"
+        )),
+        "{error}"
+    );
+    assert!(
+        error.ends_with("it is safe to delete that file."),
+        "{error}"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// A first look between a new holder creating its file and marking it finds
+/// it unmarked; the notice waits for a second look rather than calling a
+/// running holder one that might be gone.
+#[tokio::test]
+async fn a_first_look_at_a_lock_not_yet_marked_does_not_announce_an_unknown_holder() {
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let lock_path = root.join(format!("{key}.lock"));
+    tokio::fs::write(&lock_path, b"").await.unwrap();
+    let holder_path = lock_path.clone();
+    let holder = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&holder_path)
+            .unwrap();
+        file.lock().unwrap();
+        std::io::Write::write_all(&mut file, format!("{}\n", entry_lock::MARKER).as_bytes())
+            .unwrap();
+        file
+    });
+    let (output, stderr, _) = LoadOutput::capturing(crate::ui::OutputStyle::Simple);
+    let mut cache =
+        GitIncludeCache::for_test(root.clone(), fake_with_the_entry(), 1000).with_output(output);
+    cache.lock_timeout = Duration::from_millis(350);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap_err();
+
+    assert!(
+        stderr
+            .contents()
+            .starts_with("Waiting for another ratect process to finish cloning"),
+        "{}",
+        stderr.contents()
+    );
+    drop(holder.await.unwrap());
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn a_takeover_rewrites_the_marker_without_emptying_the_file_first() {
+    let root = unique_temp_dir();
+    let lock_path = abandoned_lock(&root).await;
+    tokio::fs::write(&lock_path, format!("{}\nmore\n", entry_lock::MARKER))
+        .await
+        .unwrap();
+
+    let lock = entry_lock::attempt(&lock_path).unwrap();
+
+    assert!(matches!(lock, entry_lock::Attempt::Acquired(_)), "{lock:?}");
+    assert_eq!(
+        tokio::fs::read_to_string(&lock_path).await.unwrap(),
+        format!("{}\nmore\n", entry_lock::MARKER)
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_waiters_on_one_abandoned_lock_clone_once() {
+    let root = unique_temp_dir();
+    abandoned_lock(&root).await;
+    let git = fake_with_the_entry();
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1000);
+
+    let (first, second) = tokio::join!(
+        cache.ensure_cached("https://example.com/repo.git", "v1.0.0"),
+        cache.ensure_cached("https://example.com/repo.git", "v1.0.0"),
+    );
+
+    assert_eq!(first.unwrap(), second.unwrap());
+    assert_eq!(git.clone_count(), 1);
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn only_one_of_two_looks_at_an_abandoned_lock_takes_it_over() {
+    let root = unique_temp_dir();
+    let lock_path = abandoned_lock(&root).await;
+
+    let first = entry_lock::attempt(&lock_path).unwrap();
+    let second = entry_lock::attempt(&lock_path).unwrap();
+
+    assert!(
+        matches!(first, entry_lock::Attempt::Acquired(_)),
+        "{first:?}"
+    );
+    assert!(
+        matches!(second, entry_lock::Attempt::HeldByRunningHolder),
+        "{second:?}"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// A waiter that opened the lock file just before its holder released it
+/// would otherwise hold an OS lock on a file nobody else can see.
+#[tokio::test]
+async fn a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it_over() {
+    let root = unique_temp_dir();
+    let lock_path = abandoned_lock(&root).await;
+    let opened = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    let entry_lock::Attempt::Acquired(holder) = entry_lock::attempt(&lock_path).unwrap() else {
+        panic!("the abandoned lock should be taken over");
+    };
+    holder.release().unwrap();
+
+    let gone = entry_lock::take_over_if_abandoned(opened, &lock_path);
+    assert!(matches!(gone, entry_lock::TakeOver::Replaced), "{gone:?}");
+
+    // And after a new holder has created the file again.
+    let opened = std::fs::File::open(abandoned_lock(&root).await).unwrap();
+    std::fs::remove_file(&lock_path).unwrap();
+    let entry_lock::Attempt::Acquired(_new_holder) = entry_lock::attempt(&lock_path).unwrap()
+    else {
+        panic!("a free lock should be taken");
+    };
+    let replaced = entry_lock::take_over_if_abandoned(opened, &lock_path);
+    assert!(
+        matches!(replaced, entry_lock::TakeOver::Replaced),
+        "{replaced:?}"
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+fn is_close_on_exec(file: &std::fs::File) -> bool {
+    let flags = nix::fcntl::fcntl(file, nix::fcntl::FcntlArg::F_GETFD).unwrap();
+    nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC)
+}
+
+/// Decision 2: the `git` a holder starts mustn't inherit its OS lock, or a
+/// `git` outliving its holder would keep the lock from ever being abandoned.
+#[tokio::test]
+async fn an_entry_lock_is_held_through_a_close_on_exec_descriptor() {
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let created = entry_lock::attempt(&root.join("created.lock")).unwrap();
+    let taken_over = entry_lock::attempt(&abandoned_lock(&root).await).unwrap();
+
+    for attempt in [created, taken_over] {
+        let entry_lock::Attempt::Acquired(lock) = attempt else {
+            panic!("expected to hold the lock, found {attempt:?}");
+        };
+        assert!(is_close_on_exec(lock.file()));
+    }
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn a_new_holder_marks_its_lock_file() {
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let lock_path = root.join("new.lock");
+
+    let _lock = entry_lock::attempt(&lock_path).unwrap();
+
+    assert_eq!(
+        tokio::fs::read_to_string(&lock_path).await.unwrap(),
+        format!("{}\n", entry_lock::MARKER)
+    );
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+fn staging_directories(root: &Path, key: &str) -> Vec<String> {
+    std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(&format!("{key}.tmp-")))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_clone_that_loses_the_rename_uses_the_winners_working_copy() {
+    let root = unique_temp_dir();
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let git = fake_with_the_entry().losing_the_rename_to(root.join(&key));
+    let cache = GitIncludeCache::for_test(root.clone(), git, 1000);
+
+    let working_copy = cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(working_copy, root.join(&key));
+    assert!(working_copy.join("winner").exists());
+    assert!(!working_copy.join("bundle.yml").exists());
+    assert_eq!(staging_directories(&root, &key), Vec::<String>::new());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn a_failed_clone_leaves_no_staging_directory() {
+    let root = unique_temp_dir();
+    let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new().failing("no"), 1000);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap_err();
+
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    assert_eq!(staging_directories(&root, &key), Vec::<String>::new());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// Decision 7: under the lock, a leftover staging directory belongs to an
+/// interrupted clone, so the next holder removes it — but only its own
+/// entry's, and nothing outside the lock does.
+#[tokio::test]
+async fn the_next_holder_removes_its_entrys_leftover_staging_directories() {
+    let root = unique_temp_dir();
+    let key = cache_key("https://example.com/repo.git", "v1.0.0");
+    let other = cache_key("https://example.com/other.git", "v1.0.0");
+    for name in [
+        format!("{key}.tmp-leftover"),
+        format!("{other}.tmp-leftover"),
+    ] {
+        tokio::fs::create_dir_all(root.join(name).join(".git"))
+            .await
+            .unwrap();
+    }
+    let cache = GitIncludeCache::for_test(root.clone(), fake_with_the_entry(), 1000);
+
+    cache
+        .ensure_cached("https://example.com/repo.git", "v1.0.0")
+        .await
+        .unwrap();
+
+    assert_eq!(staging_directories(&root, &key), Vec::<String>::new());
+    assert!(root.join(format!("{other}.tmp-leftover")).exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+#[tokio::test]
+async fn removal_and_the_sweep_leave_a_staging_directory_alone() {
+    let (root, key, mut cache) = cloned_entry_with_a_stale_lock(FakeGitClient::new()).await;
+    let staging = root.join(format!("{key}.tmp-leftover"));
+    tokio::fs::create_dir_all(&staging).await.unwrap();
+
+    cache.clean(None).await.unwrap();
+    cache.clock = Box::new(|| 500 + STALE_AFTER.as_secs() + 1);
+    cache.cleanup_stale().await.unwrap();
+
+    assert!(staging.exists());
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
@@ -1206,4 +1613,73 @@ async fn a_directory_without_a_sidecar_is_neither_listed_nor_swept() {
     assert!(in_progress.exists());
 
     tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// Set to a lock path, makes [`a_lock_holder_process`] take that lock and
+/// hold it until killed.
+const LOCK_HOLDER_ENV: &str = "RATECT_TEST_ENTRY_LOCK_HOLDER";
+
+/// What [`a_lock_holder_process`] prints once it holds the lock.
+const LOCK_HELD: &str = "entry-lock-held";
+
+/// Not a test on its own: does nothing unless [`LOCK_HOLDER_ENV`] is set, as
+/// it is when the test below runs this binary again to get a holder in a
+/// process of its own.
+#[test]
+fn a_lock_holder_process() {
+    let Some(path) = std::env::var_os(LOCK_HOLDER_ENV) else {
+        return;
+    };
+    let lock = entry_lock::attempt(Path::new(&path)).unwrap();
+    assert!(matches!(lock, entry_lock::Attempt::Acquired(_)), "{lock:?}");
+    // libtest has already printed `test <name> ... ` without a newline, so
+    // the parent looks for this anywhere in a line.
+    let mut stdout = std::io::stdout();
+    std::io::Write::write_all(&mut stdout, format!("{LOCK_HELD}\n").as_bytes()).unwrap();
+    std::io::Write::flush(&mut stdout).unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+/// Decision 3's premise, with a real process rather than a second open file
+/// standing in for one: the kernel releases a holder's OS lock when the holder
+/// is killed, so its lock is then taken over.
+#[test]
+fn a_lock_whose_holder_process_was_killed_is_taken_over() {
+    use std::io::BufRead;
+
+    let root = unique_temp_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    let lock_path = root.join("entry.lock");
+    let mut holder = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "git_include::tests::a_lock_holder_process",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(LOCK_HOLDER_ENV, &lock_path)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = std::io::BufReader::new(holder.stdout.take().unwrap());
+    assert!(
+        stdout.lines().any(|line| line.unwrap().contains(LOCK_HELD)),
+        "the holder process never took the lock"
+    );
+
+    let while_running = entry_lock::attempt(&lock_path).unwrap();
+    holder.kill().unwrap();
+    holder.wait().unwrap();
+    let after_kill = entry_lock::attempt(&lock_path).unwrap();
+
+    assert!(
+        matches!(while_running, entry_lock::Attempt::HeldByRunningHolder),
+        "{while_running:?}"
+    );
+    assert!(
+        matches!(after_kill, entry_lock::Attempt::Acquired(_)),
+        "{after_kill:?}"
+    );
+
+    std::fs::remove_dir_all(&root).ok();
 }
