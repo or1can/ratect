@@ -3163,7 +3163,12 @@ fn all_projects_never_reaches_containers_ratect_did_not_create() {
     let survived = String::from_utf8_lossy(&survived.stdout).trim().to_string();
     let _ = Command::new("docker").args(["rm", "-f", name]).output();
 
-    assert!(cleaned.status.success());
+    assert!(
+        cleaned.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&cleaned.stdout),
+        String::from_utf8_lossy(&cleaned.stderr)
+    );
     // Docker's own networks carry no labels, so a key-existence filter
     // excludes them; an unfiltered listing would have included all three.
     for builtin in ["bridge", "host", "none"] {
