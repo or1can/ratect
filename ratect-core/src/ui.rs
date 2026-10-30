@@ -49,6 +49,25 @@
 //! stdout (prefixed) while a dependency's follow the progress console —
 //! so `ratect run x -o all 2>/dev/null` is still the task's own lines.
 //!
+//! **Escaping** (#752). A name or value from configuration is untrusted
+//! text — a Git bundle's above all — so whatever a [`Console`] prints is a
+//! [`Text`], and a plain string becomes one only by having its control
+//! characters escaped ([`printable`]): an ESC, BEL or `\r` from config
+//! prints as `\u{1b}`, `\u{7}`, `\r`, never as a command to the terminal.
+//! Ratect's own styling and cursor movement are `Text` already, so they
+//! survive; a line is composed with [`text!`](crate::text), which escapes
+//! each argument and keeps the `Text`s it is given. Composing with
+//! `format!` instead still prints nothing unescaped — it escapes the styling
+//! too, visibly. Only [`Text::raw`] skips escaping: for Ratect's own
+//! sequences, and for what passes through by design — a container's own
+//! output, which is the user's program's. Image build output is escaped
+//! like configuration, since a Git bundle's `Dockerfile` writes the `RUN`
+//! lines BuildKit echoes. A warning or notice is one line, so a plain string
+//! handed to one is escaped whole, line breaks included. An error keeps its
+//! line breaks and tabs — a chain's layout, and the build or health check
+//! output it may quote — so a value with a line break in it, quoted in an
+//! error, still breaks that line: the one gap left (#770).
+//!
 //! The user-facing output layer (0.16.0's output-modes
 //! work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
 //! posts typed `TaskEvent` milestones and `docker.rs` posts fine-grained
@@ -381,14 +400,14 @@ pub enum TaskEvent {
     /// reaches a stream — `fancy` has to freeze its live block before any
     /// of them lands, or the next repaint counts rows that aren't there.
     Notice {
-        message: String,
+        message: Text,
     },
     /// Something the user should change, though the run proceeds — a proxy
     /// bound to loopback, a credential helper that failed. `Warning: ` in
     /// bold yellow, then the message in the default colour, on stderr in
     /// every style.
     Warning {
-        message: String,
+        message: Text,
     },
     /// Ratect failed to do something it set out to do, reported here rather
     /// than by the error the run returns because the run's own error is a
@@ -399,7 +418,7 @@ pub enum TaskEvent {
     /// way is already reported: `main` prints no second `Error:` for the
     /// error it turns into (see `exit_code::already_reported`).
     Error {
-        message: String,
+        message: Text,
     },
 }
 
@@ -905,11 +924,11 @@ impl LoadOutput {
         }
     }
 
-    pub fn notice(&self, message: &str) {
+    pub fn notice(&self, message: impl ToText) {
         self.stderr.notice(message);
     }
 
-    pub fn progress(&self, line: &str) {
+    pub fn progress(&self, line: impl Into<Text>) {
         if let Some(progress) = &self.progress {
             progress.println(line);
         }
@@ -918,10 +937,10 @@ impl LoadOutput {
     /// `text` as [`Console::bold`] renders it on the progress console, for
     /// the user's own names in a [`progress`](Self::progress) line
     /// (decisions/0017).
-    pub fn progress_bold(&self, text: &str) -> String {
+    pub fn progress_bold(&self, text: &str) -> Text {
         match &self.progress {
             Some(progress) => progress.bold(text),
-            None => text.to_string(),
+            None => text.to_text(),
         }
     }
 
@@ -1029,6 +1048,224 @@ impl Color {
     }
 }
 
+/// `value` with each control character escaped as Rust would (`\u{1b}`,
+/// `\n`, `\0`), for printing a value from configuration: a raw ESC, BEL or
+/// carriage return would otherwise reach the terminal as a command —
+/// retitling it, or overwriting the line it is printed on (#752) — and a raw
+/// NUL prints as nothing, so a path refused for holding one would look fine
+/// (#365). Nothing else is escaped, so an ordinary value, Unicode included,
+/// reads exactly as it was written. The one escaping rule: [`Text`] applies
+/// it to everything a [`Console`] prints, and `config.rs` to the values its
+/// messages quote.
+pub fn printable(value: &str) -> String {
+    escape_controls(value, |_| true)
+}
+
+/// `value` with each control character `escaped` says to escape written as
+/// [`char::escape_debug`] writes it — [`printable`]'s rule, for a caller that
+/// must keep some control characters as they are.
+pub fn escape_controls(value: &str, escaped: impl Fn(char) -> bool) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if c.is_control() && escaped(c) {
+            out.extend(c.escape_debug());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Text that is safe to print: every control character in it is either
+/// escaped ([`printable`]) or one Ratect wrote itself — a style from
+/// [`Console::bold`] and its siblings, a line break or tab in a message, the
+/// literal part of a [`text!`](crate::text) line. What every [`Console`]
+/// entry point takes (#752), so a string from configuration can't reach a
+/// terminal unescaped by default: a plain `&str` or `String` converts by
+/// escaping, keeping only its line breaks and tabs — a message's layout,
+/// and the layout of the program output an error can quote (a failed build's
+/// output, a health check's), neither of which can hide or overwrite
+/// anything — and only [`Text::raw`] skips escaping, for the few things
+/// that must pass through as written.
+///
+/// Composing a line by `format!` and handing it over as a `String` is
+/// therefore *safe but wrong*: the styles in it get escaped too, which shows.
+/// Compose with [`text!`](crate::text) instead, which escapes each argument
+/// (a value from configuration, line breaks and all) and keeps the
+/// [`Text`]s it is given as they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Text(String);
+
+impl Text {
+    /// `text` as written, control characters included — for Ratect's own
+    /// escape sequences, and for what passes through by design: a
+    /// container's own output, which is the user's program's (#752's scope),
+    /// and generated files printed whole.
+    /// Never for anything from configuration.
+    pub fn raw(text: impl Into<String>) -> Self {
+        Self(text.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// `items` with `separator`, Ratect's own, between each — the [`Text`]
+    /// form of `[..].join(..)`.
+    pub fn join(items: impl IntoIterator<Item = Text>, separator: &'static str) -> Self {
+        let parts: Vec<String> = items.into_iter().map(|text| text.0).collect();
+        Self(parts.join(separator))
+    }
+}
+
+impl std::fmt::Display for Text {
+    /// Pads like a `str`, so `{:>8}` aligns a [`Text`] by its characters.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(&self.0)
+    }
+}
+
+impl PartialEq<str> for Text {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for Text {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<String> for Text {
+    fn eq(&self, other: &String) -> bool {
+        &self.0 == other
+    }
+}
+
+/// A whole line or message: every control character escaped except a line
+/// break or a tab.
+impl From<&str> for Text {
+    fn from(text: &str) -> Self {
+        Self(escape_controls(text, |c| c != '\n' && c != '\t'))
+    }
+}
+
+impl From<String> for Text {
+    fn from(text: String) -> Self {
+        Self::from(text.as_str())
+    }
+}
+
+impl From<&String> for Text {
+    fn from(text: &String) -> Self {
+        Self::from(text.as_str())
+    }
+}
+
+impl From<&Text> for Text {
+    fn from(text: &Text) -> Self {
+        text.clone()
+    }
+}
+
+/// One value as it goes into a [`text!`](crate::text) line or a
+/// [`Console::bold`]-style span: a string from configuration escaped whole,
+/// line breaks included, since a name or a value has no lines of its own; a
+/// [`Text`] as it is; a number as it prints.
+pub trait ToText {
+    fn to_text(&self) -> Text;
+}
+
+impl ToText for str {
+    fn to_text(&self) -> Text {
+        Text(printable(self))
+    }
+}
+
+impl ToText for String {
+    fn to_text(&self) -> Text {
+        self.as_str().to_text()
+    }
+}
+
+/// A path, as `Path::display` writes it — escaped like any string, since a
+/// path can come from configuration too.
+impl ToText for std::path::Display<'_> {
+    fn to_text(&self) -> Text {
+        self.to_string().to_text()
+    }
+}
+
+impl ToText for Text {
+    fn to_text(&self) -> Text {
+        self.clone()
+    }
+}
+
+impl<T: ToText + ?Sized> ToText for &T {
+    fn to_text(&self) -> Text {
+        (**self).to_text()
+    }
+}
+
+macro_rules! number_to_text {
+    ($($number:ty),*) => {
+        $(impl ToText for $number {
+            fn to_text(&self) -> Text {
+                Text(self.to_string())
+            }
+        })*
+    };
+}
+
+number_to_text!(i32, i64, u16, u32, u64, usize);
+
+/// `format!` for a [`Text`] line: the format string is Ratect's own and kept
+/// as written, and each argument goes in through [`ToText`] — escaped if it
+/// is a string, as it is if it is already a [`Text`]. A name captured inline
+/// (`{name}`) would be formatted by `format!` itself, bypassing the escaping,
+/// so the format string may not hold one: that is a compile error.
+#[macro_export]
+macro_rules! text {
+    ($format:literal $(, $argument:expr)* $(,)?) => {{
+        const _: () = assert!(
+            !$crate::ui::captures_inline($format),
+            "text! takes every value as an argument, never captured inline"
+        );
+        $crate::ui::Text::raw(format!(
+            $format
+            $(, $crate::ui::ToText::to_text(&$argument))*
+        ))
+    }};
+}
+
+/// Whether `format` names a variable inline (`{name}`, `{名前:>4}`) — what
+/// [`text!`](crate::text) refuses. `{{` is a literal brace, and `{}`, `{:>4}`
+/// and `{0}` take an argument: anything else after a `{` starts a name, which
+/// may begin with any Unicode letter.
+#[doc(hidden)]
+pub const fn captures_inline(format: &str) -> bool {
+    let bytes = format.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                i += 2;
+                continue;
+            }
+            if i + 1 < bytes.len()
+                && !matches!(bytes[i + 1], b'}' | b':')
+                && !bytes[i + 1].is_ascii_digit()
+            {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Where a logger writes, plus whether ANSI color is applied when it does —
 /// a minimal port of Batect's `Console`. Color and (future) cursor movement
 /// are deliberately independent axes here, unlike Batect's single
@@ -1118,25 +1355,34 @@ impl Console {
     /// `message` as an error line: `Error: ` in bold red, the message in the
     /// default colour (decisions/0017's marker). The marker says "act on
     /// this"; a message that is read, not acted on, is a [`Console::notice`].
-    pub fn error(&self, message: &str) {
-        self.println(&format!(
-            "{} {message}",
-            self.bold_colored(Color::Red, "Error:")
+    pub fn error(&self, message: impl Into<Text>) {
+        let message: Text = message.into();
+        self.println(text!(
+            "{} {}",
+            self.bold_colored(Color::Red, "Error:"),
+            message
         ));
     }
 
     /// `message` as a warning line: `Warning: ` in bold yellow, the message
     /// in the default colour.
-    pub fn warning(&self, message: &str) {
-        self.println(&format!(
-            "{} {message}",
-            self.bold_colored(Color::Yellow, "Warning:")
+    ///
+    /// One line, so a plain string has every control character escaped, a
+    /// line break included (#752) — only [`Console::error`] lays out a
+    /// message over several lines, an error chain's.
+    pub fn warning(&self, message: impl ToText) {
+        let message = message.to_text();
+        self.println(text!(
+            "{} {}",
+            self.bold_colored(Color::Yellow, "Warning:"),
+            message
         ));
     }
 
-    /// `message` as a notice: unmarked, since it asks for nothing.
-    pub fn notice(&self, message: &str) {
-        self.println(message);
+    /// `message` as a notice: unmarked, since it asks for nothing. One
+    /// line, escaped as [`Console::warning`]'s is.
+    pub fn notice(&self, message: impl ToText) {
+        self.println(message.to_text());
     }
 
     /// Prints `event` if it is one of the three stderr classes
@@ -1157,14 +1403,15 @@ impl Console {
     /// Writes `line` plus a newline, flushed immediately — output must
     /// appear as it happens, not whenever the buffer next fills, since
     /// container output written elsewhere shares the same underlying
-    /// stdout.
-    pub fn println(&self, line: &str) {
+    /// stdout. `line` escaped as [`Text`] says.
+    pub fn println(&self, line: impl Into<Text>) {
+        let line = line.into();
         let mut writer = self.writer.lock().unwrap();
         // Deliberately ignore write errors (e.g. a closed pipe on the far
         // end of `ratect ... | head`) rather than panicking or threading a
         // Result through every logger — matching what `println!` would have
         // aborted on anyway, minus the abort. No explicit `flush()` here
-        // (unlike `write_raw`, below): the real production writer is
+        // (unlike `print`, below): the real production writer is
         // `std::io::stdout()`, whose internal `LineWriter` already flushes
         // on every `\n` this always writes — an extra flush call would just
         // be a second, redundant syscall per line.
@@ -1172,22 +1419,22 @@ impl Console {
     }
 
     /// `text` wrapped in `color`'s ANSI escape when color is enabled,
-    /// unchanged otherwise.
-    pub fn colored(&self, color: Color, text: &str) -> String {
+    /// unchanged otherwise — escaped as [`ToText`] says either way.
+    pub fn colored(&self, color: Color, text: &(impl ToText + ?Sized)) -> Text {
         self.styled(color.ansi_code(), text)
     }
 
     /// `text` wrapped in the ANSI bold escape when color (SGR styling
     /// generally — `--no-color` suppresses bold too, matching Batect) is
     /// enabled, unchanged otherwise.
-    pub fn bold(&self, text: &str) -> String {
+    pub fn bold(&self, text: &(impl ToText + ?Sized)) -> Text {
         self.styled("1", text)
     }
 
     /// `text` both bold and in `color`, as one SGR sequence (`1;31`) rather
     /// than one nested in the other — what the `Error:`/`Warning:` markers
     /// are, and what a test pins byte for byte.
-    pub fn bold_colored(&self, color: Color, text: &str) -> String {
+    pub fn bold_colored(&self, color: Color, text: &(impl ToText + ?Sized)) -> Text {
         self.styled(&format!("1;{}", color.ansi_code()), text)
     }
 
@@ -1196,11 +1443,14 @@ impl Console {
     /// prefixed lines without a prefix inheriting the style or a line
     /// losing it (Batect's `TextRun.lines` keeps each piece's style the
     /// same way). An empty line gets no escape.
-    fn styled(&self, code: &str, text: &str) -> String {
+    fn styled(&self, code: &str, text: &(impl ToText + ?Sized)) -> Text {
+        let text = text.to_text();
         if !self.color_enabled {
-            return text.to_string();
+            return text;
         }
-        text.split('\n')
+        let styled = text
+            .as_str()
+            .split('\n')
             .map(|line| {
                 if line.is_empty() {
                     String::new()
@@ -1209,17 +1459,19 @@ impl Console {
                 }
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        Text::raw(styled)
     }
 
-    /// Writes `text` exactly as given (no trailing newline appended),
-    /// flushed immediately, as one atomic write under the console's lock —
-    /// how the fancy display emits a whole repaint (cursor movement plus
-    /// rewritten lines) without another writer's line landing mid-repaint.
-    /// Cursor-movement escapes are deliberately *not* gated on
-    /// `color_enabled` — cursor movement and SGR styling are independent
-    /// axes here (see the type-level docs).
-    pub fn write_raw(&self, text: &str) {
+    /// Writes `text` (escaped as [`Text`] says) with no trailing newline
+    /// appended, flushed immediately, as one atomic write under the
+    /// console's lock — how the fancy display emits a whole repaint (cursor
+    /// movement plus rewritten lines, as one [`Text::raw`]) without another
+    /// writer's line landing mid-repaint. Cursor-movement escapes are
+    /// deliberately *not* gated on `color_enabled` — cursor movement and SGR
+    /// styling are independent axes here (see the type-level docs).
+    pub fn print(&self, text: impl Into<Text>) {
+        let text = text.into();
         let mut writer = self.writer.lock().unwrap();
         let result = write!(writer, "{text}").and_then(|()| writer.flush());
         self.note_failure(result);
@@ -1254,62 +1506,73 @@ impl OnceFlag {
 /// The opening cleanup line `simple` and `all` print: `Cleaning up...`, or
 /// `Cleaning up after <what failed>...` when cleanup follows a failure,
 /// subject first and the user's own names and values bold (decisions/0017).
-pub(crate) fn cleaning_up(console: &Console, cause: Option<&CleanupCause>) -> String {
+pub(crate) fn cleaning_up(console: &Console, cause: Option<&CleanupCause>) -> Text {
     let bold = |text: &str| console.bold(text);
     let after = match cause {
-        None => return "Cleaning up...".to_string(),
-        Some(CleanupCause::Exited { task, exit_code }) => format!(
+        None => return Text::raw("Cleaning up..."),
+        Some(CleanupCause::Exited { task, exit_code }) => text!(
             "{} exited with code {}",
             bold(task),
             bold(&exit_code.to_string())
         ),
         Some(CleanupCause::ImagePullFailed { container }) => {
-            format!("{}'s image failed to pull", bold(container))
+            text!("{}'s image failed to pull", bold(container))
         }
         Some(CleanupCause::ImageBuildFailed { container }) => {
-            format!("{}'s image failed to build", bold(container))
+            text!("{}'s image failed to build", bold(container))
         }
         Some(CleanupCause::CreateFailed { container }) => {
-            format!("{} failed to be created", bold(container))
+            text!("{} failed to be created", bold(container))
         }
         Some(CleanupCause::StartFailed { container }) => {
-            format!("{} failed to start", bold(container))
+            text!("{} failed to start", bold(container))
         }
         Some(CleanupCause::NotHealthy { container }) => {
-            format!("{} did not become healthy", bold(container))
+            text!("{} did not become healthy", bold(container))
         }
         Some(CleanupCause::SetupCommandExited {
             container,
             index,
             exit_code,
-        }) => format!(
-            "{}'s setup command {index} exited with code {}",
+        }) => text!(
+            "{}'s setup command {} exited with code {}",
             bold(container),
+            index,
             bold(&exit_code.to_string())
         ),
         Some(CleanupCause::SetupCommandNotRun { container, index }) => {
-            format!(
-                "{}'s setup command {index} could not be run",
-                bold(container)
+            text!(
+                "{}'s setup command {} could not be run",
+                bold(container),
+                index
             )
         }
         Some(CleanupCause::DependencyExited {
             container,
             exit_code,
-        }) => format!(
+        }) => text!(
             "{} exited with code {}",
             bold(container),
             bold(&exit_code.to_string())
         ),
-        Some(CleanupCause::Failed { task }) => format!("{} failed", bold(task)),
+        Some(CleanupCause::Failed { task }) => text!("{} failed", bold(task)),
     };
-    format!("Cleaning up after {after}...")
+    text!("Cleaning up after {}...", after)
+}
+
+/// A container's command as every style shows it: bold, the user's own
+/// value (decisions/0017), with every control character escaped except a
+/// line break or a tab. A multi-line command is ordinary — a script — and each style
+/// lays its lines out itself (`all` prefixes each one, `fancy` keeps its row
+/// to one), where a name has no lines of its own and escapes them too.
+pub(crate) fn command(console: &Console, command: &str) -> Text {
+    console.bold(&Text::from(command))
 }
 
 /// What every non-quiet style prints for [`TaskEvent::PrerequisitesOnly`]:
 /// Batect's own sentence, the task's name in bold.
-pub(crate) fn nothing_more_to_do(console: &Console, task: &str) -> String {
-    format!(
+pub(crate) fn nothing_more_to_do(console: &Console, task: &str) -> Text {
+    text!(
         "The task {} only defines prerequisite tasks, nothing more to do.",
         console.bold(task)
     )
@@ -1324,8 +1587,8 @@ pub(crate) fn format_task_failed_summary(
     console: &Console,
     task: &str,
     duration: Duration,
-) -> String {
-    format!(
+) -> Text {
+    text!(
         "{} failed after {}.",
         console.bold(task),
         format_duration(duration)
@@ -1340,16 +1603,17 @@ pub(crate) fn format_task_summary(
     task: &str,
     exit_code: i64,
     duration: Duration,
-) -> String {
+) -> Text {
     let color = if exit_code == 0 {
         Color::Green
     } else {
         Color::Red
     };
     let exit_code = console.bold_colored(color, &exit_code.to_string());
-    format!(
-        "{} finished with exit code {exit_code} in {}.",
+    text!(
+        "{} finished with exit code {} in {}.",
         console.bold(task),
+        exit_code,
         format_duration(duration)
     )
 }
@@ -1363,8 +1627,8 @@ pub(crate) fn format_task_summary(
 /// other event the two styles share will take as ratect#505/#507 move them
 /// in. The exit code is bold, the user's own value (decisions/0017), and
 /// uncoloured: a palette colour on an exit code is the summary line's.
-pub(crate) fn exited_unexpectedly(console: &Console, exit_code: i64) -> String {
-    format!(
+pub(crate) fn exited_unexpectedly(console: &Console, exit_code: i64) -> Text {
+    text!(
         "exited unexpectedly with exit code {}",
         console.bold(&exit_code.to_string())
     )

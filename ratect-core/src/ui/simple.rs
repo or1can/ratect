@@ -28,6 +28,7 @@
 //! console is stderr and the question doesn't arise.
 
 use super::{Console, EventSink, OnceFlag, TaskEvent};
+use crate::text;
 use std::sync::Mutex;
 
 pub struct SimpleEventLogger {
@@ -84,7 +85,7 @@ impl EventSink for SimpleEventLogger {
                 state.started_cleanup.reset();
                 state.task_container = None;
                 self.console
-                    .println(&format!("Running {}...", self.console.bold(&task)));
+                    .println(text!("Running {}...", self.console.bold(&task)));
             }
             // In place of a task's `Running` line, so separated the same way.
             TaskEvent::PrerequisitesOnly { task } => {
@@ -94,14 +95,14 @@ impl EventSink for SimpleEventLogger {
                 }
                 state.printed_a_task = true;
                 self.console
-                    .println(&super::nothing_more_to_do(&self.console, &task));
+                    .println(super::nothing_more_to_do(&self.console, &task));
             }
             TaskEvent::TaskFinished {
                 task,
                 exit_code,
                 duration,
             } => {
-                self.console.println(&super::format_task_summary(
+                self.console.println(super::format_task_summary(
                     &self.console,
                     &task,
                     exit_code,
@@ -109,7 +110,7 @@ impl EventSink for SimpleEventLogger {
                 ));
             }
             TaskEvent::TaskFailed { task, duration } => {
-                self.console.println(&super::format_task_failed_summary(
+                self.console.println(super::format_task_failed_summary(
                     &self.console,
                     &task,
                     duration,
@@ -117,39 +118,39 @@ impl EventSink for SimpleEventLogger {
             }
             TaskEvent::ImagePullStarting { image } => {
                 self.console
-                    .println(&format!("Pulling {}...", self.console.bold(&image)));
+                    .println(text!("Pulling {}...", self.console.bold(&image)));
             }
             TaskEvent::ImagePullCompleted { image } => {
                 self.console
-                    .println(&format!("Pulled {}.", self.console.bold(&image)));
+                    .println(text!("Pulled {}.", self.console.bold(&image)));
             }
             TaskEvent::ImageBuildStarting { container } => {
                 self.console
-                    .println(&format!("Building {}...", self.console.bold(&container)));
+                    .println(text!("Building {}...", self.console.bold(&container)));
             }
             TaskEvent::ImageBuildCompleted { container } => {
                 self.console
-                    .println(&format!("Built {}.", self.console.bold(&container)));
+                    .println(text!("Built {}.", self.console.bold(&container)));
             }
             TaskEvent::DependencyStarting { container } => {
                 self.console
-                    .println(&format!("Starting {}...", self.console.bold(&container)));
+                    .println(text!("Starting {}...", self.console.bold(&container)));
             }
             TaskEvent::DependencyStarted { container } => {
                 self.console
-                    .println(&format!("Started {}.", self.console.bold(&container)));
+                    .println(text!("Started {}.", self.console.bold(&container)));
             }
             TaskEvent::ContainerBecameHealthy { container } => {
                 if self.is_task_container(&container) {
                     return;
                 }
-                self.console.println(&format!(
+                self.console.println(text!(
                     "{} has become healthy.",
                     self.console.bold(&container)
                 ));
             }
             TaskEvent::DependencyCompleted { container } => {
-                self.console.println(&format!(
+                self.console.println(text!(
                     "{} ran to completion.",
                     self.console.bold(&container)
                 ));
@@ -169,19 +170,22 @@ impl EventSink for SimpleEventLogger {
                 // dropping either one loses something.
                 let bold = |text: &str| self.console.bold(text);
                 let location = match run_in {
-                    Some(run_in) => format!("{}, for {}", bold(&run_in), bold(&container)),
+                    Some(run_in) => text!("{}, for {}", bold(&run_in), bold(&container)),
                     None => bold(&container),
                 };
-                self.console.println(&format!(
-                    "Running setup command {} ({index} of {total}) in {location}...",
-                    bold(&command)
+                self.console.println(text!(
+                    "Running setup command {} ({} of {}) in {}...",
+                    super::command(&self.console, &command),
+                    index,
+                    total,
+                    location
                 ));
             }
             TaskEvent::SetupCommandsCompleted { container } => {
                 if self.is_task_container(&container) {
                     return;
                 }
-                self.console.println(&format!(
+                self.console.println(text!(
                     "{} has completed all setup commands.",
                     self.console.bold(&container)
                 ));
@@ -190,7 +194,7 @@ impl EventSink for SimpleEventLogger {
                 container,
                 exit_code,
             } => {
-                self.console.println(&format!(
+                self.console.println(text!(
                     "{} {}.",
                     self.console.bold(&container),
                     super::exited_unexpectedly(&self.console, exit_code)
@@ -200,18 +204,22 @@ impl EventSink for SimpleEventLogger {
                 let bold = |text: &str| self.console.bold(text);
                 let line = match command {
                     Some(command) => {
-                        format!("Running {} in {}...", bold(&command), bold(&container))
+                        text!(
+                            "Running {} in {}...",
+                            super::command(&self.console, &command),
+                            bold(&container)
+                        )
                     }
-                    None => format!("Running {}...", bold(&container)),
+                    None => text!("Running {}...", bold(&container)),
                 };
-                self.console.println(&line);
+                self.console.println(line);
             }
             TaskEvent::CleanupStarting { cause } => {
                 let mut state = self.state.lock().unwrap();
                 if state.started_cleanup.fire_once() {
                     self.console.println("");
                     self.console
-                        .println(&super::cleaning_up(&self.console, cause.as_ref()));
+                        .println(super::cleaning_up(&self.console, cause.as_ref()));
                 }
             }
             // Recorded only so `is_task_container` can recognize the task's

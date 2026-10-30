@@ -4520,7 +4520,7 @@ async fn a_missing_network_still_posts_task_failed() {
                 task: "build".into()
             },
             TaskEvent::Error {
-                message: format!("{error:?}")
+                message: format!("{error:?}").into()
             },
             task_failed("build"),
         ]
@@ -6773,6 +6773,7 @@ async fn an_unanswered_build_cancel_doesnt_hold_up_cleanup() {
         .iter()
         .position(|event| {
             warning(event).is_some_and(|message| {
+                let message = message.as_str();
                 message.contains("'app'") && message.contains("didn't answer")
             })
         })
@@ -7683,7 +7684,7 @@ async fn an_infrastructure_failure_is_reported_before_cleanup_and_only_once() {
     let error = engine.run_task("start", &[]).await.unwrap_err();
 
     let events = sink.events();
-    let errors: Vec<(usize, &String)> = events
+    let errors: Vec<(usize, &crate::ui::Text)> = events
         .iter()
         .enumerate()
         .filter_map(|(index, event)| match event {
@@ -7694,7 +7695,7 @@ async fn an_infrastructure_failure_is_reported_before_cleanup_and_only_once() {
     assert_eq!(errors.len(), 1, "reported exactly once: {events:?}");
     let (error_at, message) = errors[0];
     assert!(
-        message.starts_with(&format!("{error:?}")),
+        message.as_str().starts_with(&format!("{error:?}")),
         "the report is the chain main would have printed: {message}"
     );
     let cleanup_at = events
@@ -7876,7 +7877,7 @@ async fn reported_errors(
     sink.events()
         .into_iter()
         .filter_map(|event| match event {
-            TaskEvent::Error { message } => Some(message),
+            TaskEvent::Error { message } => Some(message.to_string()),
             _ => None,
         })
         .collect()
@@ -8028,7 +8029,7 @@ async fn no_other_failure_hints_no_cleanup_after_failure() {
     assert!(
         sink.events().iter().all(|event| !matches!(
             event,
-            TaskEvent::Error { message } if message.contains("--no-cleanup-after-failure")
+            TaskEvent::Error { message } if message.as_str().contains("--no-cleanup-after-failure")
         )),
         "an interrupt: {:?}",
         sink.events()
@@ -10272,7 +10273,7 @@ fn failed_before_anything_was_created(task: &str, error: &anyhow::Error) -> Vec<
         TaskEvent::TaskStarting { task: task.into() },
         TaskEvent::RunEnded { task: task.into() },
         TaskEvent::Error {
-            message: format!("{error:?}"),
+            message: format!("{error:?}").into(),
         },
         task_failed(task),
     ]
@@ -16447,25 +16448,32 @@ async fn interleaved_policy_keeps_a_prerequisites_container_non_interactive_with
 // ---- Printed, not logged: the stderr classes the engine posts (decisions/0017) ----
 
 /// The events of one class, as their messages.
-fn messages(events: &[TaskEvent], class: fn(&TaskEvent) -> Option<&String>) -> Vec<String> {
-    events.iter().filter_map(class).cloned().collect()
+fn messages(
+    events: &[TaskEvent],
+    class: fn(&TaskEvent) -> Option<&crate::ui::Text>,
+) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(class)
+        .map(|message| message.to_string())
+        .collect()
 }
 
-fn notice(event: &TaskEvent) -> Option<&String> {
+fn notice(event: &TaskEvent) -> Option<&crate::ui::Text> {
     match event {
         TaskEvent::Notice { message } => Some(message),
         _ => None,
     }
 }
 
-fn warning(event: &TaskEvent) -> Option<&String> {
+fn warning(event: &TaskEvent) -> Option<&crate::ui::Text> {
     match event {
         TaskEvent::Warning { message } => Some(message),
         _ => None,
     }
 }
 
-fn error_line(event: &TaskEvent) -> Option<&String> {
+fn error_line(event: &TaskEvent) -> Option<&crate::ui::Text> {
     match event {
         TaskEvent::Error { message } => Some(message),
         _ => None,

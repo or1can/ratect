@@ -42,9 +42,10 @@ use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::exit_code::Word;
 use ratect_core::resources::Leftover;
+use ratect_core::text;
 use ratect_core::ui::{
     create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
-    Console, LoadOutput, OutputStyle, ProgressStream, TaskEvent, TerminalFacts,
+    Console, LoadOutput, OutputStyle, ProgressStream, TaskEvent, TerminalFacts, Text, ToText,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -802,7 +803,7 @@ async fn async_main() {
             // would be the same event reported twice (decisions/0017; the
             // list is `already_reported`'s).
             if !ratect_core::exit_code::already_reported(&error) {
-                stderr.error(&format!("{error:?}"));
+                stderr.error(format!("{error:?}"));
             }
             ratect_core::exit_code::for_failure(&error, is_run)
         }
@@ -867,7 +868,7 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
                 OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
                 _ => format_task_list(&project.config.project_name, &project.config.tasks),
             };
-            stdout.write_raw(&listing);
+            stdout.print(listing);
             Ok(())
         }
         // Deliberately no `load` call: see `CachesArgs`.
@@ -911,7 +912,8 @@ fn generate_completions(args: CompletionsArgs, stdout: &Console) -> Result<()> {
     completer
         .write_registration("COMPLETE", "ratect", "ratect", "ratect", &mut script)
         .context("writing the completion registration script")?;
-    stdout.write_raw(&String::from_utf8_lossy(&script));
+    // A generated script, which carries the shell's own escapes.
+    stdout.print(Text::raw(String::from_utf8_lossy(&script)));
     Ok(())
 }
 
@@ -1138,14 +1140,16 @@ async fn run_task(
     interrupt.listen();
     let docker = match interrupt
         .unless_signalled(DockerClient::new(&args.docker.into(), |message| {
-            event_sink.post(TaskEvent::Warning { message })
+            event_sink.post(TaskEvent::Warning {
+                message: message.to_text(),
+            })
         }))
         .await
     {
         Ok(connected) => connected?,
         Err(interrupted) => {
             event_sink.post(TaskEvent::Notice {
-                message: interrupted.signal.not_starting(&args.task),
+                message: interrupted.signal.not_starting(&args.task).to_text(),
             });
             return Err(interrupted.into());
         }
@@ -1278,7 +1282,7 @@ async fn manage_caches(
             // construction exactly what a `clean` with these same flags
             // would act on, so it is always safe to pipe back.
             for name in found.actionable() {
-                stdout.println(name);
+                stdout.println(text!("{}", name));
             }
         } else if found.is_empty() {
             // Named after what was searched, not after the project: with
@@ -1292,7 +1296,7 @@ async fn manage_caches(
             if !found.owned.is_empty() {
                 stdout.println("Caches for this project:");
                 for name in &found.owned {
-                    stdout.println(&format!("- {name}"));
+                    stdout.println(text!("- {}", name));
                 }
             }
             // Never under "this project's": these are machine-wide, and most
@@ -1303,7 +1307,7 @@ async fn manage_caches(
                 }
                 stdout.println("Shared caches on this machine:");
                 for name in &found.shared {
-                    stdout.println(&format!("- {name}"));
+                    stdout.println(text!("- {}", name));
                 }
             }
         }
@@ -1337,7 +1341,7 @@ async fn remove_caches<D: ratect_core::cache::VolumeStore + Send + Sync>(
             // implementation detail of where it's kept, not what the user
             // called it.
             ratect_core::cache::CleanEvent::Removed(cache) if !quiet => {
-                stdout.println(&format!("Removed cache '{}'.", cache.name))
+                stdout.println(text!("Removed cache '{}'.", cache.name))
             }
             ratect_core::cache::CleanEvent::Removed(_) => {}
             ratect_core::cache::CleanEvent::Warning(message) => stderr.warning(&message),
@@ -1365,7 +1369,7 @@ async fn remove_caches<D: ratect_core::cache::VolumeStore + Send + Sync>(
     };
 
     if !quiet {
-        stdout.println(&format!("Removed {} cache(s).", removed.len()));
+        stdout.println(text!("Removed {} cache(s).", removed.len()));
     }
 
     // A name that matched nothing is worth saying out loud: the likeliest
@@ -1379,12 +1383,12 @@ async fn remove_caches<D: ratect_core::cache::VolumeStore + Send + Sync>(
         // "for this project" points at the wrong storage entirely.
         match found.scope {
             Some(ratect_core::config::CacheScope::Shared) => {
-                stderr.warning(&format!("No shared cache named '{name}' exists."))
+                stderr.warning(format!("No shared cache named '{name}' exists."))
             }
             Some(ratect_core::config::CacheScope::Project) => {
-                stderr.warning(&format!("No cache named '{name}' exists for this project."))
+                stderr.warning(format!("No cache named '{name}' exists for this project."))
             }
-            None => stderr.warning(&format!(
+            None => stderr.warning(format!(
                 "No cache named '{name}' exists for this project, or as a shared cache."
             )),
         }
@@ -1498,7 +1502,7 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool, stdout: &Console) {
         // Machine-readable, same contract as `tasks list`/`caches list`:
         // one id per line and nothing else, ready to pipe into `docker rm`.
         for leftover in leftovers {
-            stdout.println(&leftover.resource.id);
+            stdout.println(text!("{}", leftover.resource.id));
         }
         return;
     }
@@ -1507,7 +1511,7 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool, stdout: &Console) {
     runs.sort_unstable();
     runs.dedup();
 
-    stdout.println(&format!(
+    stdout.println(text!(
         "{} left over from {} previous run{}:",
         leftovers.len(),
         runs.len(),
@@ -1517,9 +1521,9 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool, stdout: &Console) {
         let group: Vec<&Leftover> = leftovers.iter().filter(|l| l.run == run).collect();
         let task = &group[0].task;
         let age = format_age(group.iter().map(|l| l.age_seconds).max().unwrap_or(0));
-        stdout.println(&format!("\n  {task} ({age} ago, run {run}):"));
+        stdout.println(text!("\n  {} ({} ago, run {}):", task, age, run));
         for leftover in group {
-            stdout.println(&format!("    - {}", leftover.describe()));
+            stdout.println(text!("    - {}", leftover.describe()));
         }
     }
     stdout.println("\nRemove them with: ratect resources clean");
@@ -1547,7 +1551,7 @@ where
         ratect_core::resources::remove(docker, leftovers, |leftover, result| match result {
             Ok(()) => {
                 if !quiet {
-                    stdout.println(&format!("Removed {}.", leftover.describe()));
+                    stdout.println(text!("Removed {}.", leftover.describe()));
                 }
             }
             Err(error) => failures.push(format!("{} ({error:#})", leftover.describe())),
@@ -1555,7 +1559,7 @@ where
         .await;
 
     if !quiet {
-        stdout.println(&format!("Removed {removed} of {}.", leftovers.len()));
+        stdout.println(text!("Removed {} of {}.", removed, leftovers.len()));
     }
     anyhow::ensure!(
         failures.is_empty(),
@@ -1684,17 +1688,19 @@ fn report_findings(
             .iter()
             .filter(|finding| !matches!(finding, Finding::Fine(_)))
         {
-            stdout.println(finding.render().trim_start());
+            stdout.println(finding.render().trim_start().to_text());
         }
     } else {
-        stdout.println(&format!("Checking {}...", config_file.display()));
+        stdout.println(text!("Checking {}...", config_file.display()));
         for finding in findings {
-            stdout.println(&finding.render());
+            stdout.println(finding.render().to_text());
         }
         stdout.println("");
-        stdout.println(&format!(
-            "{} check(s): {problems} problem(s), {warnings} warning(s).",
-            findings.len()
+        stdout.println(text!(
+            "{} check(s): {} problem(s), {} warning(s).",
+            findings.len(),
+            problems,
+            warnings
         ));
     }
 
@@ -1834,12 +1840,13 @@ async fn convert_config(
                 if index > 0 {
                     stdout.println("");
                 }
-                stdout.println(&format!("# === {} ===", document.target.display()));
+                stdout.println(text!("# === {} ===", document.target.display()));
             }
-            stdout.write_raw(&document.text);
+            // The converted file itself, as it would be written to disk.
+            stdout.print(Text::raw(document.text.as_str()));
         }
         for document in &documents {
-            stderr.write_raw(&conversion_check_list(&document.target, &document.checks));
+            stderr.print(conversion_check_list(&document.target, &document.checks));
         }
         return Ok(());
     }
@@ -1873,7 +1880,7 @@ async fn convert_config(
 
     if style != OutputStyle::Quiet {
         for document in &documents {
-            stdout.println(&format!(
+            stdout.println(text!(
                 "Converted {} to {}.",
                 document.source.display(),
                 document.target.display()
@@ -1883,7 +1890,7 @@ async fn convert_config(
             .iter()
             .map(|document| document.source.display().to_string())
             .collect();
-        stdout.println(&format!(
+        stdout.println(text!(
             "Review {}, then remove {}.",
             if sources.len() == 1 { "it" } else { "them" },
             join_names(&sources)
@@ -1891,7 +1898,7 @@ async fn convert_config(
     }
     // Even in quiet: what's left to check is what needs acting on.
     for document in &documents {
-        stdout.write_raw(&conversion_check_list(&document.target, &document.checks));
+        stdout.print(conversion_check_list(&document.target, &document.checks));
     }
     Ok(())
 }
@@ -1938,27 +1945,23 @@ fn conversion_header(source: &Path, checks: &[ConversionCheck]) -> String {
 /// write the rest of the value into the file as TOML. TOML allows no other
 /// control character but tab in a comment either.
 fn comment_line(text: &str) -> String {
-    text.chars()
-        .map(|c| match c {
-            '\t' => c.to_string(),
-            c if c.is_control() => c.escape_default().to_string(),
-            c => c.to_string(),
-        })
-        .collect()
+    ratect_core::ui::escape_controls(text, |c| c != '\t')
 }
 
 /// The terminal's list of what to check in `output`, rendered as `doctor`
 /// renders a warning — or nothing, when there's nothing to check.
-fn conversion_check_list(output: &Path, checks: &[ConversionCheck]) -> String {
+fn conversion_check_list(output: &Path, checks: &[ConversionCheck]) -> Text {
     if checks.is_empty() {
-        return String::new();
+        return Text::default();
     }
-    let mut list = format!("Check before using {}:\n", output.display());
-    for check in checks {
-        list.push_str(&check.finding().render());
-        list.push('\n');
-    }
-    list
+    let lines = checks
+        .iter()
+        .map(|check| text!("{}\n", check.finding().render()));
+    text!(
+        "Check before using {}:\n{}",
+        output.display(),
+        Text::join(lines, "")
+    )
 }
 
 /// Writes one converted file without ever truncating an existing file in
@@ -2038,33 +2041,7 @@ async fn manage_includes(
 
     match command {
         IncludesCommand::List => {
-            let entries = cache.list().await?;
-            if entries.is_empty() {
-                if !quiet {
-                    stdout.println("No Git includes are cached.");
-                }
-                return Ok(());
-            }
-            if quiet {
-                for entry in entries {
-                    stdout.println(&quiet_include_line(&entry));
-                }
-                return Ok(());
-            }
-            let total: u64 = entries.iter().map(|entry| entry.size_bytes).sum();
-            stdout.println(&format!(
-                "{} cached Git include(s), {} on disk:",
-                entries.len(),
-                format_size(total)
-            ));
-            for entry in entries {
-                stdout.println(&format!("\n  {}", named_include(&entry)));
-                stdout.println(&format!(
-                    "    {}, last used {} ago",
-                    format_size(entry.size_bytes),
-                    format_age(age_of(entry.last_used))
-                ));
-            }
+            list_includes(cache.list().await?, quiet, stdout);
             Ok(())
         }
         IncludesCommand::Clean(args) => {
@@ -2083,6 +2060,41 @@ async fn manage_includes(
             let outcome = cache.refresh().await?;
             report_include_outcome(&outcome, IncludesVerb::Refresh, quiet, stdout, stderr)
         }
+    }
+}
+
+/// What `includes list` prints for `entries`: one line each when `quiet`, a
+/// summary and a short block each otherwise.
+fn list_includes(
+    entries: Vec<ratect_core::git_include::CachedInclude>,
+    quiet: bool,
+    stdout: &Console,
+) {
+    if entries.is_empty() {
+        if !quiet {
+            stdout.println("No Git includes are cached.");
+        }
+        return;
+    }
+    if quiet {
+        for entry in entries {
+            stdout.println(quiet_include_line(&entry));
+        }
+        return;
+    }
+    let total: u64 = entries.iter().map(|entry| entry.size_bytes).sum();
+    stdout.println(text!(
+        "{} cached Git include(s), {} on disk:",
+        entries.len(),
+        format_size(total)
+    ));
+    for entry in entries {
+        stdout.println(text!("\n  {}", named_include(&entry)));
+        stdout.println(text!(
+            "    {}, last used {} ago",
+            format_size(entry.size_bytes),
+            format_age(age_of(entry.last_used))
+        ));
     }
 }
 
@@ -2115,18 +2127,20 @@ fn report_include_outcome(
     };
     if !quiet {
         for entry in &outcome.succeeded {
-            stdout.println(&format!("{done} {}.", named_include(entry)));
+            stdout.println(text!("{} {}.", done, named_include(entry)));
         }
-        stdout.println(&format!(
-            "{done} {} cached Git include(s).",
+        stdout.println(text!(
+            "{} {} cached Git include(s).",
+            done,
             outcome.succeeded.len()
         ));
     }
     for failure in &outcome.failed {
-        stderr.error(&format!(
-            "Could not {failed} {}: {:#}",
+        stderr.error(text!(
+            "Could not {} {}: {}",
+            failed,
             named_include(&failure.entry),
-            failure.error
+            Text::from(format!("{:#}", failure.error))
         ));
     }
     if !outcome.failed.is_empty() {
@@ -2169,8 +2183,13 @@ fn format_size(bytes: u64) -> String {
 /// remote, with any credentials shown as `***` (#751), the ref, then the
 /// entry's whole cache key — its directory under `~/.ratect/incl` — which
 /// tells apart two entries that differ only in what `Display` hid.
-fn quiet_include_line(entry: &ratect_core::git_include::CachedInclude) -> String {
-    format!("{}\t{}\t{}", entry.remote, entry.git_ref, entry.key)
+fn quiet_include_line(entry: &ratect_core::git_include::CachedInclude) -> Text {
+    text!(
+        "{}\t{}\t{}",
+        entry.remote.to_string(),
+        entry.git_ref,
+        entry.key
+    )
 }
 
 /// A cached Git include as `ratect includes` prints it for a person: its
@@ -2179,13 +2198,13 @@ fn quiet_include_line(entry: &ratect_core::git_include::CachedInclude) -> String
 /// was hidden (credentials, or a path's `@` and what precedes it, #760) — so
 /// only then is the start of its cache key added, enough
 /// to tell them apart and to find its directory under `~/.ratect/incl`.
-fn named_include(entry: &ratect_core::git_include::CachedInclude) -> String {
-    let named = format!("{} at {}", entry.remote, entry.git_ref);
+fn named_include(entry: &ratect_core::git_include::CachedInclude) -> Text {
+    let named = text!("{} at {}", entry.remote.to_string(), entry.git_ref);
     if !entry.remote.hides_credentials() {
         return named;
     }
     let key = entry.key.get(..12).unwrap_or(&entry.key);
-    format!("{named} (key {key})")
+    text!("{} (key {})", named, key)
 }
 
 #[cfg(test)]

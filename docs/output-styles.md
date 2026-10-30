@@ -62,6 +62,15 @@ failure before any task starts, such as a config that doesn't load, is printed
 as the run exits, with no summary line, as is a prerequisite's failure for the
 task waiting on it: the prerequisite's own line is the one printed.
 
+In every style, and in every command's own output, a control character in a
+name or value from your configuration (a task, container, image or cache
+name, a command, a Git include's `repo` or `ref`), or in image build output,
+is printed escaped: `\u{1b}` for ESC, `\r` for a carriage return. A Git
+bundle or a config file can't send your terminal escape sequences that way. A
+name's line breaks and tabs are escaped too (`\n`, `\t`), except inside an
+error message, which keeps both. A command and image build output
+keep theirs. A container's own output is printed as it was written.
+
 Each style is shown below from the *same* real run — `ratect run journey-test`
 against
 [`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)

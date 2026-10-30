@@ -125,7 +125,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use crate::include_trust::{self, Boundary, Bundle, BundleId, EffectiveGrants, Grants};
-use crate::ui::LoadOutput;
+use crate::ui::{printable, LoadOutput, Text};
 
 /// Batect's one built-in config variable, resolvable via
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
@@ -2705,16 +2705,18 @@ pub fn container_names_in_task<'a>(
 /// the last included, ends in a newline, so a project with no tasks is the
 /// empty string: the whole output, written as is. An exact port of Batect's
 /// own `ListTasksCommand.printMachineReadableFormat`.
-pub fn format_task_list_quiet(tasks: &IndexMap<String, Task>) -> String {
+pub fn format_task_list_quiet(tasks: &IndexMap<String, Task>) -> Text {
     let mut names: Vec<_> = tasks.keys().collect();
     names.sort();
-    names
-        .into_iter()
-        .map(|name| match non_blank(tasks[name].description.as_deref()) {
-            Some(description) => format!("{name}\t{description}\n"),
-            None => format!("{name}\n"),
-        })
-        .collect()
+    Text::join(
+        names
+            .into_iter()
+            .map(|name| match non_blank(tasks[name].description.as_deref()) {
+                Some(description) => crate::text!("{}\t{}\n", name, description),
+                None => crate::text!("{}\n", name),
+            }),
+        "",
+    )
 }
 
 /// Formats `--list-tasks` output: every task's name (and `description`,
@@ -2731,8 +2733,8 @@ pub fn format_task_list_quiet(tasks: &IndexMap<String, Task>) -> String {
 /// opens a flat list with `Available tasks:` and a grouped one with its
 /// first group heading, a divergence recorded in
 /// `docs/differences-from-batect.md`.
-pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> String {
-    let mut lines = vec![format!("Tasks in {}:", project_name)];
+pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> Text {
+    let mut lines = vec![crate::text!("Tasks in {}:", project_name)];
 
     if tasks.values().all(|task| listed_group(task).is_none()) {
         let mut names: Vec<_> = tasks.keys().collect();
@@ -2740,7 +2742,8 @@ pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> S
         for name in names {
             lines.push(format_task_line(name, tasks[name].description.as_deref()));
         }
-        return lines.join("\n") + "\n";
+        lines.push(Text::default());
+        return Text::join(lines, "\n");
     }
 
     let mut groups: HashMap<Option<&str>, Vec<&String>> = HashMap::new();
@@ -2759,21 +2762,22 @@ pub fn format_task_list(project_name: &str, tasks: &IndexMap<String, Task>) -> S
         (Some(a), Some(b)) => a.cmp(b),
     });
 
-    lines.push(String::new());
+    lines.push(Text::default());
     for (i, key) in group_keys.iter().enumerate() {
         lines.push(match key {
-            Some(name) => format!("{}:", name),
-            None => "Ungrouped tasks:".to_string(),
+            Some(name) => crate::text!("{}:", name),
+            None => Text::raw("Ungrouped tasks:"),
         });
         for name in &groups[key] {
             lines.push(format_task_line(name, tasks[*name].description.as_deref()));
         }
         if i + 1 < group_keys.len() {
-            lines.push(String::new());
+            lines.push(Text::default());
         }
     }
 
-    lines.join("\n") + "\n"
+    lines.push(Text::default());
+    Text::join(lines, "\n")
 }
 
 /// The heading `task` is listed under, `None` being the ungrouped bucket. An
@@ -2784,10 +2788,10 @@ fn listed_group(task: &Task) -> Option<&str> {
     task.group.as_deref().filter(|group| !group.is_empty())
 }
 
-fn format_task_line(name: &str, description: Option<&str>) -> String {
+fn format_task_line(name: &str, description: Option<&str>) -> Text {
     match non_blank(description) {
-        Some(description) => format!("- {}: {}", name, description),
-        None => format!("- {}", name),
+        Some(description) => crate::text!("- {}: {}", name, description),
+        None => crate::text!("- {}", name),
     }
 }
 
@@ -5119,23 +5123,6 @@ fn deferred_check_context(field: &str, expression: &str) -> String {
         "{field} ('{}') evaluates to a value that can't be used",
         printable(expression)
     )
-}
-
-/// `value` with each control character escaped as Rust would (`\0`, `\n`),
-/// for quoting a user's value in a message: a raw NUL prints as nothing, so a
-/// path refused for holding one would otherwise look fine (#365). Nothing
-/// else is escaped, so an ordinary value reads exactly as it was written.
-fn printable(value: &str) -> String {
-    value
-        .chars()
-        .map(|c| {
-            if c.is_control() {
-                c.escape_debug().to_string()
-            } else {
-                c.to_string()
-            }
-        })
-        .collect()
 }
 
 /// Where each container came from, as far as evaluating it needs to know —

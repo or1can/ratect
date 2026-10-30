@@ -125,6 +125,7 @@
 
 use crate::cache::VolumeStore;
 use crate::resources::ResourceInventory;
+use crate::ui::ToText;
 use crate::ui::{ContainerIoStreaming, EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
@@ -1240,7 +1241,7 @@ impl Drop for RawModeGuard {
             self.event_sink.post(TaskEvent::Warning {
                 message: "Couldn't take the terminal out of raw mode, so it may not echo \
                           what you type; run reset or stty sane to restore it"
-                    .to_string(),
+                    .to_text(),
             });
         }
     }
@@ -3014,7 +3015,9 @@ impl ContainerRuntime for DockerClient {
         if let Some(message) = warning {
             // Printed, not logged: a credential helper that failed is
             // something the user should fix (decisions/0017).
-            self.event_sink.post(TaskEvent::Warning { message });
+            self.event_sink.post(TaskEvent::Warning {
+                message: message.to_text(),
+            });
         }
 
         // Only the request is normalised: events, errors and the engine's
@@ -3126,7 +3129,9 @@ impl ContainerRuntime for DockerClient {
         let (credentials, warnings) =
             resolve_build_credentials(self.credential_resolver.as_ref(), &registries).await;
         for message in list_warning.into_iter().chain(warnings) {
-            self.event_sink.post(TaskEvent::Warning { message });
+            self.event_sink.post(TaskEvent::Warning {
+                message: message.to_text(),
+            });
         }
         // `None` (not `Some(HashMap::new())`) when nothing resolved, so a
         // build with no registries configured sends exactly the request it

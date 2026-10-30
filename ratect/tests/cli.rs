@@ -372,6 +372,45 @@ fn a_git_include_remotes_credentials_are_never_printed() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// #752: a Git include's remote holding terminal escapes prints escaped in
+/// the clone's announcement and in the error the failed clone ends the load
+/// with — `ratect`'s progress and errors both being on stderr.
+#[test]
+fn a_git_include_remotes_control_characters_print_escaped() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\
+         include = [{ type = \"git\", repo = \"https://127.0.0.1:9/\\u001b]0;pwned\\u0007b.git\", \
+         ref = \"native-752\" }]\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .arg("-f")
+        .arg(dir.join("ratect.toml"))
+        .args(["-o", "simple", "tasks", "list"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success(), "{stderr}");
+    let escaped = "https://127.0.0.1:9/\\u{1b}]0;pwned\\u{7}b.git";
+    assert!(
+        stderr.contains(&format!("Cloning {escaped} native-752...")),
+        "{stderr:?}"
+    );
+    assert!(
+        stderr.contains(&format!("Could not clone repository '{escaped}'")),
+        "{stderr:?}"
+    );
+    assert!(!stderr.contains('\x1b'), "{stderr:?}");
+    assert!(!stderr.contains('\x07'), "{stderr:?}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A run that fails before any task starts — here, a config that doesn't
 /// load — reached no event sink, so `main` prints its `Error:` line, and
 /// exactly once (ratect#334).

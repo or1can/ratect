@@ -26,9 +26,10 @@ use ratect_core::docker::{DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::exit_code::{InvalidOptionValue, Word};
 use ratect_core::git_include::GitIncludeCache;
+use ratect_core::text;
 use ratect_core::ui::{
     create_event_sink, select_output_style, ColorMode, Console, LoadOutput, OutputStyle,
-    ProgressStream, TaskEvent, TerminalFacts,
+    ProgressStream, TaskEvent, TerminalFacts, Text, ToText,
 };
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -817,7 +818,7 @@ async fn async_main() {
     let stdout = Console::stdout(color_mode);
 
     if let Err(err) = init_tracing(args.log_file.as_deref(), stderr.color_enabled()) {
-        stderr.error(&format!("{err:?}"));
+        stderr.error(format!("{err:?}"));
         std::process::exit(failed(&err).into());
     }
 
@@ -853,7 +854,7 @@ async fn async_main() {
             // second line would be the same event twice (decisions/0017;
             // the list is `already_reported`'s, shared with `ratect`).
             if !ratect_core::exit_code::already_reported(&err) {
-                stderr.error(&format!("{err:?}"));
+                stderr.error(format!("{err:?}"));
             }
 
             failed(&err)
@@ -989,7 +990,7 @@ async fn run(
             OutputStyle::Quiet => format_task_list_quiet(&project.config.tasks),
             _ => format_task_list(&project.config.project_name, &project.config.tasks),
         };
-        stdout.write_raw(&listing);
+        stdout.print(listing);
         return Ok(());
     }
 
@@ -1045,14 +1046,16 @@ async fn run(
     interrupt.listen();
     let docker = match interrupt
         .unless_signalled(DockerClient::new(&args.docker_connection(), |message| {
-            event_sink.post(TaskEvent::Warning { message })
+            event_sink.post(TaskEvent::Warning {
+                message: message.to_text(),
+            })
         }))
         .await
     {
         Ok(connected) => connected?,
         Err(interrupted) => {
             event_sink.post(TaskEvent::Notice {
-                message: interrupted.signal.not_starting(task_name),
+                message: interrupted.signal.not_starting(task_name).to_text(),
             });
             return Err(interrupted.into());
         }
@@ -1128,7 +1131,7 @@ async fn clean_caches(
             Some(docker)
         }
         CacheType::Directory => {
-            stdout.println(&format!(
+            stdout.println(text!(
                 "Checking for cache directories in '{}'...",
                 ratect_core::cache::cache_directory(&project_directory).display()
             ));
@@ -1163,7 +1166,7 @@ async fn remove_project_caches<D: ratect_core::cache::VolumeStore + Send + Sync>
     let removed = store
         .remove(&found, only, |event| match event {
             ratect_core::cache::CleanEvent::Removing(cache) => {
-                stdout.println(&deleting_line(cache_type, &cache.storage))
+                stdout.println(deleting_line(cache_type, &cache.storage))
             }
             ratect_core::cache::CleanEvent::Removed(_) => {}
             ratect_core::cache::CleanEvent::Warning(message) => stderr.warning(&message),
@@ -1171,7 +1174,7 @@ async fn remove_project_caches<D: ratect_core::cache::VolumeStore + Send + Sync>
         .await?
         .expect("a Project-scoped selection can never trigger CacheStore's shared-cache refusal");
 
-    stdout.println(&done_line(cache_type, removed.len()));
+    stdout.println(done_line(cache_type, removed.len()));
 
     Ok(())
 }
@@ -1182,10 +1185,10 @@ async fn remove_project_caches<D: ratect_core::cache::VolumeStore + Send + Sync>
 /// identifier Batect itself prints: a Docker volume name under
 /// `CacheType::Volume`, a full host path under `CacheType::Directory` —
 /// never the bare cache name a `cache` mount declares.
-fn deleting_line(cache_type: CacheType, storage: &str) -> String {
+fn deleting_line(cache_type: CacheType, storage: &str) -> Text {
     match cache_type {
-        CacheType::Volume => format!("Deleting volume '{storage}'..."),
-        CacheType::Directory => format!("Deleting '{storage}'..."),
+        CacheType::Volume => text!("Deleting volume '{}'...", storage),
+        CacheType::Directory => text!("Deleting '{}'...", storage),
     }
 }
 

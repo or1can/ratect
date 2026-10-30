@@ -587,7 +587,7 @@ fn a_burst_of_warnings_is_followed_by_one_block() {
 
     for registry in ["a", "b", "c"] {
         logger.post(TaskEvent::Warning {
-            message: format!("registry {registry}"),
+            message: format!("registry {registry}").into(),
         });
     }
     logger.post(TaskEvent::ImagePullStarting {
@@ -2295,5 +2295,72 @@ fn with_colour_off_the_bold_lines_are_plain_text() {
     assert!(
         !contents.contains("\x1b[1m") && !contents.contains("\x1b[0m"),
         "{contents:?}"
+    );
+}
+
+/// #752: a hostile task or container name prints escaped in the live block
+/// and the lines around it, and is measured as escaped — the escaped name
+/// fits a wide terminal whole. Ratect's own `\r` (each row starts with
+/// `\r\x1b[2K`) is taken out before looking for the name's.
+#[test]
+fn a_hostile_name_prints_escaped() {
+    use super::super::tests::{assert_nothing_raw, HOSTILE};
+
+    let (logger, buffer) = logger_with_width(200);
+    logger.post(TaskEvent::TaskStarting {
+        task: HOSTILE.into(),
+    });
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info(HOSTILE, Some(HOSTILE), &[], true)],
+    });
+    logger.post(TaskEvent::ImagePullStarting {
+        image: HOSTILE.into(),
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: HOSTILE.into(),
+        command: Some(HOSTILE.into()),
+    });
+    logger.post(TaskEvent::TaskFinished {
+        task: HOSTILE.into(),
+        exit_code: 0,
+        duration: Duration::from_secs(1),
+    });
+    assert_nothing_raw(&buffer.contents().replace("\r\x1b[", "\x1b["));
+}
+
+/// #752: a build line is escaped — a `Dockerfile` can come from a Git
+/// bundle, and BuildKit echoes each `RUN` line — and a tab, in it or in a
+/// command, paints as a space: the terminal would expand it to columns the
+/// clip never counted.
+#[test]
+fn a_build_line_is_escaped_and_a_tab_paints_as_a_space() {
+    let (logger, buffer) = two_builds_and_a_task();
+    logger.post(TaskEvent::ImageBuildStarting {
+        container: "build-a".into(),
+    });
+    logger.post(TaskEvent::ImageBuildProgress {
+        tag: "p-build-a".into(),
+        message: "#5 RUN echo \x1b]0;pwned\x07".into(),
+    });
+    assert_eq!(
+        last_frame(&buffer, 3)[0],
+        "build-a: building image: #5 RUN echo \\u{1b}]0;pwned\\u{7}"
+    );
+
+    let (logger, buffer) = logger_with_width(120);
+    logger.post(TaskEvent::TaskStarting {
+        task: "test".into(),
+    });
+    logger.post(TaskEvent::TaskGraphResolved {
+        containers: vec![info("app", Some("app:1"), &[], true)],
+    });
+    logger.post(TaskEvent::RunningTaskContainer {
+        container: "app".into(),
+        command: Some("make\tall".into()),
+    });
+    assert!(
+        buffer.contents().contains("app: running make all\n"),
+        "{:?}",
+        buffer.contents()
     );
 }

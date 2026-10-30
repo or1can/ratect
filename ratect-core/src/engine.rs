@@ -97,6 +97,7 @@ use crate::config::{
 };
 use crate::container_spec::{derive_build_spec, BindMount, BindSource};
 use crate::docker::ContainerRuntime;
+use crate::ui::ToText;
 use crate::ui::{CleanupCause, EventSink, TaskEvent};
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
@@ -1758,7 +1759,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 message: format!(
                     "Couldn't cancel the image build for '{container}', so it may still be \
                      running in the Docker daemon: {reason}"
-                ),
+                )
+                .to_text(),
             });
         }
     }
@@ -1917,9 +1919,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     }
 
     /// Posts `message` as a notice — printed on stderr in every style, never
-    /// logged (decisions/0017).
+    /// logged (decisions/0017). One line, so every control character in it
+    /// is escaped, a line break included (#752).
     fn post_notice(&self, message: String) {
-        self.event_sink.post(TaskEvent::Notice { message });
+        self.event_sink.post(TaskEvent::Notice {
+            message: message.to_text(),
+        });
     }
 
     /// Warns, once per invocation, about every rewritten proxy URL whose
@@ -1940,7 +1945,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                      host. Bind the proxy to 0.0.0.0 to make it reachable — which also exposes \
                      it to anything else that can reach this machine, so do that only on a \
                      network you trust. Use --no-proxy-vars if this run doesn't need the proxy."
-                ),
+                )
+                .to_text(),
             });
         }
     }
@@ -3119,7 +3125,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     message.push_str("\n\n");
                     message.push_str(RERUN_WITHOUT_CLEANUP_HINT);
                 }
-                self.event_sink.post(TaskEvent::Error { message });
+                self.event_sink.post(TaskEvent::Error {
+                    message: message.into(),
+                });
                 Err(FailureReported(error).into())
             }
             result => result,
@@ -3276,7 +3284,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                      find {them} with docker ps -a --filter label={}={run_id}",
                     unanswered.join(", "),
                     crate::labels::RUN,
-                ),
+                )
+                .to_text(),
             });
         }
         // Everything Docker created, however far each got — see
@@ -3591,7 +3600,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .filter(|_| owns_network && !network_removed),
                 );
                 self.event_sink.post(TaskEvent::Error {
-                    message: left.failure_message(abandoned, &refusals.into_inner().unwrap()),
+                    message: left
+                        .failure_message(abandoned, &refusals.into_inner().unwrap())
+                        .to_text(),
                 });
             } else if interrupted_by.is_some() {
                 // The interrupt sequence's last line (decisions/0017): a
