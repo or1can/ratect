@@ -199,8 +199,9 @@ pub(crate) struct Boundary {
 enum Escape {
     /// The path's spelling already leaves both allowed roots.
     Lexical,
-    /// Its spelling stays inside, but what it really points at does not.
-    ViaSymlink,
+    /// Its spelling stays inside, but what it really points at — carried,
+    /// since that is the part to fix — does not.
+    ViaSymlink(PathBuf),
 }
 
 impl Boundary {
@@ -318,7 +319,27 @@ impl Boundary {
         {
             return Ok(());
         }
-        Err(self.refuse_escape(resolved, project_dir, Escape::ViaSymlink))
+        Err(self.refuse_escape(resolved, project_dir, Escape::ViaSymlink(real)))
+    }
+
+    /// How a message names `path` if it lies in this bundle's checkout: as
+    /// the bundle names it ([`describe`](Self::describe)), or for the
+    /// checkout itself, as the bundle's — never by the clone-cache path
+    /// Ratect resolved, which nobody wrote (#639). `None` for any other path —
+    /// a project directory path, or a host path the bundle spelled out —
+    /// which a message names as it is: described relative to the clone, it
+    /// would be a run of `..` that depends on where the cache lives.
+    pub(crate) fn describe_in_checkout(&self, path: &Path) -> Option<String> {
+        if path == self.repo_dir {
+            Some(format!(
+                "the checkout of the bundle '{}' at '{}'",
+                self.bundle.id.remote, self.bundle.id.git_ref
+            ))
+        } else if path.starts_with(&self.repo_dir) {
+            Some(self.describe(path))
+        } else {
+            None
+        }
     }
 
     /// [`real_path_as_far_as_it_exists`] with this bundle's name attached: the
@@ -327,38 +348,51 @@ impl Boundary {
     /// the candidate and both allowed roots — since a root failing to resolve
     /// is not the caller's path being at fault.
     fn real_path(&self, path: &Path) -> Result<PathBuf> {
-        real_path_as_far_as_it_exists(path).with_context(|| {
-            format!(
+        real_path_as_far_as_it_exists(path).with_context(|| match self.describe_in_checkout(path) {
+            Some(described) => format!(
+                "Cannot determine where {described} really points, so its containment \
+                     cannot be checked."
+            ),
+            None => format!(
                 "Cannot determine where '{}' really points, so the containment for the \
-                 Git repository '{}' at '{}' cannot be checked.",
+                     Git repository '{}' at '{}' cannot be checked.",
                 path.display(),
                 self.bundle.id.remote,
                 self.bundle.id.git_ref
-            )
+            ),
         })
     }
 
     /// The refusal both halves of [`check_path_allowed`](Self::check_path_allowed)
-    /// raise. Which half it was changes only how the path is described; the
-    /// remedy is the same either way, and is the part that has to name the
-    /// field rather than spell its syntax, since the include entry it points
-    /// at may be in either format.
+    /// raise. Which half it was changes only how the path is described —
+    /// a symlink's says where it really leads, which is as it is: it escapes
+    /// the checkout, so it is no path within the bundle. The remedy is the
+    /// same either way, and is the part that has to name the field rather
+    /// than spell its syntax, since the include entry it points at may be in
+    /// either format.
     fn refuse_escape(&self, resolved: &Path, project_dir: &Path, escape: Escape) -> anyhow::Error {
         let how = match escape {
-            Escape::Lexical => "",
-            Escape::ViaSymlink => " (via a symlink)",
+            Escape::Lexical => String::new(),
+            Escape::ViaSymlink(real) => format!(" (via a symlink, to '{}')", real.display()),
+        };
+        // A path described within the bundle already names it.
+        let (path, repository) = match self.describe_in_checkout(resolved) {
+            Some(described) => (described, "its checkout".to_string()),
+            None => (
+                format!("'{}'", resolved.display()),
+                format!(
+                    "the Git repository '{}' at '{}' it was included from",
+                    self.bundle.id.remote, self.bundle.id.git_ref
+                ),
+            ),
         };
         anyhow::anyhow!(
-            "Path '{}' escapes both the Git repository '{}' at '{}' it was included from and \
-             the project directory '{}'{} — a container reached through a Git include must \
-             resolve its 'volumes'/'build_directory' paths within one of the two. If you trust \
-             this bundle to reach that path, set 'allow_host_paths' to true on the include entry \
-             for '{}' in your own configuration.",
-            resolved.display(),
-            self.bundle.id.remote,
-            self.bundle.id.git_ref,
+            "Path {path} escapes both {repository} and the project directory '{}'{how} — a \
+             container reached through a Git include must resolve its \
+             'volumes'/'build_directory' paths within one of the two. If you trust this bundle \
+             to reach that path, set 'allow_host_paths' to true on the include entry for '{}' \
+             in your own configuration.",
             project_dir.display(),
-            how,
             self.bundle.id.remote
         )
     }

@@ -1594,6 +1594,7 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         image: Some(image.to_string()),
         image_pull_policy: None,
         build_directory: None,
+        build_directory_in_bundle: None,
         dockerfile: None,
         build_target: None,
         build_secrets: None,
@@ -1660,6 +1661,7 @@ fn config_with_cycle() -> Config {
             image: Some("alpine:3.18".to_string()),
             image_pull_policy: None,
             build_directory: None,
+            build_directory_in_bundle: None,
             dockerfile: None,
             build_target: None,
             build_secrets: None,
@@ -1767,6 +1769,7 @@ fn config_with_shared_prerequisite() -> Config {
             image: Some("alpine:3.18".to_string()),
             image_pull_policy: None,
             build_directory: None,
+            build_directory_in_bundle: None,
             dockerfile: None,
             build_target: None,
             build_secrets: None,
@@ -2753,6 +2756,7 @@ fn container_with_run_as_current_user(
         image: Some(image.to_string()),
         image_pull_policy: None,
         build_directory: None,
+        build_directory_in_bundle: None,
         dockerfile: None,
         build_target: None,
         build_secrets: None,
@@ -3242,6 +3246,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             image: Some("alpine:3.18".to_string()),
             image_pull_policy: None,
             build_directory: None,
+            build_directory_in_bundle: None,
             dockerfile: None,
             build_target: None,
             build_secrets: None,
@@ -3313,6 +3318,7 @@ fn container_with_build_directory(
         image: None,
         image_pull_policy: None,
         build_directory: Some(build_directory.to_string()),
+        build_directory_in_bundle: None,
         build_args,
         dockerfile: None,
         build_target: None,
@@ -3503,6 +3509,29 @@ async fn a_dockerfile_that_cant_be_built_from_is_refused_before_building() {
             .any(|event| event.starts_with("build:")),
         "{:?}",
         docker.events()
+    );
+}
+
+/// A run names a bundle's `build_directory` in a build refusal as evaluation
+/// recorded it, not by the path it resolved to (#639).
+#[tokio::test]
+async fn a_build_refusal_names_a_bundles_build_directory_as_the_bundle_does() {
+    let mut config = config_building_with_dockerfile("Missing.Dockerfile");
+    config.containers["build-env"].build_directory_in_bundle =
+        Some("'docker' from the bundle 'https://example.com/bundle.git' at 'v1.0.0'".to_string());
+
+    let error = engine(config, FakeContainerRuntime::default())
+        .run_task("build", &[])
+        .await
+        .unwrap_err();
+
+    let message = format!("{error:#}");
+    assert!(
+        message.contains(
+            "dockerfile 'Missing.Dockerfile' doesn't exist in build_directory 'docker' from the \
+             bundle 'https://example.com/bundle.git' at 'v1.0.0'"
+        ),
+        "{message}"
     );
 }
 
@@ -4198,6 +4227,7 @@ async fn container_without_image_or_build_directory_errors() {
             image: None,
             image_pull_policy: None,
             build_directory: None,
+            build_directory_in_bundle: None,
             dockerfile: None,
             build_target: None,
             build_secrets: None,
@@ -10970,6 +11000,7 @@ async fn dependency_without_image_or_build_directory_errors() {
             image: None,
             image_pull_policy: None,
             build_directory: None,
+            build_directory_in_bundle: None,
             dockerfile: None,
             build_target: None,
             build_secrets: None,

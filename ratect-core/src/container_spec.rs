@@ -676,25 +676,31 @@ pub fn derive_build_spec(
 /// The run calls this when it is about to build, and `ratect doctor` and
 /// `config validate` call it for every build container, so the two can't
 /// disagree about what can't be built. The error names the fields but not
-/// the container, which each caller attributes in its own way.
+/// the container, which each caller attributes in its own way. It names
+/// `build_directory` as `in_bundle` does when given one — the container's
+/// `build_directory_in_bundle` — and as it is otherwise.
 pub(crate) fn check_build_files(
     build_directory: &Path,
+    in_bundle: Option<&str>,
     dockerfile: Option<&str>,
 ) -> std::result::Result<String, String> {
     use path_clean::PathClean;
     let dockerfile = dockerfile.unwrap_or("Dockerfile");
-    let directory = build_directory.display();
+    let directory = in_bundle.map_or_else(
+        || format!("'{}'", build_directory.display()),
+        str::to_string,
+    );
     if !build_directory.exists() {
-        return Err(format!("build_directory '{directory}' doesn't exist"));
+        return Err(format!("build_directory {directory} doesn't exist"));
     }
     if !build_directory.is_dir() {
-        return Err(format!("build_directory '{directory}' isn't a directory"));
+        return Err(format!("build_directory {directory} isn't a directory"));
     }
     let root = build_directory.clean();
     let path = root.join(dockerfile).clean();
     if !path.exists() {
         return Err(format!(
-            "dockerfile '{dockerfile}' doesn't exist in build_directory '{directory}'"
+            "dockerfile '{dockerfile}' doesn't exist in build_directory {directory}"
         ));
     }
     if !path.is_file() {
@@ -712,7 +718,7 @@ pub(crate) fn check_build_files(
     }
     let Ok(relative) = path.strip_prefix(&root) else {
         return Err(format!(
-            "dockerfile '{dockerfile}' isn't inside build_directory '{directory}'"
+            "dockerfile '{dockerfile}' isn't inside build_directory {directory}"
         ));
     };
     // The context walk skips a linked directory as it skips a linked file,
