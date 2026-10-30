@@ -226,7 +226,7 @@ history, from when it was the only binary.
 
 ### Security
 
-- A Git include's `repo` is shown with any credentials in its URL replaced by `***` (`https://***@host/repo.git`) in every message, in `RUST_LOG=debug` records, and in `ratect includes` output, which also gives such an entry the first 12 characters of its cache key, so two that differ only in credentials are told apart. The include is still cloned with the URL as written.
+- A Git include's `repo` is shown with everything between its URL's `://` and last `@` — any credentials, even one containing `/` — replaced by `***` (`https://***@host/repo.git`) in every message, in `RUST_LOG=debug` records, and in `ratect includes` output, which also gives such an entry the first 12 characters of its cache key, so two that differ only in what was hidden are told apart. A `repo` whose path contains `@` is hidden up to it too: `https://host/a@b` is shown as `https://***@b`. The include is still cloned with the URL as written.
 - Upgraded `rustls-webpki` to 0.103.16, fixing [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) (certificate verification may accept distrusted intermediates).
 - Upgraded `tokio` to 1.54.1, fixing [RUSTSEC-2026-0384](https://rustsec.org/advisories/RUSTSEC-2026-0384) (a race condition in `tokio::time::Interval`). Ratect's own code doesn't use `Interval`; lockfile only.
 
