@@ -1290,6 +1290,93 @@ async fn a_directory_clean_prints_each_line_as_it_goes() {
     std::fs::remove_dir_all(&project_dir).unwrap();
 }
 
+/// The volumes Batect's own `CleanupCachesCommandSpec` lists: two of a
+/// project keyed `this-project`, one of another project, and one that
+/// isn't a cache at all — the project's two out of sorted order, so a test
+/// can tell the daemon's list order from a sorted one. Each removal is written to `log`, the buffer the
+/// test's stdout `Console` writes to, so a test reads the lines printed
+/// and the removals made as one sequence.
+struct LoggedVolumes {
+    log: Captured,
+}
+
+#[async_trait::async_trait]
+impl ratect_core::cache::VolumeStore for LoggedVolumes {
+    async fn list_volumes(&self) -> Result<Vec<String>> {
+        Ok(vec![
+            "batect-cache-this-project-def456".to_string(),
+            "batect-cache-this-project-abc123".to_string(),
+            "batect-cache-other-project-abc123".to_string(),
+            "something-else".to_string(),
+        ])
+    }
+
+    async fn remove_volume(&self, name: &str) -> Result<()> {
+        use std::io::Write as _;
+        writeln!(self.log.clone(), "<removed {name}>").unwrap();
+        Ok(())
+    }
+}
+
+/// Runs [`remove_project_caches`] in volume mode against [`LoggedVolumes`],
+/// for a project keyed `this-project`, and returns the log of what it
+/// printed and removed, in order.
+async fn clean_logged_volumes(only: &[&str]) -> String {
+    let project_dir = unique_temp_dir();
+    let caches = ratect_core::cache::cache_directory(&project_dir);
+    std::fs::create_dir_all(&caches).unwrap();
+    std::fs::write(caches.join("key"), "this-project\n").unwrap();
+    let log = Captured::default();
+    let volumes = LoggedVolumes { log: log.clone() };
+    let store = ratect_core::cache::CacheStore::new(
+        CacheType::Volume,
+        Some(&volumes),
+        project_dir.clone(),
+        None,
+    )
+    .unwrap();
+
+    remove_project_caches(
+        &store,
+        CacheType::Volume,
+        &only.iter().map(|name| name.to_string()).collect(),
+        &Console::new(Box::new(log.clone()), false),
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .await
+    .unwrap();
+
+    std::fs::remove_dir_all(&project_dir).unwrap();
+    log.text()
+}
+
+/// #466, Batect's CCC-4: with no names, each of this project's volumes
+/// is announced immediately before its own removal, in the daemon's list
+/// order (not sorted), and no other volume is removed.
+#[tokio::test]
+async fn a_volume_clean_announces_each_volume_before_removing_it() {
+    assert_eq!(
+        clean_logged_volumes(&[]).await,
+        "Deleting volume 'batect-cache-this-project-def456'...\n\
+         <removed batect-cache-this-project-def456>\n\
+         Deleting volume 'batect-cache-this-project-abc123'...\n\
+         <removed batect-cache-this-project-abc123>\n\
+         Done! Deleted 2 volumes.\n"
+    );
+}
+
+/// #466, Batect's CCC-9: a named volume clean removes only that one of
+/// the project's volumes, and says so in the singular.
+#[tokio::test]
+async fn a_named_volume_clean_removes_only_the_named_volume() {
+    assert_eq!(
+        clean_logged_volumes(&["def456"]).await,
+        "Deleting volume 'batect-cache-this-project-def456'...\n\
+         <removed batect-cache-this-project-def456>\n\
+         Done! Deleted 1 volume.\n"
+    );
+}
+
 #[test]
 fn a_cache_removal_summary_uses_the_singular_for_exactly_one() {
     assert_eq!(

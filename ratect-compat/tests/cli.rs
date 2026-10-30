@@ -9096,6 +9096,156 @@ fn directory_clean_warns_once_about_a_skipped_symbolic_link() {
     std::fs::remove_dir_all(&outside).unwrap();
 }
 
+/// The cache directory Batect's own `CleanupCachesCommandSpec` sets up for
+/// its directory-mode cases, in a one-task project: an empty cache, one
+/// holding a file, one holding a subdirectory, and a plain file beside
+/// them that no clean removes. Returns the project, canonicalized as the
+/// binary prints it (macOS's `/var` is a symbolic link), and its
+/// `.batect/caches`.
+fn project_with_batects_cache_directories(purpose: &str) -> (PathBuf, PathBuf) {
+    let project = one_task_project(purpose).canonicalize().unwrap();
+    let caches = project.join(".batect/caches");
+    std::fs::create_dir_all(caches.join("empty-cache")).unwrap();
+    std::fs::create_dir_all(caches.join("cache-with-file")).unwrap();
+    std::fs::write(caches.join("cache-with-file/file"), "").unwrap();
+    std::fs::create_dir_all(caches.join("cache-with-sub-directory/sub-dir")).unwrap();
+    std::fs::write(caches.join("file-that-should-not-be-deleted"), "").unwrap();
+    (project, caches)
+}
+
+/// #466, Batect's CCC-14: a directory-mode clean with no names prints the
+/// checking line once, a `Deleting` line per cache directory, and the
+/// summary once, and leaves the plain file alone. Batect allows the
+/// directories in any order; ratect-compat's is sorted.
+#[test]
+fn directory_clean_prints_checking_then_each_directory_then_the_summary() {
+    let (project, caches) = project_with_batects_cache_directories("clean-all-directories");
+
+    let output = isolated_docker_command(&project)
+        .args(["--clean", "--cache-type", "directory"])
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "Checking for cache directories in '{caches}'...\n\
+             Deleting '{caches}/cache-with-file'...\n\
+             Deleting '{caches}/cache-with-sub-directory'...\n\
+             Deleting '{caches}/empty-cache'...\n\
+             Done! Deleted 3 directories.\n",
+            caches = caches.display()
+        )
+    );
+    let remaining: Vec<_> = std::fs::read_dir(&caches)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(remaining, ["file-that-should-not-be-deleted"]);
+
+    std::fs::remove_dir_all(&project).unwrap();
+}
+
+/// #466, Batect's CCC-19: `--clean-cache` names one cache directory, and
+/// only that one is announced and removed, with the summary in the
+/// singular.
+#[test]
+fn named_directory_clean_prints_and_removes_only_that_directory() {
+    let (project, caches) = project_with_batects_cache_directories("clean-named-directory");
+
+    let output = isolated_docker_command(&project)
+        .args([
+            "--clean-cache",
+            "cache-with-file",
+            "--cache-type",
+            "directory",
+        ])
+        .output()
+        .expect("failed to run ratect");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "Checking for cache directories in '{caches}'...\n\
+             Deleting '{caches}/cache-with-file'...\n\
+             Done! Deleted 1 directory.\n",
+            caches = caches.display()
+        )
+    );
+    assert!(!caches.join("cache-with-file").exists());
+    for kept in [
+        "empty-cache",
+        "cache-with-sub-directory/sub-dir",
+        "file-that-should-not-be-deleted",
+    ] {
+        assert!(caches.join(kept).exists(), "{kept} was removed");
+    }
+
+    std::fs::remove_dir_all(&project).unwrap();
+}
+
+/// #466: as Batect's `runForDirectories` does, a directory-mode clean
+/// prints each `Deleting` line before attempting that removal, so one that
+/// fails partway has announced every directory it reached, the failing one
+/// included, and prints no summary. `b` can't be removed because a
+/// directory inside it is read-only — which doesn't stop root, so the test
+/// first checks that it does stop this user, and otherwise prints
+/// `skipped:` (shown under `--nocapture`) and asserts nothing.
+#[cfg(unix)]
+#[test]
+fn a_failed_directory_clean_has_printed_each_directory_it_reached() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let project = one_task_project("clean-fails-partway")
+        .canonicalize()
+        .unwrap();
+    let caches = project.join(".batect/caches");
+    for name in ["a", "b/inner", "c"] {
+        std::fs::create_dir_all(caches.join(name)).unwrap();
+    }
+    let inner = caches.join("b/inner");
+    std::fs::write(inner.join("file"), "").unwrap();
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let unremovable = std::fs::remove_file(inner.join("file")).is_err();
+
+    let output = unremovable.then(|| {
+        isolated_docker_command(&project)
+            .args(["--clean", "--cache-type", "directory"])
+            .output()
+            .expect("failed to run ratect")
+    });
+    let remaining: Vec<bool> = ["a", "b", "c"]
+        .map(|name| caches.join(name).exists())
+        .to_vec();
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_dir_all(&project).unwrap();
+
+    let Some(output) = output else {
+        eprintln!("skipped: a read-only directory doesn't stop this user removing it (root?)");
+        return;
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(stderr.contains("Permission denied"), "{stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "Checking for cache directories in '{caches}'...\n\
+             Deleting '{caches}/a'...\n\
+             Deleting '{caches}/b'...\n",
+            caches = caches.display()
+        )
+    );
+    assert_eq!(remaining, [false, true, true], "a, b, c remaining");
+}
+
 /// #459: a directory-mode clean of a project with no `.batect/caches`
 /// still succeeds with zero deletions, where Batect fails — and says
 /// there was no cache directory, once, rather than leaving that to read
