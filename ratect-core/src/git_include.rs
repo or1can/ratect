@@ -71,34 +71,88 @@ use crate::ui::LoadOutput;
 
 mod entry_lock;
 
-/// `remote` as Ratect shows it, in every message and listing: a URL's
-/// credentials — everything in its authority before the last `@` — as `***`,
-/// so a token in a `repo` never reaches a terminal or a log (#751); the rest
-/// as written, byte for byte, and a remote that isn't a URL (`git@host:path`,
-/// a local path) unchanged. `git`'s own messages already leave credentials
-/// out. What is stored and passed to `git` is the remote in full.
+/// A Git include's remote — its `repo` — wherever one is held: the config
+/// model, the cache's entries and sidecars, a bundle's identity (#756).
 ///
-/// Written out rather than parsed with `url`, which would normalise the rest
-/// (lowercase the host, add a trailing `/`) and can't parse what isn't a URL.
-pub fn display_remote(remote: &str) -> Cow<'_, str> {
-    let Some(scheme_end) = remote.find("://") else {
-        return Cow::Borrowed(remote);
-    };
-    let (head, rest) = remote.split_at(scheme_end + "://".len());
-    // To the first `/` only: a credential may hold an unencoded `?` or `#`,
-    // and taking too much of a URL with neither only hides more of it.
-    let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
-    match authority.rfind('@') {
-        Some(at) => Cow::Owned(format!("{head}***{}", &rest[at..])),
-        None => Cow::Borrowed(remote),
+/// `Display` and `Debug` both show it as Ratect shows a remote in every
+/// message and listing: a URL's credentials — everything in its authority
+/// before the last `@` — as `***`, so a token in a `repo` never reaches a
+/// terminal or a log (#751); the rest as written, byte for byte, and a remote
+/// that isn't a URL (`git@host:path`, a local path) unchanged. `git`'s own
+/// messages already leave credentials out. So a new message, log record or
+/// `{:?}` naming one hides them without its author having to remember to.
+///
+/// The remote in full is `Remote::unredacted`, crate-private so neither
+/// binary can print it, and only what must have it reads it: the `git`
+/// invocation (its argv, and the leading-`-` refusal that guards it), the
+/// cache key, and serialisation — which is transparent, so a sidecar and
+/// `ratect config convert`'s output keep the URL that clones. Equality and hashing compare it in full too, so two
+/// remotes differing only in credentials are different remotes that display
+/// alike.
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Remote(String);
+
+impl Remote {
+    /// The remote as written, credentials included. Never for a message.
+    pub(crate) fn unredacted(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether `Display` leaves credentials out — the only way two different
+    /// remotes can show alike, so what tells `ratect includes` to add an
+    /// entry's cache key to tell them apart.
+    pub fn hides_credentials(&self) -> bool {
+        matches!(self.redacted(), Cow::Owned(_))
+    }
+
+    /// The remote as `Display` shows it. Written out rather than parsed with
+    /// `url`, which would normalise the rest (lowercase the host, add a
+    /// trailing `/`) and can't parse what isn't a URL.
+    fn redacted(&self) -> Cow<'_, str> {
+        let remote = self.0.as_str();
+        let Some(scheme_end) = remote.find("://") else {
+            return Cow::Borrowed(remote);
+        };
+        let (head, rest) = remote.split_at(scheme_end + "://".len());
+        // To the first `/` only: a credential may hold an unencoded `?` or `#`,
+        // and taking too much of a URL with neither only hides more of it.
+        let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+        match authority.rfind('@') {
+            Some(at) => Cow::Owned(format!("{head}***{}", &rest[at..])),
+            None => Cow::Borrowed(remote),
+        }
     }
 }
 
-/// A Git include as every message names it — `'<remote>' at '<ref>'`, the
-/// remote through [`display_remote`] — so no message spells the pair, or
-/// forgets to redact it, on its own.
-pub fn describe_include(remote: &str, git_ref: &str) -> String {
-    format!("'{}' at '{git_ref}'", display_remote(remote))
+impl From<String> for Remote {
+    fn from(remote: String) -> Self {
+        Remote(remote)
+    }
+}
+
+impl From<&str> for Remote {
+    fn from(remote: &str) -> Self {
+        Remote(remote.to_string())
+    }
+}
+
+impl std::fmt::Display for Remote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.redacted())
+    }
+}
+
+impl std::fmt::Debug for Remote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.redacted(), f)
+    }
+}
+
+/// A Git include as every message names it — `'<remote>' at '<ref>'` — so
+/// no message spells the pair on its own.
+pub fn describe_include(remote: &Remote, git_ref: &str) -> String {
+    format!("'{remote}' at '{git_ref}'")
 }
 
 /// Where a sidecar failed to parse — `at line N` — and nothing else: toml's
@@ -123,7 +177,7 @@ pub trait GitClient: Send + Sync {
     /// `destination` doesn't exist yet: it is a staging directory fresh to
     /// this attempt, which the caller (`GitIncludeCache`) renames into place
     /// once this returns, and removes if it fails.
-    async fn clone_repo(&self, remote: &str, git_ref: &str, destination: &Path) -> Result<()>;
+    async fn clone_repo(&self, remote: &Remote, git_ref: &str, destination: &Path) -> Result<()>;
 }
 
 /// The real `GitClient`: `git clone --quiet --no-checkout` into
@@ -141,33 +195,35 @@ pub struct SystemGitClient;
 
 #[async_trait::async_trait]
 impl GitClient for SystemGitClient {
-    async fn clone_repo(&self, remote: &str, git_ref: &str, destination: &Path) -> Result<()> {
+    async fn clone_repo(&self, remote: &Remote, git_ref: &str, destination: &Path) -> Result<()> {
         // Defense against argv flag smuggling: a `repo`/`ref` from a config
         // file (possibly itself from a git-included bundle) that starts
         // with `-` could otherwise be parsed as a git flag rather than a
         // positional argument. `clone` below also has a `--` separator
         // before `remote`; `checkout` can't safely use one (see the comment
         // there), so this check is what protects `git_ref` there.
-        if remote.starts_with('-') {
-            anyhow::bail!(
-                "Git include 'repo' must not start with '-': '{}'",
-                display_remote(remote)
-            );
+        if remote.unredacted().starts_with('-') {
+            anyhow::bail!("Git include 'repo' must not start with '-': '{remote}'");
         }
         if git_ref.starts_with('-') {
             anyhow::bail!("Git include 'ref' must not start with '-': '{git_ref}'");
         }
 
         let clone_output = Command::new("git")
-            .args(["clone", "--quiet", "--no-checkout", "--", remote])
+            .args([
+                "clone",
+                "--quiet",
+                "--no-checkout",
+                "--",
+                remote.unredacted(),
+            ])
             .arg(destination)
             .output()
             .await
             .context("Failed to run 'git clone' — is git installed and on PATH?")?;
         if !clone_output.status.success() {
             anyhow::bail!(
-                "Could not clone repository '{}': git exited with {}: {}",
-                display_remote(remote),
+                "Could not clone repository '{remote}': git exited with {}: {}",
                 clone_output.status,
                 String::from_utf8_lossy(&clone_output.stderr).trim()
             );
@@ -187,8 +243,7 @@ impl GitClient for SystemGitClient {
             .context("Failed to run 'git checkout'")?;
         if !checkout_output.status.success() {
             anyhow::bail!(
-                "Could not check out reference '{git_ref}' for repository '{}': git exited with {}: {}",
-                display_remote(remote),
+                "Could not check out reference '{git_ref}' for repository '{remote}': git exited with {}: {}",
                 checkout_output.status,
                 String::from_utf8_lossy(&checkout_output.stderr).trim()
             );
@@ -214,21 +269,19 @@ struct CacheInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheInfoRepo {
-    remote: String,
+    remote: Remote,
     #[serde(rename = "ref")]
     git_ref: String,
 }
 
 /// One entry in the Git include cache — what `ratect includes list`
-/// reports, and what `clean`/`refresh` return as having acted on. Its `Debug`
-/// shows `remote` through [`display_remote`], so one logged whole can't print
-/// its credentials.
-#[derive(Clone, PartialEq, Eq)]
+/// reports, and what `clean`/`refresh` return as having acted on.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedInclude {
     /// The hashed directory name under `~/.ratect/incl`. Not meaningful to
     /// a user, but it's what identifies the entry on disk.
     pub key: String,
-    pub remote: String,
+    pub remote: Remote,
     pub git_ref: String,
     /// Seconds since the Unix epoch, from the entry's own sidecar — bumped
     /// on every use, so this is "when a task last needed it", not when it
@@ -242,19 +295,6 @@ pub struct CachedInclude {
     pub size_bytes: u64,
 }
 
-impl std::fmt::Debug for CachedInclude {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CachedInclude")
-            .field("key", &self.key)
-            .field("remote", &display_remote(&self.remote))
-            .field("git_ref", &self.git_ref)
-            .field("last_used", &self.last_used)
-            .field("path", &self.path)
-            .field("size_bytes", &self.size_bytes)
-            .finish()
-    }
-}
-
 /// What [`GitIncludeCache::clean`]/[`refresh`](GitIncludeCache::refresh) did:
 /// the entries each acted on, and each one it couldn't, for the caller to
 /// report — this module prints nothing of its own (#755).
@@ -265,7 +305,7 @@ pub struct Outcome {
 }
 
 /// An entry `clean` couldn't remove, or `refresh` couldn't remove or clone
-/// again, and why. `error` names no remote but through [`display_remote`].
+/// again, and why. `error` names a remote only as [`Remote`] displays it.
 #[derive(Debug)]
 pub struct Failure {
     pub entry: CachedInclude,
@@ -392,10 +432,11 @@ fn real_now() -> u64 {
 /// silently reuse another, unrelated project's cached clone. Length-
 /// prefixing makes the two fields unambiguously separable regardless of
 /// what characters they contain.
-pub(crate) fn cache_key(remote: &str, git_ref: &str) -> String {
+pub(crate) fn cache_key(remote: &Remote, git_ref: &str) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
+    let remote = remote.unredacted();
     hasher.update(remote.len().to_le_bytes());
     hasher.update(remote.as_bytes());
     hasher.update(git_ref.len().to_le_bytes());
@@ -418,7 +459,7 @@ pub(crate) fn cache_key(remote: &str, git_ref: &str) -> String {
 /// function is untestable in-process, which is how completion's own walk came
 /// to enforce a containment rule with no test behind it.
 pub(crate) fn cached_working_copy(
-    remote: &str,
+    remote: &Remote,
     git_ref: &str,
     root: Option<&Path>,
 ) -> Option<PathBuf> {
@@ -535,7 +576,7 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// lock first: it takes over a lock whose holder has exited, and waits on
     /// any other — announcing the wait on this cache's [`LoadOutput`] — for
     /// up to `lock_timeout` (see `acquire_lock`).
-    pub async fn ensure_cached(&self, remote: &str, git_ref: &str) -> Result<PathBuf> {
+    pub async fn ensure_cached(&self, remote: &Remote, git_ref: &str) -> Result<PathBuf> {
         let root = self.root.resolve()?;
         tokio::fs::create_dir_all(&root)
             .await
@@ -579,7 +620,7 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// good as this one, which is discarded.
     async fn clone_if_missing(
         &self,
-        remote: &str,
+        remote: &Remote,
         git_ref: &str,
         root: &Path,
         key: &str,
@@ -596,7 +637,7 @@ impl<G: GitClient> GitIncludeCache<G> {
         ));
         self.output.progress(&format!(
             "Cloning {} {}...",
-            self.output.progress_bold(&display_remote(remote)),
+            self.output.progress_bold(&remote.to_string()),
             self.output.progress_bold(git_ref)
         ));
         if let Err(e) = self.git.clone_repo(remote, git_ref, &staging).await {
@@ -629,7 +670,7 @@ impl<G: GitClient> GitIncludeCache<G> {
     async fn acquire_lock(
         &self,
         lock_path: &Path,
-        remote: &str,
+        remote: &Remote,
         git_ref: &str,
     ) -> Result<entry_lock::EntryLock> {
         let include = format!("Git include {}", describe_include(remote, git_ref));
@@ -711,7 +752,12 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// (`list`, or the sweep) can never observe a torn file; a concurrent
     /// `last_used` bump can still be lost to a last-write-wins race, same as
     /// Batect accepts.
-    async fn update_info_file(&self, remote: &str, git_ref: &str, info_path: &Path) -> Result<()> {
+    async fn update_info_file(
+        &self,
+        remote: &Remote,
+        git_ref: &str,
+        info_path: &Path,
+    ) -> Result<()> {
         let mut info: toml::Table = match tokio::fs::read_to_string(info_path).await {
             Ok(content) => toml::from_str(&content).map_err(|e| {
                 anyhow::anyhow!(
@@ -724,7 +770,7 @@ impl<G: GitClient> GitIncludeCache<G> {
                 toml::Table::try_from(CacheInfo {
                     kind: "git".to_string(),
                     repo: CacheInfoRepo {
-                        remote: remote.to_string(),
+                        remote: remote.clone(),
                         git_ref: git_ref.to_string(),
                     },
                     cloned_with_version: self.version.clone(),
@@ -1065,11 +1111,11 @@ impl FakeGitClient {
 #[cfg(test)]
 #[async_trait::async_trait]
 impl GitClient for FakeGitClient {
-    async fn clone_repo(&self, remote: &str, git_ref: &str, destination: &Path) -> Result<()> {
+    async fn clone_repo(&self, remote: &Remote, git_ref: &str, destination: &Path) -> Result<()> {
         self.clone_calls
             .lock()
             .unwrap()
-            .push((remote.to_string(), git_ref.to_string()));
+            .push((remote.unredacted().to_string(), git_ref.to_string()));
 
         if let Some(message) = self.fail.lock().unwrap().clone() {
             anyhow::bail!(message);
@@ -1079,7 +1125,7 @@ impl GitClient for FakeGitClient {
             .responses
             .lock()
             .unwrap()
-            .get(&(remote.to_string(), git_ref.to_string()))
+            .get(&(remote.unredacted().to_string(), git_ref.to_string()))
             .cloned()
             .ok_or_else(|| {
                 anyhow::anyhow!("FakeGitClient: no response configured for '{remote}'@'{git_ref}'")
@@ -1097,7 +1143,7 @@ impl GitClient for FakeGitClient {
             .symlinks
             .lock()
             .unwrap()
-            .get(&(remote.to_string(), git_ref.to_string()))
+            .get(&(remote.unredacted().to_string(), git_ref.to_string()))
             .cloned()
             .unwrap_or_default();
         for (link, target) in symlinks {

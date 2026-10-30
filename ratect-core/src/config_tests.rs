@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::git_include::{FakeGitClient, GitIncludeCache, SystemGitClient};
+use crate::git_include::{FakeGitClient, GitIncludeCache, Remote, SystemGitClient};
 use crate::include_trust::Trust;
 
 fn parse(yaml: &str) -> Config {
@@ -3885,7 +3885,7 @@ fn ungranted_git_boundary_at(repo_dir: PathBuf) -> Boundary {
         repo_dir,
         bundle: Bundle {
             id: BundleId {
-                remote: "https://example.com/bundle.git".to_string(),
+                remote: Remote::from("https://example.com/bundle.git"),
                 git_ref: "v1.0.0".to_string(),
             },
             trust: Trust::NONE,
@@ -6487,7 +6487,7 @@ fn completion_will_not_follow_a_bundle_include_out_of_its_clone() {
     let scratch = unique_temp_dir();
     let cache_root = scratch.join("incl");
     let remote = "https://example.com/bundle.git";
-    let clone = cache_root.join(crate::git_include::cache_key(remote, "v1"));
+    let clone = cache_root.join(crate::git_include::cache_key(&Remote::from(remote), "v1"));
     std::fs::create_dir_all(&clone).unwrap();
 
     // `../..` from the clone directory lands beside the cache root, so the
@@ -6542,8 +6542,14 @@ fn completion_excludes_a_nested_git_include_the_bundle_was_not_granted() {
     let cache_root = scratch.join("incl");
     let outer_remote = "https://example.com/outer.git";
     let inner_remote = "https://example.com/inner.git";
-    let outer_clone = cache_root.join(crate::git_include::cache_key(outer_remote, "v1"));
-    let inner_clone = cache_root.join(crate::git_include::cache_key(inner_remote, "v1"));
+    let outer_clone = cache_root.join(crate::git_include::cache_key(
+        &Remote::from(outer_remote),
+        "v1",
+    ));
+    let inner_clone = cache_root.join(crate::git_include::cache_key(
+        &Remote::from(inner_remote),
+        "v1",
+    ));
     std::fs::create_dir_all(&outer_clone).unwrap();
     std::fs::create_dir_all(&inner_clone).unwrap();
 
@@ -6592,7 +6598,7 @@ fn completion_excludes_a_git_include_whose_yaml_entry_sets_a_native_only_field()
     let scratch = unique_temp_dir();
     let cache_root = scratch.join("incl");
     let remote = "https://example.com/bundle.git";
-    let clone = cache_root.join(crate::git_include::cache_key(remote, "v1"));
+    let clone = cache_root.join(crate::git_include::cache_key(&Remote::from(remote), "v1"));
     std::fs::create_dir_all(&clone).unwrap();
     std::fs::write(
         clone.join("ratect-bundle.toml"),
@@ -12068,7 +12074,7 @@ tasks: {}
             .unwrap()[0],
     );
     let clone_dir = cache_root.join(crate::git_include::cache_key(
-        "https://example.com/bundle.git",
+        &Remote::from("https://example.com/bundle.git"),
         "v1.0.0",
     ));
     assert_eq!(volume.local, clone_dir.join("code").display().to_string());
@@ -14240,7 +14246,10 @@ async fn a_local_include_reaching_a_bundles_file_first_is_not_a_lost_grant() {
     ]);
     let cache_root = unique_temp_dir();
     let remote = bundle.display().to_string();
-    let clone_dir = cache_root.join(crate::git_include::cache_key(&remote, "v1"));
+    let clone_dir = cache_root.join(crate::git_include::cache_key(
+        &Remote::from(remote.as_str()),
+        "v1",
+    ));
 
     let project = unique_temp_dir();
     std::fs::write(
@@ -18131,4 +18140,20 @@ async fn an_invalid_review_names_the_include_without_its_credentials() {
     );
     std::fs::remove_dir_all(&project).ok();
     std::fs::remove_dir_all(&cache_root).ok();
+}
+
+/// #756: an include entry logged whole hides its remote's credentials, as
+/// every other holder of a remote does; what serialises is the remote in full.
+#[test]
+fn a_git_include_entry_debugs_without_its_credentials_and_serialises_in_full() {
+    let entry: IncludeEntry =
+        crate::yaml::from_str("type: git\nrepo: https://u:s3cret@host/b.git\nref: v1\n").unwrap();
+
+    let debugged = format!("{entry:?}");
+    assert!(!debugged.contains("s3cret"), "{debugged}");
+    assert!(debugged.contains("https://***@host/b.git"), "{debugged}");
+    assert_eq!(
+        serde_json::to_value(&entry).unwrap()["repo"],
+        "https://u:s3cret@host/b.git"
+    );
 }

@@ -16,7 +16,7 @@ use super::*;
 
 fn id(remote: &str) -> BundleId {
     BundleId {
-        remote: remote.to_string(),
+        remote: remote.into(),
         git_ref: "main".to_string(),
     }
 }
@@ -93,7 +93,7 @@ fn an_owned_file_is_never_restricted() {
 #[test]
 fn a_restricted_bundle_may_declare_a_git_include_only_when_granted() {
     let ungranted = Bundle::granted(None, id("outer"), asks(false, None));
-    let error = check_may_declare_git(Some(&ungranted), "inner").unwrap_err();
+    let error = check_may_declare_git(Some(&ungranted), &Remote::from("inner")).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("The bundle 'outer' at 'main' declares a Git include of its own"),
@@ -115,8 +115,8 @@ fn a_restricted_bundle_may_declare_a_git_include_only_when_granted() {
     );
 
     let granted = Bundle::granted(None, id("outer"), asks(false, Some(true)));
-    assert!(check_may_declare_git(Some(&granted), "inner").is_ok());
-    assert!(check_may_declare_git(None, "inner").is_ok());
+    assert!(check_may_declare_git(Some(&granted), &Remote::from("inner")).is_ok());
+    assert!(check_may_declare_git(None, &Remote::from("inner")).is_ok());
 }
 
 /// [`refuse_read`] mirrors whichever `Result<()>` it's given — the same
@@ -128,7 +128,7 @@ fn refuse_read_declines_exactly_when_the_check_it_is_given_errs() {
     assert!(!refuse_read(Ok(())));
     assert!(refuse_read(check_may_declare_git(
         Some(&Bundle::granted(None, id("outer"), asks(false, None))),
-        "inner"
+        &Remote::from("inner")
     )));
 }
 
@@ -140,7 +140,7 @@ fn the_native_only_field_is_refused_in_a_compat_project() {
         None,
         YAML_ROOT,
         Some(BatectFile::Root),
-        "inner",
+        &Remote::from("inner"),
         ConfigFormat::Compat,
     )
     .unwrap_err();
@@ -161,7 +161,7 @@ fn the_compat_refusal_names_the_bundle_that_wrote_the_field() {
         Some(&declaring),
         YAML_ROOT,
         Some(BatectFile::Root),
-        "inner",
+        &Remote::from("inner"),
         ConfigFormat::Compat,
     )
     .unwrap_err();
@@ -181,7 +181,7 @@ fn a_compat_project_refuses_the_field_set_to_false_too() {
         None,
         YAML_ROOT,
         Some(BatectFile::Root),
-        "inner",
+        &Remote::from("inner"),
         ConfigFormat::Compat
     )
     .is_err());
@@ -191,7 +191,7 @@ fn a_compat_project_refuses_the_field_set_to_false_too() {
         None,
         YAML_ROOT,
         Some(BatectFile::Root),
-        "inner",
+        &Remote::from("inner"),
         ConfigFormat::Compat
     )
     .is_ok());
@@ -235,7 +235,7 @@ fn a_native_project_refuses_the_native_only_fields_in_a_yaml_file_only() {
                     None,
                     YAML_ROOT,
                     Some(place),
-                    "inner",
+                    &Remote::from("inner"),
                     ConfigFormat::Native
                 )
                 .unwrap_err()
@@ -258,7 +258,7 @@ fn a_native_project_refuses_the_native_only_fields_in_a_yaml_file_only() {
                 None,
                 YAML_ROOT,
                 None,
-                "inner",
+                &Remote::from("inner"),
                 ConfigFormat::Native
             )
             .is_ok(),
@@ -271,7 +271,7 @@ fn a_native_project_refuses_the_native_only_fields_in_a_yaml_file_only() {
         None,
         YAML_ROOT,
         Some(BatectFile::Owned),
-        "inner",
+        &Remote::from("inner"),
         ConfigFormat::Native
     )
     .is_ok());
@@ -281,7 +281,7 @@ fn a_native_project_refuses_the_native_only_fields_in_a_yaml_file_only() {
 fn an_unrestricted_clone_failure_keeps_gits_own_error() {
     let error = hide_clone_detail(
         anyhow::anyhow!("fatal: could not read from remote"),
-        "r",
+        &Remote::from("r"),
         "v1",
         &["1.yml".to_string()],
         None,
@@ -299,7 +299,7 @@ fn a_restricted_clone_failure_withholds_gits_error() {
     let declaring = Bundle::granted(None, id("outer"), asks(false, Some(true)));
     let error = hide_clone_detail(
         anyhow::anyhow!("fatal: could not read from remote"),
-        "internal.example",
+        &Remote::from("internal.example"),
         "v1",
         &["1.yml".to_string()],
         Some(&declaring),
@@ -335,7 +335,9 @@ fn a_grant_the_winning_route_did_not_carry_is_refused() {
             "allow_nested_git_includes",
         ),
     ] {
-        let error = effective.check(&file, wanted, "shared").unwrap_err();
+        let error = effective
+            .check(&file, wanted, &Remote::from("shared"))
+            .unwrap_err();
         let message = format!("{error:#}");
         assert!(
             message.contains(&format!("'{field}' was set on the include of 'shared'")),
@@ -375,7 +377,7 @@ fn an_entry_losing_both_grants_is_told_about_both() {
                 host_paths: true,
                 nested_git: true,
             },
-            "shared",
+            &Remote::from("shared"),
         )
         .unwrap_err();
     let message = format!("{error:#}");
@@ -404,7 +406,9 @@ fn a_route_asking_for_less_than_the_winner_still_loads() {
         }),
     );
 
-    assert!(effective.check(&file, Trust::NONE, "shared").is_ok());
+    assert!(effective
+        .check(&file, Trust::NONE, &Remote::from("shared"))
+        .is_ok());
     assert!(effective
         .check(
             &file,
@@ -412,7 +416,7 @@ fn a_route_asking_for_less_than_the_winner_still_loads() {
                 host_paths: true,
                 nested_git: false,
             },
-            "shared"
+            &Remote::from("shared")
         )
         .is_ok());
 }
@@ -424,7 +428,9 @@ fn a_route_asking_for_less_than_the_winner_still_loads() {
 fn an_unrecorded_file_is_treated_as_granted_nothing() {
     let effective = EffectiveGrants::default();
     let file = PathBuf::from("/clone/bundle.toml");
-    assert!(effective.check(&file, Trust::NONE, "shared").is_ok());
+    assert!(effective
+        .check(&file, Trust::NONE, &Remote::from("shared"))
+        .is_ok());
     assert!(effective
         .check(
             &file,
@@ -432,7 +438,7 @@ fn an_unrecorded_file_is_treated_as_granted_nothing() {
                 host_paths: true,
                 nested_git: false,
             },
-            "shared"
+            &Remote::from("shared")
         )
         .is_err());
 }
@@ -443,7 +449,7 @@ fn clone_failures_and_refusals_hide_a_remotes_credentials() {
     let declaring = Bundle::granted(
         None,
         BundleId {
-            remote: "https://u:outer-token@host/outer.git".to_string(),
+            remote: "https://u:outer-token@host/outer.git".into(),
             git_ref: "main".to_string(),
         },
         asks(false, Some(false)),
@@ -451,20 +457,23 @@ fn clone_failures_and_refusals_hide_a_remotes_credentials() {
     let messages = [
         hide_clone_detail(
             anyhow::anyhow!("fatal"),
-            "https://u:inner-token@host/inner.git",
+            &Remote::from("https://u:inner-token@host/inner.git"),
             "v1",
             &["1.yml".to_string()],
             None,
         ),
         hide_clone_detail(
             anyhow::anyhow!("fatal"),
-            "https://u:inner-token@host/inner.git",
+            &Remote::from("https://u:inner-token@host/inner.git"),
             "v1",
             &["1.yml".to_string()],
             Some(&declaring),
         ),
-        check_may_declare_git(Some(&declaring), "https://u:inner-token@host/inner.git")
-            .unwrap_err(),
+        check_may_declare_git(
+            Some(&declaring),
+            &Remote::from("https://u:inner-token@host/inner.git"),
+        )
+        .unwrap_err(),
     ]
     .map(|error| format!("{error:#}"));
 
@@ -558,7 +567,7 @@ fn dialect_and_late_grant_refusals_hide_credentials() {
             declaring,
             YAML_ROOT,
             Some(BatectFile::Owned),
-            inner,
+            &inner.into(),
             format,
         )
         .unwrap_err()
@@ -598,7 +607,7 @@ fn dialect_and_late_grant_refusals_hide_credentials() {
                 host_paths: true,
                 nested_git: false,
             },
-            inner,
+            &inner.into(),
         )
         .unwrap_err()
         .to_string();

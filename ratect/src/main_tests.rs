@@ -1072,7 +1072,7 @@ async fn caches_clean_reports_each_cache_then_the_count_unless_quiet() {
 fn includes_output_names_an_entry_without_its_credentials() {
     let entry = |remote: &str| ratect_core::git_include::CachedInclude {
         key: "45de9a2d81c0f00dfeedbeef".to_string(),
-        remote: remote.to_string(),
+        remote: remote.into(),
         git_ref: "v1".to_string(),
         last_used: 0,
         path: PathBuf::from("/k"),
@@ -1101,7 +1101,7 @@ fn includes_output_names_an_entry_without_its_credentials() {
 fn includes_reports_each_entry_it_could_not_refresh_as_an_error() {
     let entry = |remote: &str, git_ref: &str| ratect_core::git_include::CachedInclude {
         key: "45de9a2d81c0f00dfeedbeef".to_string(),
-        remote: remote.to_string(),
+        remote: remote.into(),
         git_ref: git_ref.to_string(),
         last_used: 0,
         path: PathBuf::from("/k"),
@@ -1153,7 +1153,7 @@ fn includes_reports_each_entry_it_could_not_refresh_as_an_error() {
 fn includes_clean_reports_an_entry_it_could_not_remove_and_succeeds_otherwise() {
     let entry = ratect_core::git_include::CachedInclude {
         key: "k".to_string(),
-        remote: "https://host/a.git".to_string(),
+        remote: "https://host/a.git".into(),
         git_ref: "v1".to_string(),
         last_used: 0,
         path: PathBuf::from("/k"),
@@ -1207,7 +1207,7 @@ fn includes_clean_reports_an_entry_it_could_not_remove_and_succeeds_otherwise() 
 fn a_quiet_includes_line_is_repo_ref_and_cache_key() {
     let entry = |remote: &str, key: &str| ratect_core::git_include::CachedInclude {
         key: key.to_string(),
-        remote: remote.to_string(),
+        remote: remote.into(),
         git_ref: "v1".to_string(),
         last_used: 0,
         path: PathBuf::from("/k"),
