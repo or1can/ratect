@@ -650,13 +650,15 @@ fn parse_tag_image(value: &str) -> std::result::Result<(String, String), String>
 /// `--log-file`, which nothing has asked this binary for yet. Coloured iff
 /// `color` — stderr's own decision (a terminal, and no `--no-color`/
 /// `NO_COLOR`), the same one every other line on stderr follows
-/// (decisions/0017; ratect#479).
+/// (decisions/0017; ratect#479). Through
+/// `ratect_core::ui::raw_mode::stderr`, so a line logged during an
+/// interactive session still starts at the first column (ratect#613).
 fn init_tracing(color: bool) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(color)
-        .with_writer(std::io::stderr)
+        .with_writer(ratect_core::ui::raw_mode::stderr)
         .init();
 }
 

@@ -1207,16 +1207,24 @@ fn stdin_flags(interactive: bool, use_tty: bool) -> StdinFlags {
 /// handled locally first. Restores the terminal on `Drop`, so it's never
 /// left in raw mode even if the session ends via an error return.
 ///
+/// It is also the one thing that records raw mode in
+/// [`crate::ui::raw_mode`], so every line a `Console` or the `tracing` stderr
+/// layer prints to a terminal in the meantime ends `\r\n` (ratect#613). The
+/// record is set *before* raw mode is enabled and cleared only *after* the
+/// restore, and any warning about it, so the window where the two disagree
+/// only ever has the record set on a terminal that isn't raw — whose extra
+/// `\r` is invisible — and never a raw terminal printing a bare `\n`.
+///
 /// A restore that fails is a `Warning:` naming the fix, not a log line: a
 /// shell with no echo or line editing leaves a user with `RUST_LOG` unset
 /// worse off without it (decisions/0017). It is posted from here, not
 /// returned, because the early-error return this `Drop` exists for has no
-/// caller left to report it. The warning is one line, since it prints
-/// while the terminal is still raw: raw mode stops a line feed returning
-/// the cursor to the first column, so every line Ratect prints from here
-/// on starts where the one before it ended, until the user restores the
-/// terminal as the warning says. A second line of its own would be the
-/// first to stagger, so there is none.
+/// caller left to report it. The terminal is still raw then, and still
+/// recorded so, which is what lets the warning start the next line at the
+/// first column. Everything printed after it isn't: the record is cleared
+/// on `Drop` whatever the restore did, since Ratect has stopped holding
+/// the terminal raw on purpose and the warning has told the user how to
+/// restore it.
 struct RawModeGuard {
     event_sink: std::sync::Arc<dyn EventSink>,
     /// `crossterm::terminal::disable_raw_mode`, except in a test, which
@@ -1226,10 +1234,28 @@ struct RawModeGuard {
 
 impl RawModeGuard {
     fn enable(event_sink: std::sync::Arc<dyn EventSink>) -> Result<Self> {
-        crossterm::terminal::enable_raw_mode().context("Failed to enable raw terminal mode")?;
+        Self::enable_with(
+            event_sink,
+            crossterm::terminal::enable_raw_mode,
+            crossterm::terminal::disable_raw_mode,
+        )
+    }
+
+    /// [`RawModeGuard::enable`], with `enable` and `restore` in place of
+    /// `crossterm`'s — a test has no real terminal to put into raw mode.
+    fn enable_with(
+        event_sink: std::sync::Arc<dyn EventSink>,
+        enable: fn() -> std::io::Result<()>,
+        restore: fn() -> std::io::Result<()>,
+    ) -> Result<Self> {
+        crate::ui::raw_mode::set_active(true);
+        if let Err(e) = enable() {
+            crate::ui::raw_mode::set_active(false);
+            return Err(e).context("Failed to enable raw terminal mode");
+        }
         Ok(Self {
             event_sink,
-            restore: crossterm::terminal::disable_raw_mode,
+            restore,
         })
     }
 }
@@ -1244,6 +1270,7 @@ impl Drop for RawModeGuard {
                     .to_text(),
             });
         }
+        crate::ui::raw_mode::set_active(false);
     }
 }
 

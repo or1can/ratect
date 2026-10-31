@@ -5112,11 +5112,16 @@ impl EventSink for AllEventsSink {
 /// a printed warning, not a log line (decisions/0017, ratect#614).
 #[test]
 fn a_terminal_left_in_raw_mode_is_a_warning_naming_the_fix() {
+    let _lock = crate::ui::raw_mode::test_lock();
     let sink = std::sync::Arc::new(AllEventsSink::default());
-    drop(RawModeGuard {
-        event_sink: sink.clone(),
-        restore: || Err(std::io::Error::other("no tty")),
-    });
+    drop(
+        RawModeGuard::enable_with(
+            sink.clone(),
+            || Ok(()),
+            || Err(std::io::Error::other("no tty")),
+        )
+        .unwrap(),
+    );
     let events = sink.0.lock().unwrap().clone();
     let [TaskEvent::Warning { message }] = events.as_slice() else {
         panic!("expected exactly one warning, got {events:?}");
@@ -5131,12 +5136,69 @@ fn a_terminal_left_in_raw_mode_is_a_warning_naming_the_fix() {
 
 #[test]
 fn a_restored_terminal_posts_nothing() {
+    let _lock = crate::ui::raw_mode::test_lock();
     let sink = std::sync::Arc::new(AllEventsSink::default());
-    drop(RawModeGuard {
-        event_sink: sink.clone(),
-        restore: || Ok(()),
-    });
+    drop(RawModeGuard::enable_with(sink.clone(), || Ok(()), || Ok(())).unwrap());
     assert_eq!(*sink.0.lock().unwrap(), Vec::new());
+}
+
+/// Whether raw mode was recorded as on when each event was posted.
+#[derive(Default)]
+struct RawModeAtPostSink(std::sync::Mutex<Vec<bool>>);
+
+impl EventSink for RawModeAtPostSink {
+    fn post(&self, _: TaskEvent) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(crate::ui::raw_mode::is_active());
+    }
+}
+
+/// #613: lines printed during the session end `\r\n` exactly while the
+/// guard holds the terminal raw.
+#[test]
+fn the_guard_records_raw_mode_from_enable_until_drop() {
+    let _lock = crate::ui::raw_mode::test_lock();
+    let guard = RawModeGuard::enable_with(
+        std::sync::Arc::new(AllEventsSink::default()),
+        || Ok(()),
+        || Ok(()),
+    )
+    .unwrap();
+    assert!(crate::ui::raw_mode::is_active());
+    drop(guard);
+    assert!(!crate::ui::raw_mode::is_active());
+}
+
+/// A terminal that failed to restore is still raw, so the warning saying
+/// so is printed translated; the record is cleared after it regardless.
+#[test]
+fn a_failed_restore_warns_while_still_recorded_raw_then_clears() {
+    let _lock = crate::ui::raw_mode::test_lock();
+    let sink = std::sync::Arc::new(RawModeAtPostSink::default());
+    drop(
+        RawModeGuard::enable_with(
+            sink.clone(),
+            || Ok(()),
+            || Err(std::io::Error::other("no tty")),
+        )
+        .unwrap(),
+    );
+    assert_eq!(*sink.0.lock().unwrap(), vec![true]);
+    assert!(!crate::ui::raw_mode::is_active());
+}
+
+#[test]
+fn a_failed_enable_leaves_raw_mode_unrecorded() {
+    let _lock = crate::ui::raw_mode::test_lock();
+    let result = RawModeGuard::enable_with(
+        std::sync::Arc::new(AllEventsSink::default()),
+        || Err(std::io::Error::other("no tty")),
+        || Ok(()),
+    );
+    assert!(result.is_err());
+    assert!(!crate::ui::raw_mode::is_active());
 }
 
 /// #770: a pull, and the local lookup before it, quote the image escaped,
