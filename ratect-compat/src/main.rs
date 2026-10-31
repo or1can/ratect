@@ -560,7 +560,9 @@ fn parse_tag_image(s: &str) -> std::result::Result<(String, String), String> {
 /// Logs to stderr, filtered by `RUST_LOG` (default `info`), in colour when
 /// `stderr_color` — stderr's own colour decision (a terminal, and no
 /// `--no-color`/`NO_COLOR`), the same one every other line on stderr
-/// follows (decisions/0017; ratect#479).
+/// follows (decisions/0017; ratect#479). Through
+/// `ratect_core::ui::raw_mode::stderr`, so a line logged during an
+/// interactive session still starts at the first column (ratect#613).
 ///
 /// `log_file`, when given (`--log-file`), gets the same records as a
 /// debugging artifact of its own: plain text, one record per line, never
@@ -570,7 +572,8 @@ fn parse_tag_image(s: &str) -> std::result::Result<(String, String), String> {
 /// records at `debug` (ratect#326). Other crates stay at `info` there:
 /// bollard's `debug` records carry each request's body, a container's
 /// environment included, and a file is kept and shared in a way a terminal
-/// isn't, so writing those takes asking for them.
+/// isn't, so writing those takes asking for them. Nor does it get raw
+/// mode's `\r`: a file is never a terminal.
 /// The records are Ratect's own, not Batect's JSON ones; Batect's default
 /// with no `--log-file` is a `NullLogSink`, nothing anywhere, where Ratect
 /// always logs to stderr.
@@ -623,7 +626,7 @@ fn init_tracing(log_file: Option<&Path>, stderr_color: bool) -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
-                .with_writer(std::io::stderr)
+                .with_writer(ratect_core::ui::raw_mode::stderr)
                 .with_ansi(stderr_color)
                 .with_filter(filter_or("info")),
         )

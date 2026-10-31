@@ -48,6 +48,8 @@
 //! [`TaskEvent::ContainerOutput`] lines for the task container go to
 //! stdout (prefixed) while a dependency's follow the progress console —
 //! so `ratect run x -o all 2>/dev/null` is still the task's own lines.
+//! While an interactive session holds the terminal in raw mode, a
+//! `Console` on a terminal ends each line `\r\n` ([`raw_mode`]).
 //!
 //! **Escaping** (#752). A name or value from configuration is untrusted
 //! text — a Git bundle's above all — so whatever a [`Console`] prints is a
@@ -123,6 +125,7 @@
 
 pub mod fancy;
 pub mod interleaved;
+pub mod raw_mode;
 pub mod simple;
 
 use std::io::IsTerminal;
@@ -1301,6 +1304,9 @@ pub const fn captures_inline(format: &str) -> bool {
 pub struct Console {
     writer: Mutex<Box<dyn Write + Send>>,
     color_enabled: bool,
+    /// Whether `writer` is a terminal — which, while an interactive session
+    /// has it in raw mode, makes every line end `\r\n` ([`raw_mode`]).
+    is_terminal: bool,
     reader_gone: AtomicBool,
 }
 
@@ -1312,8 +1318,9 @@ impl Console {
     /// `enableComplexOutput = !disableColorOutput && stdoutIsTTY` for the
     /// `Auto`/`Off` cases, which is all Batect itself has.
     pub fn stdout(color_mode: ColorMode) -> Self {
-        let color_enabled = color_mode.enables_color(|| std::io::stdout().is_terminal());
-        Self::new(Box::new(std::io::stdout()), color_enabled)
+        let is_terminal = std::io::stdout().is_terminal();
+        let color_enabled = color_mode.enables_color(|| is_terminal);
+        Self::new(Box::new(std::io::stdout()), color_enabled).on_terminal(is_terminal)
     }
 
     /// A console on the real stderr, colored by the same rule as
@@ -1323,8 +1330,9 @@ impl Console {
     /// binaries' errors, warnings and notices are written to; the `tracing`
     /// subscriber follows the same decision via [`Console::color_enabled`].
     pub fn stderr(color_mode: ColorMode) -> Self {
-        let color_enabled = color_mode.enables_color(|| std::io::stderr().is_terminal());
-        Self::new(Box::new(std::io::stderr()), color_enabled)
+        let is_terminal = std::io::stderr().is_terminal();
+        let color_enabled = color_mode.enables_color(|| is_terminal);
+        Self::new(Box::new(std::io::stderr()), color_enabled).on_terminal(is_terminal)
     }
 
     /// [`Console::stdout`] or [`Console::stderr`], whichever `stream` names.
@@ -1339,8 +1347,16 @@ impl Console {
         Self {
             writer: Mutex::new(writer),
             color_enabled,
+            is_terminal: false,
             reader_gone: AtomicBool::new(false),
         }
+    }
+
+    /// This console, told whether its writer is a terminal — not one
+    /// unless told, as [`Console::new`] makes it.
+    pub(crate) fn on_terminal(mut self, is_terminal: bool) -> Self {
+        self.is_terminal = is_terminal;
+        self
     }
 
     /// Whether a write has failed because this console's reader has gone —
@@ -1425,8 +1441,12 @@ impl Console {
         // (unlike `print`, below): the real production writer is
         // `std::io::stdout()`, whose internal `LineWriter` already flushes
         // on every `\n` this always writes — an extra flush call would just
-        // be a second, redundant syscall per line.
-        self.note_failure(writeln!(writer, "{line}"));
+        // be a second, redundant syscall per line. Formatted whole and
+        // written once, so raw mode's translation sees the line and its
+        // ending together.
+        let line = format!("{line}\n");
+        let bytes = raw_mode::line_endings(line.as_bytes(), self.is_terminal);
+        self.note_failure(writer.write_all(&bytes));
     }
 
     /// `text` wrapped in `color`'s ANSI escape when color is enabled,
@@ -1484,7 +1504,8 @@ impl Console {
     pub fn print(&self, text: impl Into<Text>) {
         let text = text.into();
         let mut writer = self.writer.lock().unwrap();
-        let result = write!(writer, "{text}").and_then(|()| writer.flush());
+        let bytes = raw_mode::line_endings(text.as_str().as_bytes(), self.is_terminal);
+        let result = writer.write_all(&bytes).and_then(|()| writer.flush());
         self.note_failure(result);
     }
 }
