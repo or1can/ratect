@@ -835,3 +835,19 @@ fn the_reference_row_leaves_what_fails_the_load_to_the_trial_load() {
     let file = toml_file("f", "[containers.app]\ncommand = 'cat <foo.txt $5'\n");
     assert_eq!(expressions_read_differently(&[file]), []);
 }
+
+/// #770: a refused `ratect_version` is quoted escaped.
+#[test]
+fn a_refused_version_quotes_a_line_break_escaped() {
+    for text in [
+        "0.12\nError: forged",
+        "x-\nError: forged",
+        "0.12.x\nError: forged",
+    ] {
+        let err = text.parse::<Version>().unwrap_err();
+        assert!(
+            err.to_string().contains("\\nError: forged") && !err.to_string().contains('\n'),
+            "{err}"
+        );
+    }
+}

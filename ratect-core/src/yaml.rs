@@ -71,6 +71,12 @@
 //! file being read decides, and a TOML file never gets the default.
 //! `run_as_current_user.enabled` is the one such field (#374).
 //!
+//! **An error is one line, escaped** (#770). `noyalib` quotes a key in the
+//! path it reports and in its own messages (`unknown field: x`) as written, so
+//! [`from_str`] escapes the whole message, which never has a line of its own:
+//! a key or value with a line break in it can't add a line to the error. A
+//! message that already quotes its value escaped is unchanged by it.
+//!
 //! **Not on `noyalib`'s AST path.** A YAML tag (`!!int 7`, `!custom`)
 //! anywhere in a document sends the whole document through `noyalib`'s AST
 //! loader instead, where `plain_scalar_strings` re-formats the resolved
@@ -79,6 +85,8 @@
 use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, Visitor};
 use std::cell::Cell;
 use std::fmt;
+
+use crate::ui::printable;
 
 thread_local! {
     /// Whether a [`from_str`] is in progress on this thread.
@@ -93,7 +101,8 @@ pub(crate) fn from_str<T: DeserializeOwned + 'static>(text: &str) -> noyalib::Re
         &noyalib::ParserConfig::new()
             .plain_scalar_strings(true)
             .duplicate_key_policy(noyalib::DuplicateKeyPolicy::Error),
-    )?;
+    )
+    .map_err(|error| noyalib::Error::Custom(printable(&error.to_string())))?;
     Ok(value)
 }
 

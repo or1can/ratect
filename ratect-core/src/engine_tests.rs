@@ -18040,3 +18040,68 @@ fn a_failed_tag_is_invisible_in_the_report_and_survives_unsharing() {
     assert_eq!(failed_step(&unshared), Some(cause));
     assert!(is_not_ready(&unshared));
 }
+
+/// #770: a prerequisite that names no task is quoted escaped, so a line
+/// break in it can't add a line to the run's error.
+#[tokio::test]
+async fn a_missing_prerequisite_is_quoted_with_its_line_break_escaped() {
+    let config = config_with_prerequisites(&[("main", &["x\nError: forged"])]);
+
+    let err = assert_refused_with_nothing_run(config).await;
+
+    assert_eq!(err.to_string(), "Task 'x\\nError: forged' not found.");
+}
+
+/// #770, a failure partway through a run: a value from configuration that a
+/// build refuses is still quoted escaped once the engine has attributed the
+/// failure to its container — in the error the run returns and in the
+/// `Error` event it posts, which is what a user sees.
+#[tokio::test]
+async fn a_build_failure_mid_run_quotes_a_line_break_in_the_value_escaped() {
+    let mut containers = IndexMap::new();
+    containers.insert(
+        "build-env".to_string(),
+        Container {
+            build_secrets: Some(HashMap::from([(
+                "cert".to_string(),
+                BuildSecret::Path("/nonexistent\nError: forged".to_string()),
+            )])),
+            ..container_with_build_directory("./docker", None)
+        },
+    );
+    let mut tasks = IndexMap::new();
+    tasks.insert("build".to_string(), task("build-env", "echo hi"));
+    let config = Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    };
+    let sink = RecordingEventSink::default();
+    let docker = FakeContainerRuntime::default();
+    let engine = TaskEngine::new(
+        project(config),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    let err = engine.run_task("build", &[]).await.unwrap_err();
+
+    let returned = format!("{err:#}");
+    assert!(
+        returned.contains("Failed to build the image for container 'build-env'"),
+        "{returned}"
+    );
+    let posted = messages(&sink.events(), error_line);
+    assert_eq!(posted.len(), 1, "{posted:?}");
+    for message in [&returned, &posted[0]] {
+        assert!(
+            message.contains("reads '/nonexistent\\nError: forged'"),
+            "{message}"
+        );
+        assert!(!message.contains("\nError: forged"), "{message}");
+    }
+    assert_eq!(docker.build_spec_for("demo-build-env"), None);
+}

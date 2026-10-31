@@ -44,8 +44,9 @@ use ratect_core::exit_code::Word;
 use ratect_core::resources::Leftover;
 use ratect_core::text;
 use ratect_core::ui::{
-    create_event_sink, resolve_color_mode, resolve_no_color, select_output_style, ColorMode,
-    Console, LoadOutput, OutputStyle, ProgressStream, TaskEvent, TerminalFacts, Text, ToText,
+    create_event_sink, printable, resolve_color_mode, resolve_no_color, select_output_style,
+    ColorMode, Console, LoadOutput, OutputStyle, ProgressStream, TaskEvent, TerminalFacts, Text,
+    ToText,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1855,7 +1856,7 @@ async fn convert_config(
         let existing: Vec<String> = documents
             .iter()
             .filter(|document| document.target.exists())
-            .map(|document| document.target.display().to_string())
+            .map(|document| printable(&document.target.display().to_string()))
             .collect();
         if !existing.is_empty() {
             anyhow::bail!(
@@ -1875,7 +1876,7 @@ async fn convert_config(
                 error.context(format!("Already written: {}", join_names(&written)))
             });
         }
-        written.push(document.target.display().to_string());
+        written.push(printable(&document.target.display().to_string()));
     }
 
     if style != OutputStyle::Quiet {
@@ -1977,6 +1978,7 @@ fn conversion_check_list(output: &Path, checks: &[ConversionCheck]) -> Text {
 fn write_generated_config(output: &Path, document: &str, force: bool) -> Result<()> {
     use std::io::Write;
 
+    let shown = printable(&output.display().to_string());
     if !force {
         return match std::fs::OpenOptions::new()
             .write(true)
@@ -1985,14 +1987,11 @@ fn write_generated_config(output: &Path, document: &str, force: bool) -> Result<
         {
             Ok(mut file) => file
                 .write_all(document.as_bytes())
-                .with_context(|| format!("Failed to write {}", output.display())),
+                .with_context(|| format!("Failed to write {shown}")),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => anyhow::bail!(
-                "{} already exists — pass --force to overwrite it, or --stdout to print instead.",
-                output.display()
+                "{shown} already exists — pass --force to overwrite it, or --stdout to print instead."
             ),
-            Err(error) => {
-                Err(error).with_context(|| format!("Failed to write {}", output.display()))
-            }
+            Err(error) => Err(error).with_context(|| format!("Failed to write {shown}")),
         };
     }
 
@@ -2008,9 +2007,8 @@ fn write_generated_config(output: &Path, document: &str, force: bool) -> Result<
     // rename is what actually makes the replacement atomic.
     let temp = directory.join(format!(".{file_name}.{}.tmp", std::process::id()));
     std::fs::write(&temp, document)
-        .with_context(|| format!("Failed to write {}", temp.display()))?;
-    std::fs::rename(&temp, output)
-        .with_context(|| format!("Failed to replace {}", output.display()))?;
+        .with_context(|| format!("Failed to write {}", printable(&temp.display().to_string())))?;
+    std::fs::rename(&temp, output).with_context(|| format!("Failed to replace {shown}"))?;
     Ok(())
 }
 

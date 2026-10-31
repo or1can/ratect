@@ -64,9 +64,14 @@
 //! like configuration, since a Git bundle's `Dockerfile` writes the `RUN`
 //! lines BuildKit echoes. A warning or notice is one line, so a plain string
 //! handed to one is escaped whole, line breaks included. An error keeps its
-//! line breaks and tabs — a chain's layout, and the build or health check
-//! output it may quote — so a value with a line break in it, quoted in an
-//! error, still breaks that line: the one gap left (#770).
+//! line breaks and tabs — a chain's layout, and the build output, health
+//! check output, git stderr or TOML source snippet it may quote — so each
+//! value from configuration an error quotes is escaped where the message
+//! quotes it, with [`printable`] (#770), as are the YAML and TOML parsers'
+//! own messages, which quote keys and values as written. A command keeps
+//! its line breaks wherever it is quoted: a multi-line script is ordinary.
+//! A site that misses a value can only add a line, never send the terminal
+//! an escape sequence, since `Text` still escapes the rest.
 //!
 //! The user-facing output layer (0.16.0's output-modes
 //! work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
@@ -1055,8 +1060,8 @@ impl Color {
 /// NUL prints as nothing, so a path refused for holding one would look fine
 /// (#365). Nothing else is escaped, so an ordinary value, Unicode included,
 /// reads exactly as it was written. The one escaping rule: [`Text`] applies
-/// it to everything a [`Console`] prints, and `config.rs` to the values its
-/// messages quote.
+/// it to everything a [`Console`] prints, and an error message to each value
+/// from configuration it quotes (#770).
 pub fn printable(value: &str) -> String {
     escape_controls(value, |_| true)
 }

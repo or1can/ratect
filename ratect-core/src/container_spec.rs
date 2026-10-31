@@ -61,6 +61,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use crate::ui::printable;
+
 use crate::config::{BuildSecret, Container, NetworkMode, TaskContainerCustomisation, TaskRun};
 use crate::docker::UserMapping;
 use crate::labels::{ContainerRole, RunLabels};
@@ -113,8 +115,9 @@ pub fn resolve_network(
                 .get(target)
                 .with_context(|| {
                     format!(
-                        "The container '{target}' named by 'network_mode' has not been \
-                         created as a dependency."
+                        "The container '{}' named by 'network_mode' has not been \
+                         created as a dependency.",
+                        printable(target)
                     )
                 })?
                 .clone(),
@@ -687,9 +690,10 @@ pub(crate) fn check_build_files(
     use path_clean::PathClean;
     let dockerfile = dockerfile.unwrap_or("Dockerfile");
     let directory = in_bundle.map_or_else(
-        || format!("'{}'", build_directory.display()),
+        || format!("'{}'", printable(&build_directory.display().to_string())),
         str::to_string,
     );
+    let shown_dockerfile = printable(dockerfile);
     if !build_directory.exists() {
         return Err(format!("build_directory {directory} doesn't exist"));
     }
@@ -700,11 +704,13 @@ pub(crate) fn check_build_files(
     let path = root.join(dockerfile).clean();
     if !path.exists() {
         return Err(format!(
-            "dockerfile '{dockerfile}' doesn't exist in build_directory {directory}"
+            "dockerfile '{shown_dockerfile}' doesn't exist in build_directory {directory}"
         ));
     }
     if !path.is_file() {
-        return Err(format!("dockerfile '{dockerfile}' isn't a regular file"));
+        return Err(format!(
+            "dockerfile '{shown_dockerfile}' isn't a regular file"
+        ));
     }
     let is_link = |path: &Path| {
         path.symlink_metadata()
@@ -712,13 +718,13 @@ pub(crate) fn check_build_files(
     };
     if is_link(&path) {
         return Err(format!(
-            "dockerfile '{dockerfile}' is a symbolic link, which Ratect's build context \
+            "dockerfile '{shown_dockerfile}' is a symbolic link, which Ratect's build context \
              doesn't carry"
         ));
     }
     let Ok(relative) = path.strip_prefix(&root) else {
         return Err(format!(
-            "dockerfile '{dockerfile}' isn't inside build_directory {directory}"
+            "dockerfile '{shown_dockerfile}' isn't inside build_directory {directory}"
         ));
     };
     // The context walk skips a linked directory as it skips a linked file,
@@ -728,9 +734,15 @@ pub(crate) fn check_build_files(
     for component in relative.components() {
         reached.push(component);
         if reached != path && is_link(&reached) {
-            let link = reached.strip_prefix(&root).unwrap_or(&reached).display();
+            let link = printable(
+                &reached
+                    .strip_prefix(&root)
+                    .unwrap_or(&reached)
+                    .display()
+                    .to_string(),
+            );
             return Err(format!(
-                "dockerfile '{dockerfile}' is reached through '{link}', a symbolic link, which \
+                "dockerfile '{shown_dockerfile}' is reached through '{link}', a symbolic link, which \
                  Ratect's build context doesn't carry"
             ));
         }
@@ -974,21 +986,18 @@ fn buildkit_options(container: &Container) -> Result<Option<crate::docker::Build
 /// nothing mounts builds without complaint, and a mounted one fails partway
 /// through the build.
 fn check_secret_file(id: &str, path: &Path) -> Result<()> {
+    let id = printable(id);
+    let shown = printable(&path.display().to_string());
     match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(()),
-        Ok(_) => anyhow::bail!(
-            "The 'build_secrets' entry '{id}' reads '{}', which is not a file",
-            path.display()
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
-            "The 'build_secrets' entry '{id}' reads '{}', which does not exist",
-            path.display()
-        ),
+        Ok(_) => {
+            anyhow::bail!("The 'build_secrets' entry '{id}' reads '{shown}', which is not a file")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!("The 'build_secrets' entry '{id}' reads '{shown}', which does not exist")
+        }
         Err(error) => Err(error).with_context(|| {
-            format!(
-                "The 'build_secrets' entry '{id}' reads '{}', which cannot be read",
-                path.display()
-            )
+            format!("The 'build_secrets' entry '{id}' reads '{shown}', which cannot be read")
         }),
     }
 }

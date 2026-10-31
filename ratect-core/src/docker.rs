@@ -125,7 +125,7 @@
 
 use crate::cache::VolumeStore;
 use crate::resources::ResourceInventory;
-use crate::ui::ToText;
+use crate::ui::{printable, ToText};
 use crate::ui::{ContainerIoStreaming, EventSink, NullEventSink, TaskEvent};
 use anyhow::{Context, Result};
 use bollard::container::AttachContainerResults;
@@ -737,13 +737,13 @@ pub fn classify_ssh_agent_paths(id: &str, paths: &[PathBuf]) -> Result<SshAgentS
         (1, _) => Err(anyhow::anyhow!(
             "The 'build_ssh' agent '{}' lists both the agent socket '{}' and other files — \
              an agent socket has to be the entry's only path",
-            id,
-            sockets[0].display()
+            printable(id),
+            printable(&sockets[0].display().to_string())
         )),
         _ => Err(anyhow::anyhow!(
             "The 'build_ssh' agent '{}' lists {} agent sockets, but only one agent can be \
              forwarded under a single id",
-            id,
+            printable(id),
             sockets.len()
         )),
     }
@@ -1041,7 +1041,7 @@ async fn build_image_via_buildkit(
                     let keyring = crate::ssh_agent::Keyring::start(key_files)
                         .await
                         .with_context(|| {
-                            format!("Failed to serve the keys for SSH agent '{id}'")
+                            format!("Failed to serve the keys for SSH agent '{}'", printable(id))
                         })?;
                     let socket = keyring.socket_path().to_path_buf();
                     keyrings.push(keyring);
@@ -1476,12 +1476,13 @@ fn build_user_mapping_tar(mapping: &UserMapping) -> Result<Vec<u8>> {
 /// share one `uploadDirectory` for the same reason. Pure (no Docker
 /// involved), so it's unit-testable directly.
 fn build_owned_directory_tar(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>> {
+    let shown = printable(path);
     if !path.starts_with('/') {
-        anyhow::bail!("'{path}' is not an absolute path");
+        anyhow::bail!("'{shown}' is not an absolute path");
     }
     let leaf_name = Path::new(path)
         .file_name()
-        .with_context(|| format!("Invalid directory '{path}': no directory name"))?
+        .with_context(|| format!("Invalid directory '{shown}': no directory name"))?
         .to_string_lossy()
         .into_owned();
 
@@ -1493,7 +1494,7 @@ fn build_owned_directory_tar(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>> 
     header.set_size(0);
     header
         .set_path(format!("{leaf_name}/"))
-        .with_context(|| format!("Invalid directory '{path}'"))?;
+        .with_context(|| format!("Invalid directory '{shown}'"))?;
     header.set_cksum();
 
     let mut builder = tar::Builder::new(Vec::new());
@@ -1661,7 +1662,8 @@ fn create_nested_mount_points(binds: &[BindMount], tmpfs: &[(String, String)]) -
             created => created.with_context(|| {
                 format!(
                     "Failed to create the mount point for {} at {:?}",
-                    mount.container, path
+                    printable(mount.container),
+                    path
                 )
             })?,
         }
@@ -3054,7 +3056,7 @@ impl ContainerRuntime for DockerClient {
                     }
                 }
                 Err(e) => {
-                    return Err(e).context(format!("Failed to pull image {}", image));
+                    return Err(e).context(format!("Failed to pull image {}", printable(image)));
                 }
             }
         }
@@ -3066,24 +3068,30 @@ impl ContainerRuntime for DockerClient {
             None => image.to_string(),
         };
         let pulled = self.docker.inspect_image(&lookup).await.with_context(|| {
-            format!("Failed to find image {image} after pulling it (looked up as {lookup})")
+            format!(
+                "Failed to find image {} after pulling it (looked up as {})",
+                printable(image),
+                printable(&lookup)
+            )
         })?;
         pulled
             .id
-            .with_context(|| format!("Image {image} has no ID after pulling it"))
+            .with_context(|| format!("Image {} has no ID after pulling it", printable(image)))
     }
 
     async fn local_image_id(&self, image: &str) -> Result<Option<String>> {
         match self.docker.inspect_image(image).await {
-            Ok(found) => found
-                .id
-                .map(Some)
-                .with_context(|| format!("Image {image} exists locally but has no ID")),
+            Ok(found) => found.id.map(Some).with_context(|| {
+                format!("Image {} exists locally but has no ID", printable(image))
+            }),
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
             }) => Ok(None),
             Err(e) => Err(e).with_context(|| {
-                format!("Failed to check whether image '{}' exists locally", image)
+                format!(
+                    "Failed to check whether image '{}' exists locally",
+                    printable(image)
+                )
             }),
         }
     }

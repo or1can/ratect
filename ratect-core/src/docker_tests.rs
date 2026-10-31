@@ -5138,3 +5138,56 @@ fn a_restored_terminal_posts_nothing() {
     });
     assert_eq!(*sink.0.lock().unwrap(), Vec::new());
 }
+
+/// #770: a pull, and the local lookup before it, quote the image escaped,
+/// so a line break in it can't add a line to the error.
+#[tokio::test]
+async fn a_pull_failure_quotes_the_image_with_its_line_break_escaped() {
+    let image = "alpine\nError: forged";
+    let (client, _) =
+        client_for_recording_daemon(|_, _| (500, r#"{"message":"daemon refused"}"#.to_string()))
+            .await;
+
+    let pulled = client.pull_image(image).await.unwrap_err();
+    let looked_up = client.local_image_id(image).await.unwrap_err();
+
+    assert_eq!(
+        pulled.to_string(),
+        "Failed to pull image alpine\\nError: forged"
+    );
+    assert_eq!(
+        looked_up.to_string(),
+        "Failed to check whether image 'alpine\\nError: forged' exists locally"
+    );
+}
+
+/// #770: a mount point Ratect takes ownership of is quoted escaped.
+#[test]
+fn an_owned_directory_refusal_quotes_the_path_with_its_line_break_escaped() {
+    let err = build_owned_directory_tar("cache\nError: forged", 1000, 1000).unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "'cache\\nError: forged' is not an absolute path"
+    );
+}
+
+/// #770: a `build_ssh` refusal quotes the agent's id escaped.
+#[test]
+fn a_build_ssh_refusal_quotes_the_id_with_its_line_break_escaped() {
+    let dir = std::env::temp_dir().join(format!("ratect-770-ssh-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let socket = dir.join("agent.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let key = dir.join("key");
+    std::fs::write(&key, "").unwrap();
+
+    let err = classify_ssh_agent_paths("id\nError: forged", &[socket, key]).unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        err.to_string()
+            .starts_with("The 'build_ssh' agent 'id\\nError: forged' lists both"),
+        "{err}"
+    );
+}

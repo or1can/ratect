@@ -64,12 +64,13 @@ task waiting on it: the prerequisite's own line is the one printed.
 
 In every style, and in every command's own output, a control character in a
 name or value from your configuration (a task, container, image or cache
-name, a command, a Git include's `repo` or `ref`), or in image build output,
-is printed escaped: `\u{1b}` for ESC, `\r` for a carriage return. A Git
-bundle or a config file can't send your terminal escape sequences that way. A
-name's line breaks and tabs are escaped too (`\n`, `\t`), except inside an
-error message, which keeps both. A command and image build output
-keep theirs. A container's own output is printed as it was written.
+name, a path, a command, a Git include's `repo` or `ref`), or in image build
+output, is printed escaped: `\u{1b}` for ESC, `\r` for a carriage return. A
+Git bundle or a config file can't send your terminal escape sequences that
+way. A name's or value's line breaks and tabs are escaped too (`\n`, `\t`),
+error messages included, so neither can add a line of its own. A command and
+image build output keep theirs, as does the output of a program an error
+quotes, such as git's. A container's own output is printed as it was written.
 
 Each style is shown below from the *same* real run — `ratect run journey-test`
 against

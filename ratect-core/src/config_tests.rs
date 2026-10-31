@@ -18333,3 +18333,199 @@ fn a_git_include_entry_debugs_without_its_credentials_and_serialises_in_full() {
         "https://u:s3cret@host/b.git"
     );
 }
+
+// ---- #770: a value a load refusal quotes is escaped, line breaks included ----
+
+/// A value holding a line break, followed by what a forged error line would
+/// say.
+const FORGED: &str = "\nError: forged";
+
+/// `message` quotes [`FORGED`] escaped, and nowhere breaks a line with it.
+fn assert_quotes_forged_escaped(case: &str, message: &str) {
+    assert!(
+        message.contains("\\nError: forged"),
+        "{case}: the value is quoted escaped: {message}"
+    );
+    assert!(
+        !message.contains(FORGED),
+        "{case}: no line break from the value: {message}"
+    );
+}
+
+/// #770: every refusal of a `batect.yml` value that quotes the value as
+/// written — `noyalib`'s own and the YAML path it gives included — escapes
+/// its line break.
+#[tokio::test]
+async fn a_batect_yml_refusal_quotes_a_line_break_in_the_value_escaped() {
+    let app = |entry: &str| {
+        format!(
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine\n{entry}\
+             tasks:\n  t:\n    run:\n      container: app\n"
+        )
+    };
+    let cases = [
+        (
+            "container name",
+            "project_name: demo\ncontainers:\n  \"app\\nError: forged\":\n    image: alpine\n"
+                .to_string(),
+        ),
+        (
+            "task name",
+            "project_name: demo\ntasks:\n  \"t\\nError: forged\":\n    prerequisites: []\n"
+                .to_string(),
+        ),
+        (
+            "config variable name",
+            "project_name: demo\nconfig_variables:\n  \"v\\nError: forged\": {}\n".to_string(),
+        ),
+        (
+            "project name",
+            "project_name: \"demo\\nError: forged\"\n".to_string(),
+        ),
+        ("unknown field", app("    \"x\\nError: forged\": 1\n")),
+        ("ports", app("    ports: [\"1:2\\nError: forged\"]\n")),
+        ("volumes", app("    volumes: [\"a:b:c:d\\nError: forged\"]\n")),
+        ("devices", app("    devices: [\"a:b:c:d\\nError: forged\"]\n")),
+        (
+            "volume type",
+            app("    volumes:\n      - type: \"x\\nError: forged\"\n        container: /c\n"),
+        ),
+        (
+            "cache name",
+            app("    volumes:\n      - type: cache\n        name: \"a\\nError: forged\"\n        container: /c\n"),
+        ),
+        (
+            "cache container path",
+            app("    run_as_current_user:\n      enabled: true\n      home_directory: /home/u\n    volumes:\n      - type: cache\n        name: a\n        container: \"c\\nError: forged\"\n"),
+        ),
+        (
+            "duration",
+            app("    health_check:\n      interval: \"1x\\nError: forged\"\n"),
+        ),
+        ("shm_size", app("    shm_size: \"1x\\nError: forged\"\n")),
+        (
+            "dependency",
+            app("    dependencies: [\"x\\nError: forged\"]\n"),
+        ),
+        (
+            "image expression",
+            app("").replace("image: alpine", "image: \"$X\\nError: forged\""),
+        ),
+        (
+            "customised container",
+            app("").replace(
+                "      container: app\n",
+                "      container: app\n    customise:\n      \"x\\nError: forged\": {}\n",
+            ),
+        ),
+        (
+            "include path",
+            "project_name: demo\ninclude: [\"x\\nError: forged.yml\"]\n".to_string(),
+        ),
+    ];
+    for (case, yaml) in cases {
+        let error = format!(
+            "{:#}",
+            load_compat_yaml(&yaml)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{case}: loaded"))
+        );
+        assert_quotes_forged_escaped(case, &error);
+    }
+}
+
+/// #770: the same for a `ratect.toml`, where `toml`'s own message can quote
+/// the value too — while the source snippet it prints above the message
+/// keeps its lines.
+#[tokio::test]
+async fn a_ratect_toml_refusal_quotes_a_line_break_in_the_value_escaped() {
+    let app = |entry: &str| {
+        format!(
+            "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine\"\n{entry}\n\
+             [containers.db]\nimage = \"postgres\"\n"
+        )
+    };
+    let cases = [
+        ("unknown field", app("\"x\\nError: forged\" = 1"), true),
+        ("ports", app("ports = [\"1:2\\nError: forged\"]"), true),
+        (
+            "network_mode value",
+            app("network_mode = \"x\\nError: forged\""),
+            true,
+        ),
+        (
+            "network_mode target",
+            app("network_mode = \"container:x\\nError: forged\""),
+            false,
+        ),
+        ("extends", app("extends = \"x\\nError: forged\""), false),
+        ("dns", app("dns = [\"x\\nError: forged\"]"), false),
+        (
+            "external health check type",
+            app("external_health_check = { type = \"x\\nError: forged\", port = 1 }"),
+            true,
+        ),
+        (
+            "external health check path",
+            app("external_health_check = { type = \"http\", port = 1, path = \"/x\\nError: forged\" }"),
+            false,
+        ),
+        (
+            "run_in",
+            app("setup_commands = [{ command = \"true\", run_in = \"x\\nError: forged\" }]"),
+            false,
+        ),
+    ];
+    for (case, toml, parse_error) in cases {
+        let error = format!(
+            "{:#}",
+            load_native_toml(&toml)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{case}: loaded"))
+        );
+        assert_quotes_forged_escaped(case, &error);
+        if parse_error {
+            assert!(
+                error.contains("TOML parse error at line") && error.contains("\n  |\n"),
+                "{case}: the snippet keeps its lines: {error}"
+            );
+        }
+    }
+}
+
+/// #770: an environment or build arg key is quoted escaped in the field a
+/// failed evaluation names, as its value is.
+#[tokio::test]
+async fn a_key_whose_value_cannot_be_evaluated_is_quoted_escaped() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         environment:\n      \"A\\nError: forged\": $RATECT_770_UNSET\n",
+    )
+    .unwrap();
+    let project = load_project(&dir.join("batect.yml"), &LoadOutput::default())
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let err = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+
+    assert_quotes_forged_escaped("environment key", &format!("{err:#}"));
+}
+
+/// #770: a `toml` error with no snippet — one `toml::from_str` gives no
+/// spanless example of, so built directly — is escaped too, its own line
+/// break kept.
+#[test]
+fn a_toml_error_without_a_snippet_is_escaped_keeping_its_layout() {
+    let error = <toml::de::Error as serde::de::Error>::custom("x\nError: forged");
+
+    assert_eq!(
+        escaped_toml_error(&error).to_string(),
+        "x\\nError: forged\n"
+    );
+}

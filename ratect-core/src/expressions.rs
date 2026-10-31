@@ -31,6 +31,8 @@
 //! fails the load, located in its file.
 
 use anyhow::{bail, Result};
+
+use crate::ui::printable;
 use std::collections::HashMap;
 
 /// Scans `input` for Batect-style expressions — `$VAR`, `${VAR}`,
@@ -319,7 +321,7 @@ fn parse_token(chars: &[char], start: usize) -> Result<Token> {
         )));
     }
     if name.is_empty() {
-        let written: String = chars[start..=i].iter().collect();
+        let written = printable(&chars[start..=i].iter().collect::<String>());
         return Err(fail(format!(
             "'{written}' at column {} does not contain a variable name",
             start + 1
@@ -342,22 +344,23 @@ fn resolve(
     host_env: impl Fn(&str) -> Option<String>,
     config_vars: &HashMap<String, Option<String>>,
 ) -> Result<String> {
+    let shown = printable(name);
     if sigil == '$' {
         match host_env(name) {
             Some(value) => Ok(value),
             None => match default {
                 Some(default) => Ok(default.to_string()),
                 None => bail!(
-                    "Host environment variable '{name}' is not set, and no default was given \
-                     (e.g. '${{{name}:-default}}')"
+                    "Host environment variable '{shown}' is not set, and no default was given \
+                     (e.g. '${{{shown}:-default}}')"
                 ),
             },
         }
     } else {
         match config_vars.get(name) {
-            None => bail!("Config variable '{name}' is not declared in 'config_variables'"),
+            None => bail!("Config variable '{shown}' is not declared in 'config_variables'"),
             Some(None) => bail!(
-                "Config variable '{name}' has no value: no --config-var/--config-vars-file \
+                "Config variable '{shown}' has no value: no --config-var/--config-vars-file \
                  override was given, and it has no 'default' in 'config_variables'"
             ),
             Some(Some(value)) => Ok(value.clone()),
