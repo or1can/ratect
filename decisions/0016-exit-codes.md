@@ -12,10 +12,10 @@ the same release
 usage error was `2` everywhere, and a value that failed its check was the
 command's ordinary failure. Refined again on 2026-10-29, also before release:
 a container or network already gone when cleanup reaches it is not a cleanup
-failure, on every removal path. Its rework is
-[#609](https://github.com/or1can/ratect/issues/609). As first implemented, a
-graceful stop or a network removal answered `404` counted as one, while
-forced removal did not.
+failure, on every removal path. That rework is implemented in the same
+release ([#609](https://github.com/or1can/ratect/issues/609)). As first
+implemented, a graceful stop or a network removal answered `404` counted as
+one, while forced removal did not.
 
 ## Context
 

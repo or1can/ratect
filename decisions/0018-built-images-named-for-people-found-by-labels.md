@@ -1,7 +1,7 @@
 # 0018 — Built images are named for people and found by labels
 
-**Status:** Accepted — the naming half is planned for ratect-compat 0.33.0 ·
-ratect 0.12.0 ([#290](https://github.com/or1can/ratect/issues/290),
+**Status:** Accepted — the naming half is implemented (ratect-compat 0.33.0 ·
+ratect 0.12.0, [#290](https://github.com/or1can/ratect/issues/290),
 [#302](https://github.com/or1can/ratect/issues/302),
 [#436](https://github.com/or1can/ratect/issues/436),
 [#453](https://github.com/or1can/ratect/issues/453)); the lifecycle half is

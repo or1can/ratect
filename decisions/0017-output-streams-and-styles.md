@@ -1,6 +1,6 @@
 # 0017 — Output: what each stream is for, and how a style shapes it
 
-**Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
+**Status:** Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0,
 [#535](https://github.com/or1can/ratect/issues/535)). Refined by
 [#473](https://github.com/or1can/ratect/issues/473): a task that fails to run
 once started ends with a summary line of its own, so that route is listed below.
