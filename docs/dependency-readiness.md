@@ -295,14 +295,15 @@ dependents have started doesn't affect the rest of the task.
 Not re-checking health doesn't mean staying silent, though: a dependency that
 has already become ready and then exits on its own — while the task's own
 command, or a later dependency's own health/setup wait, is still going — prints
-a warning naming the container and its exit code, in every output mode. Without
+a progress line naming the container and its exit code, in every output style
+except `quiet`. Without
 it, that container's own death would otherwise surface later as a confusing
 symptom in whatever *depended* on it (a connection refused, a timeout) rather
 than the real cause. This is a notification only — the run isn't failed or
 stopped because of it — and it's never printed for a container cleanup itself
 stops: Ratect stops watching a dependency for this the moment the task's own
-execution finishes, strictly before cleanup ever touches a container. This
-warning doesn't apply to a `run_to_completion` dependency either: its exit is
+execution finishes, strictly before cleanup ever touches a container. Nor is
+it printed for a `run_to_completion` dependency: its exit is
 how it *became* ready in the first place, not a later surprise, so there's
 nothing unexpected to report.
 

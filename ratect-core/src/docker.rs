@@ -1595,8 +1595,9 @@ struct MountPoint<'a> {
 /// directory, which fails a nested file or socket mount at container start.
 /// A host mount of a Docker Desktop special path gets nothing (its type
 /// can't be known on the host), and an existing mount point is never
-/// touched, whatever its type — a dangling symlink included. Nor is a
-/// symlink on the way to one followed ([`missing_mount_point`]).
+/// touched, whatever its type — a dangling symlink included. A symlink on
+/// the way to one is followed only while it stays inside the enclosing
+/// mount's host directory ([`missing_mount_point`]).
 fn create_nested_mount_points(binds: &[BindMount], tmpfs: &[(String, String)]) -> Result<()> {
     let mounts: Vec<MountPoint> = binds
         .iter()
