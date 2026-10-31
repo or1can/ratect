@@ -1,6 +1,6 @@
 # 0020 — A bundle records the Ratect version it was written for
 
-**Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
+**Status:** Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0,
 [#559](https://github.com/or1can/ratect/issues/559)). Takes up the per-bundle
 alternative [0015](0015-native-project-records-its-written-for-version.md)
 deferred. Clarified on 2026-10-29, before that release shipped: "a

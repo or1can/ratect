@@ -1,6 +1,6 @@
 # 0021 — A native field follows its file, on include entries as on containers
 
-**Status:** Accepted — planned (ratect-compat 0.33.0 · ratect 0.12.0,
+**Status:** Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0,
 [#680](https://github.com/or1can/ratect/issues/680)). Supersedes the
 include-entry exception in [0003](0003-ratect-native-config-format.md)'s
 "Generalized (ratect#214)" paragraph; the rest of 0003 stands. Refined while
