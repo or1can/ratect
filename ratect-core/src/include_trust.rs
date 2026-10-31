@@ -114,9 +114,9 @@ pub(crate) struct Grants {
 /// something it is not in a position to be given.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Trust {
-    /// This bundle's containers may resolve `volumes`/`build_directory`/
-    /// `build_secrets` paths anywhere, rather than only within its own clone
-    /// or the project directory.
+    /// This bundle's containers may resolve every [`HostPathField`]'s paths
+    /// anywhere, rather than only within its own clone or the project
+    /// directory.
     pub host_paths: bool,
     /// This bundle's own `type: git` includes may be followed, so it may
     /// redirect the load to remotes the project owner never named.
@@ -200,6 +200,30 @@ pub(crate) struct Boundary {
     /// an arbitrary host *file* into the configuration, which is a separate
     /// concern from where its containers may mount.
     pub bundle: Bundle,
+}
+
+/// The config fields whose host paths a [`Boundary`] contains — every field
+/// `Boundary::check_path_allowed` is called for, named so its refusal can say
+/// which one escaped (#180) and so the list exists once, not in each message
+/// or comment that would otherwise enumerate it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostPathField {
+    Volumes,
+    BuildDirectory,
+    BuildSecrets,
+    BuildSsh,
+}
+
+impl HostPathField {
+    /// The field's name as a file writes it, in either format.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Volumes => "volumes",
+            Self::BuildDirectory => "build_directory",
+            Self::BuildSecrets => "build_secrets",
+            Self::BuildSsh => "build_ssh",
+        }
+    }
 }
 
 /// Which of `Boundary::check_path_allowed`'s two checks refused a path.
@@ -317,13 +341,21 @@ impl Boundary {
     /// `volumes`/`build_directory` path need not — Ratect or Docker creates
     /// it. Both allowed roots are resolved too, since a project or cache
     /// directory may itself sit under a symlink (`/tmp` does on macOS).
-    pub(crate) fn check_path_allowed(&self, resolved: &Path, project_dir: &Path) -> Result<()> {
+    ///
+    /// `field` is where the path came from, which a refusal names: this layer
+    /// knows a path, not who wrote it.
+    pub(crate) fn check_path_allowed(
+        &self,
+        resolved: &Path,
+        project_dir: &Path,
+        field: HostPathField,
+    ) -> Result<()> {
         let resolved = &resolved.clean();
         if self.bundle.trust.host_paths {
             return Ok(());
         }
         if !(resolved.starts_with(&self.repo_dir) || resolved.starts_with(project_dir)) {
-            return Err(self.refuse_escape(resolved, project_dir, Escape::Lexical));
+            return Err(self.refuse_escape(resolved, project_dir, field, Escape::Lexical));
         }
         let real = self.real_path(resolved)?;
         if real.starts_with(self.real_path(&self.repo_dir)?)
@@ -331,7 +363,7 @@ impl Boundary {
         {
             return Ok(());
         }
-        Err(self.refuse_escape(resolved, project_dir, Escape::ViaSymlink(real)))
+        Err(self.refuse_escape(resolved, project_dir, field, Escape::ViaSymlink(real)))
     }
 
     /// How a message names `path` if it lies in this bundle's checkout: as
@@ -378,7 +410,13 @@ impl Boundary {
     /// same either way, and is the part that has to name the field rather
     /// than spell its syntax, since the include entry it points at may be in
     /// either format.
-    fn refuse_escape(&self, resolved: &Path, project_dir: &Path, escape: Escape) -> anyhow::Error {
+    fn refuse_escape(
+        &self,
+        resolved: &Path,
+        project_dir: &Path,
+        field: HostPathField,
+        escape: Escape,
+    ) -> anyhow::Error {
         let how = match escape {
             Escape::Lexical => String::new(),
             Escape::ViaSymlink(real) => format!(
@@ -396,11 +434,12 @@ impl Boundary {
         };
         anyhow::anyhow!(
             "Path {path} escapes both {repository} and the project directory '{}'{how} — a \
-             container reached through a Git include must resolve its \
-             'volumes'/'build_directory' paths within one of the two. If you trust this bundle \
-             to reach that path, set 'allow_host_paths' to true on the include entry for '{}' \
-             in your own configuration.",
+             '{}' path of a container reached through a Git include must resolve within \
+             one of the two. If you trust this bundle to reach that path, set \
+             'allow_host_paths' to true on the include entry for '{}' in your own \
+             configuration.",
             project_dir.display(),
+            field.name(),
             self.bundle.id.remote
         )
     }

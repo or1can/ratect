@@ -124,7 +124,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-use crate::include_trust::{self, Boundary, Bundle, BundleId, EffectiveGrants, Grants};
+use crate::include_trust::{
+    self, Boundary, Bundle, BundleId, EffectiveGrants, Grants, HostPathField,
+};
 use crate::ui::{printable, LoadOutput, Text};
 
 /// Batect's one built-in config variable, resolvable via
@@ -4068,8 +4070,8 @@ fn include_file_at(
 pub struct LoadedConfig {
     pub config: Config,
     container_base_paths: HashMap<String, PathBuf>,
-    /// The Git boundary a container's `volumes`/`build_directory` paths must
-    /// stay within, for every container whose origin file was reached
+    /// The Git boundary a container's host paths (each
+    /// `include_trust::HostPathField`) must stay within, for every container whose origin file was reached
     /// (directly or via a nested local include) through a `type: git`
     /// include — see `Boundary::check_path_allowed`. A container absent
     /// from this map was declared entirely within the caller's own local
@@ -4703,24 +4705,26 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                         if !local.local_is_expression(anchor.batect_shaped) =>
                     {
                         if anchor.boundary.is_some() {
-                            anchor_path(&local.local, &anchor)?;
+                            anchor_path(&local.local, &anchor, HostPathField::Volumes)?;
                         }
                     }
-                    VolumeMount::Local(local) => check_literal_path(&local.local, &anchor)?,
+                    VolumeMount::Local(local) => {
+                        check_literal_path(&local.local, &anchor, HostPathField::Volumes)?
+                    }
                     // `container`/`options` are plain strings too, matching
                     // Batect's own `TmpfsMount` typing.
                     VolumeMount::Tmpfs(_) => {}
                 }
             }
             if let Some(build_directory) = &container.build_directory {
-                check_literal_path(build_directory, &anchor)?;
+                check_literal_path(build_directory, &anchor, HostPathField::BuildDirectory)?;
             }
             for secret in container.build_secrets.iter().flat_map(HashMap::values) {
                 // `Environment` is a literal host env var *name*, not itself
                 // an expression — matches Batect's own `String` (not
                 // `Expression`) typing for that variant.
                 if let BuildSecret::Path(path) = secret {
-                    check_literal_path(path, &anchor)?;
+                    check_literal_path(path, &anchor, HostPathField::BuildSecrets)?;
                 }
             }
             // Batect parses every command line while decoding the file
@@ -4753,7 +4757,7 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     );
                 }
                 for path in &agent.paths {
-                    check_literal_path(path, &anchor)?;
+                    check_literal_path(path, &anchor, HostPathField::BuildSsh)?;
                 }
             }
             if let Some(run_as_current_user) = &container.run_as_current_user {
@@ -4842,9 +4846,9 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
 /// from a Git include: whether it stays inside that bundle's [`Boundary`]
 /// needs nothing from the machine but the home directory a leading `~`
 /// expands to. A path holding an expression is judged when evaluated.
-fn check_literal_path(path: &str, anchor: &Anchor<'_>) -> Result<()> {
+fn check_literal_path(path: &str, anchor: &Anchor<'_>, contained: HostPathField) -> Result<()> {
     if anchor.boundary.is_some() && !crate::expressions::contains_expression(path) {
-        anchor_path(path, anchor)?;
+        anchor_path(path, anchor, contained)?;
     }
     Ok(())
 }
@@ -4984,10 +4988,10 @@ fn evaluate_container(
     let mut failures = Vec::new();
     let suppliers = provenance.suppliers_of(name);
     let anchor = |supplier: &str| provenance.anchor(supplier, project_directory);
-    let resolve = |field: &str, path: &str, anchor: &Anchor<'_>| -> Result<String> {
+    let resolve = |field: &str, contained: HostPathField, path: &str, anchor: &Anchor<'_>| {
         let evaluated = evaluate_value(field, path, host_env, config_vars)?;
-        let resolved =
-            anchor_path(&evaluated, anchor).with_context(|| deferred_check_context(field, path))?;
+        let resolved = anchor_path(&evaluated, anchor, contained)
+            .with_context(|| deferred_check_context(field, path))?;
         Ok(resolved.display().to_string())
     };
 
@@ -5017,9 +5021,14 @@ fn evaluate_container(
         // `Cache` and `Tmpfs` mounts hold no expression — see `check_values`.
         if let VolumeMount::Local(local) = volume {
             let resolved = if local.local_is_expression(volumes_anchor.batect_shaped) {
-                resolve("'volumes'", &local.local, &volumes_anchor)
+                resolve(
+                    "'volumes'",
+                    HostPathField::Volumes,
+                    &local.local,
+                    &volumes_anchor,
+                )
             } else {
-                anchor_path(&local.local, &volumes_anchor)
+                anchor_path(&local.local, &volumes_anchor, HostPathField::Volumes)
                     .map(|resolved| resolved.display().to_string())
                     .with_context(|| {
                         format!(
@@ -5035,6 +5044,7 @@ fn evaluate_container(
         let build_directory_anchor = anchor(&suppliers.build_directory);
         let resolved = resolve(
             "'build_directory'",
+            HostPathField::BuildDirectory,
             build_directory,
             &build_directory_anchor,
         );
@@ -5058,6 +5068,7 @@ fn evaluate_container(
         if let BuildSecret::Path(path) = secret {
             let resolved = resolve(
                 &format!("'build_secrets.{}'", printable(key)),
+                HostPathField::BuildSecrets,
                 path,
                 &build_secrets_anchor,
             );
@@ -5068,7 +5079,7 @@ fn evaluate_container(
     for agent in container.build_ssh.iter_mut().flatten() {
         let field = format!("'build_ssh' entry '{}'", printable(&agent.id));
         for path in &mut agent.paths {
-            let resolved = resolve(&field, path, &build_ssh_anchor);
+            let resolved = resolve(&field, HostPathField::BuildSsh, path, &build_ssh_anchor);
             store_or_record(path, resolved, &mut failures);
         }
     }
@@ -5311,11 +5322,14 @@ pub fn resolve_option_path(path: &Path) -> Result<PathBuf> {
 /// cosmetic (the path still resolves correctly on disk either way), but
 /// worth avoiding since it's user-visible in errors.
 ///
+/// `contained` is the field the path came from, for the boundary's refusal
+/// to name.
+///
 /// A path holding a NUL is refused first, as Batect's `PathResolver` refuses
 /// it: no filesystem accepts one, so letting it through only fails later —
 /// at `create_dir_all`, or at the daemon once the container already exists
 /// (#365).
-fn anchor_path(path: &str, anchor: &Anchor<'_>) -> Result<PathBuf> {
+fn anchor_path(path: &str, anchor: &Anchor<'_>, contained: HostPathField) -> Result<PathBuf> {
     if path.contains('\0') {
         anyhow::bail!("'{}' is not a valid path", printable(path));
     }
@@ -5346,7 +5360,7 @@ fn anchor_path(path: &str, anchor: &Anchor<'_>) -> Result<PathBuf> {
     };
 
     if let Some((boundary, project_dir)) = anchor.boundary {
-        boundary.check_path_allowed(&resolved, project_dir)?;
+        boundary.check_path_allowed(&resolved, project_dir, contained)?;
     }
 
     Ok(resolved)

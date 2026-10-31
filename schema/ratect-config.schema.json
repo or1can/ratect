@@ -728,7 +728,7 @@
           "additionalProperties": false,
           "properties": {
             "allow_host_paths": {
-              "description": "Let this bundle's containers resolve 'volumes'/'build_directory' paths outside the usual containment (its own clone, or your project directory) — for a bundle you trust that needs, say, a shared cache under your home directory. Applies only to the bundle named here, never to bundles it includes itself, and only when set in your own configuration. Defaults to false.",
+              "description": "Let this bundle's containers resolve 'volumes'/'build_directory'/'build_secrets'/'build_ssh' paths outside the usual containment (its own clone, or your project directory) — for a bundle you trust that needs, say, a shared cache under your home directory. Applies only to the bundle named here, never to bundles it includes itself, and only when set in your own configuration. Defaults to false.",
               "type": "boolean"
             },
             "allow_nested_git_includes": {

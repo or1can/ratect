@@ -1113,7 +1113,8 @@ impl JsonSchema for crate::config::IncludeEntry {
                         "allow_host_paths": {
                             "type": "boolean",
                             "description": "Let this bundle's containers resolve 'volumes'/\
-                                            'build_directory' paths outside the usual \
+                                            'build_directory'/'build_secrets'/'build_ssh' \
+                                            paths outside the usual \
                                             containment (its own clone, or your project \
                                             directory) — for a bundle you trust that needs, \
                                             say, a shared cache under your home directory. \
