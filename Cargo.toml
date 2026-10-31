@@ -23,17 +23,22 @@ resolver = "2"
 # forward from an old PR branch: upstream squash-merges on review, so an old
 # branch and master end up expressing the same landed feature as different
 # commits touching the same lines, which conflicts on comparison and makes the
-# branch unable to raise a PR or pick up later upstream fixes. Keep this pin on
-# a branch that is `master` + our own unlanded commits, and rebase it rather
-# than merging master into it — worth catching up whenever this file is
-# touched and the branch has drifted, dropping any commit that has landed
-# upstream since, rather than folding that into an unrelated change.
+# branch unable to raise a PR or pick up later upstream fixes. Keep that branch
+# `master` + our own unlanded commits, and rebase it rather than merging master
+# into it — worth catching up whenever this file is touched and the branch has
+# drifted, dropping any commit that has landed upstream since, rather than
+# folding that into an unrelated change.
 #
-# Cargo.lock pins the exact commit, so builds stay reproducible. Dropping this
-# patch entirely needs a crates.io release with both commits landed.
+# The patch names a tag on that branch's head, not the branch itself. A rebase
+# leaves the old commits on no branch, so a released tag's Cargo.lock, which
+# pins the exact commit, would stop being fetchable from a branch pin; a tag
+# keeps it fetchable for good. After each rebase, push a new
+# `ratect-pin/feat-build-cancel/<short sha>` tag at the new head and move both
+# patches to it. Dropping the patch entirely needs a crates.io release with
+# both commits landed.
 [patch.crates-io]
-bollard = { git = "https://github.com/or1can/bollard.git", branch = "feat/build-cancel" }
-bollard-stubs = { git = "https://github.com/or1can/bollard.git", branch = "feat/build-cancel" }
+bollard = { git = "https://github.com/or1can/bollard.git", tag = "ratect-pin/feat-build-cancel/9bcd7d7" }
+bollard-stubs = { git = "https://github.com/or1can/bollard.git", tag = "ratect-pin/feat-build-cancel/9bcd7d7" }
 
 # The profile that 'dist' will build with
 [profile.dist]

@@ -321,7 +321,7 @@ dependencies = [
 [[package]]
 name = "bollard"
 version = "0.22.0"
-source = "git+https://github.com/or1can/bollard.git?branch=feat%2Fbuild-cancel#9bcd7d762175ca1d010dac726c6f4fa95f1ab8a4"
+source = "git+https://github.com/or1can/bollard.git?tag=ratect-pin%2Ffeat-build-cancel%2F9bcd7d7#9bcd7d762175ca1d010dac726c6f4fa95f1ab8a4"
 dependencies = [
  "async-stream",
  "base64 0.23.1",
@@ -382,7 +382,7 @@ dependencies = [
 [[package]]
 name = "bollard-stubs"
 version = "1.53.1-rc.29.3.1"
-source = "git+https://github.com/or1can/bollard.git?branch=feat%2Fbuild-cancel#9bcd7d762175ca1d010dac726c6f4fa95f1ab8a4"
+source = "git+https://github.com/or1can/bollard.git?tag=ratect-pin%2Ffeat-build-cancel%2F9bcd7d7#9bcd7d762175ca1d010dac726c6f4fa95f1ab8a4"
 dependencies = [
  "base64 0.23.1",
  "bollard-buildkit-proto",
