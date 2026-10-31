@@ -109,13 +109,14 @@ list drifted from this file's prose in the same release that added it). See
 
 Two things worth knowing without opening a `Cargo.toml`:
 
-- **`bollard` and `noyalib` are consumed through `[patch.crates-io]` forks**
-  pinned in the root `Cargo.toml`, whose comments explain the branch rules —
-  each cut from the upstream branch its comment names, rebased and never
-  merged into. Getting that wrong dead-ended a branch once already. A patch
-  only applies while the fork's version satisfies the crate's own
-  requirement, so a version bump can silently retire one — `noyalib`'s
-  comment says what catches that and when to drop its pin.
+- **`bollard` is consumed through a `[patch.crates-io]` fork** pinned in the
+  root `Cargo.toml`, whose comment explains the branch rules — cut from the
+  upstream branch its comment names, rebased and never merged into, with the
+  patch naming a tag on its head so a rebase can't leave a released
+  `Cargo.lock` pointing at a commit no ref reaches. Getting
+  that wrong dead-ended a branch once already. A patch only applies while the
+  fork's version satisfies the crate's own requirement, so a version bump can
+  silently retire one.
 - **`ssh-key` and its companions are Ratect's only cryptographic dependency**,
   taken knowingly ([decisions/0005](decisions/0005-build-ssh-keyring-placement.md)),
   and both accepted `cargo audit` advisories belong to that tree — see
