@@ -2696,7 +2696,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // Every task's own container is eligible, prerequisites included,
         // as in Batect. That relies on prerequisites running one after
         // another: `docker::stdin`'s one stdin reader is lent to one container
-        // at a time, and only one can hold the terminal — revisit this if
+        // at a time, and only one can hold the terminal (see `RawModeGuard`,
+        // whose record of raw mode assumes the same) — revisit this if
         // prerequisites ever run concurrently (ratect#102).
         let interactive = self
             .event_sink

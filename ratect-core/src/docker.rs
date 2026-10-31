@@ -1215,6 +1215,15 @@ fn stdin_flags(interactive: bool, use_tty: bool) -> StdinFlags {
 /// only ever has the record set on a terminal that isn't raw — whose extra
 /// `\r` is invisible — and never a raw terminal printing a bare `\n`.
 ///
+/// The record is on or off, not a count, because it mirrors the terminal,
+/// which is one setting: `crossterm` doesn't count nested enables, so the
+/// first of two overlapping guards to drop would restore the terminal
+/// while the other session still needed it raw. One guard at a time is
+/// what keeps both right, and every task's container can be interactive,
+/// prerequisites' included — safe only while prerequisites run one after
+/// another. If they ever run concurrently (ratect#102), give the terminal
+/// one owner rather than counting the record.
+///
 /// A restore that fails is a `Warning:` naming the fix, not a log line: a
 /// shell with no echo or line editing leaves a user with `RUST_LOG` unset
 /// worse off without it (decisions/0017). It is posted from here, not
