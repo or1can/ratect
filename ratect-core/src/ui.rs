@@ -71,7 +71,13 @@
 //! own messages, which quote keys and values as written. A command keeps
 //! its line breaks wherever it is quoted: a multi-line script is ordinary.
 //! A site that misses a value can only add a line, never send the terminal
-//! an escape sequence, since `Text` still escapes the rest.
+//! an escape sequence, since `Text` still escapes the rest. The one residue
+//! left on purpose (#774): program output an error quotes — the Docker
+//! daemon's message, git's stderr — may echo a value back with its line
+//! break, as the program wrote it. Escaping it would mean rewriting another
+//! program's output; the added line can't be an escape sequence either, and
+//! where such output is a cause in the chain it prints indented under
+//! `Caused by:`, away from Ratect's own `Error: `.
 //!
 //! The user-facing output layer (0.16.0's output-modes
 //! work) — a port of Batect's `TaskEventSink`/`EventLogger` design: `engine.rs`
