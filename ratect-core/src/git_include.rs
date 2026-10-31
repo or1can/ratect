@@ -67,7 +67,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::Instant;
 
-use crate::ui::LoadOutput;
+use crate::ui::{printable, LoadOutput};
 
 mod entry_lock;
 
@@ -146,9 +146,11 @@ impl From<&str> for Remote {
     }
 }
 
+/// Escaped ([`printable`]) as well as redacted: a remote is only ever shown
+/// in a message, and a line break in one would add a line to it (#770).
 impl std::fmt::Display for Remote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.redacted())
+        f.write_str(&printable(&self.redacted()))
     }
 }
 
@@ -161,7 +163,7 @@ impl std::fmt::Debug for Remote {
 /// A Git include as every message names it — `'<remote>' at '<ref>'` — so
 /// no message spells the pair on its own.
 pub fn describe_include(remote: &Remote, git_ref: &str) -> String {
-    format!("'{remote}' at '{git_ref}'")
+    format!("'{remote}' at '{}'", printable(git_ref))
 }
 
 /// Where a sidecar failed to parse — `at line N` — and nothing else: toml's
@@ -215,7 +217,10 @@ impl GitClient for SystemGitClient {
             anyhow::bail!("Git include 'repo' must not start with '-': '{remote}'");
         }
         if git_ref.starts_with('-') {
-            anyhow::bail!("Git include 'ref' must not start with '-': '{git_ref}'");
+            anyhow::bail!(
+                "Git include 'ref' must not start with '-': '{}'",
+                printable(git_ref)
+            );
         }
 
         let clone_output = Command::new("git")
@@ -252,7 +257,8 @@ impl GitClient for SystemGitClient {
             .context("Failed to run 'git checkout'")?;
         if !checkout_output.status.success() {
             anyhow::bail!(
-                "Could not check out reference '{git_ref}' for repository '{remote}': git exited with {}: {}",
+                "Could not check out reference '{}' for repository '{remote}': git exited with {}: {}",
+                printable(git_ref),
                 checkout_output.status,
                 String::from_utf8_lossy(&checkout_output.stderr).trim()
             );

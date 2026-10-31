@@ -60,6 +60,7 @@ use crate::config::{
 use crate::diagnostics::{conversion_checks, ConversionCheck, ConversionCheckKind};
 use crate::git_include::describe_include;
 use crate::include_trust::BundleId;
+use crate::ui::printable;
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -141,15 +142,15 @@ pub fn convert_project(
             anyhow::bail!(
                 "Converting '{}' would overwrite it with its own conversion: a Batect-format \
                  file is YAML whatever its extension, so rename it before converting.",
-                file.path.display()
+                printable(&file.path.display().to_string())
             );
         }
         if let Some(previous) = claimed.insert(target, &file.path) {
             anyhow::bail!(
                 "Converting '{}' and '{}' would both write '{}' — rename one of them first.",
-                previous.display(),
-                file.path.display(),
-                target.display()
+                printable(&previous.display().to_string()),
+                printable(&file.path.display().to_string()),
+                printable(&target.display().to_string())
             );
         }
         target_of.insert(&file.path, target);

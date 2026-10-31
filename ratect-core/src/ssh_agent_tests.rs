@@ -514,3 +514,16 @@ async fn dropping_the_agent_stops_a_connection_it_is_already_serving() {
 
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+/// #770: a key's path, which comes from configuration, is quoted escaped.
+#[test]
+fn a_key_that_cannot_be_read_is_quoted_with_its_line_break_escaped() {
+    let Err(err) = load_key(Path::new("/nonexistent\nError: forged")) else {
+        panic!("no such key");
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "Failed to read the SSH private key '/nonexistent\\nError: forged'"
+    );
+}

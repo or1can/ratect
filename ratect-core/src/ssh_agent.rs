@@ -188,9 +188,25 @@ fn load_keys(key_files: &[PathBuf]) -> Result<Vec<LoadedKey>> {
     key_files.iter().map(|path| load_key(path)).collect()
 }
 
+/// `path` as a message quotes it: a key's path comes from configuration, so
+/// each control character in it is escaped as `char::escape_debug` writes it
+/// (#770) — `ratect_core::ui::printable`'s rule, restated rather than
+/// imported so this module stays extractable.
+fn shown(path: &Path) -> String {
+    let mut out = String::new();
+    for c in path.display().to_string().chars() {
+        if c.is_control() {
+            out.extend(c.escape_debug());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn load_key(path: &Path) -> Result<LoadedKey> {
     let key = PrivateKey::read_openssh_file(path)
-        .with_context(|| format!("Failed to read the SSH private key '{}'", path.display()))?;
+        .with_context(|| format!("Failed to read the SSH private key '{}'", shown(path)))?;
 
     if key.is_encrypted() {
         // Go BuildKit's own keyring doesn't handle these either (its
@@ -201,7 +217,7 @@ fn load_key(path: &Path) -> Result<LoadedKey> {
             "The SSH private key '{}' is protected by a passphrase, which this agent \
              cannot use — load it into a running ssh-agent and forward that instead, \
              or use a key with no passphrase",
-            path.display()
+            shown(path)
         );
     }
 
@@ -210,7 +226,7 @@ fn load_key(path: &Path) -> Result<LoadedKey> {
         _ => anyhow::bail!(
             "The SSH private key '{}' uses the algorithm '{}', which this agent \
              cannot sign with — Ed25519, RSA and ECDSA keys are supported",
-            path.display(),
+            shown(path),
             key.algorithm()
         ),
     }
@@ -218,7 +234,7 @@ fn load_key(path: &Path) -> Result<LoadedKey> {
     let blob = key
         .public_key()
         .to_bytes()
-        .with_context(|| format!("Failed to encode the public key of '{}'", path.display()))?;
+        .with_context(|| format!("Failed to encode the public key of '{}'", shown(path)))?;
 
     Ok(LoadedKey {
         blob,

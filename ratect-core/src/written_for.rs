@@ -66,6 +66,8 @@
 //!   [`check_yaml_root`] — which converting the root fixes.
 
 use anyhow::{Context, Result};
+
+use crate::ui::printable;
 use std::path::Path;
 
 /// The top-level field a root `ratect.toml` declares its version in.
@@ -473,14 +475,15 @@ impl std::str::FromStr for Version {
     type Err = anyhow::Error;
 
     fn from_str(text: &str) -> Result<Self> {
+        let shown = printable(text);
         let release = match text.split_once('-') {
             Some((release, pre)) if !pre.is_empty() => release,
-            Some(_) => anyhow::bail!("'{text}' is not a version"),
+            Some(_) => anyhow::bail!("'{shown}' is not a version"),
             None => text,
         };
         let parts: Vec<&str> = release.split('.').collect();
         let [major, minor, patch] = parts.as_slice() else {
-            anyhow::bail!("'{text}' is not a version (expected major.minor.patch, e.g. 0.11.0)");
+            anyhow::bail!("'{shown}' is not a version (expected major.minor.patch, e.g. 0.11.0)");
         };
         // Digits only: `u64`'s own parser also takes a leading `+`.
         let number = |part: &str| {
@@ -489,7 +492,7 @@ impl std::str::FromStr for Version {
                 .then(|| part.parse::<u64>().ok())
                 .flatten()
                 .with_context(|| {
-                    format!("'{text}' is not a version (expected major.minor.patch, e.g. 0.11.0)")
+                    format!("'{shown}' is not a version (expected major.minor.patch, e.g. 0.11.0)")
                 })
         };
         Ok(Version {

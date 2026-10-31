@@ -2243,3 +2243,70 @@ async fn a_clone_announcement_escapes_the_remote_and_ref() {
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
+
+/// #770: a Git include's remote and ref are quoted escaped wherever a
+/// message names the include, so a line break in either can't add a line.
+#[test]
+fn a_git_include_is_named_with_its_line_breaks_escaped() {
+    let remote = Remote::from("https://host/r.git\nError: forged");
+
+    assert_eq!(remote.to_string(), "https://host/r.git\\nError: forged");
+    assert_eq!(
+        describe_include(&remote, "v1\nError: forged"),
+        "'https://host/r.git\\nError: forged' at 'v1\\nError: forged'"
+    );
+}
+
+/// #770: the refusal of a remote or ref git would read as an option quotes
+/// it escaped.
+#[tokio::test]
+async fn a_dash_refusal_quotes_the_remote_and_ref_escaped() {
+    let destination = unique_temp_dir().join("clone");
+
+    let remote = SystemGitClient
+        .clone_repo(&Remote::from("-x\nError: forged"), "v1", &destination)
+        .await
+        .unwrap_err();
+    let git_ref = SystemGitClient
+        .clone_repo(
+            &Remote::from("https://host/r.git"),
+            "-x\nError: forged",
+            &destination,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        remote.to_string(),
+        "Git include 'repo' must not start with '-': '-x\\nError: forged'"
+    );
+    assert_eq!(
+        git_ref.to_string(),
+        "Git include 'ref' must not start with '-': '-x\\nError: forged'"
+    );
+}
+
+/// #770: a failed clone quotes the remote escaped, but git's own stderr after
+/// it keeps its lines — it is git's output, and its layout — even where git
+/// echoes the remote back.
+#[tokio::test]
+async fn a_failed_clone_escapes_the_remote_and_keeps_gits_stderr_as_written() {
+    let destination = unique_temp_dir().join("clone");
+
+    let err = SystemGitClient
+        .clone_repo(
+            &Remote::from("/nonexistent\nError: forged"),
+            "v1",
+            &destination,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+    let (ours, stderr) = err.split_once(": git exited with ").expect(&err);
+    assert_eq!(
+        ours,
+        "Could not clone repository '/nonexistent\\nError: forged'"
+    );
+    assert!(stderr.contains("/nonexistent\nError: forged"), "{err}");
+}

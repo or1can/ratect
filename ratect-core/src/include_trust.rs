@@ -94,6 +94,7 @@ use path_clean::PathClean;
 
 use crate::config::ConfigFormat;
 use crate::git_include::{describe_include, Remote};
+use crate::ui::printable;
 
 /// What a `type: git` include entry asks for. Built from the entry's own
 /// fields at the single place each walker destructures one, so neither passes
@@ -251,7 +252,11 @@ impl Boundary {
     pub(crate) fn describe(&self, path: &Path) -> String {
         format!(
             "'{}' from the bundle {}",
-            relative_to(&self.repo_dir, &path.clean()).display(),
+            printable(
+                &relative_to(&self.repo_dir, &path.clean())
+                    .display()
+                    .to_string()
+            ),
             self.bundle.id
         )
     }
@@ -360,7 +365,7 @@ impl Boundary {
             None => format!(
                 "Cannot determine where '{}' really points, so the containment for the \
                      Git repository {} cannot be checked.",
-                path.display(),
+                printable(&path.display().to_string()),
                 self.bundle.id
             ),
         })
@@ -376,13 +381,16 @@ impl Boundary {
     fn refuse_escape(&self, resolved: &Path, project_dir: &Path, escape: Escape) -> anyhow::Error {
         let how = match escape {
             Escape::Lexical => String::new(),
-            Escape::ViaSymlink(real) => format!(" (via a symlink, to '{}')", real.display()),
+            Escape::ViaSymlink(real) => format!(
+                " (via a symlink, to '{}')",
+                printable(&real.display().to_string())
+            ),
         };
         // A path described within the bundle already names it.
         let (path, repository) = match self.describe_in_checkout(resolved) {
             Some(described) => (described, "its checkout".to_string()),
             None => (
-                format!("'{}'", resolved.display()),
+                format!("'{}'", printable(&resolved.display().to_string())),
                 format!("the Git repository {} it was included from", self.bundle.id),
             ),
         };

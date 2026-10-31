@@ -1109,3 +1109,39 @@ fn check_build_files_defaults_to_a_dockerfile_at_the_root() {
     );
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+/// #770: a build refusal quotes the `build_directory` and `dockerfile`
+/// escaped, so a line break in either can't add a line to the error.
+#[test]
+fn a_build_file_refusal_quotes_a_line_break_in_the_path_escaped() {
+    let missing = std::path::Path::new("/nonexistent\nError: forged");
+    assert_eq!(
+        check_build_files(missing, None, None).unwrap_err(),
+        "build_directory '/nonexistent\\nError: forged' doesn't exist"
+    );
+
+    let directory = std::env::temp_dir().join(format!("ratect-770-build-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let refused = refusal(&directory, "Dockerfile\nError: forged");
+    std::fs::remove_dir_all(&directory).ok();
+    assert!(
+        refused.starts_with("dockerfile 'Dockerfile\\nError: forged' doesn't exist"),
+        "{refused}"
+    );
+}
+
+/// #770: so does a `build_secrets` refusal, of its id and its path.
+#[test]
+fn a_build_secret_refusal_quotes_a_line_break_in_the_id_and_path_escaped() {
+    let err = check_secret_file(
+        "id\nError: forged",
+        std::path::Path::new("/nonexistent\nError: forged"),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "The 'build_secrets' entry 'id\\nError: forged' reads \
+         '/nonexistent\\nError: forged', which does not exist"
+    );
+}

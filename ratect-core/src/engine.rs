@@ -97,7 +97,7 @@ use crate::config::{
 };
 use crate::container_spec::{derive_build_spec, BindMount, BindSource};
 use crate::docker::ContainerRuntime;
-use crate::ui::ToText;
+use crate::ui::{printable, ToText};
 use crate::ui::{CleanupCause, EventSink, TaskEvent};
 use anyhow::{Context, Result};
 use async_recursion::async_recursion;
@@ -591,8 +591,12 @@ fn dependents_to_stop_first(
 fn wildcard_to_regex(pattern: &str) -> Result<regex::Regex> {
     let escaped_segments: Vec<String> = pattern.split('*').map(regex::escape).collect();
     let pattern = format!("^{}$", escaped_segments.join(".*"));
-    regex::Regex::new(&pattern)
-        .with_context(|| format!("Invalid wildcard prerequisite pattern '{}'", pattern))
+    regex::Regex::new(&pattern).with_context(|| {
+        format!(
+            "Invalid wildcard prerequisite pattern '{}'",
+            printable(&pattern)
+        )
+    })
 }
 
 /// Expands any `*`-wildcard entry in a task's `prerequisites` against the
@@ -723,7 +727,12 @@ pub struct UnknownTask {
 
 impl std::fmt::Display for UnknownTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Task '{}' not found.{}", self.task, self.suggestions)
+        write!(
+            f,
+            "Task '{}' not found.{}",
+            printable(&self.task),
+            self.suggestions
+        )
     }
 }
 

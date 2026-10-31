@@ -566,8 +566,9 @@ impl TryFrom<String> for NetworkMode {
             _ => match value.strip_prefix("container:") {
                 Some(name) if !name.is_empty() => Ok(NetworkMode::Container(name.to_string())),
                 _ => Err(format!(
-                    "'{value}' is not a network mode: expected 'host', 'none' or \
-                     'container:<name>'"
+                    "'{}' is not a network mode: expected 'host', 'none' or \
+                     'container:<name>'",
+                    printable(&value)
                 )),
             },
         }
@@ -606,8 +607,9 @@ impl DeviceMapping {
     fn parse_string(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
-                "Device mount definition '{value}' is invalid. It must be in the form \
-                 'local_path:container_path' or 'local_path:container_path:options'."
+                "Device mount definition '{}' is invalid. It must be in the form \
+                 'local_path:container_path' or 'local_path:container_path:options'.",
+                printable(value)
             )
         };
         if value.is_empty() {
@@ -1029,8 +1031,9 @@ impl VolumeMount {
     fn parse_string(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
-                "Volume mount definition '{value}' is invalid. It must be in the form \
-                 'local_path:container_path' or 'local_path:container_path:options'."
+                "Volume mount definition '{}' is invalid. It must be in the form \
+                 'local_path:container_path' or 'local_path:container_path:options'.",
+                printable(value)
             )
         };
         if value.is_empty() {
@@ -1174,8 +1177,9 @@ impl<'de> Deserialize<'de> for VolumeMount {
                         Ok(VolumeMount::Tmpfs(TmpfsVolumeMount { container, options }))
                     }
                     other => Err(serde::de::Error::custom(format!(
-                        "Unknown volume mount type '{other}'. It must be 'local', 'cache', or \
-                         'tmpfs'."
+                        "Unknown volume mount type '{}'. It must be 'local', 'cache', or \
+                         'tmpfs'.",
+                        printable(other)
                     ))),
                 }
             }
@@ -1282,7 +1286,8 @@ pub(crate) fn parse_byte_size(value: &str) -> std::result::Result<i64, String> {
 /// written, or an integer as read — so `-0x10` is reported as `'-16'`.
 fn invalid_size(value: impl std::fmt::Display) -> String {
     format!(
-        "Invalid size '{value}'. It must be in the format '123', '123b', '123k', '123m' or '123g'."
+        "Invalid size '{}'. It must be in the format '123', '123b', '123k', '123m' or '123g'.",
+        printable(&value.to_string())
     )
 }
 
@@ -2043,7 +2048,8 @@ impl TryFrom<ExternalHealthCheckFields> for ExternalHealthCheck {
             }
             other => {
                 return Err(format!(
-                    "Unknown external health check type '{other}'. It must be 'http' or 'tcp'."
+                    "Unknown external health check type '{}'. It must be 'http' or 'tcp'.",
+                    printable(other)
                 ))
             }
         };
@@ -2171,7 +2177,10 @@ pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
     // Checked before rounding, so a negative that rounds to zero
     // nanoseconds is still refused rather than loading as zero.
     if negative && total_nanos > 0.0 {
-        anyhow::bail!("The duration '{text}' is negative. Durations must be positive.")
+        anyhow::bail!(
+            "The duration '{}' is negative. Durations must be positive.",
+            printable(text)
+        )
     }
     Ok(std::time::Duration::from_nanos(total_nanos.round() as u64))
 }
@@ -2179,7 +2188,7 @@ pub fn parse_duration(text: &str) -> Result<std::time::Duration> {
 /// [`parse_duration`]'s grammar, past any sign: `unsigned`'s total in
 /// nanoseconds, with errors naming `text`, the value as written.
 fn parse_unsigned_duration_nanos(text: &str, unsigned: &str) -> Result<f64> {
-    let invalid = || anyhow::anyhow!("The value '{text}' is not a valid duration.");
+    let invalid = || anyhow::anyhow!("The value '{}' is not a valid duration.", printable(text));
 
     if unsigned == "0" {
         return Ok(0.0);
@@ -2206,7 +2215,9 @@ fn parse_unsigned_duration_nanos(text: &str, unsigned: &str) -> Result<f64> {
         // an unquoted `interval: 5` in a YAML file is an easy one to write.
         if number_len == remaining.len() {
             anyhow::bail!(
-                "The value '{text}' is not a valid duration: '{number_str}' has no unit, such as 's' or 'ms'."
+                "The value '{}' is not a valid duration: '{}' has no unit, such as 's' or 'ms'.",
+                printable(text),
+                printable(number_str)
             );
         }
         let number: f64 = number_str.parse().map_err(|_| invalid())?;
@@ -2365,20 +2376,25 @@ impl PortRange {
     pub fn parse(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
-                "Port range '{value}' is invalid. It must be in the form 'port' or 'from-to' \
-                 and each port must be a positive integer."
+                "Port range '{}' is invalid. It must be in the form 'port' or 'from-to' \
+                 and each port must be a positive integer.",
+                printable(value)
             )
         };
         let (from_str, to_str) = value.split_once('-').unwrap_or((value, value));
         let from: u16 = from_str.parse().map_err(|_| invalid())?;
         let to: u16 = to_str.parse().map_err(|_| invalid())?;
         if from == 0 {
-            anyhow::bail!("Port range '{value}' is invalid. Ports must be positive integers.");
+            anyhow::bail!(
+                "Port range '{}' is invalid. Ports must be positive integers.",
+                printable(value)
+            );
         }
         if from > to {
             anyhow::bail!(
-                "Port range '{value}' is invalid. Port range limits must be given in ascending \
-                 order."
+                "Port range '{}' is invalid. Port range limits must be given in ascending \
+                 order.",
+                printable(value)
             );
         }
         Ok(Self { from, to })
@@ -2491,9 +2507,10 @@ impl PortMapping {
     fn parse_string(value: &str) -> Result<Self> {
         let invalid = || {
             anyhow::anyhow!(
-                "Port mapping definition '{value}' is invalid. It must be in the form \
+                "Port mapping definition '{}' is invalid. It must be in the form \
                  'local:container', 'local:container/protocol', 'from-to:from-to' or \
-                 'from-to:from-to/protocol' and each port must be a positive integer."
+                 'from-to:from-to/protocol' and each port must be a positive integer.",
+                printable(value)
             )
         };
         if value.is_empty() {
@@ -3016,8 +3033,9 @@ impl<'de> Deserialize<'de> for IncludeEntry {
                         })
                     }
                     Some(other) if other != "file" => Err(serde::de::Error::custom(format!(
-                        "Include type '{other}' is not supported yet — only 'file' and 'git' \
-                         includes are implemented."
+                        "Include type '{}' is not supported yet — only 'file' and 'git' \
+                         includes are implemented.",
+                        printable(other)
                     ))),
                     _ => {
                         if repo.is_some() || git_ref.is_some() {
@@ -3089,8 +3107,9 @@ impl CheckedName for TaskName {
             return Ok(());
         }
         Err(format!(
-            "Invalid task name '{name}'. Task names must contain only letters, digits, colons, \
-             dashes, periods and underscores, and must start and end with a letter or digit."
+            "Invalid task name '{}'. Task names must contain only letters, digits, colons, \
+             dashes, periods and underscores, and must start and end with a letter or digit.",
+            printable(name)
         ))
     }
 }
@@ -3115,9 +3134,10 @@ impl CheckedName for ConfigVariableName {
             return Ok(());
         }
         Err(format!(
-            "Invalid config variable name '{name}'. Config variable names must start with a \
+            "Invalid config variable name '{}'. Config variable names must start with a \
              letter, contain only letters, digits, dashes, periods and underscores, and must \
-             not start with 'batect'."
+             not start with 'batect'.",
+            printable(name)
         ))
     }
 }
@@ -3133,8 +3153,9 @@ impl CheckedName for ContainerName {
             return Ok(());
         }
         Err(format!(
-            "Invalid container name '{name}'. Container names must be valid Docker \
-             references: they {IMAGE_NAME_RULE}"
+            "Invalid container name '{}'. Container names must be valid Docker \
+             references: they {IMAGE_NAME_RULE}",
+            printable(name)
         ))
     }
 }
@@ -3151,8 +3172,9 @@ fn deserialize_project_name<'de, D: serde::Deserializer<'de>>(
     };
     if !crate::image_reference::is_name_component(&name) {
         return Err(serde::de::Error::custom(format!(
-            "Invalid project name '{name}'. The project name must be a valid Docker \
-             reference: it {IMAGE_NAME_RULE}"
+            "Invalid project name '{}'. The project name must be a valid Docker \
+             reference: it {IMAGE_NAME_RULE}",
+            printable(&name)
         )));
     }
     Ok(Some(name))
@@ -3542,7 +3564,7 @@ fn describe_origin(origin: &Path, boundary: Option<&Boundary>) -> String {
 fn describe_file(path: &Path, boundary: Option<&Boundary>) -> String {
     match boundary {
         Some(boundary) => boundary.describe(path),
-        None => format!("'{}'", path.display()),
+        None => format!("'{}'", printable(&path.display().to_string())),
     }
 }
 
@@ -3898,7 +3920,7 @@ impl<'de, K: serde::de::DeserializeSeed<'de>> serde::de::DeserializeSeed<'de>
 fn parse_toml_config_file(path: &Path, name: &str) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to open config file {name}"))?;
-    toml::from_str(&text).with_context(|| format!("Failed to parse config file {name}"))
+    toml_from_str(&text).with_context(|| format!("Failed to parse config file {name}"))
 }
 
 /// Resolves `path` to an absolute, lexically-cleaned path, anchored at the
@@ -3929,9 +3951,10 @@ pub(crate) fn infer_project_name(root_path: &Path) -> Result<String> {
     let name = directory.to_string_lossy().to_lowercase();
     if !crate::image_reference::is_name_component(&name) {
         anyhow::bail!(
-            "The inferred project name '{name}', from the directory holding {:?}, is invalid. \
+            "The inferred project name '{}', from the directory holding {:?}, is invalid. \
              The project name must be a valid Docker reference: it {IMAGE_NAME_RULE} Set \
              'project_name' to name the project explicitly.",
+            printable(&name),
             root_path
         );
     }
@@ -4019,8 +4042,12 @@ fn include_file_at(
         // A bundle file is named as written, and where that landed
         // within the bundle — never by its clone-cache path.
         let named = match boundary {
-            Some(boundary) => format!("'{as_written}' ({})", boundary.describe(&resolved)),
-            None => format!("'{}'", resolved.display()),
+            Some(boundary) => format!(
+                "'{}' ({})",
+                printable(as_written),
+                boundary.describe(&resolved)
+            ),
+            None => format!("'{}'", printable(&resolved.display().to_string())),
         };
         if resolved.exists() {
             anyhow::bail!("Included file {named} is not a file.");
@@ -4606,7 +4633,7 @@ impl Config {
             FileFormat::Toml => {
                 let text = std::fs::read_to_string(path)
                     .with_context(|| format!("Failed to open config vars file {:?}", path))?;
-                toml::from_str(&text)
+                toml_from_str(&text)
                     .with_context(|| format!("Failed to parse config vars file {:?}", path))
             }
         }
@@ -4722,7 +4749,7 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     anyhow::bail!(
                         "has more than one 'build_ssh' entry with the id \
                          '{}', but each SSH agent must have a unique id",
-                        agent.id
+                        printable(&agent.id)
                     );
                 }
                 for path in &agent.paths {
@@ -4777,7 +4804,7 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     "Task '{}' cannot have container '{}' as both the main task \
                      container (via 'run') and a task-level dependency",
                     task_name,
-                    run.container
+                    printable(&run.container)
                 );
             }
             _ => {}
@@ -4796,7 +4823,7 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                 anyhow::bail!(
                     "Cannot apply customisations to main task container '{}' in task \
                      '{}'. Set the corresponding properties on 'run' instead",
-                    customisation_name,
+                    printable(customisation_name),
                     task_name
                 );
             }
@@ -4884,7 +4911,7 @@ fn config_variable_values(
             anyhow::bail!(
                 "Config variable '{}' was given a value via --config-var/--config-vars-file, \
                  but isn't declared in 'config_variables'",
-                key
+                printable(key)
             );
         }
     }
@@ -4978,7 +5005,7 @@ fn evaluate_container(
     }
     for (key, value) in container.environment.iter_mut().flatten() {
         let evaluated = evaluate_value(
-            &format!("'environment.{key}'"),
+            &format!("'environment.{}'", printable(key)),
             value,
             host_env,
             config_vars,
@@ -5018,15 +5045,19 @@ fn evaluate_container(
         store_or_record(build_directory, resolved, &mut failures);
     }
     for (key, value) in container.build_args.iter_mut().flatten() {
-        let evaluated =
-            evaluate_value(&format!("'build_args.{key}'"), value, host_env, config_vars);
+        let evaluated = evaluate_value(
+            &format!("'build_args.{}'", printable(key)),
+            value,
+            host_env,
+            config_vars,
+        );
         store_or_record(value, evaluated, &mut failures);
     }
     let build_secrets_anchor = anchor(&suppliers.build_secrets);
     for (key, secret) in container.build_secrets.iter_mut().flatten() {
         if let BuildSecret::Path(path) = secret {
             let resolved = resolve(
-                &format!("'build_secrets.{key}'"),
+                &format!("'build_secrets.{}'", printable(key)),
                 path,
                 &build_secrets_anchor,
             );
@@ -5035,7 +5066,7 @@ fn evaluate_container(
     }
     let build_ssh_anchor = anchor(&suppliers.build_ssh);
     for agent in container.build_ssh.iter_mut().flatten() {
-        let field = format!("'build_ssh' entry '{}'", agent.id);
+        let field = format!("'build_ssh' entry '{}'", printable(&agent.id));
         for path in &mut agent.paths {
             let resolved = resolve(&field, path, &build_ssh_anchor);
             store_or_record(path, resolved, &mut failures);
@@ -5079,7 +5110,7 @@ fn evaluate_task(
         .flat_map(|run| run.environment.iter_mut().flatten());
     for (key, value) in environment {
         let evaluated = evaluate_value(
-            &format!("'run.environment.{key}'"),
+            &format!("'run.environment.{}'", printable(key)),
             value,
             host_env,
             config_vars,
@@ -5091,7 +5122,7 @@ fn evaluate_task(
     for (container, customisation) in task.customise.iter_mut().flatten() {
         for (key, value) in customisation.environment.iter_mut().flatten() {
             let evaluated = evaluate_value(
-                &format!("'customise.{container}.environment.{key}'"),
+                &format!("'customise.{container}.environment.{}'", printable(key)),
                 value,
                 host_env,
                 config_vars,
@@ -5239,8 +5270,12 @@ fn expand_home_directory(path: impl AsRef<Path>) -> Result<Option<PathBuf>> {
     if !leads_with_tilde {
         return Ok(None);
     }
-    let home = crate::user::home_directory()
-        .with_context(|| format!("Cannot expand '~' in path '{}'", path.display()))?;
+    let home = crate::user::home_directory().with_context(|| {
+        format!(
+            "Cannot expand '~' in path '{}'",
+            printable(&path.display().to_string())
+        )
+    })?;
     // For a bare `~` the remainder is empty, and joining that yields the home
     // directory itself.
     Ok(Some(home.join(components.as_path())))
@@ -5438,8 +5473,7 @@ impl LoadedProject {
                     .with_context(|| format!("Failed to read {name}"))?;
                 Ok(crate::written_for::TomlFile {
                     name: name.clone(),
-                    document: text
-                        .parse()
+                    document: toml_from_str(&text)
                         .with_context(|| format!("Failed to parse {name}"))?,
                 })
             })
@@ -5588,6 +5622,44 @@ impl LoadedProject {
     }
 }
 
+/// `text` parsed as TOML, as `toml::from_str` parses it, but failing with
+/// what `toml`'s error quotes escaped ([`printable`], #770): its message can
+/// quote a key or value as written (``unknown field `x` ``), and so can the
+/// ``in `a.b` `` line naming the keys of an error with no snippet. The
+/// layout is kept: the snippet `toml` prints above the message (one line of
+/// the file, as the file spells it, and a caret line), and the line breaks
+/// between the parts.
+fn toml_from_str<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
+    toml::from_str(text).map_err(|error| escaped_toml_error(&error))
+}
+
+/// [`toml_from_str`]'s error: `error` as `toml` renders it, escaped as that
+/// function describes.
+fn escaped_toml_error(error: &toml::de::Error) -> anyhow::Error {
+    let rendered = error.to_string();
+    let message = error.message();
+    let snippet_end = rendered
+        .starts_with("TOML parse error at line")
+        .then(|| rendered.match_indices('\n').nth(3))
+        .flatten()
+        .map_or(0, |(at, _)| at + 1);
+    let (snippet, rest) = rendered.split_at(snippet_end);
+    let rest = match rest.strip_prefix(message) {
+        Some(after) => format!("{}{}", printable(message), escape_each_line(after)),
+        None => escape_each_line(rest),
+    };
+    anyhow::anyhow!("{snippet}{rest}")
+}
+
+/// `text` with each of its lines [`printable`], and the line breaks between
+/// them kept.
+fn escape_each_line(text: &str) -> String {
+    text.split('\n')
+        .map(printable)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The `project_name` `config_file` declares, read from that one file and
 /// nothing else — for `ratect resources`, which scopes itself by the name
 /// alone (ratect#563). `project_name` is root-only, so the root file is
@@ -5607,7 +5679,7 @@ pub fn project_name_of(config_file: &Path) -> Result<String> {
     let text = std::fs::read_to_string(config_file)
         .with_context(|| format!("Failed to open config file {:?}", config_file))?;
     let parsed: ProjectName = match config_file_format(config_file)? {
-        FileFormat::Toml => toml::from_str(&text)
+        FileFormat::Toml => toml_from_str(&text)
             .with_context(|| format!("Failed to parse config file {:?}", config_file))?,
         FileFormat::Yaml => crate::yaml::from_str(&text)
             .with_context(|| format!("Failed to parse config file {:?}", config_file))?,
@@ -6223,11 +6295,13 @@ fn network_namespace_owner<'a>(
             let reached = if owner == target {
                 String::new()
             } else {
-                format!(", which leads to '{owner}'")
+                format!(", which leads to '{}'", printable(owner))
             };
             anyhow::bail!(
                 "The container '{name}' has 'network_mode' set to share the network of \
-                 '{target}'{reached}, but '{owner}' is not a container in this project."
+                 '{}'{reached}, but '{}' is not a container in this project.",
+                printable(target),
+                printable(owner)
             );
         };
         if let Some(start) = path.iter().position(|visited| *visited == owner) {
@@ -6291,8 +6365,9 @@ fn validate_dns_servers(config: &Config) -> Result<()> {
         for server in container.dns.iter().flatten() {
             if server.parse::<std::net::IpAddr>().is_err() {
                 anyhow::bail!(
-                    "The container '{name}' has a 'dns' entry, '{server}', that is not an IP \
-                     address."
+                    "The container '{name}' has a 'dns' entry, '{}', that is not an IP \
+                     address.",
+                    printable(server)
                 );
             }
         }
@@ -6399,6 +6474,7 @@ fn validate_setup_command_targets(config: &Config) -> Result<()> {
                 .flatten()
                 .any(|dependency| dependency == target);
             if !is_dependency {
+                let target = printable(target);
                 anyhow::bail!(
                     "The setup command '{}' on container '{name}' has 'run_in' set to \
                      '{target}', which is not one of that container's own dependencies. A \
@@ -6608,10 +6684,11 @@ fn validate_cache_name(name: &str) -> Result<()> {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
     if !valid {
         anyhow::bail!(
-            "has a 'cache' volume mount named '{name}', which \
+            "has a 'cache' volume mount named '{}', which \
              is not a valid cache name. A cache name must start with a letter or digit and \
              contain only letters, digits, underscores, dots and dashes — it names storage, \
-             not a path."
+             not a path.",
+            printable(name)
         );
     }
     Ok(())
@@ -6651,15 +6728,16 @@ fn reject_image_expressions_in_compat(containers: &[BatectShaped<'_>]) -> Result
         return Err(native_field_rejection(
             entry,
             format!(
-            // Names what to do, not a flag that would fix this file: the
-            // check runs at load, so '--override-image' does not get past it
-            // — the expression has to go first.
-            "Container '{container_name}' uses an expression in its 'image' ('{image}'), which \
+                // Names what to do, not a flag that would fix this file: the
+                // check runs at load, so '--override-image' does not get past it
+                // — the expression has to go first.
+                "Container '{container_name}' uses an expression in its 'image' ('{}'), which \
                  is a ratect-native feature not supported in Batect-compatible \
                  configuration. Batect resolves no expression there, so a file using one \
                  would stop working under 'batect' itself. Write a fixed image here; \
                  '--override-image {container_name}=...' is how this binary chooses one \
-                 per run."
+                 per run.",
+                printable(image)
             ),
         ));
     }
@@ -6693,9 +6771,10 @@ fn reject_shared_caches_in_compat(containers: &[BatectShaped<'_>]) -> Result<()>
         return Err(native_field_rejection(
             entry,
             format!(
-                "The container '{container_name}' declares the cache '{cache_name}' with a \
+                "The container '{container_name}' declares the cache '{}' with a \
                  'scope', which is a ratect-native field not supported in \
-                 Batect-compatible configuration."
+                 Batect-compatible configuration.",
+                printable(cache_name)
             ),
         ));
     }
@@ -6731,7 +6810,7 @@ fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
                 Some(scope) if *scope != cache.scope() => anyhow::bail!(
                     "The cache '{}' is declared with both 'project' and 'shared' scope. \
                      A cache name refers to one piece of storage, so it can only have one.",
-                    cache.name
+                    printable(&cache.name)
                 ),
                 _ => {
                     seen.insert(cache.name.as_str(), cache.scope());
@@ -6775,7 +6854,10 @@ fn reject_references_to_undeclared_containers(config: &Config) -> Result<()> {
         if config.containers.contains_key(reference) || companions.contains(reference) {
             return Ok(());
         }
-        anyhow::bail!("The container '{reference}' referenced by {referrer} does not exist.")
+        anyhow::bail!(
+            "The container '{}' referenced by {referrer} does not exist.",
+            printable(reference)
+        )
     };
     for (name, container) in &config.containers {
         for dependency in container.dependencies.iter().flatten() {
@@ -6816,6 +6898,7 @@ fn reject_customisations_outside_the_task_graph(config: &Config) -> Result<()> {
             task.dependencies.as_deref(),
         );
         if let Some(name) = customise.keys().find(|name| !names_in_task.contains(*name)) {
+            let name = printable(name);
             anyhow::bail!(
                 "Task '{task_name}' has customisations for container '{name}', but the \
                  container '{name}' will not be started as part of the task"
@@ -6859,7 +6942,7 @@ fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()
                     anyhow::bail!(
                         "Container '{name}' has an invalid 'cache' volume mount: \
                          '{}' is not an absolute path",
-                        cache.container
+                        printable(&cache.container)
                     );
                 }
             }
@@ -6980,7 +7063,10 @@ fn resolve_container_extends(
 
     if let Some(parent) = merged.extends.clone() {
         if !source.contains_key(&parent) {
-            anyhow::bail!("The container '{name}' extends '{parent}', which is not defined.");
+            anyhow::bail!(
+                "The container '{name}' extends '{}', which is not defined.",
+                printable(&parent)
+            );
         }
         ancestors.push(name.to_string());
         resolve_container_extends(&parent, source, resolved, suppliers, ancestors)?;
@@ -7031,10 +7117,11 @@ fn resolve_container_extends(
 /// unescaped in a URL path anyway, so a path containing one was already
 /// wrong before it was dangerous.
 fn validate_external_health_check_path(container: &str, path: &str) -> Result<()> {
+    let quoted = printable(path);
     if !path.starts_with('/') {
         anyhow::bail!(
             "Container '{container}' has an invalid 'external_health_check.path': \
-             '{path}' must start with '/'"
+             '{quoted}' must start with '/'"
         );
     }
     if let Some(bad) = path
@@ -7043,7 +7130,7 @@ fn validate_external_health_check_path(container: &str, path: &str) -> Result<()
     {
         anyhow::bail!(
             "Container '{container}' has an invalid 'external_health_check.path': \
-             '{path}' contains {bad:?}, which a URL path cannot hold unescaped"
+             '{quoted}' contains {bad:?}, which a URL path cannot hold unescaped"
         );
     }
     Ok(())
