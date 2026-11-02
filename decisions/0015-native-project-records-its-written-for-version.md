@@ -1,7 +1,12 @@
 # 0015 — A native project records the Ratect version it was written for
 
 **Status:** Accepted — shipped (ratect-compat 0.32.0 · ratect 0.11.0,
-[#149](https://github.com/or1can/ratect/issues/149)).
+[#149](https://github.com/or1can/ratect/issues/149)). A row carries its
+version, a one-line summary and, since
+[0022](0022-written-for-refusal-says-what-applies.md), how it is checked, but
+not its `CHANGELOG.md` entry, despite what the Decision says: the test ties
+the two together instead, matching each marked `CHANGELOG.md` entry to a row
+by version, one for one.
 
 ## Context
 
@@ -83,8 +88,10 @@ exact version a project ran. Ratect ships no wrapper, deliberately
   and is refused then, naming that file. That takes a check after the load,
   since only the load finds the includes; a TOML root is still checked
   before it. So for a YAML root, a TOML include that fails to load — a field
-  this binary doesn't know — gets the parse error this check exists to
-  explain, the one case the amendment gives back.)*
+  this binary doesn't know, or a value one of the rows now refuses, such as a
+  trailing `\` or a malformed expression — gets the loader's own error
+  instead of the explanation this check exists to give, the one case the
+  amendment gives back.)*
 - **A row's `CHANGELOG.md` entry is tagged** as a configuration change, and a
   test checks that every tagged entry has a row — so a missed row fails the
   build rather than shipping.

@@ -189,7 +189,7 @@ can be proved.**
   Under Decision 1 that costs a duplicate clone, never a corrupt entry. At
   worst the new holder's Decision 7 removes the live clone's temporary
   directory, and that clone fails with an error.
-- **`ratect-compat` matches Batect in one more way, and differs in one.**
+- **`ratect-compat` matches Batect in one more way, and differs in two.**
   Staging into a fresh directory per attempt is parity. Recovering an
   abandoned lock and printing a notice while it waits are divergences, and get
   a row in [`docs/differences-from-batect.md`](../docs/differences-from-batect.md).
@@ -198,6 +198,7 @@ can be proved.**
   get a notice onto stderr.
 - **Close-on-exec is pinned by a test,** not assumed. The research couldn't
   confirm Rust std's default.
-- **A clone's own progress is not covered here.** A first clone of a large
-  include is still silent until it finishes. That has its own issue, since it
-  has nothing to do with concurrency.
+- **A clone's own progress is not covered here.** A load that clones prints
+  `Cloning <repo> <ref>...` before the clone starts
+  ([#420](https://github.com/or1can/ratect/issues/420)), but nothing more
+  until it finishes. Progress has nothing to do with concurrency.

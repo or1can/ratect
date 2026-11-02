@@ -7,7 +7,9 @@ creation in [#603](https://github.com/or1can/ratect/issues/603). Corrected on
 ([#360](https://github.com/or1can/ratect/issues/360)): Decision 2 called a
 capped create and start "Batect's every-step model, narrowed to the steps
 Ratect caps", but Batect never caps a start. The decision itself is
-unchanged, so no rework follows.
+unchanged, so no rework follows. Corrected again before release: Decision 2
+read as capping every start, but the task's own container's start holds no
+permit, as in Batect; only a dependency's does.
 
 ## Context
 
@@ -77,11 +79,13 @@ started proceeds without regard to its dependencies:
    alike. A container that has been created and not yet started is registered
    for cleanup at creation — as the engine already does for every container
    it creates — so a run that fails between the two leaves nothing
-   unaccounted for. Under `--max-parallelism`, a create and a start each hold
-   one permit, released when that step ends; a permit is never held while
-   waiting on a dependency, so a small limit can't deadlock a chain. Batect
-   caps a create too, but never a start: its run step, start included, is
-   exempt for every container — a divergence
+   unaccounted for. Under `--max-parallelism`, every container's create and a
+   dependency's start each hold one permit, released when that step ends; the
+   task's own container's start holds none, as in Batect. A permit is never
+   held while waiting on a dependency, so a small limit can't deadlock a
+   chain. Batect caps a create too, but never a start: its run step, start
+   included, is exempt for every container — so capping a dependency's start
+   is a divergence
    [`docs/differences-from-batect.md`](../docs/differences-from-batect.md#cli-flags)
    records.
 3. **A container starts only when every container it depends on has passed
@@ -111,11 +115,10 @@ render.
 The lifecycle events a run posts follow the new order: image events for every
 container arrive early, no longer after a dependency's readiness; a
 dependency's "starting" milestone is posted when its start actually begins —
-after its dependencies are ready and the permit is held (today it is posted
-before the permit is acquired; moving it is in
-[#505](https://github.com/or1can/ratect/issues/505)'s agent brief); phase 2
-adds a creation
-milestone for the display to render.
+after its dependencies are ready and the permit is held
+([#505](https://github.com/or1can/ratect/issues/505) moved it there from
+before the permit); phase 2 adds a creation milestone for the display to
+render.
 
 ## Alternatives considered
 

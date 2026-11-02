@@ -211,13 +211,15 @@ The exit code is [0016](0016-exit-codes.md)'s and unchanged by this record.
 
 In every style, a cleanup that leaves something behind is a cleanup failure
 ([0016](0016-exit-codes.md)'s term, and `CONTEXT.md`'s), so it is reported
-as the error it is: `Error: Cleanup abandoned; left behind: <container>,
-<network>. Remove with: <the real command>` when the ladder's abandon rung
-was reached, or `Error: Cleanup failed: <what the daemon said>; left behind:
-… Remove with: …` when a removal was refused — where the command is the one
-that works from that binary (`ratect resources clean` where it exists;
-`docker rm -f`/`docker network rm` with the names otherwise). The exit code
-is 0016's. A `--no-cleanup*` flag is not a failure, so its line is a notice,
+as the error it is: `Error: Cleanup abandoned; left behind: <container>
+(<id>), network <network>. Remove with: <the real command>` when the ladder's
+abandon rung was reached, or `Error: Cleanup failed: <what the daemon said>;
+left behind: … Remove with: …` when a removal was refused (both, `Cleanup
+abandoned after failing: …`, when a refusal came first). The command is
+always `docker`'s, since the message comes from shared core and `docker`
+works from either binary, where `ratect resources clean` is a verb
+`ratect-compat` lacks: `docker rm -f` with the containers' ids, then `docker
+network rm` with the network's name. The exit code is 0016's. A `--no-cleanup*` flag is not a failure, so its line is a notice,
 with the same tail and a reason in place of the marker: `Left in place
 (--no-cleanup): <container>, <network>. Remove with: …` — "in place", not
 "running", since a container created but never started is kept too. One
@@ -295,8 +297,7 @@ can pin each event's wording once.
 
 Under `ratect-compat`, progress stays on stdout and shares it with the task's
 output, unmarked, as under Batect; `-o quiet` and `-o all` are the escapes,
-and [`docs/output-styles.md`](../docs/output-styles.md) will say so when the
-stream rule lands on it. A prefix
+and [`docs/output-styles.md`](../docs/output-styles.md) says so. A prefix
 would change every CI log captured from a Batect project for a problem the
 native binary no longer has, and bold doesn't survive a pipe. For `ratect`
 the question doesn't arise.

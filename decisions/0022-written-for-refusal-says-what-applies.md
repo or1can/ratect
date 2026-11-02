@@ -85,6 +85,8 @@ happened. That rejection stands.
   against a file that uses the construct and one that doesn't. A detector's
   false "none found" is the one wrong answer that matters, so it's what those
   tests pin.
-- **A row for YAML files** (#721, undecided) would need detectors that read
-  YAML. Nothing here assumes every detected file is TOML beyond the rows that
+- **A row for YAML files** was considered and rejected
+  ([0020](0020-bundle-records-its-written-for-version.md), #721). If a later
+  change reopens that, the row would need detectors that read YAML. Nothing
+  here assumes every detected file is TOML beyond the rows that
   exist today.
