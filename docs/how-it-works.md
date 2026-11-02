@@ -276,8 +276,9 @@ it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017
   defaults to `debug` for Ratect's own targets). A fatal error is never only one of these: `main.rs`
   prints it directly (`Error: <message>`), so it stays visible under
   `RUST_LOG=off` and `-o quiet` alike — except for a run's failure the run has
-  already reported by another route (the task's own non-zero exit, a signal, a
-  cleanup failure the engine reported as it happened), which gets no second
+  already reported by another route (the task's own non-zero exit, a signal or
+  a closed stdout, or a failure to run the task once it had started or to clean
+  up after it, which the engine reported as it happened), which gets no second
   line. `ratect-compat` also records every one at `debug`, so `--log-file`
   says why the run failed unless `RUST_LOG` filters that record out.
 
@@ -288,6 +289,6 @@ terminal — each stream decides for itself, `tracing`'s lines included — see
 
 ### Filtering `RUST_LOG`
 
-Scoping `RUST_LOG` to Ratect's own targets (`ratect_core`, `ratect_core::docker`)
-rather than every dependency's is on
+Scoping `RUST_LOG` to Ratect's own targets (`ratect_core`, `ratect_core::docker`,
+and `ratect-compat`'s `ratect_compat`) rather than every dependency's is on
 [Troubleshooting](troubleshooting.md#filtering-rust_log), which owns it.

@@ -38,7 +38,9 @@ API client Ratect is built on) also logs at `debug`, and a bare `RUST_LOG=debug`
 
 A directive with no target (e.g. `RUST_LOG=debug`) applies everywhere, including
 dependencies like `bollard`. Scoping to a specific target instead — `ratect_core` covers
-everything Ratect itself logs — excludes anything not matched, including `bollard`,
+everything the `ratect` binary logs, and all but a few of `ratect-compat`'s own
+lines, which log under `ratect_compat` (among them why a run failed) — excludes
+anything not matched, including `bollard`,
 without needing to name it:
 
 ```sh
