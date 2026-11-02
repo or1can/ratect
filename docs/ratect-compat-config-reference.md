@@ -96,9 +96,9 @@ path — for a container name, the entry's value's, as for a [task
 name](#task-names).
 
 A root file with no `project_name` is named after the directory holding it,
-lowercased as Batect lowercases it: a `batect.yml` in `My-App/` <!-- example -->
+lowercased as Batect lowercases it: a `batect.yml` in `My-App/`
 names the project `my-app`. A directory whose lowercased name still breaks the
-rule (`-app/` <!-- example -->) fails the load, naming the inferred name and the
+rule (`-app/`) fails the load, naming the inferred name and the
 file and saying to set `project_name`, as does a root file directly in the
 filesystem root, whose directory has no name.
 
