@@ -37,8 +37,10 @@ group = "Development"
 run = { container = "build-env", command = "cargo build" }
 ```
 
-`project_name` is the only required top-level key: unlike in a `batect.yml`
-loaded by `ratect-compat`, it's never inferred from the directory name. It's
+`project_name` is the only top-level key the format requires, though a project
+must also set [`ratect_version`](#ratect_version-the-version-a-project-was-written-for)
+or `ratect` refuses it. Unlike in a `batect.yml` loaded by `ratect-compat`,
+`project_name` is never inferred from the directory name. It's
 taken from the root file only, and names the images the project builds and its
 `eu.orican.ratect.project` label — see
 [Top level](ratect-compat-config-reference.md#top-level). `ratect` defaults `-f` to
@@ -139,8 +141,8 @@ is refused naming that file — once it has loaded, so a `.toml` include that
 doesn't load gets its own error first. Making the root a `ratect.toml` is the way to
 declare a version for it: [`ratect config convert`](ratect-cli.md#config)
 converts its YAML files, but reads every file as YAML, so a local `.toml`
-include has to be carried over by hand. `ratect-compat` rejects the field like any other it doesn't
-know.
+include has to be carried over by hand. `ratect-compat` rejects the field too, saying
+that only a native `ratect.toml` can declare it.
 
 ## `extends`: inheritance instead of YAML anchors
 
@@ -945,7 +947,8 @@ for VS Code, or JetBrains' TOML support — gives field-name autocompletion, hov
 documentation, and a red squiggle under a misspelled or unsupported field. It's
 the native counterpart of the [`batect.yml`
 schema](ratect-compat-config-reference.md#editor-autocompletion-and-validation): the same
-schema, adjusted to the native shape (object-only list entries, plus `extends`).
+schema, adjusted to the native shape (object-only list entries) and adding the
+native-only fields this page documents.
 
 The simplest way to use it is a schema directive on the first line of your
 config, which taplo honors:
@@ -955,11 +958,11 @@ config, which taplo honors:
 project_name = "my-project"
 ```
 
-Structural validation only catches what the schema can express; for the rules it
-can't (a task needing `run` or `prerequisites`, an `extends` cycle, a container
-with neither `image` nor `build_directory`), [`ratect config
-validate`](ratect-cli.md#config) checks a `ratect.toml` without a Docker daemon,
-so it also works as a CI gate.
+Structural validation only catches what the schema can express. For some of the
+rules it can't (a task needing `run` or `prerequisites`, an `extends` cycle),
+[`ratect config validate`](ratect-cli.md#config) checks a `ratect.toml` without a
+Docker daemon, so it also works as a CI gate. A container with neither `image`
+nor `build_directory` is still only reported when a task runs it.
 
 ## Differences from `batect.yml`, at a glance
 
