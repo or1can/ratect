@@ -540,8 +540,8 @@ tables above:
   `-o quiet`, which prints only errors, warnings and notices; Batect prints it
   in every style.
 - **What cleanup leaves is reported in one line, in every style.** A
-  `--no-cleanup*` run ends with `Left in place (--no-cleanup): …`, and a cleanup
-  that failed with `Error: Cleanup failed: …; left behind: …`, each naming the
+  `--no-cleanup*` run reports `Left in place (--no-cleanup): …`, and a cleanup
+  that failed `Error: Cleanup failed: …; left behind: …`, each naming the
   containers by config name and short id and ending `Remove with:` one `docker
   rm -f -v` for every container, then `docker network rm` for the network. After
   a `--no-cleanup*` run, a line per kept container gives Batect's `docker logs`
