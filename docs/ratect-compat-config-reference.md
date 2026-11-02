@@ -1078,8 +1078,8 @@ environment:
 is a checked-in pair of files using each form.)
 
 A `\` at the very end of a value has nothing to escape, so the file fails to load
-— for every command, `--list-tasks` included, and whether or not a task uses that
-container. The error is located like a [malformed expression](#variable-names)'s.
+— for every command that loads it, `--list-tasks` included, and whether or not a
+task uses that container. The error is located like a [malformed expression](#variable-names)'s.
 
 A `ratect.toml` reads `\` the same way; write such a value as a literal
 (single-quoted) TOML string, for the same reason. A field that isn't an
