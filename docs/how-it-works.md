@@ -279,7 +279,8 @@ it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017
   already reported by another route (the task's own non-zero exit, a signal or
   a closed stdout, or a failure to run the task once it had started or to clean
   up after it, which the engine reported as it happened), which gets no second
-  line. `ratect-compat` also records every one at `debug`, so `--log-file`
+  line, and for a verb that printed its own `Error:` line for each thing it
+  couldn't do (`ratect includes clean`/`refresh`). `ratect-compat` also records every one at `debug`, so `--log-file`
   says why the run failed unless `RUST_LOG` filters that record out.
 
 Colours (e.g. the exit code in the task summary line, the `Error:` marker) are,
