@@ -84,8 +84,9 @@ one.
 
 [`examples/node`](https://github.com/or1can/ratect/tree/main/examples/node).
 A TypeScript project with `build`/`test`/`lint` npm scripts (`tsc`, `vitest`,
-`eslint`). Each task runs `npm ci` itself rather than relying on a separate
-install step — a task's own container is recreated from scratch every run,
+`eslint`). Each of `build`, `test` and `lint` runs `npm ci` itself, and
+`run` gets it through its `build` prerequisite, rather than relying on a
+separate install step — a task's own container is recreated from scratch every run,
 so nothing installed by one task's container is there for the next one's;
 only what lands in the bind-mounted project directory or a `cache` mount
 survives. The npm cache mount is what keeps a repeated `npm ci` fast.
