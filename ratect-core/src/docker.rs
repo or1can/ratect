@@ -3766,6 +3766,13 @@ impl ResourceInventory for DockerClient {
         Ok(())
     }
 
+    /// Docker's `stop`, then the forced, volume-removing removal
+    /// `remove_container_forcibly` makes. No stop options are sent unless
+    /// `stop_signal` or `stop_grace_period` is set, and a grace period is
+    /// rounded up to whole seconds (Docker's `t`), so it never becomes a
+    /// shorter wait than configured. A 404 on the stop counts as stopped. A
+    /// failed stop returns before `stopped` is signalled and before any
+    /// removal is asked for.
     async fn stop_and_remove_container(
         &self,
         container_id: &str,
