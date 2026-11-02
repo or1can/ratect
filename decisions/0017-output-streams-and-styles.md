@@ -337,9 +337,9 @@ decision: the `Caused by:` chain's format
 - **Keep Batect's white, or use bright colours.** Rejected: both are
   theme-dependent; the default foreground is the only colour every theme
   renders readably.
-- **Batect's prefix order and graph-order assignment.** Rejected: blue
-  beside cyan on the first two containers, and a colour that changes between
-  runs.
+- **Batect's prefix order and graph-order assignment.** Rejected: black on
+  the first container, which a dark theme barely renders, and a colour that
+  changes between runs.
 - **A marker on `ratect-compat`'s `simple` lines.** Rejected: changes every
   Batect user's captured log; the native binary doesn't need it.
 
