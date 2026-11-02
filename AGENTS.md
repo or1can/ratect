@@ -166,8 +166,9 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   still asserted verbatim elsewhere — generalized from this repo's own
   former echoed-claims script), `executable-claims` (gate, `<!-- verify: ...
   -->` markers — generalized from this repo's own former verify-docs
-  script), plus three checks with no prior equivalent here: `check-links`
-  (gate, dead internal Markdown links/anchors), `check-citations` (gate, a
+  script), plus four checks with no prior equivalent here: `check-links`
+  (gate, dead internal Markdown links/anchors), `check-file-refs` (gate, a
+  bare repo path in prose that names no tracked file), `check-citations` (gate, a
   backticked name citing a symbol this repo once declared but no longer
   has, Markdown/Swift only — no Rust support yet), and
   `claim-words`/`judgment-agent` (advisory, totalising language and
