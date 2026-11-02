@@ -283,15 +283,18 @@ share, not parity that only `ratect-compat` owes.
 
 ### One grammar for every milestone
 
-Subject first, by the user's own name, bold; then what happened — past tense
-for a milestone (`Started`, `Built`, `Removed`), progressive for in-flight
-(`Starting…`, `Pulling…`); and the summary as `<task> finished with exit code
-<N> in <t>`. Ratect's own words, chosen over Batect's where Ratect's are
-clearer ([#505](https://github.com/or1can/ratect/issues/505),
+The user's own name, bold; past tense for a milestone (`Started`, `Built`),
+progressive for in-flight (`Starting…`, `Pulling…`); and the summary as
+`<task> finished with exit code <N> in <t>`. Ratect's own words, chosen over
+Batect's where Ratect's are clearer
+([#505](https://github.com/or1can/ratect/issues/505),
 [#507](https://github.com/or1can/ratect/issues/507)). `fancy`'s
-per-container status line and `simple`'s milestone line say the same thing
-for the same event, so the two styles differ in rendering only, and a test
-can pin each event's wording once.
+per-container status line and `simple`'s milestone line are to say the same
+thing for the same event, so the two styles differ in rendering only, and a
+test can pin each event's wording once. One event is worded that way so far
+— a dependency's unexpected exit, `ui::exited_unexpectedly`; the others
+still differ between the two (`fancy`'s `pulling image <image>...`,
+`simple`'s `Pulling <image>...`).
 
 ### `ratect-compat`'s `simple` lines stay unmarked
 
@@ -355,7 +358,7 @@ decision: the `Caused by:` chain's format
   stderr is coloured only when stderr is a terminal (closing
   [#479](https://github.com/or1can/ratect/issues/479)); white and black
   leave the palette; `all`'s prefix order changes; `simple` and `fancy` share
-  one wording per event.
+  one wording for a dependency's unexpected exit.
 - `fancy` is auto-selected for `ratect` whenever stderr is an interactive
   console (the same terminal facts as today — a terminal, `TERM` set and not
   `dumb`, a queryable size — asked of stderr instead of stdout), so a run
