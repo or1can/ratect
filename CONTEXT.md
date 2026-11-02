@@ -1,8 +1,9 @@
 # Domain glossary
 
-What each term in Ratect's configuration model denotes. Definitions only — no
-implementation detail, no behaviour, no rationale. Why a thing works as it does
-belongs in [`decisions/`](decisions/README.md); what it does for a user belongs
+What each term in Ratect's domain denotes — its configuration model, and the
+runs, output and caches that model drives. Definitions, with only as much
+behaviour as a definition needs; why a thing works as it does belongs in
+[`decisions/`](decisions/README.md); what it does for a user belongs
 in [`docs/`](docs/).
 
 ## Configuration files
@@ -10,8 +11,9 @@ in [`docs/`](docs/).
 **Project** — one root configuration file and everything it includes. Named by
 `project_name`, which only the root file may set.
 
-**File include** — an entry importing one further configuration file from the
-declaring file's own tree.
+**File include** — an entry importing one further configuration file by its
+path, relative to the declaring file's directory unless it starts from the home
+directory (`~`).
 
 **Git include** — an entry importing configuration from a *bundle*.
 

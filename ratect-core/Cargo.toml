@@ -203,7 +203,8 @@ jsonschema = { version = "0.60", optional = true, default-features = false }
 # **`ssh-encoding`**, **`signature`** and **`rsa`**: parse OpenSSH private
 # key files and sign with them, for `build_ssh`'s `paths`
 # (`ratect-core/src/ssh_agent.rs`, 0.25.0). Ratect's **only cryptographic
-# dependency**, taken knowingly —
+# dependency outside TLS** (`rustls`'s, client keys included) and `sha2`,
+# which only derives directory names; taken knowingly —
 # [decisions/0005](https://github.com/or1can/ratect/blob/main/decisions/0005-build-ssh-keyring-placement.md)
 # chose owning that choice over pushing it onto the `bollard` fork, and it
 # deserves proportionate scrutiny plus an eye on advisories (`cargo audit`

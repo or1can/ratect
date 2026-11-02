@@ -175,8 +175,9 @@ before it existed.
 The [`decisions/`](../decisions/) directory holds Architecture Decision Records — the **cross-cutting** decisions that get referenced from more than one place (the two-binary split, the runtime-ownership labels, the native config format, trusting a Git include's host paths). Its [`README.md`](../decisions/README.md) states the convention; see `AGENTS.md`'s guideline 14 for when to write one.
 
 [`CONTEXT.md`](../CONTEXT.md) at the root is the **glossary**: what each term in
-the configuration model denotes, and nothing else — no implementation detail,
-no decisions, no behaviour. It exists because several of this project's bugs
+Ratect's domain denotes, with only as much behaviour as a definition needs — no
+rationale, which belongs in `decisions/`, and no user-facing how-to, which
+belongs in `docs/`. It exists because several of this project's bugs
 have been one word covering two concepts (a *grant* is written on an include
 entry, an *effective boundary* is what a file ends up with; `ConfigFormat` is a
 *project's* dialect, not a *file's* syntax). Add a term when settling one
