@@ -1,8 +1,9 @@
 # Output Styles
 
-`--output`/`-o` controls how much Ratect says about its own progress — never
-what the task's command itself prints, which always streams through unmodified,
-and never *where* anything goes. Both binaries take it (`ratect` on every
+`--output`/`-o` controls how much Ratect says about its own progress, and never
+*where* anything goes. What the task's command prints streams through as written
+in every style but `all`, which prefixes each of its lines with the container's
+name, as it does every other line. Both binaries take it (`ratect` on every
 command, `ratect-compat` on every invocation) and render each style with the
 same code
 ([`ui.rs`](https://github.com/or1can/ratect/blob/main/ratect-core/src/ui.rs)),
@@ -24,7 +25,7 @@ The two binaries differ in one thing: where their **progress** goes.
 - **`ratect`** writes its progress — the milestones, the summary line, and
   under `all` the prefixed lines of every container but the task's own — to
   **stderr**. Its stdout is the task container's output and nothing else, in
-  every style, so `ratect run test > out.txt` captures the result alone and
+  every style (under `all`, each line prefixed with the container's name), so `ratect run test > out.txt` captures the result alone and
   `2>/dev/null` silences the conversation without touching it.
 - **`ratect-compat`** writes its progress to **stdout**, where Batect does,
   because a Batect project's scripts may read it. Under `simple` those lines
@@ -154,7 +155,8 @@ it says why. `all` opens it the same way.
 ```
 
 No progress at all: stdout is exactly the task container's own output (under
-`ratect` it is in every style; `quiet` is where `ratect-compat` matches it),
+`ratect` it is in every style but `all`, which prefixes each line with the
+container's name; `quiet` is where `ratect-compat` matches it),
 and stderr carries only [errors, warnings and notices](#streams). Nothing
 from `app`/`db`/`cache` — a dependency's own stdout is never shown outside
 `all`, whatever the style.

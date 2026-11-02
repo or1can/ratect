@@ -88,11 +88,12 @@ struct GlobalArgs {
     )]
     config_file: PathBuf,
 
-    /// Force a particular style of Ratect's own output (never affects a
-    /// task command's output): fancy (a live per-container status display,
-    /// the default when the console supports it), simple (plain lines),
-    /// all (interleaved output from every container), or quiet (error
-    /// messages only, and a machine-readable task list).
+    /// Force a particular style of Ratect's own output (a task command's
+    /// output is never changed, only prefixed under all): fancy (a live
+    /// per-container status display, the default when the console supports
+    /// it), simple (plain lines), all (interleaved output from every
+    /// container), or quiet (error messages only, and a machine-readable task
+    /// list).
     #[arg(short = 'o', long = "output", value_enum, global = true)]
     output: Option<OutputStyleArg>,
 

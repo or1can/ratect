@@ -420,9 +420,9 @@ its entry file alone; whether it loads is the whole project's answer.
   it can't set `ratect_version`, and a bundle whose files are all YAML loads
   whatever has changed. That includes a change to how Ratect reads YAML: such
   a change brings Ratect's reading closer to Batect's, which is what the
-  bundle was written for. So far, such changes have reported an error naming
-  the problem rather than quietly changing what the bundle means. Once it includes a `.toml` file it counts as written
-  for 0.3.0, until its include sets `reviewed_ratect_version`.
+  bundle was written for. Once a YAML entry file includes a `.toml` file, the
+  bundle counts as written for 0.3.0, until its include sets
+  `reviewed_ratect_version`.
 - **A version newer than `ratect` is refused, on either side.** A bundle
   written for a newer Ratect is refused before anything but that field is
   read, rather than for a field this one doesn't know: upgrade `ratect`, or
