@@ -741,8 +741,8 @@ async fn a_home_directory_that_would_become_an_expression_is_warned_about() {
 }
 
 /// #379: a Batect-format compact `volumes` entry's host path is literal, but
-/// `ratect.toml` evaluates the same text, so `config convert` can't carry a
-/// `$`/`<` in one across unchanged. One warning per such entry, naming its
+/// `ratect.toml` evaluates the same text, so a `$`/`<` in one that `config
+/// convert` carries across unchanged changes meaning. One warning per such entry, naming its
 /// container and value — and none for the object form, whose `local` is an
 /// expression in both formats.
 #[tokio::test]
