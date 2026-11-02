@@ -116,7 +116,8 @@ Two things worth knowing without opening a `Cargo.toml`:
   `Cargo.lock` pointing at a commit no ref reaches. Getting
   that wrong dead-ended a branch once already. A patch only applies while the
   fork's version satisfies the crate's own requirement, so a version bump can
-  silently retire one.
+  retire one with only a Cargo warning (`patch … was not used in the crate
+  graph`) to show for it.
 - **`ssh-key` and its companions are Ratect's only cryptographic dependency
   outside TLS** (`rustls` and its `ring` provider, client keys included) and
   `sha2`, which only derives directory names; taken knowingly ([decisions/0005](decisions/0005-build-ssh-keyring-placement.md)),
