@@ -131,7 +131,8 @@ use crate::ui::{printable, LoadOutput, Text};
 
 /// Batect's one built-in config variable, resolvable via
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
-/// the absolute path of the directory containing the config file. Braced
+/// the absolute path of the directory containing the root config file, even
+/// in an included one. Braced
 /// only, as in Batect: an unbraced name ends at its first `.`, so
 /// `<batect.project_directory` reads a variable named `batect` (#384). See
 /// [`config_variable_values`].

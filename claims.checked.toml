@@ -1,0 +1,944 @@
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-totalising"
+unit = "cdb3444acba2ad32"
+copies = 1
+note = "Root-dir resolution checked: config_variable_values (ratect-core/src/config.rs:4902) inserts one project_directory computed from the root file, project_directory_path (config.rs:5381) makes it absolute, and config_tests.rs:10975 asserts an included file gets the root's directory."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-counts"
+unit = "cdb3444acba2ad32"
+copies = 1
+note = "\"Batect's one built-in config variable\" checked against Batect's ConfigVariablesProvider.kt:48-50, whose builtIns map holds only batect.project_directory, and ratect's PROJECT_DIRECTORY_VAR (ratect-core/src/config.rs:138)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-about-elsewhere"
+unit = "cdb3444acba2ad32"
+copies = 1
+note = "Batect side checked in ~/git/or1can/batect app/src/main/kotlin/batect/execution/ConfigVariablesProvider.kt:48-50: the only built-in is batect.project_directory, set to the project root directory, matching what the sentence says of Batect."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "restatement-ngram"
+unit = "4020073d2228c6ad-3cdd4799e6e16c4c"
+copies = 1
+note = "The retracted words are the old 1090 sentence that also named the unbraced `<batect.project_directory`; the surviving text names only the braced form, which is the one that resolves (expressions.rs ends an unbraced name at `.`; config.rs:132-138 says braced only)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "e11d3b75ee84bb29"
+copies = 1
+note = "Ran `ratect tasks list`: a file with only project_name is refused for lacking ratect_version, and one with only ratect_version fails \"missing the required 'project_name' field\" (ConfigFormat::project_name, ratect-core/src/config.rs:3389-3402); no other top-level key is required."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "af698e84558f6737"
+copies = 1
+note = "ConfigFormat::project_name (ratect-core/src/config.rs:3389-3402) infers a name only for Compat and bails for Native, so a ratect.toml's project_name is never inferred; confirmed by running `ratect tasks list` on a ratect.toml without it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "c7fa2b698dac36ef"
+copies = 1
+note = "Ran `ratect-compat -f c.yml --list-tasks` on a batect.yml declaring ratect_version: it fails \"declares 'ratect_version', which only a native ratect.toml can do\" (ratect-core/src/config.rs:3724), not the unknown-field error."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "d6e14c0ea4a56f9a"
+copies = 1
+note = "Read the Editor support section: the schema-only sentence is followed by the rules it can't express, each checked by running `ratect config validate` (task without run/prerequisites and extends cycle refused; neither image nor build_directory passes)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-about-elsewhere"
+unit = "21a34138f769ff48"
+copies = 1
+note = "Ran `ratect config validate` with no daemon involvement: it reports a task lacking run/prerequisites and \"The container 'a' has a cyclic 'extends': a -> b -> a\" as problems, exit 1."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "9a7007818593e795"
+copies = 1
+note = "Ran a ratect.toml whose container has neither image nor build_directory: `ratect config validate` reports 0 problems, and only `ratect run t` fails with \"Container 'base' has neither 'image' nor 'build_directory' set\"."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/output-styles.md"
+mode = "claim-words-totalising"
+unit = "74a99964df200e18"
+copies = 1
+note = "Ran `ratect run t` and `ratect-compat t` under simple/quiet/all with stdout and stderr captured apart: each binary keeps the same streams in every style (ratect: progress on stderr, task output on stdout; ratect-compat: both on stdout), and fancy is refused off a terminal."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/output-styles.md"
+mode = "claim-words-totalising"
+unit = "3bb5adbed21caad8"
+copies = 1
+note = "Same runs: task output was a plain `hello` under simple and quiet and `c | hello` under all in both binaries, prefixed like the progress lines, as ratect-core/src/ui/interleaved.rs's doc says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/output-styles.md"
+mode = "claim-words-totalising"
+unit = "3cd22981cbd94b34"
+copies = 1
+note = "Ran `ratect run t -o simple|quiet|all` with streams split: stdout held only the task's output (prefixed `c | ` under all), and every progress line went to stderr."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/output-styles.md"
+mode = "claim-words-about-elsewhere"
+unit = "3cd22981cbd94b34"
+copies = 1
+note = "Same runs: redirecting stdout captured only the task's output and 2>/dev/null dropped every progress line without touching stdout, as the sentence says of `> out.txt` and `2>/dev/null`."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/output-styles.md"
+mode = "claim-words-totalising"
+unit = "4d03de01249b2fce"
+copies = 1
+note = "Ran a passing task: `ratect run t -o quiet` and `ratect-compat -o quiet t` both printed only `hello` on stdout and nothing on stderr; `ratect` printed `c | hello` under all, the exception the sentence names."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/includes.md"
+mode = "temporal-words-version"
+unit = "0f1f2455922c8f21"
+copies = 1
+note = "0.3.0 is the fixed FIRST_NATIVE_RELEASE constant (ratect-core/src/written_for.rs:78-82), the version an unmarked project counts as written for (written_for.rs:630), not a dated release reference."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/troubleshooting.md"
+mode = "claim-words-about-elsewhere"
+unit = "acbb11da19ee41ca"
+copies = 1
+note = "grep of ratect/src finds no tracing call, and ratect-compat/src has two (main.rs:838 \"The run failed\", main.rs:1018 the Git-include sweep), which log under ratect_compat; no ratect-core event sets a target, so ratect_core covers the rest."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/troubleshooting.md"
+mode = "judgment-agent-added"
+unit = "acbb11da19ee41ca"
+copies = 1
+note = "`ratect_core` here is the tracing target of the ratect-core crate (pub mod tree in ratect-core/src/lib.rs), not the test path matched at main_tests.rs:1194; checked that ratect/src logs nothing itself and ratect-compat's two records (main.rs:838, :1018) are under ratect_compat."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-totalising"
+unit = "2a1fac66e822398c"
+copies = 1
+note = "Ratect's own targets are ratect_core (ratect-core/src/lib.rs:41 `pub mod docker` gives ratect_core::docker) and ratect_compat (ratect-compat/src/main.rs:838, :1018); main.rs:637's --log-file default names exactly ratect_core and ratect_compat."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-about-elsewhere"
+unit = "2a1fac66e822398c"
+copies = 1
+note = "The link target docs/troubleshooting.md:20 \"Filtering `RUST_LOG`\" exists and its lines 36-46 cover scoping RUST_LOG to ratect_core and ratect_compat."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/connecting-to-docker.md"
+mode = "claim-words-totalising"
+unit = "0ac713cc14fd1776"
+copies = 1
+note = "Ran with DOCKER_TLS_VERIFY=bogus: `ratect resources list` through the orbstack context prints \"Nothing left over.\" (exit 0); with DOCKER_HOST set it fails (exit 2); `--docker-tls` skips the check; `tasks list` ignores it; `ratect doctor` reports it as a problem via docker_environment_findings (ratect/src/main.rs:1600)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/getting-started.md"
+mode = "restatement-ngram"
+unit = "612c09e81dfab725-6d5ac441851721b8"
+copies = 1
+note = "The matched words are only the link to troubleshooting.md#filtering-rust_log, retracted with rewritten lines in ratect-cli.md/ratect-compat-cli.md; that section (troubleshooting.md:20-46) scopes RUST_LOG's diagnostics to Ratect's targets, which is what this sentence now says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/getting-started.md"
+mode = "restatement-ngram"
+unit = "0295ff0f5fc741b1-1ba2373f2c51ff55"
+copies = 1
+note = "Same link-only match as line 147: troubleshooting.md#filtering-rust_log exists and scopes diagnostics, and the sentence now says \"Ratect's own diagnostics\", not output."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-totalising"
+unit = "a165d087029a7f01"
+copies = 1
+note = "Ran the up-front checks in an empty directory: `ratect-compat -o bogus` is a clap error; `ratect-compat --log-file /nonexist/x.log` and `--config-vars-file nope.yml` fail before any config is looked for (exit 2); BATECT_CACHE_TYPE, batect.local.yml, DOCKER_CONFIG and an explicit -f were checked the same way in the earlier pass."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-totalising"
+unit = "9cc1876ac9254edb"
+copies = 1
+note = "DOCKER_BUILDKIT is read only through builder_version (ratect-core/src/docker.rs:2565), called from the build path (docker.rs:3145); DOCKER_TLS_VERIFY is read only on connecting to a host (checked by running `ratect resources list` with and without DOCKER_HOST); a defaulted -f is lazy."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-totalising"
+unit = "b667098dbc1fdfc7"
+copies = 1
+note = "Ran `ratect config convert --stdout` in a directory holding only batect.yml: it converts without looking for ratect.toml (exit 0); `ratect-compat --clean` with no batect.yml exits 0, from the earlier pass's run."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "claim-words-totalising"
+unit = "3b54990996d5352e"
+copies = 1
+note = "Checked against LeftBehind::failure_message (ratect-core/src/engine.rs:960-976): \"Cleanup abandoned\", \"Cleanup abandoned after failing: …\" and \"Cleanup failed: …\", each followed by \"; left behind: <list>. Remove with: <command>\", the list rendered as `name (id)`, then `network <name>`."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CONTEXT.md" = "35276534bb486547" }
+
+[[mark]]
+file = "decisions/0019-readiness-gates-starting-only.md"
+mode = "claim-words-totalising"
+unit = "877bf74b889a1fba"
+copies = 1
+note = "acquire_parallelism_permit has five callers in ratect-core/src/engine.rs: setup commands (:1634), pull (:2049), build (:2215), every container's create (:3922) and a dependency's start in ensure_container_ready (:4077); the task container's own start takes none."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0019-readiness-gates-starting-only.md"
+mode = "claim-words-counts"
+unit = "877bf74b889a1fba"
+copies = 1
+note = "Each permit is a scoped `_permit` held only around one create (engine.rs:3922) or one dependency start (engine.rs:4077), released at the end of that block."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0019-readiness-gates-starting-only.md"
+mode = "claim-words-totalising"
+unit = "db5442673c713fd8"
+copies = 1
+note = "In ensure_container_ready the dependencies are awaited (engine.rs:4040-4048) before the start permit is taken (:4077), and the create permit (:3922) is taken only inside the create block after its waits, so no permit is held while waiting on a dependency."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0019-readiness-gates-starting-only.md"
+mode = "claim-words-totalising"
+unit = "8c4eb360aafa8a86"
+copies = 1
+note = "Batect's TaskStep.kt:55-62 (~/git/or1can/batect): CreateContainerStep counts against the cap and RunContainerStep, which starts and runs every container, is declared with countsAgainstParallelismCap = false."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/differences-from-batect.md" = "b976dbbd2bb22b4f", "docs/differences-from-batect.md#cli-flags" = "e5e2b65b61f22b36" }
+
+[[mark]]
+file = "decisions/0019-readiness-gates-starting-only.md"
+mode = "claim-words-totalising"
+unit = "e20dc12b7badabf5"
+copies = 1
+note = "run_task_internal fans out ensure_container_created for every graph container at once (ratect-core/src/engine.rs:2871-2877), so image events come early; DependencyStarting is posted after the dependencies are ready and the permit is held (engine.rs:4040-4080), and ContainerCreating is the creation milestone (:3923)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0020-bundle-records-its-written-for-version.md"
+mode = "claim-words-totalising"
+unit = "4f5418af6c2c3e14"
+copies = 1
+note = "ratect-core/src/written_for.rs:55-66 and check_yaml_root's doc (:577-587): a YAML entry or root is judged only once the load reaches a TOML file, so a bundle of YAML files alone is never refused."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0020-bundle-records-its-written-for-version.md"
+mode = "claim-words-totalising"
+unit = "00720d5dc71c02da"
+copies = 1
+note = "The 0.12.0 rows that can change a YAML meaning without failing are the backslash escape (ratect-core/src/written_for.rs:397-399) and the unbraced-name change (:403-406); config_tests.rs:16016 a_backslash_escapes_in_every_expression_field_of_either_format shows the first applies to YAML too."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0020-bundle-records-its-written-for-version.md"
+mode = "claim-words-counts"
+unit = "00720d5dc71c02da"
+copies = 1
+note = "The two silent changes are the rows at ratect-core/src/written_for.rs:397-399 (backslash escapes) and :403-406 (unbraced name ends at `.`); the other rows fail the load, the `~` include row included, since containment refuses a home path inside a bundle (config.rs:4002-4007)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0020-bundle-records-its-written-for-version.md"
+mode = "claim-words-about-elsewhere"
+unit = "00720d5dc71c02da"
+copies = 1
+note = "Batect's Expression.kt (~/git/or1can/batect app/src/main/kotlin/batect/config/Expression.kt) treats `\\` as an escape (:131, :172) and ends an unbraced name at the first character that isn't a letter, digit or `_` (:104), so both changes give Batect's reading."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0020-bundle-records-its-written-for-version.md"
+mode = "claim-words-counts"
+unit = "a22e94177af44091"
+copies = 1
+note = "Same two rows as line 71 (ratect-core/src/written_for.rs:397-406), checked against Batect's Expression.kt :104/:131/:172, which reads both constructs the way Ratect now does."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0020-bundle-records-its-written-for-version.md"
+mode = "claim-words-totalising"
+unit = "9527930091b94358"
+copies = 1
+note = "A YAML file can't declare ratect_version (ratect-core/src/config.rs:3724, confirmed by running ratect-compat) nor set reviewed_ratect_version on an include (include_trust.rs:624-626), so only a TOML include entry can carry either."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "9e991a6400af770c"
+copies = 1
+note = "The two divergences exist in code, take_over_if_abandoned (ratect-core/src/git_include/entry_lock.rs:151) and the wait notice (git_include.rs:712-717), and both are in docs/differences-from-batect.md:42 (\"is taken over\", \"waits in silence\")."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0015-native-project-records-its-written-for-version.md"
+mode = "claim-words-totalising"
+unit = "bd36fc48e4f4a396"
+copies = 1
+note = "load_around (ratect/src/main.rs:987-1009) runs check_yaml_root only after load_project_native succeeds and returns any load error first, so a failing TOML include under a YAML root gets the loader's own error."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0015-native-project-records-its-written-for-version.md"
+mode = "claim-words-counts"
+unit = "bd36fc48e4f4a396"
+copies = 1
+note = "The failing-load cases the sentence names are the 0.12.0 rows for a trailing `\\` (ratect-core/src/written_for.rs:397-399) and a malformed expression (:403-406), plus unknown fields; check_yaml_root's doc (:585-587) names the same."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0015-native-project-records-its-written-for-version.md"
+mode = "claim-words-about-elsewhere"
+unit = "bd36fc48e4f4a396"
+copies = 1
+note = "Matches written_for.rs:585-587 (\"a TOML include using a field this binary doesn't know, or a value an escape now refuses, gets the loader's own error instead\") and the ordering in ratect/src/main.rs:997-1007."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0015-native-project-records-its-written-for-version.md"
+mode = "claim-words-counts"
+unit = "57a39d5f9265b581"
+copies = 1
+note = "BreakingChange (ratect-core/src/written_for.rs:86-93) has version, summary and check and no CHANGELOG field; every_marked_breaking_change_has_a_written_for_row (ratect/src/main_tests.rs:777-791) matches marked entries to rows by version, one for one."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "cfcf983628a1e7bd" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "4630c9b95cc2c2f1"
+copies = 1
+note = "ratect-core/Cargo.toml's crypto is rustls/ring for TLS, ssh-key/rsa/signature/ssh-encoding for build_ssh, and sha2, whose two uses derive directory names (docker/connection.rs:200 context store id, git_include.rs:450 include cache key); rcgen, tokio-rustls and rand_chacha are dev-dependencies."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "38865a10b6f80f7f", "decisions/0005-build-ssh-keyring-placement.md" = "db18653c7eeef69a" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "d8ae137407240e53"
+copies = 1
+note = "`ls ratect-compat/tests/fixtures | wc -l` gives 99 and `ls ratect/tests/fixtures | wc -l` gives 18."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "5278ab9288438c2e"
+copies = 1
+note = "local_include_target (ratect-core/src/config.rs:4020) resolves one path, against the declaring file's directory unless expand_home_directory takes a leading `~`; resolve_file_include's doc (:4002-4007) says the same."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "dc6dbfe6080b0dfe"
+copies = 1
+note = "Read CONTEXT.md (206 lines) for rationale and how-to: the only \"why\" is this line's pointer to decisions/, and lines 143 and 174 are definitional clauses; the behaviour it carries (cancel, cleanup, cache root) is what the new wording allows."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/README.md" = "1694a5b5b3b5a20b" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "claim-words-totalising"
+unit = "215c071cb0367c9a"
+copies = 1
+note = "Same reading of CONTEXT.md as for its line 4: no rationale or user how-to found (grep for because/since/why/rather than/so that hits only line 5 and definitional clauses at 143 and 174)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CONTEXT.md" = "35276534bb486547" }
+
+[[mark]]
+file = "agents/domain.md"
+mode = "claim-words-counts"
+unit = "1bf7d540dd5f5ec8"
+copies = 1
+note = "AGENTS.md guideline 14 keeps a version-scoped decision inline in its release's GitHub issue (\"Implementation Decisions\"), and guideline 9 says RELEASES.md entries before decisions/0008 carried them; those are the two places named."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "AGENTS.md" = "02a772fa08cecd36", "RELEASES.md" = "428eca6c34fe97a2", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6" }
+
+[[mark]]
+file = "agents/domain.md"
+mode = "claim-words-about-elsewhere"
+unit = "1bf7d540dd5f5ec8"
+copies = 1
+note = "Checked against AGENTS.md guidelines 9 and 14 as they read now: issue-inline for version-scoped decisions, and pre-0008 RELEASES.md entries in their old form."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "AGENTS.md" = "02a772fa08cecd36", "RELEASES.md" = "428eca6c34fe97a2", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "claim-words-totalising"
+unit = "e18ef7501fab0ae4"
+copies = 1
+note = "repaint_startup (ratect-core/src/ui/fancy.rs:590-602) skips the write when last_rendered equals the new frame, and fancy.rs:25-29's module doc lists Batect's line-diff repaint as a deliberate difference."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "claim-words-counts"
+unit = "e18ef7501fab0ae4"
+copies = 1
+note = "One better direction (the identical-frame skip, fancy.rs:601) and one worse (whole-block repaint vs Batect's diff, fancy.rs:26-29), as read in ratect-core/src/ui/fancy.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
+
+[[mark]]
+file = "TODO.md"
+mode = "claim-words-totalising"
+unit = "0722083e32ca4abf"
+copies = 1
+note = "grep across all three crates: split_image_reference is called only at ratect-core/src/docker.rs:2223 (pull_request_reference), :2237 (digest_pinned_reference) and :3318 (tag_image); the two BuildKit helpers only at :2579/:2585 in builder_version_given; all three are private fns."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "f70a5d8f8c972c17" }
+
+[[mark]]
+file = "TODO.md"
+mode = "claim-words-counts"
+unit = "0722083e32ca4abf"
+copies = 1
+note = "Same grep: three callers for split_image_reference and one, builder_version_given (docker.rs:2573), for docker_buildkit_env_value and select_builder_version."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "f70a5d8f8c972c17" }
+
+[[mark]]
+file = "TODO.md"
+mode = "claim-words-counts"
+unit = "29fc9785b366aec0"
+copies = 1
+note = "`grep -n 'task_output(' ratect-compat/tests/cli.rs` less comments and the definition gives 30 call sites; task_output (cli.rs:60-76) extracts the lines between the container's \"Running\" milestone and \"Cleaning up\"."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/tests/cli.rs" = "ab59178e15a2786f" }
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "e97e286193778c97"
+copies = 1
+note = "`tcp` is external_health_check's type value, not the container_spec_tests.rs:933 helper: ExternalHealthCheckFields (ratect-core/src/config.rs:2012) requires port, the tcp branch refuses path/expected_status, and the command is `nc -z` on the port."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "judgment-agent-added"
+unit = "c6714cc32b1716db"
+copies = 1
+note = "The ContainerRuntime::create_container trait method (ratect-core/src/docker.rs:1891, DockerClient impl at :3356) is the referent; the engine routes the task's container and every dependency through ensure_container_created and registers the id in created_containers on success and error."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "48ef2fccd65735d1"
+copies = 1
+note = "The batect.yml project_name field, resolved by ConfigFormat::project_name (ratect-core/src/config.rs:3389-3402), which falls back to infer_project_name (:3944) lowercasing the root's directory; `ratect-compat --list-tasks` in My-App/ printed \"Tasks in my-app:\"."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0002-runtime-ownership-labels.md"
+mode = "judgment-agent-added"
+unit = "f65e3381b229a444"
+copies = 1
+note = "The label value is Config.project_name (ratect-core/src/config.rs:143): engine.rs passes it to RunLabels::new, labels.rs:55 defines PROJECT, and shared() (labels.rs:146) feeds both for_network and for_container, matching the row's containers and networks."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "71823f560bf92af2"
+copies = 1
+note = "Every part of the row checked: built images tagged `{project_name}-{container_name}` (engine.rs), the eu.orican.ratect.project label (labels.rs:55), the lowercased-directory default (config.rs:3944), and root-only (config.rs:4486 refuses an included file declaring it)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-cli.md"
+mode = "judgment-agent-added"
+unit = "d662aa62b7124d64"
+copies = 1
+note = "`error` is a RUST_LOG level name, not Console::error (ui.rs:1385); init_tracing (ratect-compat/src/main.rs:580) always installs the stderr layer with default info and adds a --log-file layer defaulting to info,ratect_core=debug,ratect_compat=debug (:637)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "dcc0b8d4ea67fa5d"
+copies = 1
+note = "deserialize_project_name (config.rs:3168) checks the value, so the error points at it; container/task/config-variable names are checked as keys; scratch runs gave project_name's error at the value, a container's at the key, and an included .yml's at the entry's value."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/migrating-batect-project.md"
+mode = "judgment-agent-added"
+unit = "f80f514c18bac9f6"
+copies = 1
+note = "convert_project (ratect-core/src/convert.rs:113) gives only the root's output a project_name (convert.rs:189), taken from the loaded name that ConfigFormat::project_name (config.rs:3389) declares or infers, while the loader refuses it in an included file (config.rs:4486)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "b237eacf33af8003"
+copies = 1
+note = "`ratect resources` reads only the root file's project_name field through project_name_of (ratect-core/src/config.rs:5686, called at ratect/src/main.rs:1452), which follows no includes and evaluates nothing, and never reaches load_around's written-for check."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "judgment-agent-added"
+unit = "ce65a7d75dd18c79"
+copies = 1
+note = "The project_name field: the loader refuses it in any included file (ratect-core/src/config.rs:4486) and takes the name from loaded[0], the root, via ConfigFormat::project_name (:3389)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "judgment-agent-added"
+unit = "5e09d069ca1a53f0"
+copies = 1
+note = "`process` is Docker's Windows isolation value, not StdinReader::process (ratect-core/src/docker/stdin.rs:46); git grep for isolation/hyperv over *.rs and *.json finds only the English word in comments, so no isolation config, flag or schema property exists."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "judgment-agent-added"
+unit = "e436411de588ea0a"
+copies = 1
+note = "The built-in batect.project_directory (PROJECT_DIRECTORY_VAR, ratect-core/src/config.rs:138), which config_variable_values (:4902) adds for every evaluation through evaluate_each (:5549); not the engine_tests.rs:1875 helper."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".out-of-scope/build-image-provenance-labels.md"
+mode = "judgment-agent-added"
+unit = "ba567243cd3f59dd"
+copies = 1
+note = "`source` and `created` are OCI label keys, not docker.rs:271's Error::source or entry_lock.rs:121's created; BuildSpec (container_spec.rs:401) has no label field, neither build path sets labels, and Container.labels reaches only container creation (docker.rs:2848)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0002-runtime-ownership-labels.md" = "85c5d719b0a5bb3f" }
+
+[[mark]]
+file = "decisions/0018-built-images-named-for-people-found-by-labels.md"
+mode = "judgment-agent-added"
+unit = "3c4c438e4a90c6f9"
+copies = 1
+note = "The project_name field, validated by deserialize_project_name (ratect-core/src/config.rs:3168) on ConfigFile, the one struct both formats parse into; scratch runs of both binaries refused \"Web\" and \"P\" at load with Batect's messages."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0018-built-images-named-for-people-found-by-labels.md"
+mode = "judgment-agent-added"
+unit = "8b8f28ded682883c"
+copies = 1
+note = "An explicit project_name failing is_name_component is refused (deserialize_project_name, config.rs:3168) and returned unchanged otherwise (config.rs:3389-3392); only infer_project_name (:3944) lowercases, so explicit names are never normalised."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "ee97691d86c66998"
+copies = 1
+note = "The built-in batect.project_directory, reserved by ConfigVariableName's batect-prefix check (ratect-core/src/config.rs:3124); running ratect-compat with `1a` and `BaTeCt.project_directory` as config variable names failed the load with the documented message."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/migrating-batect-project.md"
+mode = "judgment-agent-added"
+unit = "765c178a8b47e5f3"
+copies = 1
+note = "The project_name field: every included file, of either format, is refused if it declares one (ratect-core/src/config.rs:4486), and a native root without one is an error (config.rs:3389-3402), so the line moves to the root."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0018-built-images-named-for-people-found-by-labels.md"
+mode = "judgment-agent-added"
+unit = "d87d3eda807033d1"
+copies = 1
+note = "ConfigFormat::project_name (config.rs:3389) returns a declared name as is, Compat infers via infer_project_name (:3944: lowercase, is_name_component, \"Set 'project_name'\"), and Native requires the field."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "b42b100aed8af2dd"
+copies = 1
+note = "`source` is the zsh builtin, not docker.rs:271; `ratect completions zsh` ends with compdef, so it fails in a bare `zsh -f` (\"command not found: compdef\") and sources cleanly after `autoload -U compinit && compinit`."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "2b679c579836519d"
+copies = 1
+note = "convert.rs:189 writes the loaded project_name into the root's output, which for a batect.yml without one is infer_project_name's lowercased directory (config.rs:3944); `ratect config convert --stdout` in MyProj/ wrote project_name = \"myproj\"."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "04c6df861b621894"
+copies = 1
+note = "The built-in batect.project_directory: declaring it fails ConfigVariableName's batect-prefix check (config.rs:3124) and `--config-var batect.project_directory=x` is refused as undeclared (config_variable_values, config.rs:4902), both confirmed by running ratect-compat."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "judgment-agent-added"
+unit = "0682dc008262cbb1"
+copies = 1
+note = "config_variable_values (ratect-core/src/config.rs:4902) sets batect.project_directory from the one root directory, evaluate_each (:5549) passes that map unchanged to every container, and only provenance anchors relative paths per file."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/includes.md"
+mode = "judgment-agent-added"
+unit = "105533e4c82b7033"
+copies = 1
+note = "The built-in variable (config.rs:132-138) resolves to the root file's directory from any file: the loader computes project_directory once from the root (project_directory_path, config.rs:5381) and evaluate_each shares one map across containers."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "70cda618b4359a9e"
+copies = 1
+note = "`tcp` is the ports string form's default protocol: PortMapping::parse_string (ratect-core/src/config.rs:2509) falls back to \"tcp\" when there is no `/protocol`; not the container_spec_tests.rs:933 helper."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "judgment-agent-added"
+unit = "09d8d6a1c4c6a940"
+copies = 1
+note = "`process` is the Windows isolation value; ROADMAP.md's cross-platform entry (lines 44-56) tracks the isolation and resize gaps, no isolation field or flag exists, and resize forwarding uses tokio::signal::unix in docker.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "24462b19ca0a409d" }
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "e92e631a5d058293"
+copies = 1
+note = "`healthy` is Docker's health state, not fancy_tests.rs:1627; build_health_config (docker.rs:792) makes health_check Docker's HEALTHCHECK and wait_for_container_healthy (docker.rs:3475) only watches the daemon's health_status events."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0015-native-project-records-its-written-for-version.md"
+mode = "judgment-agent-added"
+unit = "69949909d5e1caa2"
+copies = 1
+note = "The project_name field is root-only: the include loop refuses it in any included file (ratect-core/src/config.rs:4486) and the name is read from loaded[0] alone."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "4020073d2228c6ad"
+copies = 1
+note = "Section checked against code and binary: config_variable_values (config.rs:4902) always inserts the root's absolute directory (project_directory_path, :5381), a declaration fails the batect-prefix check (:3124), an override is refused, and `<batect.project_directory` reads a variable named batect."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/includes.md"
+mode = "judgment-agent-added"
+unit = "075730b7735e9fd4"
+copies = 1
+note = "Boundary::check_path_allowed (ratect-core/src/include_trust.rs:347) accepts a Git-included container's path under the clone or the project directory, its doc citing `<{batect.project_directory}/output`; the variable is config.rs:132-138's built-in."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/getting-started.md"
+mode = "judgment-agent-added"
+unit = "f981b2228f3ff564"
+copies = 1
+note = "PROJECT_DIRECTORY_VAR (ratect-core/src/config.rs:138) is added by config_variable_values (:4902) unconditionally, through the evaluate_each both formats share, so it needs no declaration in a ratect.toml either."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "a965afaab2db3d3c"
+copies = 1
+note = "`warning` is the Finding::Warning label Finding::render prints (ratect-core/src/diagnostics.rs:50); load_failure_findings (:67) gives each written-for row ok or warning and the trial load ok or problem, for doctor and config validate alike."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0002-runtime-ownership-labels.md"
+mode = "judgment-agent-added"
+unit = "dfc7fd9a8fe0a500"
+copies = 1
+note = "Past-tense context about bollard's Docker::create_container(None, config): `git show e9d37f8b^:ratect-core/src/docker.rs` has both container sites calling it with no name option and only user labels; today's call passes Some(options)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "judgment-agent-added"
+unit = "3af2b7cb4f250cbb"
+copies = 1
+note = "`source` and `created` are OCI label keys, not docker.rs:271 or entry_lock.rs:121; Container.labels goes only to container creation (docker.rs:2848) and BuildSpec (container_spec.rs:401) has no labels field, so no build-time image label exists yet."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0018-built-images-named-for-people-found-by-labels.md"
+mode = "judgment-agent-added"
+unit = "d043dac7b5788437"
+copies = 1
+note = "ConfigFormat::project_name (ratect-core/src/config.rs:3389-3402) bails for Native with \"missing the required 'project_name' field\", and infer_project_name (:3944) does the Compat inference in the order the ADR gives."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "e11d3b75ee84bb29"
+copies = 1
+note = "The native top-level project_name key (ConfigFile, config.rs:3266), resolved by ConfigFormat::project_name (:3389); runs of `ratect tasks list` showed it required, ratect_version also required, and the name root-only (config.rs:4486)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "judgment-agent-added"
+unit = "289b6b0581cf5971"
+copies = 1
+note = "project_directory_path (ratect-core/src/config.rs:5381) joins onto the current directory and cleans the path, and config_variable_values (:4902) uses that cleaned value for batect.project_directory, so `.` and `..` are resolved."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "a38961e7c2909bbe"
+copies = 1
+note = "Every included file is parsed and refused with \"declares 'project_name', but only the root configuration file can do so\" (ratect-core/src/config.rs:4486), for file and Git includes alike."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0018-built-images-named-for-people-found-by-labels.md"
+mode = "judgment-agent-added"
+unit = "02a236dd109d097b"
+copies = 1
+note = "Context section: the field is checked by deserialize_project_name and ContainerName::check (config.rs:3152-3183) with the ADR's image-name rule, and its \"Ratect accepts anything\" describes the state before the Status line's 0.33.0/0.12.0 implementation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0018-built-images-named-for-people-found-by-labels.md"
+mode = "judgment-agent-added"
+unit = "3052ead64e85c078"
+copies = 1
+note = "deserialize_project_name (config.rs:3168) and ContainerName (config.rs:3152) both apply is_name_component (image_reference.rs:115), whose path_component! regex (:51) equals the ADR's; config_tests.rs has load-failure tests for both formats."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "judgment-agent-added"
+unit = "2a1fac66e822398c"
+copies = 1
+note = "`ratect_core` is the ratect-core crate's tracing target (ratect-core/src/lib.rs:41 has `pub mod docker`, and no event sets its own target), not the path matched in main_tests.rs:1194; troubleshooting.md:20 is the linked section."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "judgment-agent-added"
+unit = "03bb0f322736fba5"
+copies = 1
+note = "The rule is image_reference.rs's path_component! regex (:51) via is_name_component (:115), enforced on a declared project_name (config.rs:3168), an inferred one (infer_project_name, :3944) and every container name (ContainerName, :3152)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "32f38c1bb36e3e16"
+copies = 1
+note = "Built images are tagged `{project_name}-{name}` (engine.rs), and deserialize_project_name/ContainerName (config.rs:3152-3183) refuse a bad name with Batect's messages; ratect-compat --list-tasks refused My-App, -api and a..b and accepted build_env, api.v2, a--b and a__b."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "9e95af63e9922fc0"
+copies = 1
+note = "The include walk refuses an included file of either format that declares project_name, naming it via describe_file (ratect-core/src/config.rs:4486); the bundle exception applies only to ratect_version (reject_misplaced_ratect_version, :3708)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "cf9dc8d8ac216058"
+copies = 1
+note = "infer_project_name (ratect-core/src/config.rs:3944-3964) fails an invalid lowercased name naming it and the file and saying to set 'project_name', and has its own error for a file in the filesystem root; ratect-compat --list-tasks in -app/ gave the first."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "judgment-agent-added"
+unit = "c598fa8f54e10a41"
+copies = 1
+note = "`tcp` is the object form's default protocol: PortMappingFields' protocol is optional and config.rs:2595 defaults it to \"tcp\"; local/container are PortRange, a port or a range. Not the container_spec_tests.rs:933 helper."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-totalising"
+unit = "cd0d501f340a61c3"
+copies = 1
+note = "already_reported (ratect-core/src/exit_code.rs:206-213) covers ContainerExitedNonZero, TaskInterrupted, StdoutClosed, CleanupFailed, FailureReported and VerbFailuresReported, which are the run routes listed plus the verb case, raised only by report_include_outcome (ratect/src/main.rs:2116) for includes clean/refresh."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-totalising"
+unit = "a02e42b394e47296"
+copies = 1
+note = "DOCKER_BUILDKIT is read at ratect-core/src/docker.rs:2566 (builder_version, called from the build path at :3145) and by diagnose, doctor's handler (ratect/src/main.rs:1602); a bogus value made `ratect doctor` report a problem and exit 1, while `ratect-compat --list-tasks` ignored it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "f165904d54b51384" }
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-counts"
+unit = "a02e42b394e47296"
+copies = 1
+note = "The two readers are the build path (docker.rs:2566) and doctor's diagnose (ratect/src/main.rs:1602), from a grep of all three crates for DOCKER_BUILDKIT; doctor exits 1 with a finding, never 2."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "f165904d54b51384" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "claim-words-totalising"
+unit = "dd1f070b32129417"
+copies = 1
+note = "LeftBehind::command (ratect-core/src/engine.rs:1018-1030) always builds `docker rm -f -v <short ids>` then `docker network rm <network>`; its doc (engine.rs:920-930) gives the shared-core and either-binary reason the sentence does."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "f70a5d8f8c972c17" }
+
+[[mark]]
+file = "ratect-core/src/config.rs"
+mode = "restatement-ngram"
+unit = "9de0dfc94e1a1e6e-005e5e99778b7794"
+copies = 1
+note = "The retracted words are this comment's old `<batect.project_directory`/ unbraced form; the surviving lines name only the braced `<{batect.project_directory}` and say the unbraced name ends at `.`, which expressions.rs does (#384)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

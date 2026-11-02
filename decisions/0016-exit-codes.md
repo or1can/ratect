@@ -359,8 +359,8 @@ container is a failure CI should see, not borrowed from anywhere.
     ([#461](https://github.com/or1can/ratect/issues/461), whose brief had
     `1`) and the Docker configuration and certificate directories
     ([#539](https://github.com/or1can/ratect/issues/539)). `DOCKER_BUILDKIT`
-    is read only by a build, so no path 2 command exits on it; `doctor`
-    reports a bad one as a finding.
+    is read only by a build and by `doctor`, which reports a bad one as a
+    finding, so no path 2 command exits `2` on it.
 - An invalid default from [#441](https://github.com/or1can/ratect/issues/441),
   [#450](https://github.com/or1can/ratect/issues/450) or
   [#539](https://github.com/or1can/ratect/issues/539) exits `125` on a run and
