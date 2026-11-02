@@ -67,12 +67,14 @@ failure worth preventing in advance — applies to a bundle unchanged.
   it.
 - **A bundle of YAML files alone is never checked, even when Ratect changes
   how it reads YAML.** Such a change moves Ratect towards Batect's meaning,
-  which is what the bundle was written for. So far every one has failed
-  loudly rather than changing a meaning silently. In 0.12.0, six of the seven
-  fail the load with Batect's message. The seventh, an unbraced name ending
-  at its first `.`, changes a meaning silently only for a bundle declaring
-  both `foo` and `foo.bar`, since a reference to an undeclared config
-  variable fails. A change that would make a YAML file silently mean
+  which is what the bundle was written for. In 0.12.0 most such changes
+  fail the load with Batect's message. Two can change a meaning without
+  failing: a `\` in an expression now escapes the character after it, so
+  `a\b` reads as `ab` and `\$X` as the literal `$X`; and an unbraced name
+  now ends at its first `.`, which changes a meaning silently only for a
+  bundle declaring both `foo` and `foo.bar`, since a reference to an
+  undeclared config variable fails. Both give the file Batect's own reading.
+  A change that would make a YAML file silently mean
   something other than Batect's reading needs a check like a row's, and
   reopens this decision.
 - **A version from the future is refused, on either side.** A bundle declaring
@@ -115,11 +117,12 @@ failure worth preventing in advance — applies to a bundle unchanged.
 
 - **A written-for check for a bundle of YAML files alone**, triggered by a
   change to how Ratect reads YAML (#721). Rejected: those changes move towards
-  the meaning the bundle's author wrote it for, and fail loudly in all but a
-  contrived case. A YAML file can't record a version or an acknowledgement
+  the meaning the bundle's author wrote it for, and the two that can change
+  a meaning without failing the load give it Batect's reading. A YAML file
+  can't record a version or an acknowledgement
   ([0021](0021-native-field-follows-its-file.md)), so only a TOML entry could
-  satisfy such a check. That would be a new mechanism for one narrow silent
-  case.
+  satisfy such a check. That would be a new mechanism for two changes that
+  only bring a file closer to what its author wrote it for.
 
 ## Consequences
 

@@ -786,10 +786,13 @@ fn parse_args() -> Args {
     })
 }
 
+/// Installs the panic hook, then runs `async_main` to completion on the
+/// runtime `ratect_core::panic_hook::run_main` builds. Not `#[tokio::main]`:
+/// a panic unwinding out of that would drop the runtime and wait forever on a
+/// blocked stdin read (ratect#670). `async_main` never returns normally. It
+/// ends with `std::process::exit` and the exit code of the invocation's outcome.
 fn main() {
     ratect_core::panic_hook::install(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-    // Not `#[tokio::main]`: a panic unwinding out of that would drop the
-    // runtime and wait forever on a blocked stdin read (ratect#670).
     ratect_core::panic_hook::run_main(async_main());
 }
 
@@ -845,8 +848,8 @@ async fn async_main() {
             // contract is "only error messages"). `{:?}` (not `{}`) prints
             // the full anyhow context chain — exactly what Rust's own
             // `Termination` impl would have printed had `main` returned a
-            // `Result` directly (see this function's own doc comment,
-            // below, for why it doesn't).
+            // `Result` directly (see the comment at the end of this
+            // function for why it doesn't).
             //
             // The deliberate exception is a run's failure that has already
             // reached the user by another route — the task's own non-zero

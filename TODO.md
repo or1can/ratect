@@ -98,8 +98,8 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
 
 ## Test coverage
 
-- **4.** **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens ~18 converted e2e
-  assertions** — replaced `assert_eq!(stdout.trim(), expected)` (whole-
+- **4.** **`ratect-compat/tests/cli.rs`'s `task_output` helper weakens the ~30 e2e
+  assertions that use it** — replaced `assert_eq!(stdout.trim(), expected)` (whole-
   stdout equality) with a windowed extract between the task-container
   milestone and `Cleaning up...`. Stray output before or after that window
   is still silently tolerated. Revisited for ratect#72: whole-stdout
@@ -140,13 +140,15 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
 
 # ratect-core/src/docker.rs: a second wide-positional-seam cluster
 
-`docker.rs`'s image/BuildKit helpers immediately above the connection block
-that became `ratect-core/src/docker/connection.rs` in 0.6.0 (`split_image_reference`,
+`docker.rs`'s image/BuildKit helpers (`split_image_reference`,
 `docker_buildkit_env_value`, `select_builder_version`) are the same shape of
-finding the architecture review that motivated that split named — a
-self-contained concept sharing a module with container lifecycle by history,
-not by relationship. Deliberately not swept into that same change: they have
-one call site each (`resolve_image`, `build_image`), so there's no
-duplication to buy back, only call-site readability — a different, weaker
-class than the one the split was justified by. Worth a look if `docker.rs`'s
+finding the architecture review that motivated the 0.6.0 split into
+`ratect-core/src/docker/connection.rs` named — a self-contained concept
+sharing a module with container lifecycle by history, not by relationship.
+Deliberately not swept into that same change: they are private, each used
+only from within `docker.rs` (`split_image_reference` by the pull-reference,
+digest-pinning and tagging paths; the two BuildKit helpers by
+`builder_version_given`), so there's no duplication across modules to buy
+back, only readability — a different, weaker class than the one the split
+was justified by. Worth a look if `docker.rs`'s
 size becomes a problem on its own terms, not before.

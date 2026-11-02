@@ -15,7 +15,10 @@ a container or network already gone when cleanup reaches it is not a cleanup
 failure, on every removal path. That rework is implemented in the same
 release ([#609](https://github.com/or1can/ratect/issues/609)). As first
 implemented, a graceful stop or a network removal answered `404` counted as
-one, while forced removal did not.
+one, while forced removal did not. Refined again before release by
+[#670](https://github.com/or1can/ratect/issues/670): a run whose stdout's
+reader goes exits `141`, as though `SIGPIPE` had ended it. As first written,
+no rule covered it, so it fell to rule 3's `125`.
 
 ## Context
 
@@ -98,6 +101,9 @@ exited `0`.
    after it never run, so rule 3 decides the run, and it exits `125`.
 2. **A termination signal ended it → `128` + that signal's number** (`130`
    `SIGINT`, `143` `SIGTERM`, `129` `SIGHUP`), whatever cleanup does after.
+   A run whose stdout's reader goes ends as though `SIGPIPE` had ended it,
+   and exits `141` after the same cleanup
+   ([#670](https://github.com/or1can/ratect/issues/670)).
    Only a signal that ended the command earns this: one that arrives during
    the cleanup of a finished run didn't end anything, so rule 1 applies. One
    that arrives during a *prerequisite's* cleanup ends the run before the
@@ -161,21 +167,23 @@ option.** An invalid option value takes its path's invocation code (`125` on
 a run, `2` otherwise) *whenever it is found*. When it is checked is each
 option's own business, and it is not settled here. Some values are checked
 up front, before any command starts. That covers every value `clap` itself
-parses (`--cache-type`, `-o`, `--tag-image`) and, in `ratect-compat`, an
-explicit `--config-vars-file` and `--log-file`. The same will hold for the
-values whose issues decided so under
+parses (`--cache-type`, `-o`, `--tag-image`); an explicit
+`--config-vars-file` in both binaries; in `ratect-compat`, an explicit `-f`
+and `--log-file`; and the values whose issues decided so under
 [0013](0013-when-ratect-compat-copies-batect.md)'s point-of-failure rule:
 `batect.local.yml` and `BATECT_CACHE_TYPE`
 ([#441](https://github.com/or1can/ratect/issues/441),
 [#450](https://github.com/or1can/ratect/issues/450)), and the Docker
-configuration and certificate directories in `ratect-compat`
+configuration and certificate directories, in every `ratect-compat` command
+and every `ratect` command that connects
 ([#539](https://github.com/or1can/ratect/issues/539)). Others are checked
-when first used: `-f` when the config loads, `DOCKER_TLS_VERIFY` when Ratect
+when first used: `-f` when the config loads (in `ratect-compat`, only a
+defaulted one), `DOCKER_TLS_VERIFY` when Ratect
 connects ([#461](https://github.com/or1can/ratect/issues/461)), and
 `DOCKER_BUILDKIT` when a build first needs it
 ([#460](https://github.com/or1can/ratect/issues/460)). So a command that
 doesn't use a value checked lazily never sees its error: `ratect-compat
---clean` doesn't need its config file, and `ratect config convert` in a
+--clean` doesn't need a defaulted config file, and `ratect config convert` in a
 project with only a `batect.yml` never looks for `ratect.toml`. Moving a check
 earlier or later changes which commands notice a bad value. It never changes
 the code they exit with.
@@ -347,8 +355,12 @@ container is a failure CI should see, not borrowed from anywhere.
     covers `--config-vars-file` naming a missing file or a directory, and
     `--log-file` in a missing directory. `ratect` has no `--log-file`, and
     reads `--config-vars-file` only on a run or in the two diagnosing verbs.
-  - **Once the issues that add each check land**, an invalid `DOCKER_*` value
-    found by a path 2 command exits `2` (#461's brief had `1`).
+  - **On path 2**, an invalid `DOCKER_*` value exits `2`: `DOCKER_TLS_VERIFY`
+    ([#461](https://github.com/or1can/ratect/issues/461), whose brief had
+    `1`) and the Docker configuration and certificate directories
+    ([#539](https://github.com/or1can/ratect/issues/539)). `DOCKER_BUILDKIT`
+    is read only by a build, so no path 2 command exits on it; `doctor`
+    reports a bad one as a finding.
 - An invalid default from [#441](https://github.com/or1can/ratect/issues/441),
   [#450](https://github.com/or1can/ratect/issues/450) or
   [#539](https://github.com/or1can/ratect/issues/539) exits `125` on a run and

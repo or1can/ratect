@@ -117,8 +117,9 @@ Two things worth knowing without opening a `Cargo.toml`:
   that wrong dead-ended a branch once already. A patch only applies while the
   fork's version satisfies the crate's own requirement, so a version bump can
   silently retire one.
-- **`ssh-key` and its companions are Ratect's only cryptographic dependency**,
-  taken knowingly ([decisions/0005](decisions/0005-build-ssh-keyring-placement.md)),
+- **`ssh-key` and its companions are Ratect's only cryptographic dependency
+  outside TLS** (`rustls` and its `ring` provider, client keys included) and
+  `sha2`, which only derives directory names; taken knowingly ([decisions/0005](decisions/0005-build-ssh-keyring-placement.md)),
   and both accepted `cargo audit` advisories belong to that tree — see
   [`.cargo/audit.toml`](.cargo/audit.toml), which carries their justifications.
 
@@ -170,8 +171,8 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   has, Markdown/Swift only — no Rust support yet), and
   `claim-words`/`judgment-agent` (advisory, totalising language and
   architecture-claim review, opt-in via `claims.toml`'s `[claim-words]
-  files` — this repo opts in `AGENTS.md`, `CONTEXT.md`, `ROADMAP.md`,
-  `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/*.md`). The four
+  files` — this repo opts in `AGENTS.md`, `agents/*.md`, `CONTEXT.md`,
+  `ROADMAP.md`, `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/*.md`). The four
   former scripts' own paths and the full migration story are in
   [decisions/0009](decisions/0009-adopt-claims-plugin.md) — not repeated
   here now that they no longer exist to link to.
@@ -185,8 +186,10 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
 
   `claims.toml` also opts `docs/*.md`, `CONTEXT.md`, `agents/*.md` and
   `README.md` into `temporal-words` (advisory, flags version-dated wording
-  added to reference prose) — deliberately the reverse file set from
-  `claim-words`'s; see its own comment for where the line sits.
+  added to reference prose) — leaving out the files that are dated or
+  forward-looking by design (`AGENTS.md`, `ROADMAP.md`, `TODO.md`,
+  `RELEASES.md`, `decisions/*.md`), all of which `claim-words` does read;
+  see its own comment for where the line sits.
 
   Every noise/timeout issue found comparing 0.2.2 against this repo's old
   tooling is now fixed upstream (`decisions/0009` has the detail and issue
@@ -252,7 +255,7 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
 - **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/`). See the fixture files themselves for what each one proves.
 
   A separate `worked-examples` CI job runs `build`/`test`/`run`/`lint`/`shell` against a real Docker daemon for every project under [`examples/`](examples/) (`shell`'s own invocation appends `-- -c '...'`, since it's interactive by design and would otherwise hang CI waiting on a TTY that never arrives; `full-stack` and `getting-started`, whose task names differ, each get their own section of the job running their own tasks) — the real, checked-in hello-world projects [`docs/worked-examples.md`](docs/worked-examples.md) `{{#include}}`s its config from directly, so the published page can't silently drift from something that no longer actually runs (as happened once, caught only by running these by hand — see that page's own note on `command` having no shell). Not `#[ignore]`d/opt-in like the fixture tests above: every push and PR runs it, since `examples/` is small and its whole point is staying provably current.
-- **Where a fixture lives — by *layer*, not by binary.** The two fixture sets look lopsided (~36 under `ratect-compat/tests/fixtures/`, a handful under `ratect/tests/fixtures/`), but that's correct, not debt. Most of `ratect-compat`'s fixtures don't test the *flat CLI* at all — they drive `ratect-core`'s engine/Docker behaviour (sidecars, readiness, build options, devices, proxy, tmpfs, the SSH-agent socket, …) against a real daemon, with the CLI as a mere harness. That behaviour is proven *once*: exhaustively in `ratect-core`'s own fake-`ContainerRuntime` unit tests, and end-to-end here. So the rules:
+- **Where a fixture lives — by *layer*, not by binary.** The two fixture sets look lopsided (about a hundred under `ratect-compat/tests/fixtures/`, under twenty under `ratect/tests/fixtures/`), but that's correct, not debt. Most of `ratect-compat`'s fixtures don't test the *flat CLI* at all — they drive `ratect-core`'s engine/Docker behaviour (sidecars, readiness, build options, devices, proxy, tmpfs, the SSH-agent socket, …) against a real daemon, with the CLI as a mere harness. That behaviour is proven *once*: exhaustively in `ratect-core`'s own fake-`ContainerRuntime` unit tests, and end-to-end here. So the rules:
   - **Core engine/Docker behaviour → a `ratect-compat` fixture.** It's the permanent home because `ratect-compat` is permanently `batect.yml`-format (compatibility requires it — see `ROADMAP.md`), so those fixtures never have to change format, and its thin CLI exercises the whole stack. Don't re-prove the same behaviour through `ratect`'s CLI — that re-tests the engine via a second driver for no added confidence; `ratect` proves *its* CLI reaches the engine with one representative e2e (`run_executes_a_task_via_docker`) and inherits the rest.
   - **A binary's own CLI surface → that binary's fixtures.** `ratect`'s set is small *because it should be*: its subcommand surface (`tasks.yml`) and its own verbs (`caches`/`resources`/`labels`, which `ratect-compat` doesn't have). From 0.3.0 it also has fixtures in `ratect`'s *own* config format — which is the deeper reason the two sets are never merged into a shared directory: a file can't be both a valid `batect.yml` and a valid `ratect`-native config, so a "common" fixtures dir would have to fork exactly when that format lands (the very next release). The fixtures belong to the format, and the format is `ratect-compat`'s permanent territory. CI runs the non-Docker suite as `cargo test --workspace --all-targets --all-features` — the `--all-features` part is what runs `ratect-core`'s `schema` module tests (see the module list above); plain `cargo test --workspace` skips them, so run `cargo test -p ratect-core --features schema` after touching anything in `config.rs`. When a config type changes, regenerate *both* committed schemas (`batect.yml`'s and `ratect.toml`'s) with `RATECT_UPDATE_SCHEMA=1 cargo test -p ratect-core --features schema schema::` and commit the result alongside — the test fails, with that same command in its message, if you don't.
   - **One documented exception: a fixture with no test at all.** `ratect-compat/tests/fixtures/manual-terminal-resize.yml` (ratect#73) backs a manual-only repro — a live terminal's own reflow rendering isn't something any headless harness here, `portable-pty` included, can reproduce or assert against. Its own header comment carries the steps; don't read its lack of a `#[ignore]`d test as orphaned or delete it as dead weight.

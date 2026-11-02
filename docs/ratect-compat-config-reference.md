@@ -210,7 +210,7 @@ containers:
 |---|---|---|---|
 | `image` | string | one of `image`/`build_directory` | A Docker image reference to pull and run (e.g. `alpine:3.18`). Exactly one of `image`/`build_directory` is required, and giving both is an error rather than one silently winning. `image` also can't be combined with any build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) — those apply only to a container built from a `build_directory`. All of this is `ratect-compat` behaviour; `ratect`'s native format deliberately allows these combinations because `extends` needs them — see [where the semantics differ](ratect-config-reference.md#where-the-semantics-differ). No [expression](#expressions) support: Batect resolves none here, so one is rejected when the file loads rather than resolved, which would make the file unusable under `batect` itself. `ratect.toml` does resolve them — see [Expressions in `image`](ratect-config-reference.md#expressions-in-image). |
 | `image_pull_policy` | `IfNotPresent` or `Always` | no | On an `image` container: whether to pull it fresh or only when it's missing locally. On a `build_directory` container: whether to force-pull the build's own base image (`docker build --pull`) before building, or leave Docker's own local-cache-if-present behavior alone — Batect's own second, distinct use of this same field. Defaults to `IfNotPresent` either way, matching Batect. No expression support. |
-| `build_directory` | string | one of `image`/`build_directory` | Builds an image from a `Dockerfile` in this directory (see [Image building](#image-building) below) instead of pulling a pre-built one. Supports [expressions](#expressions) and is resolved to an absolute path the same way a volume's `host_path` is — see [Volume path resolution](#volume-path-resolution). |
+| `build_directory` | string | one of `image`/`build_directory` | Builds an image from a `Dockerfile` in this directory (see [Image building](#image-building) below) instead of pulling a pre-built one. Supports [expressions](#expressions) and is resolved to an absolute path the same way a `local` volume's host path is — see [Volume path resolution](#volume-path-resolution). |
 | `build_args` | map of string → string | no | Build-time variables passed to `docker build` (Docker's own `--build-arg` mechanism), e.g. `VERSION: "1.2.3"`. Only meaningful alongside `build_directory`. Values support [expressions](#expressions). |
 | `dockerfile` | string | no | The Dockerfile to build, as a path relative to `build_directory`'s own root, or an absolute path inside `build_directory`. Defaults to `Dockerfile` at `build_directory`'s root. Only meaningful alongside `build_directory`. No [expression](#expressions) support. Checked when the container's image is about to be built, before Docker is asked anything: a `build_directory` that doesn't exist or isn't a directory, and a Dockerfile that doesn't exist, isn't a regular file, is a symbolic link or is reached through one, or isn't inside `build_directory`, each fail the build naming the field. `ratect doctor` and `ratect config validate` report the same, and warn about an absolute path, which only works where the project is checked out at that path. |
 | `build_target` | string | no | The build stage to stop at (Docker's own `--target` mechanism), for a multi-stage `FROM ... AS <name>` Dockerfile. Only meaningful alongside `build_directory`. No expression support. |
@@ -684,9 +684,9 @@ list:
   accept a single port or a range (`8443` or `"8000-8002"`), `protocol` is optional
   (defaults to `tcp`).
 
-Validated at config-load time (unlike `volumes`, which is never format-checked):
-a malformed entry, a non-positive port, or mismatched-size local/container ranges are
-all rejected before anything runs. No [expression](#expressions) support.
+Validated at config-load time, as `volumes` is: a malformed entry, a non-positive
+port, or mismatched-size local/container ranges are all rejected before anything
+runs. No [expression](#expressions) support.
 
 `TaskRun.ports` (see [TaskRun](#taskrun)) adds *additional* port mappings for a
 specific task's run — combined with the container's own `ports` as a union, not an
@@ -1088,7 +1088,8 @@ expression, such as a `batect.yml`'s `image`, keeps a backslash as written.
 ### Built-in config variable: `batect.project_directory`
 
 `<{batect.project_directory}` always resolves to the
-absolute path of the directory containing the config file — Batect's one built-in
+absolute path of the directory containing the root configuration file, even in an
+included file — Batect's one built-in
 config variable, so Ratect supports it without requiring (or allowing) it to be
 declared under `config_variables`. Declaring a `config_variables` entry named
 `batect.project_directory` fails the load, as any [name starting

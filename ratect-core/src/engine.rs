@@ -19,14 +19,13 @@
 //! for when a dependency counts as ready), and once-per-session
 //! dedup of image pulls/builds/task runs. `TaskEngine` is generic over
 //! `ContainerRuntime`. Worth knowing: opt-in settings (`existing_network`,
-//! `publish_ports`, etc.) are builder methods rather than `TaskEngine::new`
-//! parameters, so each new one lands without a mass-edit of the ~30 existing call
-//! sites — with `TaskEngineSettings`/`with_settings` (0.2.0-dev) as the
-//! plain-data form of that same set, which is what the *binaries* use (both
-//! expose the same ~10 knobs behind differently-named flags, so neither
-//! duplicates the builder chain; a new setting needs adding in both places or a
-//! binary can't reach it, and this module's own tests keep using the builders,
-//! where naming one setting reads better than a mostly-default struct); and
+//! `publish_ports`, etc.) are fields of `TaskEngineSettings`, applied by
+//! `with_settings`, rather than `TaskEngine::new` parameters, so each new one
+//! lands without a mass-edit of every call site. Both binaries go through
+//! `with_settings` (each exposes the same ~10 knobs behind differently-named
+//! flags), so a new setting needs assigning there or a binary can't reach it,
+//! and this module's own tests build `TaskEngineSettings` with struct-update
+//! syntax, naming only the setting under test; and
 //! every task's own container, the named task's and each prerequisite's, is
 //! eligible for interactive-TTY mode — never a dependency's. `run_task_internal`
 //! runs `prerequisites` first, then returns early (no error) if the task itself has
@@ -1033,6 +1032,17 @@ impl LeftBehind {
     }
 }
 
+/// Runs a task against a [`ContainerRuntime`]: its prerequisites first, then
+/// its own container and the dependencies that container needs, then the
+/// cleanup of everything that run created. One engine serves one invocation.
+/// It is built by [`new`](Self::new) plus [`with_settings`](Self::with_settings)
+/// and driven by [`run_task`](Self::run_task). Across that invocation it
+/// memoizes task runs, image pulls (per image and pull policy) and builds,
+/// so a prerequisite reached twice runs once and an image several containers
+/// use is pulled or built once. That shared state sits behind `Mutex`es
+/// because independent branches of a task's dependency graph start
+/// concurrently. Generic over `D` so this module's tests can drive it against
+/// a fake runtime instead of a daemon.
 pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// The project as loaded — its values unevaluated. Each task's
     /// containers and values are [evaluated](LoadedProject::evaluate) when
@@ -2516,6 +2526,31 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         Ok((task, containers))
     }
 
+    /// Runs one task once `run_task_scoped` has done the dedup and cycle
+    /// bookkeeping. First come its prerequisites, in order, each with no
+    /// `additional_args`. They are skipped for the named task (`top_level`)
+    /// under `--skip-prerequisites`. Then the task's own values are evaluated
+    /// (only now, decisions/0014). A task with no `run` stops there and posts
+    /// `TaskEvent::PrerequisitesOnly`.
+    ///
+    /// For a `run`, the image overrides and the container dependency graph
+    /// are checked before anything touches Docker. Then it creates the run's
+    /// network (or checks that `existing_network` exists), starts the
+    /// dependencies as the graph allows, and runs the task's own container
+    /// with `additional_args`, interactive if the output style allows it.
+    /// Under the Batect-compatible dialect that container's readiness gate
+    /// runs alongside its main command. Cleanup then removes every container
+    /// this run created, in reverse dependency order, and the network if it
+    /// created one, unless `cleanup_after_success` (named task only) or
+    /// `cleanup_after_failure` says to keep them. A further signal during
+    /// cleanup escalates it to force removal, and a `SIGINT` after that
+    /// abandons it.
+    ///
+    /// The task's own non-zero exit comes back as `ContainerExitedNonZero`.
+    /// An infrastructure failure is posted to the event sink before cleanup
+    /// starts and comes back as `FailureReported`. A cleanup failure replaces
+    /// only an `Ok`, as `CleanupFailed`. `TaskFinished` or `TaskFailed` is
+    /// posted after cleanup.
     async fn run_task_internal(
         &self,
         task_name: &str,

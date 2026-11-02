@@ -24,7 +24,7 @@ cache, each waiting for the last to actually be ready (not just
 networking, no leftover containers once it's done. This is the dependency
 graph from
 [`examples/full-stack`](https://github.com/or1can/ratect/tree/main/examples/full-stack)
-— that project also has `build`/`unit-test`/`lint`/`shell` tasks, omitted
+— that project also has `build`/`unit-test`/`run`/`lint`/`shell` tasks, omitted
 here to keep this to the part that's actually running below:
 
 ```toml

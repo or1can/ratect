@@ -88,11 +88,12 @@ struct GlobalArgs {
     )]
     config_file: PathBuf,
 
-    /// Force a particular style of Ratect's own output (never affects a
-    /// task command's output): fancy (a live per-container status display,
-    /// the default when the console supports it), simple (plain lines),
-    /// all (interleaved output from every container), or quiet (error
-    /// messages only, and a machine-readable task list).
+    /// Force a particular style of Ratect's own output (a task command's
+    /// output is never changed, only prefixed under all): fancy (a live
+    /// per-container status display, the default when the console supports
+    /// it), simple (plain lines), all (interleaved output from every
+    /// container), or quiet (error messages only, and a machine-readable task
+    /// list).
     #[arg(short = 'o', long = "output", value_enum, global = true)]
     output: Option<OutputStyleArg>,
 
@@ -800,9 +801,9 @@ async fn async_main() {
             // reasoning, and the same `{:?}` full-context-chain formatting,
             // as `ratect-compat`'s own top-level handler. Except for a run's
             // failure that has already reached the user by another route —
-            // the task's own non-zero exit, a signal, a failure to run the
-            // task or clean up after it, which the engine reported as it
-            // happened — for which a second line
+            // the task's own non-zero exit, a signal or a closed stdout, a
+            // failure to run the task or clean up after it, which the engine
+            // reported as it happened — for which a second line
             // would be the same event reported twice (decisions/0017; the
             // list is `already_reported`'s).
             if !ratect_core::exit_code::already_reported(&error) {
