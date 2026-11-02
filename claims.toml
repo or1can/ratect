@@ -11,6 +11,10 @@
 # or a CLI concept instead. An extension-qualified citation (`` `cache.rs` ``)
 # or an explicit relative path always counts, regardless of this list.
 module_reference_scope = ["decisions/*.md", "AGENTS.md"]
+# RELEASES.md is append-only like CHANGELOG.md, which this check skips on its
+# own: a shipped entry describes its release, so the code it names moving on
+# afterwards is expected, not a sign the entry needs rereading.
+exclude = ["RELEASES.md"]
 
 # CHANGELOG.md/RELEASES.md/decisions/*.md are this repo's own append-only
 # historical records (AGENTS.md's own rules) — they legitimately cite a path
@@ -56,6 +60,19 @@ historical = [
 # corrected claim in a doc comment whose stale twin survives in a Markdown
 # page, or vice versa.
 extensions = [".rs"]
+# A shipped CHANGELOG.md/RELEASES.md entry describes its release as it
+# shipped, and this repo's rules forbid editing one, so a survivor there is
+# never something to fix. `historical` rather than `exclude`: a line the diff
+# adds there, in `[Unreleased]`, is still read. Not `decisions/*.md`, unlike
+# the two gate checks above: an unshipped record is edited in place, and a
+# shipped one still takes a status-line note.
+historical = ["CHANGELOG.md", "RELEASES.md"]
+
+[judgment-agent]
+# Same files, same reason as `restatement`'s `historical` above: a citation
+# on a shipped changelog or release-notes line names what existed when it
+# shipped.
+historical = ["CHANGELOG.md", "RELEASES.md"]
 
 [executable-claims]
 # A cold `target/` dir (no incremental build cache — the first `cargo run`
