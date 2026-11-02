@@ -296,8 +296,8 @@ pub struct Container {
     /// forms — a `"local:container[/protocol]"` string (with port ranges,
     /// `"from-to:from-to[/protocol]"`) and the expanded object form
     /// (`{local, container, protocol}`) — see [`PortMapping`]. Validated
-    /// (matching ranges, positive ports) at config-parse time, unlike
-    /// `volumes`, which is never format-checked.
+    /// (matching ranges, positive ports) at config-parse time, as `volumes`
+    /// is.
     pub ports: Option<Vec<PortMapping>>,
     /// Overrides the health check configuration baked into the image — see
     /// [`HealthCheckConfig`]. Applied at container creation; a dependency

@@ -845,8 +845,8 @@ async fn async_main() {
             // contract is "only error messages"). `{:?}` (not `{}`) prints
             // the full anyhow context chain — exactly what Rust's own
             // `Termination` impl would have printed had `main` returned a
-            // `Result` directly (see this function's own doc comment,
-            // below, for why it doesn't).
+            // `Result` directly (see the comment at the end of this
+            // function for why it doesn't).
             //
             // The deliberate exception is a run's failure that has already
             // reached the user by another route — the task's own non-zero

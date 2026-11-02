@@ -19,14 +19,13 @@
 //! for when a dependency counts as ready), and once-per-session
 //! dedup of image pulls/builds/task runs. `TaskEngine` is generic over
 //! `ContainerRuntime`. Worth knowing: opt-in settings (`existing_network`,
-//! `publish_ports`, etc.) are builder methods rather than `TaskEngine::new`
-//! parameters, so each new one lands without a mass-edit of the ~30 existing call
-//! sites — with `TaskEngineSettings`/`with_settings` (0.2.0-dev) as the
-//! plain-data form of that same set, which is what the *binaries* use (both
-//! expose the same ~10 knobs behind differently-named flags, so neither
-//! duplicates the builder chain; a new setting needs adding in both places or a
-//! binary can't reach it, and this module's own tests keep using the builders,
-//! where naming one setting reads better than a mostly-default struct); and
+//! `publish_ports`, etc.) are fields of `TaskEngineSettings`, applied by
+//! `with_settings`, rather than `TaskEngine::new` parameters, so each new one
+//! lands without a mass-edit of every call site. Both binaries go through
+//! `with_settings` (each exposes the same ~10 knobs behind differently-named
+//! flags), so a new setting needs assigning there or a binary can't reach it,
+//! and this module's own tests build `TaskEngineSettings` with struct-update
+//! syntax, naming only the setting under test; and
 //! every task's own container, the named task's and each prerequisite's, is
 //! eligible for interactive-TTY mode — never a dependency's. `run_task_internal`
 //! runs `prerequisites` first, then returns early (no error) if the task itself has

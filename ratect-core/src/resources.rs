@@ -88,7 +88,9 @@ pub trait ResourceInventory {
     /// nothing left to remove (decisions/0016).
     async fn remove_network(&self, name: &str) -> Result<()>;
 
-    /// Stops and removes a container started with `start_background_container`.
+    /// Stops and removes `container_id`: any container a run created, a
+    /// task's own or a dependency's, started or not, or a leftover
+    /// `ratect resources clean` found.
     /// `stop_signal`/`stop_grace_period` override Docker's own default stop
     /// signal/timeout — `None` for either leaves that half of Docker's own
     /// default behavior alone (see `config::Container::stop_signal`/
