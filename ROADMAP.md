@@ -34,8 +34,8 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
   `build_context_tar` builds the *entire* tar archive as a `Vec<u8>` before
   handing it to the Docker API at all — a large build context (a monorepo, an
   unfiltered `node_modules`/`target` a `.dockerignore` should exclude but
-  doesn't) means holding the whole thing in memory twice over (once as files
-  read, once as the assembled tar) before a single byte reaches the daemon.
+  doesn't) means holding the whole assembled archive in memory before a
+  single byte reaches the daemon.
   Streaming it (tar entries written directly to the request body as they're
   read from disk) would fix that and, as a side effect, is what real build
   context *upload* progress (see Improved Progress UI, under UX & Tooling
