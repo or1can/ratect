@@ -4,7 +4,7 @@ Ratect's engineering backlog: deferred follow-on work from specific code
 reviews — real findings not worth fixing immediately, and narrower
 architectural notes surfaced along the way. Distinct from ROADMAP.md's
 **Future Vision** section, which is undecided *product* ideas with no code
-behind them yet — everything here is tied to code that already shipped.
+behind them yet — everything here is tied to code that already exists.
 
 A review finding that needs **no fix at all** doesn't get an entry here
 either, past or present — this file used to keep a standing "Reviewed, no
@@ -20,7 +20,7 @@ Findings from the pre-release code review of 0.16.0's output-modes work
 (`git diff origin/main...HEAD` at the time, covering `ratect-core/src/ui/`,
 the `engine.rs`/`docker.rs` event-posting refactor, and the `--output`/
 `--no-color` CLI surface) — all fixed; see `git log` for what landed.
-Everything below is unfixed. Grouped by severity; pick up top-down.
+Everything below is unfixed. Grouped by kind; within a group, pick up top-down.
 
 **Item numbers are identifiers, not positions.** They carry gaps because a
 completed item is deleted and the survivors keep their numbers — code cites
