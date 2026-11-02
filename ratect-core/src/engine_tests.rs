@@ -4641,8 +4641,8 @@ fn config_with_database_dependency(configure: impl FnOnce(&mut Container)) -> Co
 
 /// Cleanup must forward *each* container's own `stop_signal`/
 /// `stop_grace_period` to Docker — `app`'s own value, not `database`'s, and
-/// vice versa — at both cleanup call sites in `run_task_internal`: the
-/// task's own container and a dependency. Proves this at the unit level
+/// vice versa — for the task's own container and a dependency alike, which
+/// `run_task_internal`'s one cleanup removes the same way. Proves this at the unit level
 /// rather than relying solely on the real-Docker `_via_docker` tests in
 /// `ratect/tests/cli.rs`, which don't run in the default `cargo test`
 /// suite (ratect#112).

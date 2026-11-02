@@ -7,7 +7,7 @@ says — where Ratect is *going*, not where it has been.
 Three files divide this work, and the split is by audience and direction:
 
 - [`ROADMAP.md`](ROADMAP.md) — forward-looking, contributor-facing: what is
-  planned, and the rules the project runs by.
+  planned.
 - **This file** — backward-looking, contributor-facing: one short paragraph
   per version, naming its theme and linking to its closed GitHub Milestone
   (which lists every issue that shipped in it). Entries are never deleted, and

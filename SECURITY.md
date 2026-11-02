@@ -21,9 +21,10 @@ The areas of Ratect most likely to matter for a security report, and where its
 existing hardening lives:
 
 - **Git includes** (`type: git`): fetched bundles are treated as untrusted input —
-  path containment within the clone, restricted Git transports, and argv hygiene
-  are enforced (see the
-  [Includes](docs/includes.md#containment)). Anything that lets a
+  path containment within the clone and argv hygiene are enforced (see the
+  [Includes](docs/includes.md#containment)), while which Git transports may be
+  used is left to Git's own defaults and the user's Git configuration, as under
+  Batect. Anything that lets a
   fetched bundle read or write outside its clone (or the project directory) is a
   vulnerability.
 - **What a bundle is *granted***: widening a bundle's containment

@@ -324,13 +324,17 @@ container is a failure CI should see, not borrowed from anywhere.
 
 ## Consequences
 
-- Three observable changes, each a breaking change in `CHANGELOG.md` for both
-  binaries (a script may check the old numbers; no `ratect.toml` meaning
-  changes, so no `written_for` row): every failure of a *run* that exited
-  `1` exits `125` (the other verbs' `1` is unchanged); a passing run
-  signalled during its cleanup exits `0` (or `125` if the
-  cleanup is then abandoned or fails) rather than `128 + n`; a passing run
-  whose cleanup fails exits `125` rather than `0`.
+- Six observable changes, each a breaking change in `CHANGELOG.md` (a
+  script may check the old numbers; no `ratect.toml` meaning changes, so no
+  `written_for` row): every failure of a *run* that exited `1` exits `125`;
+  a run given a usage error exits `125` rather than `2`; a `ratect-compat`
+  line naming no task is a usage error, exiting `125` rather than warning
+  and exiting `0`; every verb but a run, `doctor` and `config validate`
+  exits `2` rather than `1` for an invalid option value; a passing run
+  signalled during its cleanup exits `0` (or `125` if the cleanup is then
+  abandoned or fails) rather than `128 + n`; a passing run whose cleanup
+  fails exits `125` rather than `0`. All but the `ratect-compat` one apply
+  to both binaries.
 - The cleanup ladder's abandon rung now has an exit-code consequence;
   `CONTEXT.md`'s entry for it defers here for what a signal during cleanup
   reports.

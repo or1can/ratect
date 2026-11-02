@@ -19,8 +19,8 @@ and a genuine (not padded) wait for a slow-starting dependency.
   inside `app` to establish that it is ready.
 - **`db`** — Postgres, seeded via a real
   [`docker-entrypoint-initdb.d`](db/init/01-schema.sql) script with a
-  million rows of sample history — real "sample data to develop against"
-  (the project's own README opens with exactly that phrase), and, as a
+  million rows of sample history — a real "database to develop against"
+  (one of the tasks Ratect's own README opens by naming), and, as a
   side effect, genuinely a few real seconds of work for `db` to do before
   it's healthy — not a `sleep` added for pacing.
 - **`cache`** — Redis, backing the read-through cache above.
