@@ -148,8 +148,9 @@ for parity, same reasoning as `allow_nested_git_includes` (shipped `ratect`
 ## Retired headings
 
 Nothing below is roadmap. Each heading once held a section that has since
-shipped or moved, and stays only so that links written before then — in the
-append-only `CHANGELOG.md` and `RELEASES.md` — still resolve.
+shipped or moved, and stays only so that links written before then still
+resolve — those in the append-only `CHANGELOG.md` and `RELEASES.md` among
+them.
 
 ### Two Binaries: `ratect` and `ratect-compat`
 
