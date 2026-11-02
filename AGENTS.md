@@ -250,6 +250,23 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   and in the list above, as well as in your own grant** — until it does,
   CI fails on it, which is deliberate: someone has to have read what the
   marker runs. The job is not yet a required status check.
+
+  **An advisory finding that was read and found true can be marked
+  checked**, in the committed `claims.checked.toml` beside `claims.toml`,
+  so the hook and CI stop reporting it until its sentence's wording, or
+  the content of a file it names, changes (the plugin's
+  [Checked marks](https://github.com/or1can/claims/blob/main/docs/checked-marks.md)
+  page). Write marks with `python3 -m claims.cli mark-checked`, over the
+  same `--diff-range` the findings were read over, with a note on each
+  saying what was checked against what, and `--by` naming who did the
+  reading: an agent's marks name the agent and whoever approved them, as
+  `--by "Claude Code agent, approved by Kevin Rogers"`. Deleting an entry
+  by hand lifts a mark early. Mark a finding only
+  after reading it against the code, file or section it names, never on
+  the strength of its own wording, and never mark a batch nobody read: a
+  mark records a reading, and one without a reading quiets a claim nobody
+  checked. A finding that was wrong is fixed, not marked. The summary
+  line's `quiet while checked` count says how many marks applied.
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace. Accepted advisories live in [`.cargo/audit.toml`](.cargo/audit.toml) — currently two, RUSTSEC-2023-0071 (the Marvin timing attack in `rsa` 0.9.x, which has no fixed release) and RUSTSEC-2026-0387 (timing variability in `crypto-bigint` 0.5.x, whose fix no stable `ssh-key` can use yet; ratect#664 tracks retiring both). **Every entry there carries a written justification**: what the advisory covers, why it's accepted rather than fixed, what mitigates it meanwhile, and what would let it be removed — an ignore without that is indistinguishable from silencing the check, and `cargo audit` prints nothing about what it skipped. An advisory with a fixed release available never belongs there — upgrade instead — unless no stable release of what depends on it can take the fix, and its entry says so.
 - **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/`). See the fixture files themselves for what each one proves.
