@@ -5,7 +5,7 @@ ratect 0.12.0, [#290](https://github.com/or1can/ratect/issues/290),
 [#302](https://github.com/or1can/ratect/issues/302),
 [#436](https://github.com/or1can/ratect/issues/436),
 [#453](https://github.com/or1can/ratect/issues/453)); the lifecycle half is
-unscheduled ([#599](https://github.com/or1can/ratect/issues/599),
+planned for ratect 0.17.0 ([#599](https://github.com/or1can/ratect/issues/599),
 [#600](https://github.com/or1can/ratect/issues/600)). Designed in
 [#547](https://github.com/or1can/ratect/issues/547).
 
