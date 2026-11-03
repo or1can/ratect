@@ -6,7 +6,14 @@ version, a one-line summary and, since
 [0022](0022-written-for-refusal-says-what-applies.md), how it is checked, but
 not its `CHANGELOG.md` entry, despite what the Decision says: the test ties
 the two together instead, matching each marked `CHANGELOG.md` entry to a row
-by version, one for one.
+by version, one for one. Extended by
+[0020](0020-bundle-records-its-written-for-version.md) (ratect-compat 0.33.0 ·
+ratect 0.12.0): the file a Git include names may also set `ratect_version`,
+and a Git include entry may set `reviewed_ratect_version`. A bundle is checked
+against the later of the two, never the root's, so the Decision's "only the
+root file may set it" and the Consequences' "only the root file's
+written-for version is checked" describe this record's release, not the
+current code.
 
 ## Context
 

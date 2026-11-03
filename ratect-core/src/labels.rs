@@ -60,7 +60,8 @@ pub const TASK: &str = "eu.orican.ratect.task";
 /// The single task execution that created it — see [`RunLabels::run_id`].
 pub const RUN: &str = "eu.orican.ratect.run";
 /// Which container in the configuration this is (`build-env`, `database`),
-/// as opposed to Docker's own randomly generated container name.
+/// as opposed to its Docker name, `<project>-<container>-<suffix>`, which
+/// [`crate::resource_names`] makes for people to read and nothing parses.
 pub const CONTAINER: &str = "eu.orican.ratect.container";
 /// [`ContainerRole`] — whether this is the task's own container or one of
 /// its dependencies.

@@ -51,8 +51,8 @@ evaluation reads what the machine running it supplies — see
    and the `--config-var`/`--config-vars-file` overrides it parsed:
    - Evaluates [expressions](ratect-compat-config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
      `<name`, `<{name}`, plus the built-in `batect.project_directory`) in every field
-     that takes one: `environment` values (container and task `run`), `local` volume
-     mount host paths, `build_directory`, `build_args`, a `build_secrets` entry's
+     that takes one: `environment` values (container, task `run`, and task
+     `customise.<container>`), `local` volume mount host paths, `build_directory`, `build_args`, a `build_secrets` entry's
      `path`, a `build_ssh` entry's `paths`, `run_as_current_user.home_directory`
      (not in a Batect-format file), and — `ratect.toml` only — `image`. A `cache`
      mount's `name`/`container` are plain strings, matching Batect: nothing to
