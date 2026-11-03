@@ -1,6 +1,6 @@
 # 0016 — What an invocation exits with
 
-**Status:** Accepted — a run's three rules implemented (ratect-compat 0.33.0 ·
+**Status:** Accepted — a run's three rules shipped (ratect-compat 0.33.0 ·
 ratect 0.12.0, [#540](https://github.com/or1can/ratect/issues/540)). Refined
 on 2026-10-22, before that release shipped, into two paths. A usage error or
 an invalid option value exits `125` on a run, where a `ratect-compat` line
