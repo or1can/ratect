@@ -724,17 +724,21 @@ impl<'de> Deserialize<'de> for DeviceMapping {
     }
 }
 
+/// Always the object form: the only one `ratect.toml`'s schema admits, and
+/// the one `config convert` therefore writes.
 impl Serialize for DeviceMapping {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        match &self.options {
-            Some(options) => {
-                serializer.serialize_str(&format!("{}:{}:{}", self.local, self.container, options))
-            }
-            None => serializer.serialize_str(&format!("{}:{}", self.local, self.container)),
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("local", &self.local)?;
+        map.serialize_entry("container", &self.container)?;
+        if let Some(options) = &self.options {
+            map.serialize_entry("options", options)?;
         }
+        map.end()
     }
 }
 
@@ -938,8 +942,10 @@ pub struct LocalVolumeMount {
     /// Whether this entry was written in the compact
     /// `"local:container[:options]"` string form rather than as an object.
     /// Kept because Batect gives the two forms different meanings — see
-    /// [`local_is_expression`](Self::local_is_expression) — and so that
-    /// re-serializing an entry writes it back in the form it came in.
+    /// [`local_is_expression`](Self::local_is_expression). Serializing
+    /// writes the object form either way, so a compact entry from a
+    /// Batect-format file means what it did only once its `local` is
+    /// escaped, as `config convert` does.
     pub compact: bool,
 }
 
@@ -1198,15 +1204,10 @@ impl Serialize for VolumeMount {
         S: serde::Serializer,
     {
         match self {
-            // Re-emits the form it was read in — round-trips through the
-            // same shape `parse_string` or the object form accepts. The two
-            // forms differ in meaning in a Batect-format file (#379), so one
-            // is never rewritten as the other.
-            VolumeMount::Local(mount) if mount.compact => match &mount.options {
-                Some(options) => serializer
-                    .serialize_str(&format!("{}:{}:{}", mount.local, mount.container, options)),
-                None => serializer.serialize_str(&format!("{}:{}", mount.local, mount.container)),
-            },
+            // Always the object form, the only one `ratect.toml`'s schema
+            // admits — even for a compact entry, whose `local` a native file
+            // reads as an expression where a Batect-format one doesn't
+            // (#379); see `LocalVolumeMount::compact`.
             VolumeMount::Local(mount) => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(3))?;
@@ -2459,10 +2460,20 @@ impl<'de> Deserialize<'de> for PortRange {
     }
 }
 
-// No `Serialize` impl for `PortRange` on its own: it only ever appears
-// inside a `PortMapping`, whose hand-written `Serialize` below formats the
-// whole `"local:container/protocol"` string itself (via `Display`), so a
-// bare-`PortRange` serializer would be dead code.
+/// A single port as an integer, a range as its `"from-to"` string — the two
+/// spellings [`Deserialize`] reads back.
+impl Serialize for PortRange {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if self.from == self.to {
+            serializer.serialize_u16(self.from)
+        } else {
+            serializer.collect_str(self)
+        }
+    }
+}
 
 /// A `ports` entry: publishes `local` (a container's `container` port, or
 /// range) to the host. Accepts either Batect form — a
@@ -2602,15 +2613,21 @@ impl<'de> Deserialize<'de> for PortMapping {
     }
 }
 
+/// Always the object form: the only one `ratect.toml`'s schema admits, and
+/// the one `config convert` therefore writes. `protocol` is written even
+/// when it's the default `tcp`, since the model doesn't record whether it
+/// was given.
 impl Serialize for PortMapping {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&format!(
-            "{}:{}/{}",
-            self.local, self.container, self.protocol
-        ))
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("local", &self.local)?;
+        map.serialize_entry("container", &self.container)?;
+        map.serialize_entry("protocol", &self.protocol)?;
+        map.end()
     }
 }
 

@@ -100,11 +100,6 @@ tasks:
     let whole = toml::to_string_pretty(&sorted(toml::Value::try_from(&config).unwrap())).unwrap();
     assert_eq!(rendered, format!("ratect_version = \"{VERSION}\"\n{whole}"));
 
-    // Pins `config convert`'s documented limitation: `ports`/`volumes` come
-    // out in the form they were read in — here the compact string form.
-    assert!(rendered.contains("\"8080:80/tcp\""), "{rendered}");
-    assert!(rendered.contains("\".:/code\""), "{rendered}");
-
     // Scalars only, and tables only, each still render as `toml` does.
     let scalars: Document = crate::yaml::from_str("project_name: demo").unwrap();
     assert_eq!(render(&scalars, None).unwrap(), "project_name = \"demo\"\n");
@@ -113,6 +108,71 @@ tasks:
     assert_eq!(
         render(&tables, None).unwrap(),
         "[containers.app]\nimage = \"alpine:3.18\"\n"
+    );
+}
+
+/// `volumes`, `ports` and `devices` entries come out as objects, the only
+/// form the native schema admits, whichever form the source wrote them in —
+/// a single port as an integer, a range as its `from-to` string.
+#[test]
+fn list_entries_render_as_objects() {
+    let document: Document = crate::yaml::from_str(
+        r#"
+containers:
+  app:
+    image: alpine:3.18
+    volumes:
+      - .:/code
+      - ./data:/data:ro
+    ports:
+      - "8080:80"
+      - "9000-9001:9000-9001/udp"
+    devices:
+      - /dev/null:/dev/x
+      - /dev/zero:/dev/y:r
+"#,
+    )
+    .unwrap();
+    let rendered = render(&document, None).unwrap();
+    let value: toml::Value = toml::from_str(&rendered).unwrap();
+    let app = &value["containers"]["app"];
+    let objects = |field: &str| -> Vec<toml::Value> {
+        app[field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                assert!(
+                    entry.is_table(),
+                    "a {field} entry isn't an object: {rendered}"
+                );
+                entry.clone()
+            })
+            .collect()
+    };
+    assert_eq!(
+        objects("volumes"),
+        [
+            toml::toml! { local = "." container = "/code" },
+            toml::toml! { local = "./data" container = "/data" options = "ro" },
+        ]
+        .map(toml::Value::Table)
+    );
+    assert_eq!(
+        objects("ports"),
+        [
+            toml::toml! { local = 8080 container = 80 protocol = "tcp" },
+            toml::toml! { local = "9000-9001" container = "9000-9001" protocol = "udp" },
+        ]
+        .map(toml::Value::Table)
+    );
+    assert_eq!(
+        objects("devices"),
+        [
+            toml::toml! { local = "/dev/null" container = "/dev/x" },
+            toml::toml! { local = "/dev/zero" container = "/dev/y" options = "r" },
+        ]
+        .map(toml::Value::Table)
     );
 }
 

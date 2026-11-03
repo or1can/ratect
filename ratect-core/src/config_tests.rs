@@ -15075,11 +15075,12 @@ tasks: {}
     assert_eq!(shape(&volumes[3]).2.as_deref(), Some("ro"));
 }
 
-/// Each local entry is written back in the form it was read in — the two
-/// forms no longer mean the same thing in a Batect-format file, so `config
-/// convert` mustn't turn one into the other.
+/// Each local entry is written as an object, whichever form it was read in —
+/// the only form the native schema admits. A compact entry's `local` means
+/// what it did only once escaped, which `config convert` does before
+/// serializing (see `convert`'s own tests).
 #[test]
-fn a_local_volume_serializes_in_the_form_it_was_read_in() {
+fn a_local_volume_serializes_as_an_object_whichever_form_it_was_read_in() {
     let config = parse(
         r#"
 project_name: demo
@@ -15096,7 +15097,10 @@ tasks: {}
     let json = serde_json::to_value(config.containers["app"].volumes.as_ref().unwrap()).unwrap();
     assert_eq!(
         json,
-        serde_json::json!(["./a:/a:ro", { "local": "./b", "container": "/b" }])
+        serde_json::json!([
+            { "local": "./a", "container": "/a", "options": "ro" },
+            { "local": "./b", "container": "/b" },
+        ])
     );
 }
 
