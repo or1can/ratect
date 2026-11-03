@@ -10952,15 +10952,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "163356029bb73ffc"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: Shipped record, false as written and left in place: fussybeaver/bollard#796 merged 2026-10-04 (gh pr view), crates.io's newest bollard is 0.21.1 of 2026-08-16, and Cargo.toml:40-41 patches to ratect-pin/feat-build-cancel/9bcd7d7 for the open #849; the Status note at line 7 records all three."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "efe86badabc6bf0d", "ratect-core/Cargo.toml" = "2908d69eca1bbeb0" }
-
-[[mark]]
 file = "docs/differences-from-batect.md"
 mode = "stale-claims"
 unit = "d33363a7aee55bcd"
@@ -11022,3 +11013,12 @@ copies = 1
 note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/README.md" = "2ab1c24d3b3c33af" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "163356029bb73ffc"
+copies = 1
+note = "This cycle's bump changes only each crate's version line. Checked what the section says of the manifests: ratect-core/Cargo.toml still requires bollard 0.22 and depends on dockerignore by path, and the root Cargo.toml still carries the git-sourced [patch.crates-io] pin."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "efe86badabc6bf0d", "ratect-core/Cargo.toml" = "a4b9e2111097320c" }
