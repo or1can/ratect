@@ -307,19 +307,24 @@ and tests pin the precedence above case by case.
 A survey of comparable command-running tools (coreutils' wrappers, `docker
 run`, `podman run`, `docker compose`, `kubectl`, `earthly`, `dagger`, `act`,
 `cargo run`, `go run`, `npm run`, `just`, `make`, `nix run`, `devbox run`,
-`tilt`; primary sources, October 2026) bears the choices out, with one
-exception. Every tool that distinguishes its own failure from the command's
-uses a reserved code for it — `125` for the coreutils/Docker/Podman family,
-`101` for Cargo, a small set for Earthly — and every tool that exits `1` for
-its own failure doesn't distinguish at all; none uses `1` *as* the
-distinction. `128 + n` for a signal is what `just` and `timeout` do and what
-`docker compose run` returns for `SIGINT` (`130`); Earthly and Dagger use `2`
-for a cancel, which on a run would collide with a task's own `2`, and on
-path 2 with an invocation error. The exception is
-rule 1's cleanup override: no surveyed tool documents any code for a
-teardown that fails after the command succeeded (`docker compose up` exits
-`0` after a graceful teardown; Earthly force-exits `9` only when cleanup
-exceeds a timeout). That part is Ratect's own, chosen because a leaked
+`tilt`; primary sources, October 2026) bears the choices out, except at one
+point. The tools found keeping their own failure apart from the command's do
+it with a reserved code — `125` for the coreutils/Docker/Podman family, `101`
+for Cargo (except a usage error, which exits `1`) — and neither uses `1` *as*
+the distinction, since a tool's own `1` can't be told from a command's.
+Earthly reserves a few codes (`2`, `6`, `7`, `9`, `255`) for some
+infrastructure failures, but exits `1` both for its own syntax and parameter
+errors and for a failed `RUN`, whose code it doesn't pass through. `128 + n`
+for a signal is what `just` and `timeout` do and what `docker compose run`
+returns for `SIGINT` (`130`); Earthly and Dagger use `2` for a cancel, which
+on a run would collide with a task's own `2`, and on path 2 with an
+invocation error. The point the survey doesn't bear out is rule 1's cleanup
+override: of the tools whose teardown was read, none gives a teardown that
+fails after the command succeeded a code of its own (`docker compose up` exits
+`0` when it tears down after a service exits `0` under
+`--abort-on-container-exit`, and `130` after a Ctrl+C teardown; Earthly
+force-exits `9` only when cleanup after a signal exceeds 30 seconds or a
+second signal arrives). That part is Ratect's own, chosen because a leaked
 container is a failure CI should see, not borrowed from anywhere.
 
 ## Consequences

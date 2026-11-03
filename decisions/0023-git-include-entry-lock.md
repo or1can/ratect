@@ -28,7 +28,8 @@ Ctrl+C has always left one the same way.
 
 The obvious fix, telling a lock whose holder has gone from one whose holder is
 slow, was designed three times during #631 and failed review each time.
-#733's last comment has the detail. In short:
+[#733's "Back to `needs-triage`" comment](https://github.com/or1can/ratect/issues/733#issuecomment-6518021999)
+has the detail. In short:
 
 - **Age-based.** A lock's mtime is set when it's taken, so a clone slower than
   the threshold holds a lock that already looks abandoned.

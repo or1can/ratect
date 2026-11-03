@@ -3,7 +3,10 @@
 **Status:** Accepted — shipped (ratect-compat 0.21.1 · ratect 0.2.0). Implemented
 in [`ratect-core/src/labels.rs`](../ratect-core/src/labels.rs). Amended by
 ratect#299: Docker names now follow Batect's (see the amendment under the label
-table); the labels themselves are unchanged.
+table); the labels themselves are unchanged. The docs site launched at
+`ratect.apps.orican.eu`, not the `ratect.orican.eu` *Alternatives considered*
+anticipates, so its reverse-DNS is not the label namespace; the namespace
+reasoning is unchanged.
 
 ## Context
 

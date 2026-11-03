@@ -3,6 +3,10 @@
 **Status:** Accepted — implemented (`allow_host_paths` shipped in
 ratect-compat 0.24.0 · ratect 0.3.0; the containment it relaxes shipped in
 0.10.0). The nested case in *Consequences* remains open by design.
+The config reference this record names is now
+[`docs/ratect-compat-config-reference.md`](../docs/ratect-compat-config-reference.md),
+and the containment rules themselves are on
+[`docs/includes.md`](../docs/includes.md#containment).
 
 ## Context
 

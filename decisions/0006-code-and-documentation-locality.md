@@ -7,6 +7,10 @@ Accepted — adopted incrementally from 0.25.0-dev. Generalises what
 [0005](0005-build-ssh-keyring-placement.md) each decided once for their own
 module.
 
+Since adopted, conversion from config types has moved from `engine.rs` into
+`container_spec.rs` (`derive_spec`, `derive_build_spec`), still outside
+`docker.rs`; the boundary *What this does not mean* draws is unchanged.
+
 ## Context
 
 Ratect's information architecture is **layer-oriented**, and its code is

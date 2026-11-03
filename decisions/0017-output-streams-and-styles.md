@@ -37,15 +37,19 @@ its white text is invisible on a light theme).
 
 A survey of comparable tools (`docker compose`, BuildKit, `podman`, `earthly`,
 `dagger`, `cargo`, `just`, `make`, `tilt`, `kubectl`, `gh`, `npm`, `go`,
-`act`, `nix`; primary sources, October 2026) found one dominant convention:
-the tool's own status goes to stderr and the wrapped command's output to
-stdout, with every quiet mode converging on "stdout carries only the payload".
-The exceptions are the older tools (`make`, legacy `docker build`, which
-BuildKit moved) and Batect. No surveyed tool but `act` and Batect uses the
-terminal's plain white or black as a foreground; `gh` is the only one with a
-documented light-theme stance. Almost none gates text a user must act on
-behind a verbosity knob — `podman`'s hidden shutdown notice is the one
-counter-example, and the same defect as [#369](https://github.com/or1can/ratect/issues/369).
+`act`, `nix`; primary sources, October 2026) found a convention most of
+them share: the tool's own status goes to stderr and the wrapped command's
+output to stdout, and the quiet modes read leave stdout to the payload. The
+exceptions found are the older tools (`make`, legacy `docker build`, which
+BuildKit moved), `act` (which logs job and step status to stdout), `tilt` in
+its stream mode (which prints its own status to stdout), and Batect. On
+colour, `act`, Dagger's TUI (which flashes a key hint in plain white) and
+Batect were found printing plain white or black on the terminal's default
+background whatever its theme; `gh` uses them only on its own highlight
+background or after detecting the background, and was the one found with an
+explicit light-theme stance. Text a user must act on was found behind a
+verbosity knob in `podman`, whose shutdown notice is hidden at its default
+log level — the same defect as [#369](https://github.com/or1can/ratect/issues/369).
 
 ## Decision
 
@@ -318,7 +322,8 @@ decision: the `Caused by:` chain's format
 - **Progress on stdout in both binaries** (today's behaviour, Batect's). Rejected
   for `ratect`: it is the convention of the older tools, it makes `simple`
   unsafe to pipe, it makes `quiet` a stream rule rather than a verbosity rule,
-  and every comparable tool written in the last decade went the other way.
+  and the newer tools surveyed mostly went the other way (`act`, and `tilt` in
+  its stream mode, are the exceptions found).
   Kept for `ratect-compat` because a Batect user's scripts may read stdout.
 - **Progress on stderr in both binaries**, with `ratect-compat` diverging from
   Batect. Rejected: stream placement is an outcome a script sees, so it is
