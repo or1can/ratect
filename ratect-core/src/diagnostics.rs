@@ -13,15 +13,16 @@
 // limitations under the License.
 
 //! The checks behind `ratect doctor` and `ratect config validate` — what a
-//! [`Finding`] is, and every producer of one that needs no daemon connection
-//! of its own to run. Moved out of `ratect/src/main.rs` in 0.6.0, alongside
+//! [`Finding`] is, and the checks that produce one without a daemon
+//! connection of their own. Moved out of `ratect/src/main.rs` in 0.6.0, alongside
 //! [`crate::resources`], for the same reason: these were pure functions bound
 //! to nothing, sitting in a binary because nobody had moved them yet.
 //!
 //! **What stays in the binary, and why:** rendering a set of findings to
-//! stdout, counting problems into an exit code, and the two Docker-daemon
-//! findings (`Docker connection options are unusable`, `Docker daemon
-//! (not )?reachable`). That last pair needs `DockerClient::server_version`,
+//! stdout, counting problems into an exit code, the one-line `<file> loads`
+//! result, which only reports that loading succeeded, and the two
+//! Docker-daemon findings (`Docker connection options are unusable`, `Docker
+//! daemon (not )?reachable`). That last pair needs `DockerClient::server_version`,
 //! which answers "what does the daemon call itself" — a property of *this*
 //! connection, not of [`crate::resources::ResourceInventory`]'s container/
 //! network vocabulary, so it has no seam to cross here. [`leftover_finding`] is the
