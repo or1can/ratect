@@ -225,6 +225,25 @@ fn config_convert_rejects_stdout_and_force_together() {
     assert!(Cli::try_parse_from(["ratect", "config", "convert", "--stdout", "--force"]).is_err());
 }
 
+/// `-f` is global, so `config convert --help` shows its `ratect.toml`
+/// default — the file convert *writes*. With no `-f` convert reads
+/// `batect.yml`, and its own help has to say so.
+#[test]
+fn config_convert_help_names_batect_yml_as_what_it_reads_by_default() {
+    let mut command = Cli::command();
+    let help = command
+        .find_subcommand_mut("config")
+        .unwrap()
+        .find_subcommand_mut("convert")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+    assert!(
+        help.contains("Reads `batect.yml` unless `-f` names another file"),
+        "{help}"
+    );
+}
+
 #[test]
 fn tasks_list_is_its_own_subcommand_not_a_flag() {
     let cli = Cli::try_parse_from(["ratect", "tasks", "list"]).unwrap();

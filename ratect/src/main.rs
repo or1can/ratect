@@ -193,7 +193,9 @@ enum ConfigCommand {
     Validate(ConfigValidateArgs),
 
     /// Convert a Batect-format `batect.yml` into this binary's native
-    /// `ratect.toml`. Point `-f` at the `batect.yml` to convert.
+    /// `ratect.toml`. Reads `batect.yml` unless `-f` names another file:
+    /// `-f`'s `ratect.toml` default is the file this writes, not the one it
+    /// reads.
     ///
     /// Each local `include`d file becomes a `.toml` beside it, with the
     /// entry rewritten to point there; a Git include stays a Git include.
