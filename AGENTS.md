@@ -255,7 +255,10 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   release `.pre-commit-config.yaml` pins, read from that file at run time,
   so a bump of the hook moves CI with it; runs the checks against the PR's
   base branch, which covers the PR's whole change; and fails on a gate
-  finding. It writes its own `claims.local.toml` with the grant list
+  finding, or on an advisory finding that is neither fixed nor marked checked
+  (`--fail-on-unmarked`, CI's alone: the hook still lets a commit through).
+  So a PR resolves the findings it brings in, and whoever batches Renovate's
+  changes marks what those bring in. It writes its own `claims.local.toml` with the grant list
   above, so **a new `<!-- verify: -->` marker's command goes in that job
   and in the list above, as well as in your own grant** — until it does,
   CI fails on it, which is deliberate: someone has to have read what the
