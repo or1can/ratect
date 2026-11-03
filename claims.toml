@@ -132,3 +132,9 @@ files = [
 # expires a checked mark on one. CHANGELOG.md is append-only built in, so it
 # isn't listed.
 append_only = ["RELEASES.md"]
+# Pages other prose links to as "see there" rather than as a claim about their
+# content, each edited often enough that hashing the whole page expired dozens
+# of unrelated marks (ratect#793). A link with an anchor still counts. Decision
+# records and the other docs pages stay subjects: a section summarising one
+# should be re-read when it changes.
+navigation = ["AGENTS.md", "CONTEXT.md", "docs/differences-from-batect.md"]
