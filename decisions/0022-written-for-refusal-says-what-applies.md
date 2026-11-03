@@ -1,6 +1,6 @@
 # 0022 — A written-for refusal says which changes touch the project
 
-**Status:** Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0,
+**Status:** Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0,
 [#623](https://github.com/or1can/ratect/issues/623)). Extends
 [0015](0015-native-project-records-its-written-for-version.md) and
 [0020](0020-bundle-records-its-written-for-version.md); the refusal itself

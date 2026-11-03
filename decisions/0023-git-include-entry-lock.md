@@ -1,6 +1,6 @@
 # 0023 — A Git include's entry lock proves its holder dead, and correctness doesn't depend on it
 
-**Status:** Accepted — implemented
+**Status:** Accepted — shipped
 ([#733](https://github.com/or1can/ratect/issues/733), ratect-compat 0.33.0 ·
 ratect 0.12.0).
 

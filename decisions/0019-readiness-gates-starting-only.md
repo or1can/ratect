@@ -1,6 +1,6 @@
 # 0019 — A dependency's readiness gates only the start of what depends on it
 
-**Status:** Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0):
+**Status:** Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0):
 image work in [#312](https://github.com/or1can/ratect/issues/312), container
 creation in [#603](https://github.com/or1can/ratect/issues/603). Corrected on
 2026-10-28, before that release shipped
