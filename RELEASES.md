@@ -1267,6 +1267,31 @@ to live at, so links written before the split still resolve.
   the first declared is the one reported. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/11) for everything
   that shipped.
+- **0.33.0** — The parity-gap and output release, shared with [`ratect`
+  0.12.0](#ratect) below through `ratect-core`, with its breaking changes
+  listed under Breaking in [`CHANGELOG.md`](CHANGELOG.md). **What a run exits
+  with** is settled
+  ([decisions/0016](decisions/0016-exit-codes.md)): a run that fails without
+  its task's command exiting exits `125`, as `docker run` does, and an
+  invalid option value exits `2` on every other command but `doctor` and
+  `config validate`, which report it. **Output** follows one
+  rule per stream and one wording per event
+  ([decisions/0017](decisions/0017-output-streams-and-styles.md)): notices,
+  warnings and errors are printed rather than logged, stderr is coloured only
+  when it is a terminal, and cleanup says what it left behind and how to
+  remove it. Containers and the task network take Batect's Docker names,
+  and a built image is named for people and found by its labels
+  ([decisions/0018](decisions/0018-built-images-named-for-people-found-by-labels.md)),
+  every image is pulled or built as soon as the task network is ready
+  ([decisions/0019](decisions/0019-readiness-gates-starting-only.md)), an
+  unfinished BuildKit build is cancelled when the run ends, and a lock file
+  left behind in the Git include cache no longer blocks a load
+  ([decisions/0023](decisions/0023-git-include-entry-lock.md)). The rest is
+  the last of the spec-level parity sweep's gaps: a configuration Batect
+  refuses is refused with Batect's message, and a control character from the
+  configuration is printed escaped. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/14) for everything
+  that shipped.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1608,6 +1633,24 @@ to live at, so links written before the split still resolve.
   native project includes. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/11) for everything
   that shipped.
+- **0.12.0** — The release that makes `ratect.toml` read as Batect reads
+  its own format, on top of the shared `ratect-core` work in
+  [`ratect-compat` 0.33.0](#ratect-compat) above. Its `**ratect.toml:**`
+  breaking changes each carry a written-for row, so a project written before
+  them is refused until it has been reviewed: a `\` in an expression escapes
+  the next character, every unescaped `$` or `<` starts a reference, and
+  task, variable, project and container names meet Batect's rules. A
+  refusal now says which changes touch the project
+  ([decisions/0022](decisions/0022-written-for-refusal-says-what-applies.md)),
+  and a Git bundle records the Ratect version it was written for, so it is
+  checked against its own version rather than the root's
+  ([decisions/0020](decisions/0020-bundle-records-its-written-for-version.md),
+  [0021](decisions/0021-native-field-follows-its-file.md)). `ratect run`
+  writes its progress to stderr, leaving stdout to the task's own output
+  ([decisions/0017](decisions/0017-output-streams-and-styles.md)), and
+  `ratect resources clean` reports a removal the daemon refuses. See the
+  closed [milestone](https://github.com/or1can/ratect/milestone/14) for
+  everything that shipped.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability
 (the subcommand structure and config format won't break), not feature-completeness

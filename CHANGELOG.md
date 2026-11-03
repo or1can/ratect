@@ -21,6 +21,8 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
+
 ### Breaking
 
 - `ratect includes list -o quiet` (ratect only) prints a third tab-separated column, the entry's directory name under `~/.ratect/incl`, and shows credentials in a remote URL as `***`.
