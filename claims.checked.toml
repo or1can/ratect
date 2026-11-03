@@ -10752,3 +10752,12 @@ copies = 1
 note = "Section 2 read against ratect at its pin 0b98f81f (git show 0b98f81f:ratect-core/src/git_include.rs): clones staged in one fixed \"<key>.tmp\" removed first if it existed (:105-115), and the lock was a create_new file polled every 100 ms (:465) that bails after a 5-minute lock_timeout (:371, :457-461) with nothing removing it, so \"A person decides (... ratect today)\" and the fixed <key>.tmp claims hold as of the pin; the cited Batect, git, Cargo, pnpm and Nix sources are unchanged in the file."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/git_include.rs" = "eb9e7a254c15cd7e" }
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "8c62e4a282b98ce4"
+copies = 1
+note = "\"the only form the native schema admits\" checked against schema/ratect-config.schema.json, whose VolumeMount (three oneOf branches), PortMapping and DeviceMount definitions are all type object; \"whichever form batect.yml used\" checked by convert_tests list_entries_render_as_objects and by ratect config convert --stdout on ratect/tests/fixtures/convert, which writes its string-form volume as [[containers.app.volumes]]."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

@@ -413,10 +413,9 @@ block appears. Either way the conversion succeeds and exits 0, and the list prin
 whatever `RUST_LOG` is set to, under `-o quiet` too.
 
 The result declares the converting binary's own version as its
-[`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for). (It emits
-the compact `"8080:80"` string form for `ports` rather than the object form, and
-each `volumes` entry in the form it was written in; both forms are valid, and
-reformatting is a review step.)
+[`ratect_version`](ratect-config-reference.md#ratect_version-the-version-a-project-was-written-for). It writes
+each `volumes`, `ports` and `devices` entry as an object, the only form the native
+schema admits, whichever form `batect.yml` used.
 
 ## `doctor`
 

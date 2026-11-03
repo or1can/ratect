@@ -46,8 +46,10 @@
 use std::collections::HashMap;
 
 /// The prefix every key below shares — reverse-DNS of `ratect.orican.eu`,
-/// the project's own (planned) home; see `ROADMAP.md` for why this rather
-/// than a new `.dev` domain. Public so a caller can recognize Ratect's own
+/// under the `orican.eu` domain the project already has; see
+/// `decisions/0002` for why this rather than a new `.dev` domain (the docs
+/// site launched at `ratect.apps.orican.eu` instead, which leaves the
+/// namespace unchanged). Public so a caller can recognize Ratect's own
 /// labels as a group without matching each key individually.
 pub const NAMESPACE: &str = "eu.orican.ratect";
 

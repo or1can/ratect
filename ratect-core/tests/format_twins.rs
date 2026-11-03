@@ -120,9 +120,9 @@ const DIVERGENCES: &[Divergence] = &[
     Divergence {
         between: TWINS,
         case: "literal-in-yaml",
-        pointer: "/containers/app/volumes/0",
-        left: r#""<case>/$TWIN_HOST_VAR/literal:/literal""#,
-        right: r#""<case>/from-the-host/literal:/literal""#,
+        pointer: "/containers/app/volumes/0/local",
+        left: r#""<case>/$TWIN_HOST_VAR/literal""#,
+        right: r#""<case>/from-the-host/literal""#,
         because: "ratect#379: batect.yml uses a compact volume's host path as written",
     },
     Divergence {

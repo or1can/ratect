@@ -10,10 +10,13 @@ project_name = "convert-fixture"
 
 [containers.app]
 image = "alpine:3.18.2"
-volumes = ["$HOME/.cache:/cache"]
 
 [[containers.app.setup_commands]]
 command = "./warm-cache.sh"
+
+[[containers.app.volumes]]
+container = "/cache"
+local = "$HOME/.cache"
 
 [tasks.test]
 description = "Runs the tests"
