@@ -218,6 +218,7 @@ history, from when it was the only binary.
 - A terminal that can't be taken out of raw mode after an interactive session is a warning on stderr naming the fix (`reset` or `stty sane`), in every output style, instead of only a log line.
 - A failing `external_health_check` reports what the check last saw even when the daemon's default log driver can't be read back (`"log-driver": "none"`), instead of only `its external health check failed`. (ratect only)
 - The task listing puts a task whose `group` is the empty string under `Ungrouped tasks:`, after the named groups, instead of under a bare `:` heading listed first, as in Batect. A project whose every `group` is empty gets the flat list.
+- `ratect config validate` and `ratect doctor` no longer report a missing `build_directory` or Dockerfile as a problem for a container that also sets `image`, which a run never builds. (ratect only)
 
 ### Security
 

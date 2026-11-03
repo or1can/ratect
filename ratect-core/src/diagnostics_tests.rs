@@ -305,6 +305,45 @@ tasks:
         );
 }
 
+/// A native container may set both `image` and `build_directory`, and
+/// `image` wins (`TaskEngine::resolve_image`): an inherited
+/// `build_directory` is how a child ends up with both. Nothing is built, so
+/// a build directory or Dockerfile that isn't there is no problem.
+#[tokio::test]
+async fn a_build_directory_beside_an_image_is_not_judged() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "demo"
+
+[containers.base]
+build_directory = "/nonexistent/build/context"
+
+[containers.app]
+extends = "base"
+image = "alpine:3.18.2"
+"#,
+    )
+    .await;
+
+    let findings = findings_for(&project, no_host_env);
+    assert!(
+        !findings.iter().any(|finding| matches!(
+            finding,
+            Finding::Problem(message) if message.contains("container 'app'")
+        )),
+        "{findings:?}"
+    );
+    // The base, which has no image, is still judged.
+    assert!(
+        findings.iter().any(|finding| matches!(
+            finding,
+            Finding::Problem(message) if message.contains("container 'base'") && message.contains("doesn't exist")
+        )),
+        "{findings:?}"
+    );
+}
+
 /// decisions/0014: a value this machine can't evaluate is a warning naming
 /// the container, field and expression — never a problem — and the checks
 /// that read evaluated values skip the container it's in rather than judge
@@ -317,8 +356,11 @@ async fn an_unevaluable_value_is_a_warning_and_its_container_is_not_judged() {
 project_name = "demo"
 
 [containers.deploy]
-image = "alpine"
 build_directory = "/nonexistent/build/context"
+environment = { PROFILE = "$AWS_PROFILE" }
+
+[containers.tagged]
+image = "alpine"
 environment = { PROFILE = "$AWS_PROFILE" }
 
 [containers.app]
@@ -335,13 +377,17 @@ image = "alpine:3.18.2"
             _ => None,
         })
         .collect();
-    assert_eq!(warnings.len(), 1, "{findings:?}");
-    assert!(
-        warnings[0].contains("Container 'deploy'")
-            && warnings[0].contains("'environment.PROFILE'")
-            && warnings[0].contains("$AWS_PROFILE"),
-        "{findings:?}"
-    );
+    assert_eq!(warnings.len(), 2, "{findings:?}");
+    for container in ["deploy", "tagged"] {
+        assert!(
+            warnings.iter().any(
+                |warning| warning.contains(&format!("Container '{container}'"))
+                    && warning.contains("'environment.PROFILE'")
+                    && warning.contains("$AWS_PROFILE")
+            ),
+            "{findings:?}"
+        );
+    }
     assert!(
         findings.iter().all(|f| !matches!(f, Finding::Problem(_))),
         "an unevaluated container's build_directory isn't judged: {findings:?}"
@@ -363,7 +409,7 @@ image = "alpine:3.18.2"
     );
     assert!(
         findings.iter().any(
-            |f| matches!(f, Finding::Warning(m) if m.contains("'deploy'") && m.contains("floating"))
+            |f| matches!(f, Finding::Warning(m) if m.contains("'tagged'") && m.contains("floating"))
         ),
         "{findings:?}"
     );

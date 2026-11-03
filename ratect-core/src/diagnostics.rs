@@ -174,11 +174,13 @@ pub fn config_findings(config: &Config, evaluation: &WholeProjectEvaluation) -> 
 
     // Already resolved to an absolute path by evaluation, so this is the
     // path Ratect will actually hand to Docker. The same check a run makes
-    // before it builds, so the two agree on what can't be built.
+    // before it builds, so the two agree on what can't be built — and, like
+    // a run, nothing is built for a container that sets an `image` too
+    // (`TaskEngine::resolve_image` takes the image).
     let mut unbuildable: Vec<String> = Vec::new();
     let mut absolute: Vec<String> = Vec::new();
     for (name, container) in containers {
-        let Some(directory) = &container.build_directory else {
+        let (None, Some(directory)) = (&container.image, &container.build_directory) else {
             continue;
         };
         let dockerfile = container.dockerfile.as_deref();
