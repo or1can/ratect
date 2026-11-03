@@ -57,7 +57,7 @@ group headings there, so the order alone carries them.
 | Command | What it does |
 | --- | --- |
 | `ratect config validate` | Checks the configuration loads and is problem-free, without a daemon — a CI-friendly gate. |
-| `ratect config convert` | Converts a `batect.yml` project (point `-f` at it) into native `.toml` files, one per file. |
+| `ratect config convert` | Converts a `batect.yml` project (read unless `-f` names another file) into native `.toml` files, one per file. |
 | `ratect doctor` | Checks this project and this machine for problems, without running anything. |
 
 ### Shell integration
@@ -339,11 +339,12 @@ reads `ratect.local.toml` the same way, since evaluating the config can need the
 A config that doesn't load stops at its first error.
 
 `ratect config convert` migrates a Batect-format `batect.yml` project to the native
-format — point `-f` at the `batect.yml`:
+format. It reads `batect.yml` unless `-f` names another file: `-f`'s usual
+`ratect.toml` default is the file it writes, not the one it reads.
 
 ```bash
-ratect -f batect.yml config convert          # writes ratect.toml beside it, and a .toml beside each include
-ratect -f batect.yml config convert --stdout  # prints instead, to review or pipe
+ratect config convert          # writes ratect.toml beside it, and a .toml beside each include
+ratect config convert --stdout  # prints instead, to review or pipe
 ```
 
 It's **one-directional** (`ratect-compat` stays YAML; the reverse would be lossy) and

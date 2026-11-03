@@ -353,10 +353,11 @@ tables above:
   is the one for Docker 18.03 and later, so every Docker release Ratect
   connects to would get it (see the Docker 20.10 entry under [Runtime behavior
   gaps](#runtime-behavior-gaps)).
-- **Private registry credentials**: Batect's own Go client swallows every
-  credential-helper error unconditionally; Ratect warns instead, naming the
-  registry that failed to resolve, or, for a build, the `credsStore` whose
-  helper couldn't list what it holds. See [Private registry
+- **Private registry credentials**: on a pull or a classic build, Batect's
+  own Go client swallows a credential-helper error (under BuildKit, BuildKit's
+  own auth provider passes it back to the daemon instead); Ratect warns,
+  naming the registry that failed to resolve, or, for a build, the
+  `credsStore` whose helper couldn't list what it holds. See [Private registry
   credentials](ratect-compat-config-reference.md#private-registry-credentials).
 - **A dependency exiting unexpectedly is reported, not silent.** Batect has no
   equivalent: a dependency that dies after becoming ready — while the task's own
