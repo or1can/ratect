@@ -10844,15 +10844,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0007-where-agent-process-docs-live.md"
-mode = "stale-claims"
-unit = "ea7792a26f405e2a"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: History; AGENTS.md's two edits don't concern where agent-process docs live, and decisions/README.md still says it isn't user documentation. Earlier reading: Context is history; decisions/README.md:5 still says \"This is *not* user documentation\", and the quoted 0006 rule is at 0006:59-60. | Context is history; decisions/README.md:5 still says \"This is *not* user documentation\", and the quoted 0006 rule now sits at 0006:63-64 (moved from 59-60 by the fix commits' status note), still worded \"A decision referenced from more than one place is an ADR. User-facing behaviour is `docs/`.\""
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "efe86badabc6bf0d", "TODO.md" = "5f93f1d31b8064d1", "decisions/README.md" = "2ab1c24d3b3c33af" }
-
-[[mark]]
 file = "CONTEXT.md"
 mode = "stale-claims"
 unit = "efbe9d5743db5752"
@@ -10952,33 +10943,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0002-runtime-ownership-labels.md" = "d5b09e3eb24571f0", "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0016-exit-codes.md" = "631e121fcc6998b5", "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1" }
 
 [[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "dab39bc0f67f4b49"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: AGENTS.md guideline 14 and CONTEXT.md's terms are unchanged by the diff. Earlier reading: Around docs/ re-read: decisions/README.md exists; CONTEXT.md defines Grant (:37) and Effective boundary (:45); AGENTS.md guideline 14 (:512) says when to write an ADR; CHANGELOG links to decisions/ so moving it would break them."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CONTEXT.md" = "f74756a356e23afd", "decisions/README.md" = "2ab1c24d3b3c33af" }
-
-[[mark]]
-file = "agents/domain.md"
-mode = "stale-claims"
-unit = "57c8e234debc95bb"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: Before exploring re-read: CONTEXT.md is at the root and is the one glossary, dockerignore has no CONTEXT.md term, and decisions/README.md and agents/docs.md exist and explain the location; CONTEXT.md changed only in its Summary line entry since the mark."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "CONTEXT.md" = "f74756a356e23afd", "agents/docs.md" = "3b92411926dfb15b", "decisions/README.md" = "2ab1c24d3b3c33af" }
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "57e50172f28da1e8"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/README.md" = "2ab1c24d3b3c33af" }
-
-[[mark]]
 file = "decisions/0010-release-binary-distribution.md"
 mode = "stale-claims"
 unit = "163356029bb73ffc"
@@ -11015,10 +10979,46 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".github/workflows/ci.yml" = "c4278bfd7532e0c5", ".github/workflows/release.yml" = "8abbb3e044a1b143", "dist-workspace.toml" = "00b7f7edb35b372b", "docs/installation.md" = "c1490b152407630e" }
 
 [[mark]]
+file = "decisions/0007-where-agent-process-docs-live.md"
+mode = "stale-claims"
+unit = "ea7792a26f405e2a"
+copies = 1
+note = "Its quotation of decisions/README.md (\"This is *not* user documentation\") is still in that file's opening; #804 only reworded the 0018 index row. 0007 is a shipped record of why agents/ exists."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "4c5f56274f496e62", "TODO.md" = "5f93f1d31b8064d1", "decisions/README.md" = "60ae18b0e356228a" }
+
+[[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
-note = "The section cites ci.yml for the \"No doc link renders as literal brackets\" step, which still exists; this PR only changes the claims job's command and the Tooling & CI section, not these guidelines."
+note = "Re-read after #803 and this PR: what the section says of ROADMAP.md is its edit rules and retired-heading stubs, and #803 only changed the Image Lifecycle bullet; of decisions/README.md, the ADR convention, and this PR only reworded the 0018 index row; of ci.yml, the \"No doc link renders as literal brackets\" step, which still exists (ci.yml:91)."
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "c4278bfd7532e0c5", ".github/workflows/release.yml" = "8abbb3e044a1b143", "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "efe86badabc6bf0d", "decisions/0001-two-binaries.md#consequences" = "35752cd476e093d9", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1", "decisions/README.md" = "2ab1c24d3b3c33af", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/docker.rs" = "f70a5d8f8c972c17", "ratect-core/src/engine.rs" = "4f7742ae771dfae5", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "ffcbbf2a0af92d8c" }
+subjects = { ".github/workflows/ci.yml" = "c4278bfd7532e0c5", ".github/workflows/release.yml" = "8abbb3e044a1b143", "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "4c5f56274f496e62", "decisions/0001-two-binaries.md#consequences" = "35752cd476e093d9", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1", "decisions/README.md" = "60ae18b0e356228a", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/docker.rs" = "f70a5d8f8c972c17", "ratect-core/src/engine.rs" = "4f7742ae771dfae5", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "ffcbbf2a0af92d8c" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "57e50172f28da1e8"
+copies = 1
+note = "The glossary names decisions/README.md only as where decisions are recorded; this PR only reworded the 0018 index row, so nothing the section relies on changed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/README.md" = "60ae18b0e356228a" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "dab39bc0f67f4b49"
+copies = 1
+note = "The section names decisions/README.md only as the home of the ADR convention; this PR only reworded the 0018 index row, so nothing the section relies on changed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/README.md" = "60ae18b0e356228a" }
+
+[[mark]]
+file = "agents/domain.md"
+mode = "stale-claims"
+unit = "57c8e234debc95bb"
+copies = 1
+note = "The section points at decisions/README.md for the ADR convention; this PR only reworded the 0018 index row, so nothing the section relies on changed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "agents/docs.md" = "3b92411926dfb15b", "decisions/README.md" = "60ae18b0e356228a" }
