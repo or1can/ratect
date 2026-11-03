@@ -808,7 +808,10 @@ impl<G: GitClient> GitIncludeCache<G> {
 
         let content =
             toml::to_string_pretty(&info).context("Failed to serialize Git include cache info")?;
-        let temp_path = info_path.with_extension("toml.tmp");
+        // Unique per write: loads update this file outside the entry lock, so
+        // a shared temp path lets one writer's rename take another's file.
+        let temp_path =
+            info_path.with_extension(format!("toml.{}.tmp", uuid::Uuid::new_v4().simple()));
         tokio::fs::write(&temp_path, content)
             .await
             .with_context(|| format!("Failed to write {temp_path:?}"))?;

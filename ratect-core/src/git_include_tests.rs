@@ -966,6 +966,26 @@ async fn two_waiters_on_one_abandoned_lock_clone_once() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+/// Each load bumps `last_used` outside the entry lock, so concurrent loads
+/// of one include (in one process, or several) write its info file at once.
+/// They once shared one temp path, and a rename found it already moved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_loads_of_a_cloned_include_all_update_its_info_file() {
+    let root = unique_temp_dir();
+    let cache = GitIncludeCache::for_test(root.clone(), fake_with_the_entry(), 1000);
+    let remote = Remote::from("https://example.com/repo.git");
+    cache.ensure_cached(&remote, "v1.0.0").await.unwrap();
+
+    for _ in 0..20 {
+        let loads = (0..16).map(|_| cache.ensure_cached(&remote, "v1.0.0"));
+        for result in futures::future::join_all(loads).await {
+            result.unwrap();
+        }
+    }
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
 #[tokio::test]
 async fn only_one_of_two_looks_at_an_abandoned_lock_takes_it_over() {
     let root = unique_temp_dir();

@@ -112,6 +112,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- Two runs loading the same Git include at once no longer fail with `Failed to finalize` on its cache info file.
 - A line printed while an interactive task has the terminal — a dependency's `exited unexpectedly` line, a warning, a log line — and the line after it start at the first column, instead of where the previous line ended.
 - A Git-included container whose host path escapes its containment is refused with an error naming the field the path came from — `volumes`, `build_directory`, `build_secrets` or `build_ssh` — rather than always `volumes`/`build_directory`.
 - A run whose task's command exited `0` but whose cleanup failed ends with `<task> failed after <duration>.` instead of `<task> finished with exit code 0 in <duration>.`, in every style but `quiet`.
