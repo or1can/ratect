@@ -4,7 +4,9 @@ This documents **`ratect.toml`**, the native configuration format the
 [`ratect`](ratect-cli.md) binary reads by default. It is the same
 schema the [Configuration Reference](ratect-compat-config-reference.md) documents — the same
 containers, tasks, and fields, with the same meanings — re-spelled in TOML, with
-a few native additions (`extends`, an auto-discovered local overrides file) and a
+native additions (`extends`, `ratect_version`, and the other fields marked
+*(native only)* under [Field reference](#field-reference)), its auto-discovered local
+overrides file named `ratect.local.toml` rather than `batect.local.yml`, and a
 few YAML-isms removed (anchors, the compact string shorthands).
 
 Because the *field semantics* are identical across both formats, this reference
@@ -226,8 +228,9 @@ container = "/dev/kvm"
 - A **`devices`** entry is `{ local, container }` [+ `options`].
 
 The parser itself still *accepts* the string forms (which is what lets a
-`.yml` [include](#includes) keep using them), but the native schema, the docs,
-and [`config validate`](ratect-cli.md#config) treat the object form as canonical.
+`.yml` [include](#includes) keep using them), and so does
+[`config validate`](ratect-cli.md#config), without a warning; the native schema
+and the docs treat the object form as canonical.
 
 ## Config variables and expressions
 

@@ -31,7 +31,8 @@ ratect run run
 ratect run lint
 ```
 
-Every task runs `npm ci` itself before its real command — a task's own
-container is recreated from scratch each run, so nothing installed by one
-task's container is there for the next one's. The `~/.npm` cache mount is
-what keeps a repeated `npm ci` fast.
+Each of `build`, `test` and `lint` runs `npm ci` itself before its real
+command, and `run` gets it through its `build` prerequisite — a task's own
+container is recreated from scratch each run, so only what lands in the
+bind-mounted project directory or the `~/.npm` cache mount survives to the
+next one. That cache mount is what keeps a repeated `npm ci` fast.

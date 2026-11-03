@@ -87,9 +87,8 @@ A TypeScript project with `build`/`test`/`lint` npm scripts (`tsc`, `vitest`,
 `eslint`). Each of `build`, `test` and `lint` runs `npm ci` itself, and
 `run` gets it through its `build` prerequisite, rather than relying on a
 separate install step — a task's own container is recreated from scratch every run,
-so nothing installed by one task's container is there for the next one's;
-only what lands in the bind-mounted project directory or a `cache` mount
-survives. The npm cache mount is what keeps a repeated `npm ci` fast.
+so only what lands in the bind-mounted project directory or a `cache` mount
+survives to the next one. The npm cache mount is what keeps a repeated `npm ci` fast.
 
 ```toml
 {{#include ../examples/node/ratect.toml}}
