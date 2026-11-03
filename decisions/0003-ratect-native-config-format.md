@@ -5,6 +5,18 @@
 [0021](0021-native-field-follows-its-file.md). Supersedes the exploratory "Alternative Configuration Format (TOML)"
 [Future Vision](../ROADMAP.md#future-vision) item.
 
+Corrections found after it shipped (2026-11-02), left in place below as
+written: `config validate` does not enforce the object shape — it accepts the
+string shorthand without a warning; only the JSON schema and the docs treat
+the object form as canonical. The lazily enforced `image`/`build_directory`
+rule is at-least-one, not xor: a native container may set both, and `image`
+wins (`engine.rs`'s `resolve_image`), which is how a child replaces an
+inherited `build_directory` with an image. `ratect config convert` was built without the
+`<<:`-to-`extends` lift or its flattening warning — anchors are only inlined —
+and suggests removing only the files it converted; since ratect#574 it writes one
+`.toml` per file the project owns, each proved to round-trip on its own (see
+`ratect-core/src/convert.rs`).
+
 ## Context
 
 `ratect` (the forward-looking binary — [ADR-0001](0001-two-binaries.md)) still

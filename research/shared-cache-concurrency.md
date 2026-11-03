@@ -9,7 +9,8 @@ design for ratect: that is for the design round #733 asks for.
 Every claim cites the source that owns it, pinned to a tag or commit:
 cargo `7e1923c8` (master, 2026-10-30), git `v2.56.0`, Go `go1.27.3`, Gradle
 `v9.8.2`, Nix `2.35.4`, cacache `v21.0.1`, pnpm `v12.16.1`, ccache `v4.14.2`,
-Batect `67c94224` (0.85.0 plus 3 commits). Where this document reasons from a
+Batect `67c94224` (0.85.0 plus 3 commits), ratect `0b98f81f` (the commit
+that added this file). Where this document reasons from a
 source rather than quoting it, it says so ("inference"). Anything that could
 not be checked is in [Not verified](#not-verified).
 

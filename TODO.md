@@ -78,8 +78,8 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   config files were parsed straight from text** (#415): noyalib's streaming
   walker reports `expected string, found non-string scalar` or `expected
   bool, found other` where the `Value`-based path said `found float` /
-  `found string`, and `from_str` keeps the streaming wording by design
-  (its `locate_streaming_error`). The location and path now attached point
+  `found string`, and `noyalib`'s `from_str_with_config`, which `crate::yaml::from_str`
+  calls, keeps the streaming wording by design (its `locate_streaming_error`). The location and path now attached point
   at the value, so nothing is lost that a user can't see; the fix is
   upstream, in `noyalib`'s `streaming.rs` `TypeMismatch` arms, which have
   consumed the event by the time they name what they found.

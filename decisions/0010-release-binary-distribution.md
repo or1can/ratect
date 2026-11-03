@@ -4,6 +4,11 @@
 
 Accepted — implemented (ratect-compat 0.28.0 · ratect 0.7.0).
 
+The native-certs PR *Alternatives considered* names as still open
+(fussybeaver/bollard#796) has since merged; publishing to crates.io still
+waits on a bollard release containing it, and the `[patch.crates-io]` now
+carries the open build-cancel PR (fussybeaver/bollard#849).
+
 ## Context
 
 Before this, Ratect published no binaries at all — `docs/installation.md`

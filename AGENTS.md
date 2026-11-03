@@ -67,12 +67,13 @@ Ratect is a **Cargo workspace** with four crates (the
   | `cache.rs` | `volumes` `cache` mounts → a named volume or host directory (`resolve_cache_mount`), and — a separate concept, same module — the `CacheStore` behind `ratect caches`/`ratect-compat --clean`/`--clean-cache`: what cache storage exists, its project/shared scope rule, and how to list or remove it |
   | `expressions.rs` | Batect's `$VAR`/`${VAR:-default}`/`<name` expression syntax |
   | `container_spec.rs` | What a container's runtime spec is, and what a build's is — `ContainerSpec`/`derive_spec` (from a container's config plus a task's `run`/dependency's `customise` overlay) and `BuildSpec`/`derive_build_spec` (for `build_image`'s own call) — shared vocabulary between `engine.rs` and `docker.rs`, owned by neither |
-  | `docker.rs` (+ `ratect-core/src/docker/connection.rs`) | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait — connection selection (`--docker-host`/`-context`/`-tls*`) split into its own submodule, no reference to `ContainerRuntime` at all |
+  | `docker.rs` (+ `ratect-core/src/docker/`) | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait — connection selection (`--docker-host`/`-context`/`-tls*`) split into its own submodule, `connection.rs`, no reference to `ContainerRuntime` at all; BuildKit progress rendering in `build_output.rs`, stdin forwarding in `stdin.rs` |
   | `ssh_agent.rs` | `build_ssh`'s in-process ssh-agent (RFC 9987) — kept extractable, see [0005](decisions/0005-build-ssh-keyring-placement.md) |
   | `user.rs` | Host user lookup and the `/etc/passwd` generators for `run_as_current_user` |
   | `proxy.rs` | Proxy variable detection and propagation, the host-gateway entry a rewritten URL needs, and the loopback-bound proxy it can't fix |
   | `interrupt.rs` | Termination-signal (Ctrl+C, `SIGTERM`, `SIGHUP`) tracking — the signal half only; the engine decides what it means |
   | `engine.rs` | Task lifecycle, prerequisites, dependency graph, cleanup |
+  | `panic_hook.rs` | The panic hook both binaries install first — it says a panic is a Ratect bug, with the version, platform and where to file it — and `run_main`, which makes a panic end the process |
   | `exit_code.rs` | What a failed run exits with — the one mapping both binaries share, since `docs/ratect-cli.md` promises their codes are identical |
   | `labels.rs` | The `eu.orican.ratect.*` ownership labels, see [0002](decisions/0002-runtime-ownership-labels.md) |
   | `resource_names.rs` | The Docker names a task execution's containers and network are created under — Batect's `<project>-<container>-<suffix>`, one suffix per run; names for people, never parsed (the labels say who owns what) |
@@ -127,7 +128,7 @@ Two things worth knowing without opening a `Cargo.toml`:
 
 Dependencies are split across the four `Cargo.toml`s along CLI-vs-core lines: `clap`
 and `tracing-subscriber` are `ratect-compat`-only; `serde`, `serde_json`, `noyalib`,
-`bollard`, `futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`,
+`bollard`, `docker_credential`, `futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`,
 `crossterm`, `nix`, `url`, `sha2`, `toml`, `indexmap`, `regex`, `unicode-width`, `rustls`,
 `hyper-util`, `hyper-rustls`, `rustls-native-certs`, `ssh-key`/`ssh-encoding`/`signature`/`rsa`,
 `schemars`/`jsonschema` (optional, `schema` feature), and the
@@ -166,15 +167,22 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   still asserted verbatim elsewhere — generalized from this repo's own
   former echoed-claims script), `executable-claims` (gate, `<!-- verify: ...
   -->` markers — generalized from this repo's own former verify-docs
-  script), plus four checks with no prior equivalent here: `check-links`
+  script), plus checks with no prior equivalent here: `check-links`
   (gate, dead internal Markdown links/anchors), `check-file-refs` (gate, a
   bare repo path in prose that names no tracked file), `check-citations` (gate, a
   backticked name citing a symbol this repo once declared but no longer
-  has, Markdown/Swift only — no Rust support yet), and
-  `claim-words`/`judgment-agent` (advisory, totalising language and
-  architecture-claim review, opt-in via `claims.toml`'s `[claim-words]
-  files` — this repo opts in `AGENTS.md`, `agents/*.md`, `CONTEXT.md`,
-  `ROADMAP.md`, `RELEASES.md`, `TODO.md`, `decisions/*.md`, `docs/*.md`). The four
+  has, Markdown/Swift only — no Rust support yet), `check-cli-flags`
+  (advisory, a script and a flag named on one line, checked against the
+  script's `--help`; see its grant below), `temporal-words` (advisory, see
+  below), `claim-words` (advisory, totalising language, opt-in via
+  `claims.toml`'s `[claim-words] files` — this repo opts in `AGENTS.md`,
+  `agents/*.md`, `CONTEXT.md`, `ROADMAP.md`, `RELEASES.md`, `TODO.md`,
+  `decisions/*.md`, `docs/*.md`), and `judgment-agent` (advisory, every
+  backticked Rust/Swift name a diff added or removed, in any tracked
+  Markdown file, as candidates for architecture-claim review; not opt-in).
+  `check-config-defaults` and `check-env-vars` are registered too, but find
+  nothing here: there is no `[check-config-defaults]` mapping and no
+  `.env.example`. The four
   former scripts' own paths and the full migration story are in
   [decisions/0009](decisions/0009-adopt-claims-plugin.md) — not repeated
   here now that they no longer exist to link to.

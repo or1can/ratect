@@ -138,10 +138,12 @@ output are not part of it.
 **Milestone** — a lifecycle event rendered to the progress console: a line
 under `simple` and `all`, a status-line state under `fancy`.
 
-**Summary line** — the progress line that ends a task's run, whatever its
-outcome: that the task finished and how, or that it failed. It says that the
-run ended, never why it failed — the *error* says that — and `quiet`, which
-shows no progress, has none.
+**Summary line** — the progress line that ends a task's run once the task
+has finished or failed to run: that the task finished and how, or that it
+failed. It says that the run ended, never why it failed — the *error* says
+that. `quiet`, which shows no progress, has none, and nor does a run a
+termination signal ended or whose output's reader went: its notice says how
+it ended.
 
 **Notice** — a stderr line about the run that marks no problem and asks for
 no action. A cleanup that left something behind is a *cleanup failure*, and

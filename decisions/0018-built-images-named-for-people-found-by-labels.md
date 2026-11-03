@@ -54,17 +54,21 @@ local` removes "only images that don't have a custom tag", found by those
 labels — with a fallback by name for images "produced by an older version of
 Compose" that "did not always label built images", and orphan services'
 images spared unless asked. A plain `compose build` never removes the previous
-build. Its project name is lowercased and stripped to `[a-z0-9_-]` when
-*inferred*, but an explicit `name:` that differs from its normalised form is
-an error. Tilt tags by content digest (`tilt-<hex>`), labels
+build; `compose watch` prunes the project's dangling images on rebuild by
+default (`--prune`). Its project name is lowercased and stripped to
+`[a-z0-9_-]` when inferred or set by the file's `name:`, but one given with
+`-p` or `COMPOSE_PROJECT_NAME` that differs from its normalised form is an
+error. Tilt tags by content digest (`tilt-<hex>`), labels
 `dev.tilt.gc=true`, and prunes on a timer keeping the two most recent per
 reference, skipping anything multi-tagged. Skaffold and Earthly require a
 user-supplied name (Earthly labels `dev.earthly.*`); Dagger has no default
-name and touches no daemon-side image; devcontainers derives
+name and writes a daemon-side image only when asked (`Container.exportImage`,
+whose name is required); devcontainers derives
 `vsc-<folder>-<hash>` and sanitises rather than rejects. The pattern that
-recurs wherever a tool both names and cleans up: the name is a convenience,
-a label is the ownership record, and a rebuild leaves the old image for a
-separate command.
+recurs among the surveyed tools that both name and clean up: the name is a
+convenience, a label is the ownership record, and a rebuild leaves the old
+image for a separate command, except where `compose watch` prunes it by
+default and Skaffold does when asked.
 
 ## Decision
 
@@ -113,8 +117,9 @@ separate command.
   does: lowercase the directory name, then apply the rule, then tell the user
   to set `project_name` if it still fails. The directory name was never the
   user's choice of image name, so lowercasing it changes nothing they meant —
-  the same line Compose draws between an inferred name and an explicit
-  `name:`. The native format keeps requiring `project_name`.
+  the same line Compose draws between a name it normalises (inferred, or set
+  by `name:` in the file) and one given explicitly with `-p` or
+  `COMPOSE_PROJECT_NAME`, which it rejects. The native format keeps requiring `project_name`.
 - **`--tag-image` values are full image references** —
   `registry.example.com/team/app:1.2` is legitimate — so they're checked
   against Docker's reference grammar, not the component rule, and **at
@@ -178,8 +183,11 @@ separate command.
   as a build failure rather than a usage error.
 - **Removing the previous build during a run**, when a rebuild leaves it
   dangling. Rejected: another run may be using it, and the daemon can't say.
-  No surveyed tool does it on build either; Tilt, the one that prunes
-  unasked, does so on a timer with an age floor and keeps the two newest.
+  Of the surveyed tools, `docker compose watch` does it on rebuild by
+  default, pruning the project's dangling images (`--prune`), and Skaffold
+  does it only with `--cache-artifacts=false`; a plain `compose build` never
+  does. Tilt prunes unasked too, but on a timer with an age floor, keeping
+  the two newest.
 - **Removing the current, automatically tagged build by default**, as
   Compose's `down --rmi local` does. Rejected for the default: `down` is a
   teardown, where a leftover sweep's default has to be safe to run between
