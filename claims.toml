@@ -124,3 +124,11 @@ files = [
     "agents/*.md",
     "README.md",
 ]
+
+[subjects]
+# RELEASES.md only grows: a release adds an entry once it ships, and AGENTS.md
+# guideline 9 forbids editing a shipped one. Listing it here means adding an
+# entry neither counts as stale-claims churn for a section naming the file nor
+# expires a checked mark on one. CHANGELOG.md is append-only built in, so it
+# isn't listed.
+append_only = ["RELEASES.md"]
