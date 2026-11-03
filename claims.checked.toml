@@ -928,15 +928,6 @@ subjects = {}
 [[mark]]
 file = "decisions/0016-exit-codes.md"
 mode = "claim-words-counts"
-unit = "804e5a0ed0efcc3f"
-copies = 1
-note = "ratect-core/src/exit_code.rs:135-175 for_error has the three run rules (task code, 128+n incl. 141, else RATECT_FAILED=125). Probed in /tmp/ec/run: run t -> 0, run fail -> 42, SIGINT during run -> 130, failed pull -> 125."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0016-exit-codes.md"
-mode = "claim-words-counts"
 unit = "9b92c65e955b8547"
 copies = 1
 note = "ratect-core/src/exit_code.rs:33-42 doc names Path 1 (a run) and Path 2 (every other verb); RATECT_FAILED vs VERB_FAILED/INVOCATION_ERROR constants at :64-82."
@@ -4036,15 +4027,6 @@ mode = "claim-words-about-elsewhere"
 unit = "b5d82e33f9be68d5"
 copies = 1
 note = "AGENTS.md guideline 14: before the release ships, a refinement is folded into the record with the status line naming the rework issue in the same Milestone."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/README.md"
-mode = "claim-words-totalising"
-unit = "bbd93dc6d9db4334"
-copies = 1
-note = "Matches decisions/0019-readiness-gates-starting-only.md:3 'Accepted — implemented (ratect-compat 0.33.0 · ratect 0.12.0)'."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -7784,24 +7766,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "agents/domain.md" = "befc2eb13561a492", "agents/issue-tracker.md" = "786e5d0a2116054e", "agents/triage-labels.md" = "4f53c9b40ce2651e" }
 
 [[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "e0ee8bb50685e05f"
-copies = 1
-note = "Section is lines 128-157. Progress console: 0017:92-93 says stderr for ratect, stdout for ratect-compat. Summary line: ran -o simple and -o quiet in /tmp/shardF/s (no reason given; quiet has none). Notice/Warning/Error: ui.rs:1400-1427 gives the markers 'Warning:'/'Error:' and an unmarked notice on stderr. A cleanup that left something is an Error, per exit_code.rs:189-191 and engine CleanupFailed."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0017-output-streams-and-styles.md" = "a80b8f6d9fa70c13" }
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "0e06b84496798ba8"
-copies = 1
-note = "Section is lines 76-85. engine.rs:4190-4235: health check, then setup commands. The external_health_check branch skips the health wait (engine.rs:4200-4208), and config.rs:7206-7215 refuses setup_commands next to an external check. engine.rs:4108-4119: a run_to_completion dependency must exit 0. Gating per 0019 and 0012: see the CONTEXT.md:81 record."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0012-native-task-container-has-no-readiness-gate.md" = "65be0317e52a91d1", "decisions/0019-readiness-gates-starting-only.md" = "28532204c45f085d" }
-
-[[mark]]
 file = ".out-of-scope/wildcard-includes.md"
 mode = "stale-claims"
 unit = "dd656ffcd24a40a1"
@@ -9332,15 +9296,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/includes.md#which-fields-a-file-may-use" = "86c23f8e3454e96d", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993" }
 
 [[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "efbe9d5743db5752"
-copies = 1
-note = "Caches re-read against cache.rs:36-39 (the cache root is followed through a symlink for every operation), git_include.rs module doc (a clone is staged in <key>.tmp-<unique> then renamed, the lock is taken over once its holder exits, and the sweep removes entries unused for over 30 days) and decisions/0023, whose only fix-commit change is a comment link."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "537c7d4bfa848427" }
-
-[[mark]]
 file = "docs/ratect-compat-cli.md"
 mode = "stale-claims"
 unit = "ac10f097bf7d78d4"
@@ -9348,15 +9303,6 @@ copies = 1
 note = "whole page checked against ratect-compat/src/main.rs via the binary: --help groups and flags match the tables; \"--list-tasks a b\" lists; \"t extra\" refused 125; \"--use-network -x t\" refused 125 with the = tip; duplicate --config-var exits 2; --max-parallelism 0 exits 2; --tag-image e=_bad / digest exits 2; --override-image plus --tag-image on one container exits 2; --upgrade prints a notice and exits 0; --upgrade --list-tasks lists with no notice; BATECT_CACHE_TYPE=foo fails; exit 42 passes through; SIGINT/TERM/HUP exit 130/143/129; \"| head -n1\" exits 141 with the stdout-closed notice; an unknown task gets the suggestion plus the list hint, an unknown prerequisite the suggestion only."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/src/main.rs" = "dff8a8ba70de35ac" }
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "86830e3a7a67995f"
-copies = 1
-note = "Built images re-read: the automatic tag is format!(\"{}-{}\", project_name, name) at engine.rs:2804 and is dropped when an image override exists (:2803); the component rule at image_reference.rs:53 is [a-z0-9]+((?:[._]|__|[-]+)[a-z0-9]+)* and is enforced for project and container names at config.rs:3155/3176/3955; 0018's fix-commit changes touch only the Compose/Dagger survey."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0018-built-images-named-for-people-found-by-labels.md" = "f0d497ce45bea22b" }
 
 [[mark]]
 file = "docs/getting-started.md"
@@ -9485,33 +9431,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/output-styles-simple.ansi" = "9a1fed65b5256559", "examples/full-stack/ratect.toml" = "926279bdca0a4926" }
 
 [[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "74f78c2b3253e401"
-copies = 1
-note = "Cancelling a run re-read: interrupt.rs:125-131 has TerminationSignal::Interrupt = SIGINT plus Terminate/Hangup, and its module doc gives all three one path and the ladder (one more signal of any kind force-removes, a SIGINT after that abandons); engine.rs:3285-3292 sends abandoned-build cancels first with or without --no-cleanup*; a failed cancel is a TaskEvent::Warning (engine.rs:1777-1782); 0016's fix-commit changes are survey text only."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0016-exit-codes.md" = "85c81c0102b77163" }
-
-[[mark]]
-file = "docs/ratect-cli.md"
-mode = "stale-claims"
-unit = "8f0c8171ca58d859"
-copies = 1
-note = "Exit codes section run against target/debug/ratect: \"--bogus run test\", \"run --bogus\" and \"-o bogus run test\" exit 125; \"--bogus\", \"tasks list --bogus\" and a missing subcommand exit 2; run nosuch exits 125 with \"(Run 'ratect tasks list' ... or 'ratect run --help' for help.)\"; tasks list with no ratect.toml exits 2; config validate with no file or bad TOML exits 1; caches list --docker-config /nonexist exits 2 and doctor with it exits 1; caches list with the daemon down exits 1; --version and run --help exit 0. | prior note holds (0016 changed only its survey paragraph): re-run against target/debug/ratect: \"--bogus run test\", \"run --bogus\" and \"-o bogus run test\" give 125, while \"--bogus\", \"tasks list --bogus\", no subcommand, and tasks list with no ratect.toml give 2; config validate with no file gives 1; --version and run --help give 0; run nosuch gives 125 with the \"(Run 'ratect tasks list' ... or 'ratect run --help' for help.)\" hint; a task's own exit 42 passes through as 42."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0016-exit-codes.md" = "85c81c0102b77163" }
-
-[[mark]]
-file = "docs/ratect-compat-cli.md"
-mode = "stale-claims"
-unit = "72e425f2afe62ace"
-copies = 1
-note = "Exit codes section run against ratect-compat: an -o quiet run of 'exit 42' exits 42; SIGINT/SIGTERM/SIGHUP give 130/143/129 with their notices; yes | head -n1 exits 141 with \"Stdout closed; cleaning up.\"; no task name (even with a missing -f) exits 125 and names --list-tasks/--help; \"-- x\" with no task exits 125; --bogus build exits 125 and --bogus --clean exits 2; bad YAML under -T exits 1; --log-file in a missing dir exits 125 on a run and 2 under -T; \"Did you mean 'test' or 'yes'?\" lists every tie, and a prerequisite gets no list hint. | prior note holds (0016 changed only its survey paragraph): re-run against ratect-compat: no task name gives 125, \"-- x\" gives 125, \"--bogus build\" gives 125 and \"--bogus --clean\" gives 2, and SIGINT gives 130 with its notice (scratch r2-docs/ex, sig)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0016-exit-codes.md" = "85c81c0102b77163" }
-
-[[mark]]
 file = "docs/output-styles.md"
 mode = "stale-claims"
 unit = "5ef5ef0364b6939c"
@@ -9519,15 +9438,6 @@ copies = 1
 note = "`all` section: docs/captures/output-styles-all.ansi is journey-test with db/cache/app prefixed lines; under a pty, ratect run -o all gives TERM=dumb and no stdin TTY while -o simple gives xterm-256color and a TTY; find examples -iname 'dockerfile*' returns nothing, so no Image build capture exists, as stated."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/output-styles-all.ansi" = "e1d189c39e165f76" }
-
-[[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "7cd0026d8877e5e8"
-copies = 1
-note = "CLI flags section re-run against the binary: --version prints one line and exits 0 even with --bogus or a tag/override conflict after it; --version --help prints the version and --help --version the help; an -o fancy run is refused with 125 when stdout isn't a terminal and under TERM=dumb on a pty; grouped -T prints \"Tasks in c:\" then a blank line before \"G:\"; -Tf/-fbatect.yml/-oquiet are accepted; --clean-cache --list-tasks is a usage error with the = tip (exit 2); --tag-image refuses a digest at parse time and accepts MyOrg/app; --config-var a=b=c gives \"b=c\" and a= gives empty; --generate-completion-script is rejected; --help exits 0 with a bad --docker-config or BATECT_CACHE_TYPE; the decisions 0016/0017/0018 links resolve. | prior note holds (0016/0017/0018 changed only survey/alternatives prose): re-run: --version --bogus prints one line and exits 0, -o fancy with stdout not a terminal is refused with 125, --tag-image with a digest is a parse-time error, --config-var a=b=c is accepted, --generate-completion-script is rejected; l.209 and l.225 are confirmed above."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0016-exit-codes.md" = "85c81c0102b77163", "decisions/0017-output-streams-and-styles.md" = "70eb1104a8c81374", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "f0d497ce45bea22b" }
 
 [[mark]]
 file = "docs/getting-started.md"
@@ -9557,15 +9467,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "examples/full-stack/ratect.toml" = "926279bdca0a4926" }
 
 [[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "d33363a7aee55bcd"
-copies = 1
-note = "'Top-level fields' re-read at HEAD: the 0023 change is only a comment link; the include row's new host-path clause checked against config.rs:4709-4761 (HostPathField::Volumes, BuildDirectory, BuildSecrets, BuildSsh containment) and include_trust.rs:73 (allow_host_paths enforced in both dialects) and :435-443 (refusal names allow_host_paths); the nested-Git gate is native-only via include_trust.rs:535-540 restricting."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "537c7d4bfa848427" }
-
-[[mark]]
 file = "docs/ratect-compat-config-reference.md"
 mode = "stale-claims"
 unit = "b9c6b49c6ad301e3"
@@ -9582,15 +9483,6 @@ copies = 1
 note = "Scope re-read: the includes.md anchors #containment (:218) and #what-a-bundle-may-do (:209) exist; includes.md:277-280 says allow_host_paths applies only to the bundle named and is ignored inside a bundle file; includes.md:331 says the nested grant is one level deep; git_include.rs:199 confirms no transport restriction of its own; user.rs:112-125 generates /etc/shadow and /etc/group; allow_nested_git_includes is TOML-only (config.rs:2910)."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "docs/includes.md#containment" = "5e9932f8ba94d3e8", "docs/includes.md#what-a-bundle-may-do" = "60099454a770d094", "ratect-core/src/ssh_agent.rs" = "7768cd69b4a95322" }
-
-[[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "16396f3e621b0738"
-copies = 1
-note = "'Runtime behavior gaps' re-read against what moved: the 0002/0016/0017 fix commits changed only a status note and survey/alternatives prose, none of which the section restates; spot-checked by SIGINT runs (130, notice and \"Cleanup complete.\" on stderr, and the -o all teardown lines), a quiet --no-cleanup report, labels on created containers (eu.orican.ratect.*), and the round-1 checks below for the section's other bullets."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0002-runtime-ownership-labels.md" = "d5b09e3eb24571f0", "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0016-exit-codes.md" = "85c81c0102b77163", "decisions/0017-output-streams-and-styles.md" = "70eb1104a8c81374" }
 
 [[mark]]
 file = "ROADMAP.md"
@@ -10466,15 +10358,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "AGENTS.md" = "ffd5702f09a657c0" }
 
 [[mark]]
-file = "ROADMAP.md"
-mode = "stale-claims"
-unit = "1d74098c854152ae"
-copies = 1
-note = "config.rs's change was serialization only; the include loop still awaits ensure_cached per entry (config.rs:4411), curlimages/curl is still digest-pinned (:1814), and nothing else cited moved. Earlier reading: section re-read: both schema files exist; there are 54 tracing macro calls in ratect-core non-test code and no #[instrument] or span macros (\"around fifty\", \"no spans\"); config.rs:4323 is a while-let queue loop awaiting ensure_cached one entry at a time; config.rs:1813 pins curlimages/curl by digest; identity is absent from config.rs and ratect is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking. | Rechecked at HEAD: both schema files exist; 54 tracing macro calls in non-test ratect-core and 0 span/#[instrument]; the include loop is the while-let queue at config.rs:4323 awaiting ensure_cached at :4394 (updated line); curlimages/curl is digest-pinned at config.rs:1813; there is no identity in config.rs; ratect/Cargo.toml is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md" = "efe86badabc6bf0d", "decisions/0002-runtime-ownership-labels.md" = "d5b09e3eb24571f0", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0011-container-identity.md" = "54981fc64b0fab3d", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "f0d497ce45bea22b", "docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it" = "23b04874957e5077", "docs/ratect-config-reference.md#run_to_completion-init-containers" = "eebcbf97189cbdeb", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/user.rs" = "b61d0cd611c4d5c5", "schema/batect-config.schema.json" = "db44586f53685e27", "schema/ratect-config.schema.json" = "7dbbab2e7811c2f6" }
-
-[[mark]]
 file = "CONTEXT.md"
 mode = "stale-claims"
 unit = "e2503d5dfad6af8a"
@@ -10581,15 +10464,6 @@ copies = 1
 note = "Status names no claims version; .pre-commit-config.yaml now pins v0.21.1 (still a pre-commit hook) and AGENTS.md's Tooling & CI section is unchanged. Earlier reading: Status was checked against .pre-commit-config.yaml (repo or1can/claims, rev v0.21.0, hook id claims) and .github/workflows/ci.yml:144-149 (claims job on pull_request); AGENTS.md's Tooling & CI section, rewritten by the fix commits, still describes that setup."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "AGENTS.md" = "ffd5702f09a657c0" }
-
-[[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "dab39bc0f67f4b49"
-copies = 1
-note = "AGENTS.md guideline 14 and CONTEXT.md's terms are unchanged by the diff. Earlier reading: Around docs/ re-read: decisions/README.md exists; CONTEXT.md defines Grant (:37) and Effective boundary (:45); AGENTS.md guideline 14 (:512) says when to write an ADR; CHANGELOG links to decisions/ so moving it would break them."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CONTEXT.md" = "f74756a356e23afd", "decisions/README.md" = "1694a5b5b3b5a20b" }
 
 [[mark]]
 file = "agents/domain.md"
@@ -10736,15 +10610,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "454408fb5726b24dc4c9c4d1133dac5f56b7edd1", "docs/differences-from-batect.md" = "45fb071bf8699a6c" }
 
 [[mark]]
-file = "decisions/0007-where-agent-process-docs-live.md"
-mode = "stale-claims"
-unit = "ea7792a26f405e2a"
-copies = 1
-note = "Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: History; AGENTS.md's two edits don't concern where agent-process docs live, and decisions/README.md still says it isn't user documentation. Earlier reading: Context is history; decisions/README.md:5 still says \"This is *not* user documentation\", and the quoted 0006 rule is at 0006:59-60. | Context is history; decisions/README.md:5 still says \"This is *not* user documentation\", and the quoted 0006 rule now sits at 0006:63-64 (moved from 59-60 by the fix commits' status note), still worded \"A decision referenced from more than one place is an ADR. User-facing behaviour is `docs/`.\""
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CHANGELOG.md" = "454408fb5726b24dc4c9c4d1133dac5f56b7edd1", "ROADMAP.md" = "efe86badabc6bf0d", "TODO.md" = "5f93f1d31b8064d1", "decisions/README.md" = "1694a5b5b3b5a20b" }
-
-[[mark]]
 file = "decisions/README.md"
 mode = "stale-claims"
 unit = "263482dc2f26e13a"
@@ -10835,15 +10700,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".github/workflows/ci.yml" = "9d95d6af0846466c", ".github/workflows/release.yml" = "8abbb3e044a1b143", "CHANGELOG.md" = "454408fb5726b24dc4c9c4d1133dac5f56b7edd1", "dist-workspace.toml" = "00b7f7edb35b372b", "tools/changelog-section.py" = "ffcbbf2a0af92d8c" }
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "163356029bb73ffc"
-copies = 1
-note = "Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: Shipped record, false as written and left in place: fussybeaver/bollard#796 merged 2026-10-04 (gh pr view), crates.io's newest bollard is 0.21.1 of 2026-08-16, and Cargo.toml:40-41 patches to ratect-pin/feat-build-cancel/9bcd7d7 for the open #849; the Status note at line 7 records all three."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "454408fb5726b24dc4c9c4d1133dac5f56b7edd1", "ROADMAP.md" = "efe86badabc6bf0d", "ratect-core/Cargo.toml" = "d65048fe69367adf" }
-
-[[mark]]
 file = "decisions/0001-two-binaries.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -10898,24 +10754,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "454408fb5726b24dc4c9c4d1133dac5f56b7edd1" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "2f519634b0b93218"
-copies = 1
-note = "Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: None of the guidelines changed; re-ran guideline 6's smoke listing with target/debug/ratect-compat (same five tasks), and 0015's new status note extends rather than contradicts guideline 7's BREAKING_CHANGES rule. Earlier reading: Repo-specific guidelines re-read where the named files changed. Guideline 8 matches release.yml (create-draft-release with changelog-section.py at :169, CycloneDX in build-global-artifacts :418-441, Attest in host :531, publish-homebrew-formula :548, --prerelease only from announcement_is_prerelease) and 0010's new status note doesn't contradict it. Guideline 6's smoke listing matches output from target/debug/ratect-compat (5 tasks). Root batect.yml/ratect.toml both list build/test/lint/fmt. Guideline 12 checked with gh api: ruleset \"main branch protection\" is active with no bypass actors, deletion/non_fast_forward/pull_request (merge, rebase)/required_status_checks rules, and squash disabled at repo level. Guidelines 7 and 15's names exist (BREAKING_CHANGES written_for.rs:394, every_marked_breaking_change_has_a_written_for_row main_tests.rs:777, CACHE_MOUNT_PROJECT conformance.rs:667, ci.yml:91 step)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "9d95d6af0846466c", ".github/workflows/release.yml" = "8abbb3e044a1b143", "CHANGELOG.md" = "454408fb5726b24dc4c9c4d1133dac5f56b7edd1", "ROADMAP.md" = "efe86badabc6bf0d", "decisions/0001-two-binaries.md#consequences" = "35752cd476e093d9", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "70eb1104a8c81374", "decisions/README.md" = "1694a5b5b3b5a20b", "docs/differences-from-batect.md" = "45fb071bf8699a6c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/docker.rs" = "f70a5d8f8c972c17", "ratect-core/src/engine.rs" = "4f7742ae771dfae5", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "ffcbbf2a0af92d8c" }
-
-[[mark]]
-file = "agents/domain.md"
-mode = "stale-claims"
-unit = "57c8e234debc95bb"
-copies = 1
-note = "Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: Before exploring re-read: CONTEXT.md is at the root and is the one glossary, dockerignore has no CONTEXT.md term, and decisions/README.md and agents/docs.md exist and explain the location; CONTEXT.md changed only in its Summary line entry since the mark."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "454408fb5726b24dc4c9c4d1133dac5f56b7edd1", "CONTEXT.md" = "f74756a356e23afd", "agents/docs.md" = "3b92411926dfb15b", "decisions/README.md" = "1694a5b5b3b5a20b" }
-
-[[mark]]
 file = "decisions/0016-exit-codes.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -10950,3 +10788,237 @@ copies = 1
 note = "Re-read after #797, which only gives the Git include info file's temp path a unique name per write (git_include.rs:811); this section doesn't describe that temp path, so the change doesn't reach it. Earlier reading: step 2 checked against config.rs: load_project/load_project_native (:5896/:5911) call the Config::load_from_file* variants then load_project_impl (rejects incompatible fields, runs check_values, runs resolve_extends only when format.allows_extends); includes are walked breadth-first via VecDeque (:4302); git_include.rs clones into ~/.ratect/incl (:25, :296); CONTEXT.md defines Bundle/Grant/Boundary (:20/:37/:41); engine.rs:1499 resolve_volumes resolves cache mounts later, as stated."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CONTEXT.md" = "f74756a356e23afd", "decisions/0014-config-checked-at-load-evaluated-per-task.md" = "186e0b75044a03f2", "ratect-core/src/cache.rs" = "3ec116da38161890", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/engine.rs" = "4f7742ae771dfae5", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7" }
+
+[[mark]]
+file = "RELEASES.md"
+mode = "claim-words-totalising"
+unit = "9a2ea6c6a6f5e512"
+copies = 1
+note = "Checked against CHANGELOG.md's 0.33.0 Breaking entries: a run failing without its task's command exiting exits 125, and an invalid option value exits 2 on every command but a run, ratect doctor and ratect config validate, which report it; decisions/0016's status says it shipped in this release."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
+
+[[mark]]
+file = "RELEASES.md"
+mode = "claim-words-about-elsewhere"
+unit = "9a2ea6c6a6f5e512"
+copies = 1
+note = "Checked against CHANGELOG.md's 0.33.0 Breaking entries: a run failing without its task's command exiting exits 125, and an invalid option value exits 2 on every command but a run, ratect doctor and ratect config validate, which report it; decisions/0016's status says it shipped in this release."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
+
+[[mark]]
+file = "RELEASES.md"
+mode = "claim-words-totalising"
+unit = "8c2e9482f887be7e"
+copies = 1
+note = "Checked against decisions/0017 and CHANGELOG.md's 0.33.0 Changed entries: notices, the --no-cleanup* reminder and warnings are printed rather than logged, stderr is coloured only when it is a terminal, and cleanup's failure names what was left and the docker command to remove it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1" }
+
+[[mark]]
+file = "RELEASES.md"
+mode = "claim-words-counts"
+unit = "8c2e9482f887be7e"
+copies = 1
+note = "Checked against decisions/0017 and CHANGELOG.md's 0.33.0 Changed entries: notices, the --no-cleanup* reminder and warnings are printed rather than logged, stderr is coloured only when it is a terminal, and cleanup's failure names what was left and the docker command to remove it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1" }
+
+[[mark]]
+file = "RELEASES.md"
+mode = "claim-words-totalising"
+unit = "941b527acbce4696"
+copies = 1
+note = "Checked against CHANGELOG.md's 0.33.0 Changed entries: containers and the task network are created as <project>-<container>-<suffix> and <project>-network-<suffix>; decisions/0018's naming half shipped here; images are pulled or built once the network is ready (0019); BuildKit builds are cancelled at the run's end; a left-over lock file no longer blocks a Git include (0023)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0018-built-images-named-for-people-found-by-labels.md" = "4265196c4f948f0a", "decisions/0019-readiness-gates-starting-only.md" = "f56c3b070b1c6694", "decisions/0023-git-include-entry-lock.md" = "663cf0e7493b4f00" }
+
+[[mark]]
+file = "RELEASES.md"
+mode = "claim-words-totalising"
+unit = "8879244b971bfaf0"
+copies = 1
+note = "Checked against CHANGELOG.md's 0.33.0 Breaking entries: each **ratect.toml:** entry has a written_for::BREAKING_CHANGES row (nine 0.12.0 rows, written_for.rs), covering backslash escapes, unescaped $ and < starting references, and Batect's rules for task, variable, project and container names."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-counts"
+unit = "71114c08a48e1ed8"
+copies = 1
+note = "The record's three run rules (Decision, Path 1: the task's own exit code passes through, a termination signal gives 128 plus its number, and a run that never ran or never finished exits 125) are what exit_code.rs implements, and they shipped in this release, as the status line now says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/README.md"
+mode = "claim-words-totalising"
+unit = "f2a310d1fa169d90"
+copies = 1
+note = "Index row for 0019; its title matches the record's heading, and the status matches 0019's own status line, which this release's commit changed to shipped."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "restatement-ngram"
+unit = "073c1634c496cdb6-afaa822c741a05d7"
+copies = 1
+note = "0010's status, 'Accepted — implemented (ratect-compat 0.28.0 · ratect 0.7.0)', is still true of that record; the words it shares with the status lines this release changed to shipped belong to other records."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0007-where-agent-process-docs-live.md"
+mode = "stale-claims"
+unit = "ea7792a26f405e2a"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: History; AGENTS.md's two edits don't concern where agent-process docs live, and decisions/README.md still says it isn't user documentation. Earlier reading: Context is history; decisions/README.md:5 still says \"This is *not* user documentation\", and the quoted 0006 rule is at 0006:59-60. | Context is history; decisions/README.md:5 still says \"This is *not* user documentation\", and the quoted 0006 rule now sits at 0006:63-64 (moved from 59-60 by the fix commits' status note), still worded \"A decision referenced from more than one place is an ADR. User-facing behaviour is `docs/`.\""
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "efe86badabc6bf0d", "TODO.md" = "5f93f1d31b8064d1", "decisions/README.md" = "2ab1c24d3b3c33af" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "efbe9d5743db5752"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Caches re-read against cache.rs:36-39 (the cache root is followed through a symlink for every operation), git_include.rs module doc (a clone is staged in <key>.tmp-<unique> then renamed, the lock is taken over once its holder exits, and the sweep removes entries unused for over 30 days) and decisions/0023, whose only fix-commit change is a comment link."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "663cf0e7493b4f00" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "86830e3a7a67995f"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Built images re-read: the automatic tag is format!(\"{}-{}\", project_name, name) at engine.rs:2804 and is dropped when an image override exists (:2803); the component rule at image_reference.rs:53 is [a-z0-9]+((?:[._]|__|[-]+)[a-z0-9]+)* and is enforced for project and container names at config.rs:3155/3176/3955; 0018's fix-commit changes touch only the Compose/Dagger survey."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0018-built-images-named-for-people-found-by-labels.md" = "4265196c4f948f0a" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "0e06b84496798ba8"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Section is lines 76-85. engine.rs:4190-4235: health check, then setup commands. The external_health_check branch skips the health wait (engine.rs:4200-4208), and config.rs:7206-7215 refuses setup_commands next to an external check. engine.rs:4108-4119: a run_to_completion dependency must exit 0. Gating per 0019 and 0012: see the CONTEXT.md:81 record."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0012-native-task-container-has-no-readiness-gate.md" = "65be0317e52a91d1", "decisions/0019-readiness-gates-starting-only.md" = "f56c3b070b1c6694" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "stale-claims"
+unit = "1d74098c854152ae"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. ROADMAP's Future Vision says 0018's naming shipped first, which its status line now also says. Earlier reading: config.rs's change was serialization only; the include loop still awaits ensure_cached per entry (config.rs:4411), curlimages/curl is still digest-pinned (:1814), and nothing else cited moved. Earlier reading: section re-read: both schema files exist; there are 54 tracing macro calls in ratect-core non-test code and no #[instrument] or span macros (\"around fifty\", \"no spans\"); config.rs:4323 is a while-let queue loop awaiting ensure_cached one entry at a time; config.rs:1813 pins curlimages/curl by digest; identity is absent from config.rs and ratect is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking. | Rechecked at HEAD: both schema files exist; 54 tracing macro calls in non-test ratect-core and 0 span/#[instrument]; the include loop is the while-let queue at config.rs:4323 awaiting ensure_cached at :4394 (updated line); curlimages/curl is digest-pinned at config.rs:1813; there is no identity in config.rs; ratect/Cargo.toml is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "efe86badabc6bf0d", "decisions/0002-runtime-ownership-labels.md" = "d5b09e3eb24571f0", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0011-container-identity.md" = "54981fc64b0fab3d", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "4265196c4f948f0a", "docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it" = "23b04874957e5077", "docs/ratect-config-reference.md#run_to_completion-init-containers" = "eebcbf97189cbdeb", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/user.rs" = "b61d0cd611c4d5c5", "schema/batect-config.schema.json" = "db44586f53685e27", "schema/ratect-config.schema.json" = "7dbbab2e7811c2f6" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "7cd0026d8877e5e8"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: CLI flags section re-run against the binary: --version prints one line and exits 0 even with --bogus or a tag/override conflict after it; --version --help prints the version and --help --version the help; an -o fancy run is refused with 125 when stdout isn't a terminal and under TERM=dumb on a pty; grouped -T prints \"Tasks in c:\" then a blank line before \"G:\"; -Tf/-fbatect.yml/-oquiet are accepted; --clean-cache --list-tasks is a usage error with the = tip (exit 2); --tag-image refuses a digest at parse time and accepts MyOrg/app; --config-var a=b=c gives \"b=c\" and a= gives empty; --generate-completion-script is rejected; --help exits 0 with a bad --docker-config or BATECT_CACHE_TYPE; the decisions 0016/0017/0018 links resolve. | prior note holds (0016/0017/0018 changed only survey/alternatives prose): re-run: --version --bogus prints one line and exits 0, -o fancy with stdout not a terminal is refused with 125, --tag-image with a digest is a parse-time error, --config-var a=b=c is accepted, --generate-completion-script is rejected; l.209 and l.225 are confirmed above."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5", "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "4265196c4f948f0a" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "74f78c2b3253e401"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Cancelling a run re-read: interrupt.rs:125-131 has TerminationSignal::Interrupt = SIGINT plus Terminate/Hangup, and its module doc gives all three one path and the ladder (one more signal of any kind force-removes, a SIGINT after that abandons); engine.rs:3285-3292 sends abandoned-build cancels first with or without --no-cleanup*; a failed cancel is a TaskEvent::Warning (engine.rs:1777-1782); 0016's fix-commit changes are survey text only."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "stale-claims"
+unit = "8f0c8171ca58d859"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Exit codes section run against target/debug/ratect: \"--bogus run test\", \"run --bogus\" and \"-o bogus run test\" exit 125; \"--bogus\", \"tasks list --bogus\" and a missing subcommand exit 2; run nosuch exits 125 with \"(Run 'ratect tasks list' ... or 'ratect run --help' for help.)\"; tasks list with no ratect.toml exits 2; config validate with no file or bad TOML exits 1; caches list --docker-config /nonexist exits 2 and doctor with it exits 1; caches list with the daemon down exits 1; --version and run --help exit 0. | prior note holds (0016 changed only its survey paragraph): re-run against target/debug/ratect: \"--bogus run test\", \"run --bogus\" and \"-o bogus run test\" give 125, while \"--bogus\", \"tasks list --bogus\", no subcommand, and tasks list with no ratect.toml give 2; config validate with no file gives 1; --version and run --help give 0; run nosuch gives 125 with the \"(Run 'ratect tasks list' ... or 'ratect run --help' for help.)\" hint; a task's own exit 42 passes through as 42."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
+
+[[mark]]
+file = "docs/ratect-compat-cli.md"
+mode = "stale-claims"
+unit = "72e425f2afe62ace"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Exit codes section run against ratect-compat: an -o quiet run of 'exit 42' exits 42; SIGINT/SIGTERM/SIGHUP give 130/143/129 with their notices; yes | head -n1 exits 141 with \"Stdout closed; cleaning up.\"; no task name (even with a missing -f) exits 125 and names --list-tasks/--help; \"-- x\" with no task exits 125; --bogus build exits 125 and --bogus --clean exits 2; bad YAML under -T exits 1; --log-file in a missing dir exits 125 on a run and 2 under -T; \"Did you mean 'test' or 'yes'?\" lists every tie, and a prerequisite gets no list hint. | prior note holds (0016 changed only its survey paragraph): re-run against ratect-compat: no task name gives 125, \"-- x\" gives 125, \"--bogus build\" gives 125 and \"--bogus --clean\" gives 2, and SIGINT gives 130 with its notice (scratch r2-docs/ex, sig)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "163356029bb73ffc"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: Shipped record, false as written and left in place: fussybeaver/bollard#796 merged 2026-10-04 (gh pr view), crates.io's newest bollard is 0.21.1 of 2026-08-16, and Cargo.toml:40-41 patches to ratect-pin/feat-build-cancel/9bcd7d7 for the open #849; the Status note at line 7 records all three."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "efe86badabc6bf0d", "ratect-core/Cargo.toml" = "2908d69eca1bbeb0" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "d33363a7aee55bcd"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: 'Top-level fields' re-read at HEAD: the 0023 change is only a comment link; the include row's new host-path clause checked against config.rs:4709-4761 (HostPathField::Volumes, BuildDirectory, BuildSecrets, BuildSsh containment) and include_trust.rs:73 (allow_host_paths enforced in both dialects) and :435-443 (refusal names allow_host_paths); the nested-Git gate is native-only via include_trust.rs:535-540 restricting."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "663cf0e7493b4f00" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "2f519634b0b93218"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: None of the guidelines changed; re-ran guideline 6's smoke listing with target/debug/ratect-compat (same five tasks), and 0015's new status note extends rather than contradicts guideline 7's BREAKING_CHANGES rule. Earlier reading: Repo-specific guidelines re-read where the named files changed. Guideline 8 matches release.yml (create-draft-release with changelog-section.py at :169, CycloneDX in build-global-artifacts :418-441, Attest in host :531, publish-homebrew-formula :548, --prerelease only from announcement_is_prerelease) and 0010's new status note doesn't contradict it. Guideline 6's smoke listing matches output from target/debug/ratect-compat (5 tasks). Root batect.yml/ratect.toml both list build/test/lint/fmt. Guideline 12 checked with gh api: ruleset \"main branch protection\" is active with no bypass actors, deletion/non_fast_forward/pull_request (merge, rebase)/required_status_checks rules, and squash disabled at repo level. Guidelines 7 and 15's names exist (BREAKING_CHANGES written_for.rs:394, every_marked_breaking_change_has_a_written_for_row main_tests.rs:777, CACHE_MOUNT_PROJECT conformance.rs:667, ci.yml:91 step)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "9d95d6af0846466c", ".github/workflows/release.yml" = "8abbb3e044a1b143", "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "ROADMAP.md" = "efe86badabc6bf0d", "decisions/0001-two-binaries.md#consequences" = "35752cd476e093d9", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1", "decisions/README.md" = "2ab1c24d3b3c33af", "docs/differences-from-batect.md" = "45fb071bf8699a6c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/docker.rs" = "f70a5d8f8c972c17", "ratect-core/src/engine.rs" = "4f7742ae771dfae5", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "ffcbbf2a0af92d8c" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "e0ee8bb50685e05f"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Section is lines 128-157. Progress console: 0017:92-93 says stderr for ratect, stdout for ratect-compat. Summary line: ran -o simple and -o quiet in /tmp/shardF/s (no reason given; quiet has none). Notice/Warning/Error: ui.rs:1400-1427 gives the markers 'Warning:'/'Error:' and an unmarked notice on stderr. A cleanup that left something is an Error, per exit_code.rs:189-191 and engine CleanupFailed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "16396f3e621b0738"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: 'Runtime behavior gaps' re-read against what moved: the 0002/0016/0017 fix commits changed only a status note and survey/alternatives prose, none of which the section restates; spot-checked by SIGINT runs (130, notice and \"Cleanup complete.\" on stderr, and the -o all teardown lines), a quiet --no-cleanup report, labels on created containers (eu.orican.ratect.*), and the round-1 checks below for the section's other bullets."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0002-runtime-ownership-labels.md" = "d5b09e3eb24571f0", "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0016-exit-codes.md" = "631e121fcc6998b5", "decisions/0017-output-streams-and-styles.md" = "abc68b40464b1ea1" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "dab39bc0f67f4b49"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: AGENTS.md guideline 14 and CONTEXT.md's terms are unchanged by the diff. Earlier reading: Around docs/ re-read: decisions/README.md exists; CONTEXT.md defines Grant (:37) and Effective boundary (:45); AGENTS.md guideline 14 (:512) says when to write an ADR; CHANGELOG links to decisions/ so moving it would break them."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CONTEXT.md" = "f74756a356e23afd", "decisions/README.md" = "2ab1c24d3b3c33af" }
+
+[[mark]]
+file = "agents/domain.md"
+mode = "stale-claims"
+unit = "57c8e234debc95bb"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Re-marked under claims v0.22, where CHANGELOG.md (and RELEASES.md, listed as append-only) growing no longer expires a mark. The section names the changelog or release notes only as a convention or a location, not for what an entry says, so the entries added since don't affect it. Earlier reading: Before exploring re-read: CONTEXT.md is at the root and is the one glossary, dockerignore has no CONTEXT.md term, and decisions/README.md and agents/docs.md exist and explain the location; CONTEXT.md changed only in its Summary line entry since the mark."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "CONTEXT.md" = "f74756a356e23afd", "agents/docs.md" = "3b92411926dfb15b", "decisions/README.md" = "2ab1c24d3b3c33af" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "57e50172f28da1e8"
+copies = 1
+note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/README.md" = "2ab1c24d3b3c33af" }
