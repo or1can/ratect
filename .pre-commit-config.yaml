@@ -9,6 +9,6 @@
 # lands here — Renovate proposes those (`renovate.json5`'s `pre-commit`).
 repos:
   - repo: https://github.com/or1can/claims
-    rev: v0.21.1
+    rev: v0.23.1
     hooks:
       - id: claims
