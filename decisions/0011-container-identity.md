@@ -7,7 +7,11 @@ sub-issues; the design round was
 [#227](https://github.com/or1can/ratect/issues/227). This decision covers
 `ratect` (native) only: `ratect-compat` keeps Batect's `run_as_current_user`
 behaviour byte-for-byte, whatever this record says — being a drop-in
-replacement is its compatibility contract.
+replacement is its compatibility contract. Refined before implementation
+([#237](https://github.com/or1can/ratect/issues/237)): the hazard warnings
+are output under [0017](0017-output-streams-and-styles.md), not `tracing`, and
+fire during a run, since the daemon class needs a connection loading doesn't
+make.
 
 ## Context
 
@@ -159,8 +163,8 @@ is chowned.** On desktop and rootless the ownership outcome already holds
 (desktop file sharing maps it; rootless delivers it by construction), and
 under rootless, applying `--user` is actively destructive. On userns-remap it
 cannot be met at all — the host uid maps to a subordinate uid like every
-other — so `--user` would change nothing, and loading such a project emits a
-`tracing::warn!` and `ratect doctor` reports a finding that bind-mount
+other — so `--user` would change nothing, and a run reaching such a container
+prints a warning and `ratect doctor` reports a finding that bind-mount
 ownership has to be pre-arranged on the host. The home guarantee still holds:
 edit the *running* user's passwd entry (the image's default user, usually
 root) so its home field is the configured path, and create that directory.
@@ -172,8 +176,8 @@ One field's edit, and both `pw_dir` consumers (ssh) and `$HOME` consumers
 A non-root `user` on a remapped daemon does not write as the host user: under
 rootless it reproduces the unreadable-bind-mount failure the probes found, and
 under userns-remap it lands on a subordinate uid like every other container
-user. It stays a passthrough — that is what an escape hatch is — but
-loading such a project emits a `tracing::warn!`, and `ratect doctor` reports a
+user. It stays a passthrough — that is what an escape hatch is — but a run
+reaching such a container prints a warning, and `ratect doctor` reports a
 finding naming the hazard.
 
 ## Alternatives considered
