@@ -85,7 +85,7 @@ record refined this way.
 | [0015](0015-native-project-records-its-written-for-version.md) | A native project records the Ratect version it was written for | Accepted — shipped (ratect-compat 0.32.0 · ratect 0.11.0) |
 | [0016](0016-exit-codes.md) | What an invocation exits with | Accepted — shipped, with both refinements (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0017](0017-output-streams-and-styles.md) | Output: what each stream is for, and how a style shapes it | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
-| [0018](0018-built-images-named-for-people-found-by-labels.md) | Built images are named for people and found by labels | Accepted — naming shipped (ratect-compat 0.33.0 · ratect 0.12.0); lifecycle unscheduled |
+| [0018](0018-built-images-named-for-people-found-by-labels.md) | Built images are named for people and found by labels | Accepted — naming shipped (ratect-compat 0.33.0 · ratect 0.12.0); lifecycle planned (ratect 0.17.0) |
 | [0019](0019-readiness-gates-starting-only.md) | A dependency's readiness gates only the start of what depends on it | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0020](0020-bundle-records-its-written-for-version.md) | A bundle records the Ratect version it was written for | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0021](0021-native-field-follows-its-file.md) | A native field follows its file, on include entries as on containers | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |

@@ -192,12 +192,14 @@ jobs:
           denied = ["tools/changelog-section.py --help"]
           EOF
       # The working tree against the base branch, i.e. the PR's whole change.
-      # Exits 1 on a gate finding and 2 on an unparsable `claims.toml`, both
-      # failing the job; advisory findings are printed and pass.
+      # Exits 1 on a gate finding, 2 on an unparsable `claims.toml` and 3 on an
+      # advisory finding that is neither fixed nor marked checked, all failing
+      # the job: a PR resolves the findings it brings in, or nobody reads them.
+      # `--fail-on-unmarked` is CI's alone, so local commits stay advisory.
       - name: Run the claims checks
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli --repo-root . --diff-range "origin/$BASE_REF"
+        run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli --repo-root . --diff-range "origin/$BASE_REF" --fail-on-unmarked
 
   docker-integration:
     name: Docker Integration Test
