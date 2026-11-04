@@ -15,7 +15,7 @@
 
 """Prints the `CHANGELOG.md` section for one released version.
 
-    python3 tools/changelog-section.py <version> [changelog]
+    python3 tools/changelog-section.py [--binary <package>] <version> [changelog]
 
 `changelog` defaults to `CHANGELOG.md` in the current directory.
 
@@ -45,6 +45,12 @@ never released. Instead, each `·`-separated fragment of a heading's bracketed
 content is checked for a trailing version token of its own — `"ratect
 0.6.0"`'s token is `"0.6.0"`, `"0.21.0"`'s token is `"0.21.0"` — and that token
 must equal the requested version exactly.
+
+Given `--binary`, a fragment must name that binary and that version, so a bare
+pre-split heading never matches. The two binaries' version lines are
+independent and older than the split: `ratect 0.13.0` is not the `0.13.0` of
+July 2026, which was `ratect-compat`'s, and a release with no heading of its own
+has to fail rather than publish that one's notes.
 """
 
 import argparse
@@ -78,19 +84,30 @@ def heading_versions(bracket_content):
     return versions
 
 
-def changelog_section(text, version):
-    """The body of the `## [...]` heading naming `version`, up to the next
-    such heading (or end of file). Raises `ValueError` if no heading names it.
+def heading_matches(bracket_content, version, binary):
+    """Whether one heading's bracketed content names `version` — of `binary`,
+    if one is given."""
+    if binary is None:
+        return version in heading_versions(bracket_content)
+    fragments = [fragment.strip() for fragment in bracket_content.split(" · ")]
+    return f"{binary} {version}" in fragments
+
+
+def changelog_section(text, version, binary=None):
+    """The body of the `## [...]` heading naming `version` (of `binary`, if one
+    is given), up to the next such heading (or end of file). Raises `ValueError`
+    if no heading names it.
     """
     lines = text.splitlines()
     start = None
     for index, line in enumerate(lines):
         match = HEADING_RE.match(line)
-        if match and version in heading_versions(match.group("bracket")):
+        if match and heading_matches(match.group("bracket"), version, binary):
             start = index + 1
             break
     if start is None:
-        raise ValueError(f"no changelog heading names version {version!r}")
+        named = f"{binary} version" if binary else "version"
+        raise ValueError(f"no changelog heading names {named} {version!r}")
 
     end = len(lines)
     for index in range(start, len(lines)):
@@ -103,6 +120,11 @@ def changelog_section(text, version):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--binary",
+        choices=("ratect", "ratect-compat"),
+        help="the binary being released; only a heading naming it matches",
+    )
     parser.add_argument("version", help="the released version to extract, e.g. 0.28.0")
     parser.add_argument(
         "changelog",
@@ -120,7 +142,7 @@ def main(argv=None):
         return 1
 
     try:
-        section = changelog_section(text, args.version)
+        section = changelog_section(text, args.version, args.binary)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

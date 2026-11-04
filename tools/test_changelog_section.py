@@ -141,6 +141,47 @@ class ChangelogSectionTests(unittest.TestCase):
             changelog_section.changelog_section(changelog, "0.28.0")
 
 
+class HeadingMatchForABinaryTests(unittest.TestCase):
+    def test_matches_the_fragment_naming_that_binary_and_version(self):
+        for binary, version in (("ratect-compat", "0.27.0"), ("ratect", "0.6.0")):
+            with self.subTest(binary=binary):
+                section = changelog_section.changelog_section(COMBINED_CHANGELOG, version, binary)
+                self.assertIn("something ratect-compat specific", section)
+
+    def test_a_version_named_only_for_the_other_binary_fails(self):
+        """The two binaries' version lines are independent, so `ratect 0.27.0`
+        is not the release `ratect-compat 0.27.0` named."""
+        with self.assertRaisesRegex(ValueError, "ratect.*0.27.0"):
+            changelog_section.changelog_section(COMBINED_CHANGELOG, "0.27.0", "ratect")
+
+    def test_a_version_named_only_by_a_pre_split_heading_fails(self):
+        """Matching on the version alone, `ratect 0.13.0` with no heading of its
+        own falls through to the pre-split `## [0.13.0]`, July 2026's notes."""
+        for binary in ("ratect", "ratect-compat"):
+            with self.subTest(binary=binary):
+                with self.assertRaises(ValueError):
+                    changelog_section.changelog_section(PRE_SPLIT_CHANGELOG, "0.20.0", binary)
+
+    def test_skips_a_pre_split_heading_for_the_binary_s_own_later_one(self):
+        changelog = (
+            "## [ratect-compat 0.40.0 · ratect 0.20.0] - 2027-01-01\n\nthe real one\n\n"
+            + PRE_SPLIT_CHANGELOG
+        )
+
+        section = changelog_section.changelog_section(changelog, "0.20.0", "ratect")
+
+        self.assertEqual(section, "the real one\n")
+
+    def test_matches_a_prerelease_suffixed_version_exactly(self):
+        changelog = "## [ratect-compat 0.28.0-rc.1 · ratect 0.7.0-rc.1] - 2026-09-15\n\nrc notes\n"
+
+        section = changelog_section.changelog_section(changelog, "0.7.0-rc.1", "ratect")
+
+        self.assertIn("rc notes", section)
+        with self.assertRaises(ValueError):
+            changelog_section.changelog_section(changelog, "0.7.0", "ratect")
+
+
 class MainTests(unittest.TestCase):
     def run_main(self, argv):
         out, err = StringIO(), StringIO()
@@ -182,6 +223,25 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(out, "")
             self.assertIn("9.9.9", err)
+
+    def test_binary_option_selects_the_heading_fragment(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_changelog(Path(directory), COMBINED_CHANGELOG)
+
+            code, out, _ = self.run_main(["--binary", "ratect", "0.6.0", str(path)])
+            self.assertEqual(code, 0)
+            self.assertIn("something ratect specific", out)
+
+            code, out, err = self.run_main(["--binary", "ratect", "0.27.0", str(path)])
+            self.assertEqual(code, 1)
+            self.assertEqual(out, "")
+            self.assertIn("0.27.0", err)
+
+    def test_binary_option_accepts_only_the_two_package_names(self):
+        with self.assertRaises(SystemExit):
+            self.run_main(["--binary", "batect", "0.6.0", "/nonexistent/CHANGELOG.md"])
 
 
 if __name__ == "__main__":
