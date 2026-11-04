@@ -10871,15 +10871,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0012-native-task-container-has-no-readiness-gate.md" = "65be0317e52a91d1", "decisions/0019-readiness-gates-starting-only.md" = "f56c3b070b1c6694" }
 
 [[mark]]
-file = "ROADMAP.md"
-mode = "stale-claims"
-unit = "1d74098c854152ae"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. ROADMAP's Future Vision says 0018's naming shipped first, which its status line now also says. Earlier reading: config.rs's change was serialization only; the include loop still awaits ensure_cached per entry (config.rs:4411), curlimages/curl is still digest-pinned (:1814), and nothing else cited moved. Earlier reading: section re-read: both schema files exist; there are 54 tracing macro calls in ratect-core non-test code and no #[instrument] or span macros (\"around fifty\", \"no spans\"); config.rs:4323 is a while-let queue loop awaiting ensure_cached one entry at a time; config.rs:1813 pins curlimages/curl by digest; identity is absent from config.rs and ratect is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking. | Rechecked at HEAD: both schema files exist; 54 tracing macro calls in non-test ratect-core and 0 span/#[instrument]; the include loop is the while-let queue at config.rs:4323 awaiting ensure_cached at :4394 (updated line); curlimages/curl is digest-pinned at config.rs:1813; there is no identity in config.rs; ratect/Cargo.toml is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md" = "efe86badabc6bf0d", "decisions/0002-runtime-ownership-labels.md" = "d5b09e3eb24571f0", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0011-container-identity.md" = "54981fc64b0fab3d", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "4265196c4f948f0a", "docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it" = "23b04874957e5077", "docs/ratect-config-reference.md#run_to_completion-init-containers" = "eebcbf97189cbdeb", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/user.rs" = "b61d0cd611c4d5c5", "schema/batect-config.schema.json" = "db44586f53685e27", "schema/ratect-config.schema.json" = "7dbbab2e7811c2f6" }
-
-[[mark]]
 file = "docs/differences-from-batect.md"
 mode = "stale-claims"
 unit = "7cd0026d8877e5e8"
@@ -11022,3 +11013,39 @@ copies = 1
 note = "The section points at decisions/README.md for the ADR convention; this PR only reworded the 0018 index row, so nothing the section relies on changed."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "47ecf3fa45ca38c5611dd523982ef3f96944685f", "agents/docs.md" = "3b92411926dfb15b", "decisions/README.md" = "60ae18b0e356228a" }
+
+[[mark]]
+file = "decisions/0011-container-identity.md"
+mode = "claim-words-totalising"
+unit = "912217f837bfb802"
+copies = 1
+note = "\"Cannot be met at all\" and \"like every other\" checked against this ADR's userns-remap classification, which cites Docker's userns-remap page: every container uid maps to a subordinate host uid. The ADR records that this rests on documentation, not a probe. This change only altered how the warning is emitted."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0011-container-identity.md"
+mode = "claim-words-about-elsewhere"
+unit = "912217f837bfb802"
+copies = 1
+note = "The claim about ratect doctor is this ADR's own planned behaviour, tracked by #237, not a statement about shipped code; the userns-remap mapping is from Docker's page, cited in the ADR's Daemon classification section."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "stale-claims"
+unit = "7907fc63f83118a2"
+copies = 1
+note = "Read the section's reference to decisions/0011 against the ADR: the root-owned-files trap on a rootful Linux daemon is what identity resolves there per its Resolving identity section. This change only altered the hazard warnings' wording, which the section doesn't mention."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0001-two-binaries.md#consequences" = "35752cd476e093d9", "decisions/0011-container-identity.md" = "056f2fc49f6dd587", "docs/SUMMARY.md" = "7638de6406544ed6", "docs/ratect-cli.md#doctor" = "4b90b8022c2ad0ac", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "stale-claims"
+unit = "1d74098c854152ae"
+copies = 1
+note = "Read the section's reference to decisions/0011 against the ADR: identity adds to the image's own files and is planned for ratect 0.13.0, as its Decision and Status say. This change only altered the hazard warnings' wording, which the section doesn't mention. Earlier reading: This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. ROADMAP's Future Vision says 0018's naming shipped first, which its status line now also says. Earlier reading: config.rs's change was serialization only; the include loop still awaits ensure_cached per entry (config.rs:4411), curlimages/curl is still digest-pinned (:1814), and nothing else cited moved. Earlier reading: section re-read: both schema files exist; there are 54 tracing macro calls in ratect-core non-test code and no #[instrument] or span macros (\"around fifty\", \"no spans\"); config.rs:4323 is a while-let queue loop awaiting ensure_cached one entry at a time; config.rs:1813 pins curlimages/curl by digest; identity is absent from config.rs and ratect is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking. | Rechecked at HEAD: both schema files exist; 54 tracing macro calls in non-test ratect-core and 0 span/#[instrument]; the include loop is the while-let queue at config.rs:4323 awaiting ensure_cached at :4394 (updated line); curlimages/curl is digest-pinned at config.rs:1813; there is no identity in config.rs; ratect/Cargo.toml is 0.12.0-dev, so \"planned for ratect 0.13.0\" is still forward-looking."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "4c5f56274f496e62", "decisions/0002-runtime-ownership-labels.md" = "d5b09e3eb24571f0", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "f98fdcb97bd01d2e", "decisions/0011-container-identity.md" = "056f2fc49f6dd587", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "70c5bb9821819a66", "docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it" = "23b04874957e5077", "docs/ratect-config-reference.md#run_to_completion-init-containers" = "eebcbf97189cbdeb", "ratect-core/src/config.rs" = "247cc44cdc696a5f", "ratect-core/src/user.rs" = "b61d0cd611c4d5c5", "schema/batect-config.schema.json" = "db44586f53685e27", "schema/ratect-config.schema.json" = "7dbbab2e7811c2f6" }
