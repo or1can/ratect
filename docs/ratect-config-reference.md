@@ -850,6 +850,55 @@ network_mode = "container:database"
   [`dns`](#dnsdns_searchdns_options-name-resolution): neither a task's `run`
   block nor a `customise` overlay accepts it.
 
+## `user`/`group`/`groups`: running as a specific user
+
+A container can say which user and groups it runs as. These are passthroughs:
+Ratect hands them to the runtime verbatim and synthesizes nothing.
+
+```toml
+[containers.build-env]
+image = "rust:1.90"
+user = "1000"
+group = "20"
+groups = ["docker", 999]
+```
+
+The nearest real project is
+[`ratect/tests/fixtures/user.toml`](https://github.com/or1can/ratect/blob/main/ratect/tests/fixtures/user.toml).
+
+- **Each value is a name or an id**, written as a string or a bare integer, so
+  `user = 1000` and `user = "1000"` are the same. An empty value, one containing
+  a `:` and a negative integer are rejected when the file loads.
+- **`user` becomes the container's user, and `group` its primary group.**
+  Together they are the runtime's `user:group`. `group` without `user`, once
+  [`extends`](#extends-inheritance-instead-of-yaml-anchors) has resolved the
+  container, is rejected when the file loads.
+- **Each field inherits on its own.** A child that overrides only `user` keeps
+  its parent's `group`, and can't remove it, so `user = "root"` under a parent
+  with `group = "staff"` runs as `root:staff`.
+- **A base is judged like any other container**, unlike the need for an `image`:
+  a base with `group` needs a `user` of its own, even if every child sets one.
+- **`groups` are supplementary groups**, Docker's `--group-add`, and need no
+  `user`: they add to whichever user the container runs as.
+- **The runtime resolves names against the image's own files.** Ratect doesn't
+  check them, so a user or group the image lacks fails the container's start
+  with the runtime's own error. An id needs no entry in the image, though with
+  none `whoami` fails and `$HOME` is `/`.
+- **Ratect doesn't prepare mounts for this user.** A fresh `cache` volume stays
+  root-owned, so a non-root `user` can't write to it; on rootful Linux the same
+  goes for a missing host directory, which the daemon creates as root. Use
+  `run_as_current_user` if you need them prepared, or create them owned by that
+  user yourself.
+- **Setup commands run as the same user.** A setup command with
+  [`run_in`](#run_in-setup-commands-in-another-container) runs as its target's
+  user instead.
+- **`user` and an enabled `run_as_current_user` can't be combined.** Each says
+  who the container runs as, so setting both is rejected when the file loads.
+  `groups` works with either.
+- **Fixed on the container's own definition**, like
+  [`dns`](#dnsdns_searchdns_options-name-resolution): neither a task's `run`
+  block nor a `customise` overlay accepts them.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -874,6 +923,7 @@ The container fields, by area:
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | External checks | `external_health_check` | [above](#external_health_check-checking-a-container-from-outside-it) *(native only)* |
 | User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
+| User passthrough | `user`, `group`, `groups` | [above](#usergroupgroups-running-as-a-specific-user) *(native only)* |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
 
 ### Where the semantics differ
@@ -915,6 +965,7 @@ follow the file: only a `.toml` file can set them.
 | Setting **`ulimits`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own resource limits — see [above](#ulimits-per-resource-limits) |
 | Setting **`dns`/`dns_search`/`dns_options`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own name resolution — see [above](#dnsdns_searchdns_options-name-resolution) |
 | Setting **`network_mode`** on a container | Rejected when the file loads — Batect has no equivalent field | Takes that container off the task's network — see [above](#network_mode-leaving-the-tasks-network) |
+| Setting **`user`/`group`/`groups`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets the user and groups that container runs as — see [above](#usergroupgroups-running-as-a-specific-user) |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
 
 The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
@@ -981,6 +1032,7 @@ nor `build_directory` is still only reported when a task runs it.
 | Resource limits | — | [`ulimits`](#ulimits-per-resource-limits) on a container |
 | Name resolution | — | [`dns`/`dns_search`/`dns_options`](#dnsdns_searchdns_options-name-resolution) on a container |
 | Network mode | always the task's network | [`network_mode`](#network_mode-leaving-the-tasks-network) on a container |
+| Named user and groups | — | [`user`/`group`/`groups`](#usergroupgroups-running-as-a-specific-user) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | Task's own container's readiness gate | health check, then setup commands | none — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |
@@ -994,7 +1046,8 @@ above are the bulk of the difference. The exceptions are the native-only
 fields (`extends`, a cache's `scope`, a dependency's `run_to_completion` or
 `external_health_check`, a setup command's `run_in`, a container's
 `stop_signal`/`stop_grace_period`, `ulimits`,
-`dns`/`dns_search`/`dns_options` or `network_mode`) and the handful of behaviours in [Where
+`dns`/`dns_search`/`dns_options`, `network_mode` or
+`user`/`group`/`groups`) and the handful of behaviours in [Where
 the semantics differ](#where-the-semantics-differ), which exist because
 `extends` gives some combinations a meaning `batect.yml` has no way to
 express.

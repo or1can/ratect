@@ -215,6 +215,9 @@ pub struct ContainerOptions {
     /// depend on config types (same conversion boundary as `devices`
     /// above). `None` leaves the daemon's own defaults alone.
     pub ulimits: Option<Vec<(String, i64, i64)>>,
+    /// Supplementary groups — Docker's `--group-add`, names or ids as
+    /// written. `None` adds none.
+    pub groups: Option<Vec<String>>,
     /// Nameservers — Docker's `--dns`, already checked to be IP addresses
     /// when the config loaded. `None` leaves the daemon's own choice alone.
     pub dns: Option<Vec<String>>,
@@ -289,9 +292,15 @@ pub struct SharedContainerSpec {
     /// that decision consults, whatever made the container run as the host
     /// user.
     pub runs_as_host_user: bool,
+    /// The user this container's process and its own setup commands run as,
+    /// in the runtime's `user[:group]` form: the mapped `uid:gid` under
+    /// [`user_mapping`](Self::user_mapping), otherwise the passthrough `user`
+    /// and `group` as written. `None` leaves the image's own user alone.
+    /// The loader refuses a container with both, so neither takes precedence.
+    pub process_user: Option<String>,
     /// `Some` when this container's own `run_as_current_user` is enabled.
-    /// When present: the container's `User` is set to the mapped `uid:gid`;
-    /// and, after creation but before starting,
+    /// When present: [`process_user`](Self::process_user) is the mapped
+    /// `uid:gid`; and, after creation but before starting,
     /// minimal `/etc/passwd`/`/etc/shadow`/`/etc/group` entries and the
     /// declared home directory (owned by that `uid:gid`) are uploaded into
     /// it — an arbitrary host uid/gid otherwise has no corresponding entry
@@ -589,6 +598,12 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         log_options: container_config.log_options.clone(),
         tmpfs: tmpfs_mounts(container_config.volumes.as_ref()),
         ulimits: ulimit_triples(container_config.ulimits.as_ref()),
+        groups: container_config.groups.as_ref().map(|groups| {
+            groups
+                .iter()
+                .map(|group| group.as_str().to_string())
+                .collect()
+        }),
         dns: container_config.dns.clone(),
         dns_search: container_config.dns_search.clone(),
         dns_options: container_config.dns_options.clone(),
@@ -605,6 +620,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
             environment,
             network,
             runs_as_host_user: user_mapping.is_some(),
+            process_user: process_user(container_config, user_mapping),
             user_mapping: user_mapping.cloned(),
             network_options,
             health_check: health_check_options(container_config),
@@ -878,6 +894,18 @@ fn device_triples(
             })
             .collect(),
     )
+}
+
+/// See [`SharedContainerSpec::process_user`].
+fn process_user(container: &Container, user_mapping: Option<&UserMapping>) -> Option<String> {
+    if let Some(mapping) = user_mapping {
+        return Some(format!("{}:{}", mapping.user.uid, mapping.user.gid));
+    }
+    let user = container.user.as_ref()?.as_str();
+    Some(match &container.group {
+        Some(group) => format!("{user}:{}", group.as_str()),
+        None => user.to_string(),
+    })
 }
 
 /// Converts a `ulimits` list of `config::Ulimit` into the plain

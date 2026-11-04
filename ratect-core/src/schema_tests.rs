@@ -254,6 +254,7 @@ fn every_native_config_validates_against_the_native_schema() {
         "ratect/tests/fixtures/ulimits.toml",
         "ratect/tests/fixtures/dns.toml",
         "ratect/tests/fixtures/network-mode.toml",
+        "ratect/tests/fixtures/user.toml",
     ] {
         let path = root.join(relative);
         let text = std::fs::read_to_string(&path).expect("failed to read a native config");

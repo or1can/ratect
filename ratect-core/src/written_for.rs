@@ -810,7 +810,7 @@ pub(crate) fn check_bundle(
     let convert_first = match declared_in_batect {
         Some(place) => format!(
             ", which a Batect-format (YAML) file can't set: first, {}",
-            place.remedy()
+            place.remedy("that Git include")
         ),
         None => String::new(),
     };

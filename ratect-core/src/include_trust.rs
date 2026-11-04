@@ -539,31 +539,54 @@ pub(crate) fn restricting(declaring: Option<&Bundle>, format: ConfigFormat) -> O
     }
 }
 
-/// Where a Batect-format (YAML) file declaring a Git include sits, which
-/// decides how that entry can reach TOML once it needs a native-only field
-/// (decisions/0021). `Option<BatectFile>`, `None` for a TOML file, is how both
+/// Where a Batect-format (YAML) file declaring a Git include or a container
+/// sits, which decides how that declaration can reach TOML once it needs a
+/// native-only field (decisions/0021). `Option<BatectFile>`, `None` for a TOML file, is how both
 /// [`check_dialect`] and [`crate::written_for::check_bundle`] are told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BatectFile {
-    /// The root. Its entries reach TOML only by converting the project: a
-    /// YAML root that includes a TOML file is refused.
-    Root,
-    /// A file the project owner controls, included locally: the entry can
-    /// move into a TOML file of its own.
+    /// A local file of a project whose root is YAML, the root included. Only
+    /// converting the project gets it to TOML: a YAML root that includes a
+    /// TOML file is refused.
+    YamlRootProject,
+    /// A local include of a TOML root: what it declares can move into a TOML
+    /// file of its own.
     Owned,
-    /// A bundle file, which only its author can edit.
+    /// A bundle file a TOML root reaches, which only its author can edit.
     Bundle,
+    /// A bundle file a YAML root reaches: its author moving to TOML isn't
+    /// enough, since that root refuses TOML too.
+    BundleOfYamlRootProject,
 }
 
 impl BatectFile {
-    /// The way out, as a clause completing "To set it, …".
-    pub(crate) fn remedy(self) -> &'static str {
+    /// Where a Batect-format file sits, from whether a Git include reached it
+    /// and whether the project's root is Batect-format too. The one place
+    /// that's decided, for a Git include entry and a container alike.
+    pub(crate) fn of(in_bundle: bool, root_is_batect: bool) -> Self {
+        match (in_bundle, root_is_batect) {
+            (false, true) => BatectFile::YamlRootProject,
+            (false, false) => BatectFile::Owned,
+            (true, false) => BatectFile::Bundle,
+            (true, true) => BatectFile::BundleOfYamlRootProject,
+        }
+    }
+
+    /// The way out, as a clause completing "To set it, …", for what `subject`
+    /// names.
+    pub(crate) fn remedy(self, subject: &str) -> String {
         match self {
-            BatectFile::Root => "convert the project to TOML (ratect config convert)",
-            BatectFile::Owned => "move that Git include into a TOML file",
-            BatectFile::Bundle => {
-                "the bundle's author has to move that Git include into a TOML file"
+            BatectFile::YamlRootProject => {
+                "convert the project to TOML (ratect config convert)".to_string()
             }
+            BatectFile::Owned => format!("move {subject} into a TOML file"),
+            BatectFile::Bundle => {
+                format!("the bundle's author has to move {subject} into a TOML file")
+            }
+            BatectFile::BundleOfYamlRootProject => format!(
+                "the bundle's author has to move {subject} into a TOML file, and this project \
+                 has to convert to TOML (ratect config convert)"
+            ),
         }
     }
 }
@@ -623,7 +646,7 @@ pub(crate) fn check_dialect(
         anyhow::bail!(
             "{declared_in} sets '{field}' on its Git include of '{repo}', but a Batect-format \
              (YAML) file can't set that field. To set it, {}.",
-            batect_file.remedy()
+            batect_file.remedy("that Git include")
         );
     }
     let subject = match declaring {

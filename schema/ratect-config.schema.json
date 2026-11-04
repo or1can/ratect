@@ -387,6 +387,55 @@
             }
           ]
         },
+        "group": {
+          "description": "The primary group `user` runs with: a name or id, handed to the runtime verbatim. Only valid alongside `user`.",
+          "examples": [
+            "staff",
+            20
+          ],
+          "oneOf": [
+            {
+              "oneOf": [
+                {
+                  "pattern": "^[^:]+$",
+                  "type": "string"
+                },
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "groups": {
+          "description": "Supplementary groups for this container — Docker's --group-add: names or ids, handed to the runtime verbatim. A name must already exist in the image.",
+          "examples": [
+            [
+              "docker",
+              999
+            ]
+          ],
+          "items": {
+            "oneOf": [
+              {
+                "pattern": "^[^:]+$",
+                "type": "string"
+              },
+              {
+                "minimum": 0,
+                "type": "integer"
+              }
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "health_check": {
           "anyOf": [
             {
@@ -587,6 +636,30 @@
           "type": [
             "array",
             "null"
+          ]
+        },
+        "user": {
+          "description": "The user this container runs as, and its setup commands exec as: a name or id, handed to the runtime verbatim. A name must already exist in the image. The image's own user applies when unset.",
+          "examples": [
+            "app",
+            1000
+          ],
+          "oneOf": [
+            {
+              "oneOf": [
+                {
+                  "pattern": "^[^:]+$",
+                  "type": "string"
+                },
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "volumes": {

@@ -122,6 +122,12 @@ fn ulimits_fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ulimits.toml")
 }
 
+/// `user`/`group`/`groups` (ratect#234) — native-only, so its own fixture
+/// lives here too, for the same reason as `run_to_completion` above.
+fn user_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/user.toml")
+}
+
 /// `dns`/`dns_search`/`dns_options` (ratect#105) — native-only, so its own
 /// fixture lives here too, for the same reason as `run_to_completion` above.
 fn dns_fixture_path() -> PathBuf {
@@ -3912,6 +3918,98 @@ fn each_container_gets_only_its_own_network_mode_via_docker() {
         "a dependency's network mode must not reach the task's own container:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
+}
+
+/// `user`/`group`/`groups` (ratect#234), end to end: `id` reports the uid,
+/// the gid and each supplementary group the container was configured with, by
+/// number or by a name the image's own files resolve. Requires a running
+/// Docker daemon with network access to pull `alpine:3.18.2`. Run explicitly
+/// with `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn user_group_and_groups_reach_the_container_via_docker() {
+    let _guard = shared_docker();
+    for (task, expected) in [
+        (
+            "numeric",
+            &["uid=1234", "gid=2345", "3456", "10(wheel)"][..],
+        ),
+        ("named", &["uid=405(guest)", "gid=100(users)"][..]),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(user_fixture_path())
+            .args(["run", task])
+            .output()
+            .expect("failed to run ratect");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for fragment in expected {
+            assert!(
+                stdout.contains(fragment),
+                "{task}: {fragment} in:\n{stdout}"
+            );
+        }
+    }
+}
+
+/// A dependency's main process and its setup command each fail the run unless
+/// they have its configured identity, and `app`, which declares none, fails
+/// unless it is still the image's root. Requires a running Docker daemon with
+/// network access to pull `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn a_dependency_and_its_setup_commands_run_as_its_own_user_via_docker() {
+    let _guard = shared_docker();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(user_fixture_path())
+        .args(["run", "per-container"])
+        .output()
+        .expect("failed to run ratect");
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("app-unaffected"),
+        "a dependency's user must not reach the task's own container:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// Ratect doesn't check a name against the image: a user or group it lacks is
+/// the runtime's own start error, which names it. Requires a running Docker
+/// daemon with network access to pull `alpine:3.18.2`. Run explicitly with
+/// `cargo test -- --ignored`.
+#[test]
+#[ignore]
+fn a_name_the_image_lacks_surfaces_the_runtimes_own_error_via_docker() {
+    let _guard = shared_docker();
+    for (task, name) in [
+        ("unknown-user", "no-such-user"),
+        ("unknown-group", "no-such-group"),
+    ] {
+        let output = ratect_command()
+            .arg("-f")
+            .arg(user_fixture_path())
+            .args(["run", task])
+            .output()
+            .expect("failed to run ratect");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "stderr:\n{stderr}");
+        assert!(stderr.contains(name), "stderr:\n{stderr}");
+    }
 }
 
 /// A stand-in daemon on a plain TCP port: answers `/version` with just

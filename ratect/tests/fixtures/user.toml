@@ -1,0 +1,75 @@
+# A native `ratect.toml` fixture proving the `user`/`group`/`groups`
+# passthroughs (ratect#234) against a real Docker daemon. Native-only — Batect
+# has no equivalent fields, so this fixture, unlike most of the engine/Docker
+# behaviour proven under `ratect-compat/tests/fixtures/`, can only be expressed
+# here (see AGENTS.md's fixture-layer guideline).
+#
+# `numeric` and `named` print `id`, which the tests read. `checked-dependency`
+# checks its identity from the inside in both its main process and a setup
+# command, so one that never reached Docker, or the exec, fails the run.
+# `wheel` (gid 10) and `guest` (uid 405), in group `users` (gid 100), are
+# alpine's own.
+ratect_version = "0.12.0"
+project_name = "ratect-user-test"
+
+[containers.numeric]
+image = "alpine:3.18.2"
+user = 1234
+group = "2345"
+groups = [3456, "wheel"]
+command = "id"
+
+[containers.named]
+image = "alpine:3.18.2"
+user = "guest"
+group = "users"
+command = "id"
+
+[containers.checked-dependency]
+image = "alpine:3.18.2"
+user = "1234"
+group = "2345"
+groups = ["3456"]
+stop_grace_period = "0"
+command = "sh -c 'test \"$(id -u):$(id -g)\" = 1234:2345 && id -G | grep -qw 3456 && sleep 60'"
+setup_commands = [
+    { command = "sh -c 'test \"$(id -u):$(id -g)\" = 1234:2345 && id -G | grep -qw 3456'" },
+]
+
+[containers.app]
+image = "alpine:3.18.2"
+dependencies = ["checked-dependency"]
+# Declares no `user` of its own: whoever the dependency runs as, this runs as
+# the image's root.
+command = "sh -c 'test $(id -u) -eq 0 && echo app-unaffected'"
+
+[containers.unknown-user]
+image = "alpine:3.18.2"
+user = "no-such-user"
+command = "id"
+
+[containers.unknown-group]
+image = "alpine:3.18.2"
+user = "guest"
+groups = ["no-such-group"]
+command = "id"
+
+[tasks.numeric]
+description = "A numeric user, group and supplementary groups"
+run = { container = "numeric" }
+
+[tasks.named]
+description = "A user and group the image names"
+run = { container = "named" }
+
+[tasks.per-container]
+description = "A dependency and its setup commands run as its user, and only it does"
+run = { container = "app" }
+
+[tasks.unknown-user]
+description = "A user the image lacks"
+run = { container = "unknown-user" }
+
+[tasks.unknown-group]
+description = "A supplementary group the image lacks"
+run = { container = "unknown-group" }

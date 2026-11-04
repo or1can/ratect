@@ -2975,27 +2975,37 @@ fn owned_directory_parent_ignores_a_trailing_slash() {
 
 /// A root host user is passed through as `0:0`, as in Batect's
 /// `uploadDirectory`/`determineUserAndGroup`: its directories are owned by
-/// `0:0`, still mode `0755`, and the container runs as `0:0`.
-#[tokio::test]
-async fn a_root_host_user_owns_its_directories_and_runs_the_container_as_root() {
+/// `0:0`, still mode `0755`. `derive_spec_maps_host_root_to_a_process_user_of_0_0`
+/// is the container running as `0:0`.
+#[test]
+fn a_root_host_user_owns_its_directories() {
     let tar_bytes = build_owned_directory_tar("/home/root", 0, 0).unwrap();
     let mut archive = tar::Archive::new(tar_bytes.as_slice());
     let entry = archive.entries().unwrap().next().unwrap().unwrap();
     assert_eq!(entry.header().uid().unwrap(), 0);
     assert_eq!(entry.header().gid().unwrap(), 0);
     assert_eq!(entry.header().mode().unwrap(), 0o755);
+}
 
+/// The spec's resolved process user and supplementary groups are what the
+/// runtime is told, verbatim.
+#[tokio::test]
+async fn container_config_hands_the_runtime_the_process_user_and_groups() {
     let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
     let mut spec = spec_from(
         &crate::config::Container::default(),
         crate::labels::ContainerRole::Task,
     );
-    let mut mapping = user_mapping_fixture();
-    mapping.user.uid = 0;
-    mapping.user.gid = 0;
-    spec.shared.user_mapping = Some(mapping);
+    spec.shared.process_user = Some("app:staff".to_string());
+    spec.shared.options.groups = Some(vec!["docker".to_string(), "999".to_string()]);
+
     let config = client.container_config(&spec).unwrap();
-    assert_eq!(config.user.as_deref(), Some("0:0"));
+
+    assert_eq!(config.user.as_deref(), Some("app:staff"));
+    assert_eq!(
+        config.host_config.unwrap().group_add,
+        Some(vec!["docker".to_string(), "999".to_string()])
+    );
 }
 
 /// A `local` (or directory-type `cache`) mount of `source` at `container`.
@@ -4185,7 +4195,9 @@ async fn container_config_leaves_unset_defaults_to_the_image_and_daemon() {
     assert_eq!(config.entrypoint, None);
     assert_eq!(config.working_dir, None);
     assert_eq!(config.user, None);
-    assert_eq!(config.host_config.unwrap().shm_size, None);
+    let host_config = config.host_config.unwrap();
+    assert_eq!(host_config.shm_size, None);
+    assert_eq!(host_config.group_add, None);
 }
 
 /// Batect's `DockerClientContainerManagementSpec`, creating a container

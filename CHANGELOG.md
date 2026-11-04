@@ -27,10 +27,13 @@ history, from when it was the only binary.
 ### Added
 
 - **ratect only:** `ratect doctor` reports the Docker daemon's class: `rootless`, `userns-remap`, `desktop` or `rootful Linux`.
+- **ratect only:** Containers in a `ratect.toml` take `user`, `group` and `groups`, handed to the runtime as written, with `group` needing `user`. Setup commands exec as the same user. A `.yml` refuses all three.
 
 ### Changed
 
 - Each binary's GitHub Release notes list only the changelog entries that apply to it.
+- **ratect only:** The error for a native-only field on a container in a `.yml` says how to use it: convert the project, move the container into a TOML file, or, in a bundle, have its author do so.
+- **ratect only:** The error for a native-only field on a Git include entry in a `.yml` a YAML root reaches no longer suggests a TOML file that root would refuse.
 
 ## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
 

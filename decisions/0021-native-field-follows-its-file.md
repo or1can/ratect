@@ -6,7 +6,12 @@ include-entry exception in [0003](0003-ratect-native-config-format.md)'s
 "Generalized (ratect#214)" paragraph; the rest of 0003 stands. Refined while
 implementing (#680): the error gives a way out per kind of file rather than
 always `ratect config convert`, which converts a project from its root and so
-can't convert an included `.yml` or a bundle file.
+can't convert an included `.yml` or a bundle file. Refined by
+[#234](https://github.com/or1can/ratect/issues/234): the way out depends on the
+root as well as the file, and a container's refusal gives one too. A local
+`.yml` under a YAML root needs the project converted, since that root refuses
+TOML, and a bundle file a YAML root reaches needs its author and the project
+converted.
 
 ## Context
 

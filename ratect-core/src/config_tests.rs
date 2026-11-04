@@ -4249,6 +4249,9 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -5088,6 +5091,9 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -6901,6 +6907,7 @@ fn batect_shaped_for_test(containers: &IndexMap<String, Container>) -> Vec<Batec
             name: name.as_str(),
             container,
             origin: None,
+            way_out: None,
         })
         .collect()
 }
@@ -6961,6 +6968,10 @@ async fn native_only_fields_are_rejected_in_a_yaml_include_of_a_native_project()
         ("dns_search", "    dns_search:\n      - corp.example.com\n"),
         ("dns_options", "    dns_options:\n      - ndots:2\n"),
         ("network_mode", "    network_mode: host\n"),
+        ("user", "    user: app\n"),
+        ("user", "    user: 1000\n"),
+        ("group", "    group: staff\n"),
+        ("groups", "    groups:\n      - docker\n      - 999\n"),
         (
             "scope",
             "    volumes:\n      - type: cache\n        name: c\n        container: /c\n        \
@@ -13776,6 +13787,9 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -16800,6 +16814,7 @@ async fn a_native_only_field_in_a_bundle_file_names_it_within_the_bundle() {
         .unwrap();
     let error = ConfigFormat::Compat
         .reject_incompatible_fields(
+            &dir.join("batect.yml"),
             &loaded.config,
             &loaded.container_origins,
             &loaded.container_boundaries,
@@ -16816,6 +16831,7 @@ async fn a_native_only_field_in_a_bundle_file_names_it_within_the_bundle() {
         )),
         "{error}"
     );
+    assert!(!error.contains("To use it"), "{error}");
     assert!(
         !error.contains(&cache_root.display().to_string()),
         "{error}"
@@ -18531,5 +18547,440 @@ fn a_toml_error_without_a_snippet_is_escaped_keeping_its_layout() {
     assert_eq!(
         escaped_toml_error(&error).to_string(),
         "x\\nError: forged\n"
+    );
+}
+
+/// `user`, `group` and `groups` take a name or an id, written as a string or
+/// a bare integer, and hand the runtime the same text either way (#234,
+/// decisions/0011).
+#[tokio::test]
+async fn user_group_and_groups_parse_as_strings_and_bare_integers() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.named]
+image = "alpine:3.18"
+user = "app"
+group = "staff"
+groups = ["docker", 999]
+
+[containers.numeric]
+image = "alpine:3.18"
+user = 1000
+group = 20
+
+[containers.quoted]
+image = "alpine:3.18"
+user = "1000"
+group = "20"
+"#,
+    )
+    .await
+    .unwrap();
+
+    let text = |value: &Option<NameOrId>| value.as_ref().map(|v| v.as_str().to_string());
+    let named = &project.config.containers["named"];
+    assert_eq!(text(&named.user).as_deref(), Some("app"));
+    assert_eq!(text(&named.group).as_deref(), Some("staff"));
+    assert_eq!(
+        named
+            .groups
+            .iter()
+            .flatten()
+            .map(NameOrId::as_str)
+            .collect::<Vec<_>>(),
+        ["docker", "999"]
+    );
+    let numeric = &project.config.containers["numeric"];
+    let quoted = &project.config.containers["quoted"];
+    assert_eq!(text(&numeric.user).as_deref(), Some("1000"));
+    assert_eq!(text(&numeric.group).as_deref(), Some("20"));
+    assert_eq!(numeric.user, quoted.user);
+    assert_eq!(numeric.group, quoted.group);
+}
+
+/// A negative number is no id, and nothing a name could be written as.
+#[tokio::test]
+async fn a_negative_user_is_refused() {
+    let error = load_native_toml(
+        "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\nuser = -1\n",
+    )
+    .await
+    .expect_err("a negative id should be refused");
+    assert!(format!("{error:#}").contains("user"), "got: {error:#}");
+}
+
+/// Passwd and group files use `:` as their field separator, so no name holds
+/// one, and an empty value tells the runtime nothing. Refused rather than
+/// handed over: Docker reads `""` as the image's own user, and either of
+/// these in `user` would bring back the `user[:group]` packing the separate
+/// fields exist to avoid, including `":20"`, a group with no user.
+#[tokio::test]
+async fn a_value_that_cannot_be_a_name_or_id_is_refused_naming_the_container_and_field() {
+    for (field, declaration) in [
+        ("user", r#"user = """#),
+        ("user", r#"user = "1000:20""#),
+        ("user", r#"user = ":20""#),
+        ("group", "user = \"app\"\ngroup = \"\""),
+        ("group", "user = \"app\"\ngroup = \"a:b\""),
+        ("groups", r#"groups = ["docker", ""]"#),
+        ("groups", r#"groups = ["a:b"]"#),
+    ] {
+        let error = load_native_toml(&format!(
+            "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n{declaration}\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("{declaration} should be refused"));
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("'app'") && error.contains(&format!("'{field}'")),
+            "{declaration}: {error}"
+        );
+    }
+}
+
+/// `group` says which primary group `user` runs with, so without one it says
+/// nothing the runtime could be told.
+#[tokio::test]
+async fn group_without_user_is_refused_naming_the_container_and_field() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+group = "staff"
+"#,
+    )
+    .await
+    .expect_err("group without user should be refused");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("'app'") && error.contains("'group'") && error.contains("'user'"),
+        "got: {error}"
+    );
+}
+
+/// The rule is about what a container ends up with: `extends` can supply the
+/// `user` that makes a child's `group` legal.
+#[tokio::test]
+async fn group_without_user_is_judged_on_the_container_extends_resolves() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+
+[containers.child]
+extends = "base"
+group = "staff"
+"#,
+    )
+    .await
+    .expect_err("a group with no user, declared or inherited, should be refused");
+    assert!(format!("{error:#}").contains("'child'"), "got: {error:#}");
+
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+user = "app"
+
+[containers.child]
+extends = "base"
+group = "staff"
+groups = ["docker"]
+"#,
+    )
+    .await
+    .expect("a group whose user is inherited is legal");
+    let child = &project.config.containers["child"];
+    assert_eq!(child.user.as_ref().map(NameOrId::as_str), Some("app"));
+    assert_eq!(child.group.as_ref().map(NameOrId::as_str), Some("staff"));
+}
+
+/// A base is judged as the container it is, even if a child would complete
+/// it: a config that breaks the rule fails at load, whichever containers a
+/// task runs. The way out is moving `user` into the base.
+#[tokio::test]
+async fn a_base_with_group_but_no_user_is_refused_even_if_its_child_adds_one() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+group = "staff"
+
+[containers.child]
+extends = "base"
+image = "alpine:3.18"
+user = "app"
+"#,
+    )
+    .await
+    .expect_err("the base has a group and no user");
+    assert!(format!("{error:#}").contains("'base'"), "got: {error:#}");
+}
+
+/// `group` inherits separately from `user`, like any other field: a child
+/// overriding only `user` keeps its parent's `group`.
+#[tokio::test]
+async fn a_child_overriding_user_keeps_its_parents_group() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+user = "app"
+group = "staff"
+
+[containers.child]
+extends = "base"
+user = "root"
+"#,
+    )
+    .await
+    .unwrap();
+    let child = &project.config.containers["child"];
+    assert_eq!(child.user.as_ref().map(NameOrId::as_str), Some("root"));
+    assert_eq!(child.group.as_ref().map(NameOrId::as_str), Some("staff"));
+}
+
+/// `groups` needs no `user`: they add to whichever user the container runs as.
+#[tokio::test]
+async fn groups_without_user_are_fine() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+groups = ["docker"]
+"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(project.config.containers["app"].user, None);
+}
+
+/// Until `run_as_current_user` leaves the native format (#233), a container
+/// could name two users. Refused rather than given a silent precedence
+/// (decisions/0011), wherever each comes from. A disabled
+/// `run_as_current_user` names none, and `groups` adds to either.
+#[tokio::test]
+async fn user_with_an_enabled_run_as_current_user_is_refused() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+run_as_current_user = { enabled = true, home_directory = "/home/me" }
+
+[containers.child]
+extends = "base"
+user = "app"
+"#,
+    )
+    .await
+    .expect_err("two sources of a user should be refused");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("'child'")
+            && error.contains("'user'")
+            && error.contains("'run_as_current_user'"),
+        "got: {error}"
+    );
+
+    load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.disabled]
+image = "alpine:3.18"
+run_as_current_user = { enabled = false }
+user = "app"
+
+[containers.adds-groups]
+image = "alpine:3.18"
+run_as_current_user = { enabled = true, home_directory = "/home/me" }
+groups = ["docker"]
+"#,
+    )
+    .await
+    .expect("neither of these names two users");
+}
+
+/// `user` and friends are native-only (#234): a `batect.yml` using one is
+/// refused, naming the field, under the compat binary's own loader too.
+#[tokio::test]
+async fn user_group_and_groups_are_rejected_in_compat_mode() {
+    for (field, declaration) in [
+        ("user", "    user: app\n"),
+        ("user", "    user: 1000\n"),
+        ("group", "    group: staff\n"),
+        ("groups", "    groups:\n      - docker\n"),
+    ] {
+        let dir = unique_temp_dir();
+        let path = dir.join("batect.yml");
+        std::fs::write(
+            &path,
+            format!(
+                "project_name: demo\ncontainers:\n  app:\n    image: alpine\n{declaration}tasks: {{}}\n"
+            ),
+        )
+        .unwrap();
+        let err = load_project(&path, &LoadOutput::default())
+            .await
+            .unwrap_err();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            format!("{err:#}").contains(&format!("uses '{field}'")),
+            "expected a compat rejection of '{field}', got: {err:#}"
+        );
+    }
+}
+
+/// A native-only field in a `.yml` is refused with the way out that file has
+/// (decisions/0021). Everything a YAML root includes is YAML too, so only
+/// converting the project gets any of its files to TOML.
+#[tokio::test]
+async fn a_native_field_in_a_yaml_root_or_its_include_says_to_convert_the_project() {
+    const CONTAINER: &str = "containers:\n  app:\n    image: alpine\n    user: app\n";
+    let dir = unique_temp_dir();
+    let root = dir.join("batect.yml");
+    std::fs::write(&root, format!("project_name: demo\n{CONTAINER}")).unwrap();
+    let in_root = load_project_native(&root, running_0_12(), &LoadOutput::default()).await;
+    std::fs::write(dir.join("frag.yml"), CONTAINER).unwrap();
+    std::fs::write(&root, "project_name: demo\ninclude:\n  - frag.yml\n").unwrap();
+    let in_include = load_project_native(&root, running_0_12(), &LoadOutput::default()).await;
+    std::fs::remove_dir_all(&dir).ok();
+
+    for result in [in_root, in_include] {
+        let error = format!("{:#}", result.expect_err("refused"));
+        assert!(
+            error.ends_with("To use it, convert the project to TOML (ratect config convert)."),
+            "{error}"
+        );
+    }
+}
+
+/// `ratect-compat` has no `config convert` verb and can't read TOML, so it
+/// gives no way out at all rather than one it can't follow.
+#[tokio::test]
+async fn a_native_field_under_ratect_compat_gives_no_way_out() {
+    let dir = unique_temp_dir();
+    let root = dir.join("batect.yml");
+    std::fs::write(
+        &root,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    user: app\n",
+    )
+    .unwrap();
+    let error = load_project(&root, &LoadOutput::default())
+        .await
+        .expect_err("refused");
+    std::fs::remove_dir_all(&dir).ok();
+    let error = format!("{error:#}");
+    assert!(error.contains("uses 'user'"), "{error}");
+    assert!(!error.contains("To use it"), "{error}");
+    assert!(!error.contains("config convert"), "{error}");
+}
+
+/// A bundle's way out depends on what reaches it: a YAML root refuses TOML,
+/// so its author moving to TOML doesn't get the project there on its own.
+#[tokio::test]
+async fn a_native_field_in_a_bundle_says_what_its_author_and_this_project_must_do() {
+    for (root_file, root, way_out) in [
+        (
+            "ratect.toml",
+            format!(
+                "project_name = \"demo\"\n[[include]]\ntype = \"git\"\nrepo = \"{BUNDLE_REMOTE}\"\n\
+                 ref = \"{BUNDLE_REF}\"\npath = \"sig.yml\"\n"
+            ),
+            "To use it, the bundle's author has to move that container into a TOML file.",
+        ),
+        (
+            "batect.yml",
+            root_including_bundle_path("sig.yml", ""),
+            "To use it, the bundle's author has to move that container into a TOML file, and \
+             this project has to convert to TOML (ratect config convert).",
+        ),
+    ] {
+        let dir = unique_temp_dir();
+        let path = dir.join(root_file);
+        std::fs::write(&path, root).unwrap();
+        let files = HashMap::from([(
+            "sig.yml".to_string(),
+            "containers:\n  app:\n    image: alpine\n    user: app\n".to_string(),
+        )]);
+        let git = FakeGitClient::new().with_files(BUNDLE_REMOTE, BUNDLE_REF, files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let loaded = Config::load_from_file_native_with_git_cache(&path, &git_cache)
+            .await
+            .unwrap();
+        let error = ConfigFormat::Native
+            .reject_incompatible_fields(
+                &path,
+                &loaded.config,
+                &loaded.container_origins,
+                &loaded.container_boundaries,
+            )
+            .unwrap_err()
+            .to_string();
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
+        assert!(error.ends_with(way_out), "{root_file}: {error}");
+    }
+}
+
+/// The same way out for a Git include entry in a local `.yml` of a YAML root:
+/// moving it into a TOML file is what that root refuses.
+#[tokio::test]
+async fn a_native_field_on_a_git_include_in_a_yaml_roots_include_says_to_convert_the_project() {
+    let dir = unique_temp_dir();
+    let root = dir.join("batect.yml");
+    std::fs::write(&root, "project_name: demo\ninclude:\n  - frag.yml\n").unwrap();
+    std::fs::write(
+        dir.join("frag.yml"),
+        "include:\n  - type: git\n    repo: /nonexistent/never-cloned\n    ref: v1\n    \
+         allow_nested_git_includes: true\n",
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), FakeGitClient::new(), 1000);
+    let error = format!(
+        "{:#}",
+        Config::load_from_file_native_with_git_cache(&root, &git_cache)
+            .await
+            .expect_err("a .yml can't set a native-only field")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+    assert!(
+        error.contains("To set it, convert the project to TOML (ratect config convert)."),
+        "{error}"
+    );
+}
+
+/// A TOML root can include TOML, so the container alone has to move.
+#[tokio::test]
+async fn a_native_field_in_a_yaml_include_of_a_toml_root_says_to_move_the_container() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: alpine\n    groups:\n      - docker\n",
+    )
+    .await;
+    let error = format!("{:#}", result.expect_err("refused"));
+    assert!(
+        error.ends_with("To use it, move that container into a TOML file."),
+        "{error}"
     );
 }

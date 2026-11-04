@@ -63,7 +63,9 @@
 //! `build_devices`) — `(name, soft, hard)` triples, `None`/absent leaving
 //! the daemon's own defaults alone. `dns`/`dns_search`/`dns_options` (ratect#105)
 //! follow it too, as plain string lists passed straight onto bollard's
-//! `HostConfig` fields of the same names — no builder needed. `network_mode`
+//! `HostConfig` fields of the same names — no builder needed. `groups`
+//! (ratect#234) goes straight onto `HostConfig.group_add` the same way.
+//! `network_mode`
 //! (ratect#106) is the one that changes more than a `HostConfig` field: a
 //! container on the task's network is created on it, with its aliases
 //! (`build_networking_config`), so it is never also on the default `bridge`
@@ -1983,10 +1985,11 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// passed to Docker's exec API as already-parsed argv — confirmed by
     /// reading `RunContainerSetupCommandsStepRunner.runSetupCommand`, not
     /// assumed from Batect's docs). Docker's `exec`
-    /// mechanism. Runs with the container's own environment and (when
-    /// `user_mapping` is set) the same `uid:gid` the container itself runs
-    /// as, matching Batect. Failure to *run* the command is an `Err`; the
-    /// command running and exiting non-zero is an `Ok` whose
+    /// mechanism. Runs with the container's own environment and as `user`
+    /// (its [`process_user`](crate::container_spec::SharedContainerSpec::process_user)
+    /// for a command in its own container; `None` leaves the one the
+    /// container runs as), matching Batect. Failure to *run* the command is
+    /// an `Err`; the command running and exiting non-zero is an `Ok` whose
     /// [`ExecResult::exit_code`] says so — the caller decides what a
     /// non-zero setup command means.
     async fn exec_in_container(
@@ -1995,7 +1998,7 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
         command: &str,
         working_directory: Option<&str>,
         environment: Option<&HashMap<String, String>>,
-        user_mapping: Option<&UserMapping>,
+        user: Option<&str>,
     ) -> Result<ExecResult>;
 
     /// Starts `container_id` — created by
@@ -2829,6 +2832,7 @@ impl DockerClient {
             ),
             tmpfs: build_tmpfs_mounts(options.tmpfs.as_ref()),
             ulimits: build_ulimits(options.ulimits.as_ref()),
+            group_add: options.groups.clone(),
             dns: options.dns.clone(),
             dns_search: options.dns_search.clone(),
             dns_options: options.dns_options.clone(),
@@ -2849,10 +2853,7 @@ impl DockerClient {
             open_stdin: stdin.open_stdin,
             attach_stdin: stdin.attach_stdin,
             stdin_once: stdin.stdin_once,
-            user: shared
-                .user_mapping
-                .as_ref()
-                .map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+            user: shared.process_user.clone(),
             healthcheck: build_health_config(shared.health_check.as_ref()),
             working_dir: options.working_directory.clone(),
             labels: Some(spec.labels.clone()),
@@ -3599,7 +3600,7 @@ impl ContainerRuntime for DockerClient {
         command: &str,
         working_directory: Option<&str>,
         environment: Option<&HashMap<String, String>>,
-        user_mapping: Option<&UserMapping>,
+        user: Option<&str>,
     ) -> Result<ExecResult> {
         let exec = self
             .docker
@@ -3611,7 +3612,7 @@ impl ContainerRuntime for DockerClient {
                     tty: Some(true),
                     env: build_env(environment),
                     cmd: Some(tokenize_command_line(command)?),
-                    user: user_mapping.map(|m| format!("{}:{}", m.user.uid, m.user.gid)),
+                    user: user.map(str::to_string),
                     working_dir: working_directory.map(str::to_string),
                     ..Default::default()
                 },

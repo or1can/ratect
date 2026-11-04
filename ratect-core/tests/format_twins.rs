@@ -216,6 +216,22 @@ const DIVERGENCES: &[Divergence] = &[
     Divergence {
         between: BOTH,
         case: "native-only",
+        pointer: "/containers/child/group",
+        left: r#"null"#,
+        right: r#""staff""#,
+        because: "docs/ratect-config-reference.md#usergroupgroups-running-as-a-specific-user",
+    },
+    Divergence {
+        between: BOTH,
+        case: "native-only",
+        pointer: "/containers/child/groups",
+        left: r#"null"#,
+        right: r#"["docker","999"]"#,
+        because: "docs/ratect-config-reference.md#usergroupgroups-running-as-a-specific-user",
+    },
+    Divergence {
+        between: BOTH,
+        case: "native-only",
         pointer: "/containers/child/stop_signal",
         left: r#"null"#,
         right: r#""SIGINT""#,
@@ -228,6 +244,14 @@ const DIVERGENCES: &[Divergence] = &[
         left: r#"null"#,
         right: r#"[{"hard":2048,"name":"nofile","soft":1024},{"hard":0,"name":"core","soft":0}]"#,
         because: "docs/ratect-config-reference.md#ulimits-per-resource-limits",
+    },
+    Divergence {
+        between: BOTH,
+        case: "native-only",
+        pointer: "/containers/child/user",
+        left: r#"null"#,
+        right: r#""app""#,
+        because: "docs/ratect-config-reference.md#usergroupgroups-running-as-a-specific-user",
     },
     Divergence {
         between: BOTH,
