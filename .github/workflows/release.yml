@@ -131,6 +131,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: ${{ needs.plan.outputs.tag }}
       VERSION: ${{ fromJson(needs.plan.outputs.val).releases[0].app_version }}
+      BINARY: ${{ fromJson(needs.plan.outputs.val).releases[0].app_name }}
       # dist's own `announcement_title` is just the tag string itself (e.g.
       # "ratect-compat/v0.28.0") for a Singular announcement — fine as an id,
       # not as a Release title a human reads.
@@ -148,7 +149,7 @@ jobs:
       # isn't blocked outright, and it announces every dist-able package at
       # that version at once (2, not 1) — the same releases[0]-only
       # assumption Generate SBOM already guards against, needed here too
-      # since VERSION/TITLE/PRERELEASE_FLAG above are all releases[0]-only.
+      # since VERSION/BINARY/TITLE/PRERELEASE_FLAG above are all releases[0]-only.
       # Computed via jq-in-bash below, not a GitHub Actions expression —
       # `.releases | length` is jq's own pipe syntax, which GitHub Actions
       # expressions don't have at all (ratect#33's own original mistake,
@@ -166,7 +167,7 @@ jobs:
             echo "::error::expected exactly 1 release in this announcement, found $release_count — this job only drafts a release for releases[0]" >&2
             exit 1
           fi
-          python3 tools/changelog-section.py "$VERSION" > notes.md
+          python3 tools/changelog-section.py --binary "$BINARY" "$VERSION" > notes.md
           # Idempotent against a "re-run all jobs" retry that lands here a
           # second time: if the draft from a previous attempt already
           # exists, editing it (rather than erroring on `create`) lets

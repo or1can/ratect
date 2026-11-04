@@ -15,7 +15,7 @@
 
 """Prints the `CHANGELOG.md` section for one released version.
 
-    python3 tools/changelog-section.py <version> [changelog]
+    python3 tools/changelog-section.py [--binary <package>] <version> [changelog]
 
 `changelog` defaults to `CHANGELOG.md` in the current directory.
 
@@ -45,6 +45,26 @@ never released. Instead, each `·`-separated fragment of a heading's bracketed
 content is checked for a trailing version token of its own — `"ratect
 0.6.0"`'s token is `"0.6.0"`, `"0.21.0"`'s token is `"0.21.0"` — and that token
 must equal the requested version exactly.
+
+Given `--binary`, a fragment must name that binary and that version, so a bare
+pre-split heading never matches. The two binaries' version lines are
+independent and older than the split: `ratect 0.13.0` is not the `0.13.0` of
+July 2026, which was `ratect-compat`'s, and a release with no heading of its own
+has to fail rather than publish that one's notes.
+
+# How filtering works
+
+Given `--binary`, an entry marked for the other binary is omitted, along with
+whatever is indented under it, and every other entry stays exactly as written,
+marker included. Only a marker in `ENTRY_MARKERS`, at the very start of a
+top-level `- ` entry, counts: a "(ratect only)" further along often qualifies
+one flag or clause rather than the entry, so it is prose and the entry reaches
+both binaries' notes. A wrongly omitted entry could drop a breaking change from
+a binary's notes, where a wrongly kept one only adds a line.
+
+A subsection left with no entries goes entirely, heading and any prose in it. A
+release with no entries left has an empty body, which is not an error, whatever
+theme paragraph it opened with.
 """
 
 import argparse
@@ -67,6 +87,15 @@ HEADING_RE = re.compile(r"^## \[(?P<bracket>.+?)\](?:\s*-.*)?\s*$")
 # and needs its own exact-match heading the same way a real version does.
 VERSION_TOKEN_RE = re.compile(r"(?:^|\s)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$")
 
+# The leading text marking an entry as applying to one binary only (AGENTS.md
+# guideline 7), and that binary. `**ratect.toml:**` also carries the written-for
+# check's meaning; a `ratect.toml` is only ever read by `ratect`.
+ENTRY_MARKERS = {
+    "- **ratect only:**": "ratect",
+    "- **ratect-compat only:**": "ratect-compat",
+    "- **ratect.toml:**": "ratect",
+}
+
 
 def heading_versions(bracket_content):
     """Every version named in one heading's bracketed content."""
@@ -78,19 +107,73 @@ def heading_versions(bracket_content):
     return versions
 
 
-def changelog_section(text, version):
-    """The body of the `## [...]` heading naming `version`, up to the next
-    such heading (or end of file). Raises `ValueError` if no heading names it.
+def heading_matches(bracket_content, version, binary):
+    """Whether one heading's bracketed content names `version` — of `binary`,
+    if one is given."""
+    if binary is None:
+        return version in heading_versions(bracket_content)
+    fragments = [fragment.strip() for fragment in bracket_content.split(" · ")]
+    return f"{binary} {version}" in fragments
+
+
+def marked_for_another_binary(line, binary):
+    """Whether `line` starts an entry marked for a binary other than `binary`."""
+    return any(
+        line.startswith(marker) and marked != binary for marker, marked in ENTRY_MARKERS.items()
+    )
+
+
+def has_entries(lines):
+    return any(line.startswith("- ") for line in lines)
+
+
+def filtered_subsection(lines, binary):
+    """One `###` subsection's lines without the entries marked for the other
+    binary, or none if it had entries and none of them are left."""
+    kept = []
+    omitting = False
+    for line in lines:
+        if line.startswith("- "):
+            omitting = marked_for_another_binary(line, binary)
+        elif line and not line[0].isspace():
+            omitting = False
+        # An omitted entry's blank line still separates what's on either side
+        # of it, unless one already does.
+        if not omitting or (not line and kept and kept[-1]):
+            kept.append(line)
+    return kept if has_entries(kept) or not has_entries(lines) else []
+
+
+def filtered_section(lines, binary):
+    """A release section's body, keeping only what applies to `binary`."""
+    subsections = [[]]
+    for line in lines:
+        if line.startswith("### "):
+            subsections.append([])
+        subsections[-1].append(line)
+
+    kept = [filtered_subsection(subsection, binary) for subsection in subsections]
+    if has_entries(lines) and not any(has_entries(subsection) for subsection in kept):
+        return ""
+    texts = ["\n".join(subsection).strip("\n") for subsection in kept]
+    return "\n\n".join(text for text in texts if text) + "\n"
+
+
+def changelog_section(text, version, binary=None):
+    """The body of the `## [...]` heading naming `version` (of `binary`, if one
+    is given), up to the next such heading (or end of file), without the entries
+    marked for the other binary. Raises `ValueError` if no heading names it.
     """
     lines = text.splitlines()
     start = None
     for index, line in enumerate(lines):
         match = HEADING_RE.match(line)
-        if match and version in heading_versions(match.group("bracket")):
+        if match and heading_matches(match.group("bracket"), version, binary):
             start = index + 1
             break
     if start is None:
-        raise ValueError(f"no changelog heading names version {version!r}")
+        named = f"{binary} version" if binary else "version"
+        raise ValueError(f"no changelog heading names {named} {version!r}")
 
     end = len(lines)
     for index in range(start, len(lines)):
@@ -98,11 +181,19 @@ def changelog_section(text, version):
             end = index
             break
 
+    if binary is not None:
+        return filtered_section(lines[start:end], binary)
     return "\n".join(lines[start:end]).strip("\n") + "\n"
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--binary",
+        choices=("ratect", "ratect-compat"),
+        help="the binary being released; only a heading naming it matches, "
+        "and entries marked for the other binary are omitted",
+    )
     parser.add_argument("version", help="the released version to extract, e.g. 0.28.0")
     parser.add_argument(
         "changelog",
@@ -120,7 +211,7 @@ def main(argv=None):
         return 1
 
     try:
-        section = changelog_section(text, args.version)
+        section = changelog_section(text, args.version, args.binary)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

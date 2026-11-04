@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted — implemented (ratect-compat 0.28.0 · ratect 0.7.0).
+Accepted — implemented (ratect-compat 0.28.0 · ratect 0.7.0). Since ratect#801,
+`tools/changelog-section.py` is given the binary as well as the version, and
+omits the entries marked for the other binary.
 
 The native-certs PR *Alternatives considered* names as still open
 (fussybeaver/bollard#796) has since merged; publishing to crates.io still

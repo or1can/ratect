@@ -9,8 +9,11 @@ Ratect ships [two binaries on independent version lines](decisions/0001-two-bina
 `ratect-compat` and `ratect`, sharing one core — so most changes here reach both, and
 one changelog is the honest shape for that. Two conventions follow from it:
 
-- **An entry with no binary named applies to both.** One that doesn't says so:
-  `(ratect only)`, `(ratect-compat only)`.
+- **An entry with no leading marker applies to both.** One that applies to one
+  binary starts with `**ratect only:**` or `**ratect-compat only:**`
+  (`**ratect.toml:**` also means `ratect` only), and that binary alone lists it
+  in its GitHub Release notes. A "(ratect only)", the form sections up to
+  ratect-compat 0.33.0 · ratect 0.12.0 use, filters nothing.
 - **A release heading names every version in that release**, since a shared-core
   change is released for both binaries at once, each bumping its own number —
   e.g. `## [ratect-compat 0.21.1 · ratect 0.2.0]`. A binary released on its own
@@ -20,6 +23,10 @@ Headings before the two-binary split (0.21.0 and earlier) are `ratect-compat`'s 
 history, from when it was the only binary.
 
 ## [Unreleased]
+
+### Changed
+
+- Each binary's GitHub Release notes list only the changelog entries that apply to it.
 
 ## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
 

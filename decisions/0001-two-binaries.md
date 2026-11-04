@@ -2,7 +2,10 @@
 
 **Status:** Accepted — shipped (the split landed in 0.20.0). What
 `ratect-compat`'s "strict, literal" match means in practice is narrowed by
-[0013](0013-when-ratect-compat-copies-batect.md).
+[0013](0013-when-ratect-compat-copies-batect.md). The changelog marker's
+spelling below has since become a leading `**ratect only:**`/`**ratect-compat
+only:**` (AGENTS.md guideline 7), which each binary's release notes filter on;
+the one shared file this decides is unchanged.
 
 ## Context
 
