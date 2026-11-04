@@ -21,7 +21,7 @@ evaluation reads what the machine running it supplies — see
 [decisions/0014](../decisions/0014-config-checked-at-load-evaluated-per-task.md).
 
 1. **`load_project`** (or `load_project_native`, for `ratect.toml`) starts with
-   `Config::load_from_file` (or `load_from_file_native`): the root file is parsed
+   `Config::load_from_file_with_git_cache` (or `load_from_file_native_written_for`): the root file is parsed
    into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable` structs — YAML via
    [`noyalib`](https://docs.rs/noyalib), TOML via [`toml`](https://docs.rs/toml),
    one struct set for both formats — and its top-level `include` list (if any) is
@@ -52,7 +52,7 @@ evaluation reads what the machine running it supplies — see
    - Evaluates [expressions](ratect-compat-config-reference.md#expressions) (`$VAR`, `${VAR:-default}`,
      `<name`, `<{name}`, plus the built-in `batect.project_directory`) in every field
      that takes one: `environment` values (container, task `run`, and task
-     `customise.<container>`), `local` volume mount host paths, `build_directory`, `build_args`, a `build_secrets` entry's
+     `customise.<container>`), `local` volume mount host paths (in a Batect-format file, only the object form's), `build_directory`, `build_args`, a `build_secrets` entry's
      `path`, a `build_ssh` entry's `paths`, `run_as_current_user.home_directory`
      (not in a Batect-format file), and — `ratect.toml` only — `image`. A `cache`
      mount's `name`/`container` are plain strings, matching Batect: nothing to
@@ -160,7 +160,8 @@ Concurrency follows Batect's in outline: **prerequisites run sequentially**, one
 completion after another, even when independent — while **one task's startup is
 concurrent**. Every container's image — each dependency's and the task's own —
 is pulled or built at once, the moment the task's network is ready, and each
-container is created as soon as its own image is, so a pull, build or create
+container is created as soon as its own image is (and, under
+`network_mode = "container:<name>"`, its target has been created), so a pull, build or create
 that fails ends the task as soon as it fails — not once every dependency is
 ready, by which time their setup commands have run. Starting is what a
 container's own `dependencies` gate: independent branches of the graph start
@@ -202,7 +203,8 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   registers it for cleanup there and then, so a container whose start later fails
   or is cut short by another dependency failing is still removed. Its own step,
   separate from starting, because it waits for less: a container is created once
-  its image and the network are ready, and started only once the containers it
+  its image and the network are ready (and any `network_mode = "container:<name>"`
+  target has been created), and started only once the containers it
   depends on are — see [Dependency readiness](dependency-readiness.md#resolution-order).
 - **`run_container`**: starts and streams the task's own container until it exits.
   Three attach-and-start paths sit behind it — fully non-interactive,
@@ -231,7 +233,8 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   exit code and output for the engine to judge.
 
 Nothing here depends on `config` types: `engine.rs` converts config into a plain
-`ContainerSpec` first, which is what each container method takes.
+`ContainerSpec` first, which is what the methods that create and start a container
+take; the rest take its id and plain values.
 The module's own comment carries the gotchas — where each path calls Docker's
 `start` relative to attaching, why cleanup ownership is not to be split again, how
 `build_ssh` paths are classified — and is the thing to read before changing any of

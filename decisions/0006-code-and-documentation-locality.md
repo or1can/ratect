@@ -11,6 +11,10 @@ Since adopted, conversion from config types has moved from `engine.rs` into
 `container_spec.rs` (`derive_spec`, `derive_build_spec`), still outside
 `docker.rs`; the boundary *What this does not mean* draws is unchanged.
 
+Corrected: *Decision* says `cache.rs` was extracted from `config`/`engine`. It
+wasn't: it was written as its own module when cache mounts were added
+(`378c8ce7`), like `ssh_agent.rs`.
+
 ## Context
 
 Ratect's information architecture is **layer-oriented**, and its code is
