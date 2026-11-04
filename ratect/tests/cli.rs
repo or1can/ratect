@@ -3919,6 +3919,11 @@ fn each_container_gets_only_its_own_network_mode_via_docker() {
 /// empty list. Serves until the returned handle's sender is dropped.
 /// Returns the port.
 fn spawn_fake_plain_daemon() -> (u16, std::sync::mpsc::Sender<()>) {
+    spawn_fake_plain_daemon_with_info("[]")
+}
+
+/// [`spawn_fake_plain_daemon`], answering `/info` with `info`.
+fn spawn_fake_plain_daemon_with_info(info: &'static str) -> (u16, std::sync::mpsc::Sender<()>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -3935,8 +3940,11 @@ fn spawn_fake_plain_daemon() -> (u16, std::sync::mpsc::Sender<()>) {
         stream.set_nonblocking(false).unwrap();
         let mut request = [0u8; 2048];
         let read = stream.read(&mut request).unwrap_or(0);
-        let body = if String::from_utf8_lossy(&request[..read]).contains("/version") {
+        let request = String::from_utf8_lossy(&request[..read]);
+        let body = if request.contains("/version") {
             r#"{"ApiVersion":"1.44","Version":"0.0.0-fake"}"#
+        } else if request.contains("/info") {
+            info
         } else {
             "[]"
         };
@@ -3948,6 +3956,52 @@ fn spawn_fake_plain_daemon() -> (u16, std::sync::mpsc::Sender<()>) {
         );
     });
     (port, stop)
+}
+
+/// `doctor`'s stdout against a stand-in daemon on `port`.
+fn doctor_stdout_against(port: u16) -> String {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(native_fixture_path())
+        .arg("doctor")
+        .arg("--docker-host")
+        .arg(format!("tcp://127.0.0.1:{port}"))
+        .env_remove("DOCKER_TLS_VERIFY")
+        .output()
+        .expect("failed to run ratect");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The class is its own `ok` line, beside the reachable version.
+#[test]
+fn doctor_reports_the_daemon_class_as_fine() {
+    let (port, _stop) =
+        spawn_fake_plain_daemon_with_info(r#"{"SecurityOptions":["name=rootless"]}"#);
+    let stdout = doctor_stdout_against(port);
+    assert!(
+        stdout.contains("ok      Docker daemon reachable (0.0.0-fake)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ok      Docker daemon class: rootless"),
+        "{stdout}"
+    );
+}
+
+/// A daemon whose `/info` can't be read (this one's is an empty list) still
+/// answered `/version`, so not knowing its class is a warning, not a problem.
+#[test]
+fn doctor_warns_when_it_cannot_read_the_daemon_class() {
+    let (port, _stop) = spawn_fake_plain_daemon();
+    let stdout = doctor_stdout_against(port);
+    assert!(
+        stdout.contains("ok      Docker daemon reachable (0.0.0-fake)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("warning Docker daemon class unknown:"),
+        "{stdout}"
+    );
 }
 
 /// `DOCKER_TLS_VERIFY=0` reaches the Docker client library, which used to

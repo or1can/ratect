@@ -24,6 +24,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- **ratect only:** `ratect doctor` reports the Docker daemon's class: `rootless`, `userns-remap`, `desktop` or `rootful Linux`.
+
 ### Changed
 
 - Each binary's GitHub Release notes list only the changelog entries that apply to it.

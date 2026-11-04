@@ -68,6 +68,7 @@ Ratect is a **Cargo workspace** with four crates (the
   | `expressions.rs` | Batect's `$VAR`/`${VAR:-default}`/`<name` expression syntax |
   | `container_spec.rs` | What a container's runtime spec is, and what a build's is — `ContainerSpec`/`derive_spec` (from a container's config plus a task's `run`/dependency's `customise` overlay) and `BuildSpec`/`derive_build_spec` (for `build_image`'s own call) — shared vocabulary between `engine.rs` and `docker.rs`, owned by neither |
   | `docker.rs` (+ `ratect-core/src/docker/`) | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait — connection selection (`--docker-host`/`-context`/`-tls*`) split into its own submodule, `connection.rs`, no reference to `ContainerRuntime` at all; BuildKit progress rendering in `build_output.rs`, stdin forwarding in `stdin.rs` |
+  | `daemon_class.rs` | What kind of daemon a connection reached — Rootless, UsernsRemap, Desktop or RootfulLinux — as a pure function over its security options, Ratect's host OS and the transport; `ContainerRuntime::daemon_class` is where callers get it, see [0011](decisions/0011-container-identity.md) |
   | `ssh_agent.rs` | `build_ssh`'s in-process ssh-agent (RFC 9987) — kept extractable, see [0005](decisions/0005-build-ssh-keyring-placement.md) |
   | `user.rs` | Host user lookup and the `/etc/passwd` generators for `run_as_current_user` |
   | `proxy.rs` | Proxy variable detection and propagation, the host-gateway entry a rewritten URL needs, and the loopback-bound proxy it can't fix |

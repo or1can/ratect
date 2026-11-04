@@ -98,6 +98,11 @@ daemon, not fixed by the declaration.
 **Passthrough** — a container field handed to the runtime verbatim; Ratect
 neither resolves nor synthesizes anything from it.
 
+**Daemon class** — which kind of daemon a connection reached: **Rootless**,
+**UsernsRemap**, **Desktop** or **RootfulLinux**. *Remapped* means either of
+the first two. What an identity resolves to depends on it
+([0011](decisions/0011-container-identity.md)).
+
 ## Cancelling a run
 
 **Termination signal** — any signal Ratect traps so a run cleans up after

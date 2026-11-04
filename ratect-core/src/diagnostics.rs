@@ -20,12 +20,14 @@
 //!
 //! **What stays in the binary, and why:** rendering a set of findings to
 //! stdout, counting problems into an exit code, the one-line `<file> loads`
-//! result, which only reports that loading succeeded, and the two
-//! Docker-daemon findings (`Docker connection options are unusable`, `Docker
-//! daemon (not )?reachable`). That last pair needs `DockerClient::server_version`,
-//! which answers "what does the daemon call itself" — a property of *this*
-//! connection, not of [`crate::resources::ResourceInventory`]'s container/
-//! network vocabulary, so it has no seam to cross here. [`leftover_finding`] is the
+//! result, which only reports that loading succeeded, and the Docker-daemon
+//! findings (`Docker connection options are unusable`, `Docker daemon (not
+//! )?reachable`, `Docker daemon class`). The reachable pair needs
+//! `DockerClient::server_version`, which answers "what does the daemon call
+//! itself" — a property of *this* connection, not of
+//! [`crate::resources::ResourceInventory`]'s container/network vocabulary, so
+//! it has no seam to cross here; the class is only ever asked for once that
+//! has answered. [`leftover_finding`] is the
 //! one check downstream of a daemon connection that *is* here: it takes
 //! `Option<&D>` rather than requiring one, so a caller whose connection
 //! already failed can skip it without this module needing any opinion of its

@@ -18,6 +18,7 @@ use crate::config::{
     BuildSecret, Config, Container, Dialect, NetworkMode, PortMapping, Task, TaskRun,
 };
 use crate::container_spec::BindMount;
+use crate::daemon_class::DaemonClass;
 use crate::resources::ResourceInventory;
 use crate::ui::{CleanupCause, NullEventSink};
 use std::collections::HashMap;
@@ -272,11 +273,14 @@ struct FakeContainerRuntime {
     // ended, in (virtual) time — see `stop_window`.
     #[allow(clippy::type_complexity)]
     stop_windows: Arc<Mutex<HashMap<String, (tokio::time::Instant, Option<tokio::time::Instant>)>>>,
+    // What `daemon_class` reports (see `with_daemon_class`).
+    daemon_class: DaemonClass,
 }
 
 impl Default for FakeContainerRuntime {
     fn default() -> Self {
         Self {
+            daemon_class: DaemonClass::RootfulLinux,
             events: Default::default(),
             sequence: Default::default(),
             fail_run: Default::default(),
@@ -367,6 +371,13 @@ impl FakeContainerRuntime {
     /// non-zero, the same way the real `DockerClient` does.
     fn failing_run(self) -> Self {
         *self.fail_run.lock().unwrap() = true;
+        self
+    }
+
+    /// Makes `daemon_class` report `class` rather than the default,
+    /// `RootfulLinux`.
+    fn with_daemon_class(mut self, class: DaemonClass) -> Self {
+        self.daemon_class = class;
         self
     }
 
@@ -1100,6 +1111,10 @@ impl FakeContainerRuntime {
 
 #[async_trait::async_trait]
 impl ContainerRuntime for FakeContainerRuntime {
+    async fn daemon_class(&self) -> Result<DaemonClass> {
+        Ok(self.daemon_class)
+    }
+
     async fn pull_image(&self, image: &str) -> Result<String> {
         let delay = self.pull_delays.lock().unwrap().get(image).copied();
         if let Some(delay) = delay {
@@ -18104,4 +18119,22 @@ async fn a_build_failure_mid_run_quotes_a_line_break_in_the_value_escaped() {
         assert!(!message.contains("\nError: forged"), "{message}");
     }
     assert_eq!(docker.build_spec_for("demo-build-env"), None);
+}
+
+#[tokio::test]
+async fn the_fake_runtime_reports_the_daemon_class_it_was_given() {
+    let docker = FakeContainerRuntime::default();
+    assert_eq!(
+        docker.daemon_class().await.unwrap(),
+        DaemonClass::RootfulLinux
+    );
+
+    for class in [
+        DaemonClass::Rootless,
+        DaemonClass::UsernsRemap,
+        DaemonClass::Desktop,
+    ] {
+        let docker = FakeContainerRuntime::default().with_daemon_class(class);
+        assert_eq!(docker.daemon_class().await.unwrap(), class);
+    }
 }
