@@ -30,8 +30,9 @@
 //! eligible for interactive-TTY mode — never a dependency's. `run_task_internal`
 //! runs `prerequisites` first, then returns early (no error) if the task itself has
 //! no `run` (0.14.0) — everything after can assume `run` is present. `customise`
-//! threads through `start_dependency`'s own recursion unconditionally, so it
-//! reaches its target regardless of depth in the dependency graph. Under the
+//! is looked up by name in `ensure_container_created`, which every container
+//! in the task goes through, so it reaches its target regardless of depth in
+//! the dependency graph. Under the
 //! Batect-compatible dialect the task's own container goes through the same
 //! readiness gate a dependency has (`run_task_container_readiness`), run
 //! *concurrently* with `ContainerRuntime::run_container`'s own
@@ -2333,8 +2334,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
     /// which case, resolves the actual host user to map the container onto.
     /// Applies per-container, matching Batect: a task's own container and
     /// each of its dependencies set this independently, so this is called
-    /// from both `run_task_internal` and `start_dependency` rather than
-    /// once per task. No caching — there's only ever one real host user per
+    /// from `ensure_container_created`, once per container rather than once
+    /// per task. No caching — there's only ever one real host user per
     /// process, so recomputing it per call is cheap and simpler than adding
     /// a memoization layer for no real benefit.
     async fn resolve_user_mapping(
