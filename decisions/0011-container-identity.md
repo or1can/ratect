@@ -16,7 +16,14 @@ make. Refined while implementing the passthroughs
 holding a `:` and a negative integer are load-time errors, since none is a name
 or an id and a `:` would bring back the packed form; and until `run_as_current_user` leaves
 the native format, `user` beside an enabled one is refused the way `identity`
-beside `user` will be.
+beside `user` will be. Refined before implementation
+([#235](https://github.com/or1can/ratect/issues/235)): the probes behind this
+record varied the daemon and the user on stock images, and further probes on
+OrbStack, varying the image and the mounts, found the home guarantee failing. So
+identity sets `HOME` as well as editing the entry, a home directory is created
+only where none exists, identity files that are absent, unusual or lack the
+running user have rules of their own, and cache ownership is taken only on
+rootful Linux, and only of a root-owned named volume.
 
 ## Context
 
@@ -160,21 +167,55 @@ and appending or editing — never replacing**:
   nothing. A group entry is cosmetic (name resolution for `id` and `ls`), so
   the escape hatch on collision is to do nothing rather than invent names.
   This is Podman's keep-id rule.
-- Create and chown the home directory, and chown each writable cache mount —
-  fresh named volumes are root-owned and unwritable by the host uid here.
+- Create the home directory as [below](#the-home-guarantee), and take ownership
+  of each writable cache mount that is a named volume with a root-owned root,
+  keeping its mode: fresh named volumes are root-owned and unwritable by the
+  host uid here. Ratect chose this uid, so it owes that uid a usable cache, and
+  every `identity` container one person runs has the same one. A volume another
+  user owns is left alone, and so is a directory cache, which Ratect has already
+  created as the host user.
 
-On **desktop** and **remapped** daemons: **`--user` is not applied and nothing
-is chowned.** On desktop and rootless the ownership outcome already holds
+On **desktop** and **remapped** daemons: **`--user` is not applied and no cache
+or existing directory changes owner.** On desktop and rootless the ownership outcome already holds
 (desktop file sharing maps it; rootless delivers it by construction), and
 under rootless, applying `--user` is actively destructive. On userns-remap it
 cannot be met at all — the host uid maps to a subordinate uid like every
 other — so `--user` would change nothing, and a run reaching such a container
 prints a warning and `ratect doctor` reports a finding that bind-mount
 ownership has to be pre-arranged on the host. The home guarantee still holds:
-edit the *running* user's passwd entry (the image's default user, usually
-root) so its home field is the configured path, and create that directory.
-One field's edit, and both `pw_dir` consumers (ssh) and `$HOME` consumers
-(git) see the same path on every daemon.
+edit the *running* user's passwd entry (the image's configured user, root when
+it has none) so its home field is the configured path. A name selects the entry
+with that name, and a uid the first entry with that uid, the one the runtime
+uses, leaving any other for the same uid untouched. A running user with no entry
+gets one appended, since without it `whoami` fails and `$HOME` is `/`: named
+with its literal uid digits (`root` for uid 0, since the process is not the host
+user here), password `*`, the configured `home`, shell `/bin/sh`, and the numeric
+group from the image's `User` or else 0, the gid such a user already runs with
+(probed). A *named* user with no entry gets nothing appended, and the runtime
+reports it.
+
+### The home guarantee
+
+On every daemon class, however the entry above was reached:
+
+- **`HOME` is set to `home` in the container's environment**, over any value the
+  image's own `ENV` gives it, which otherwise beats the passwd edit. A `HOME`
+  written in the project's `environment` still wins: its author stated it, so
+  this is no silent precedence, and the passwd home stays the configured path.
+- **A home directory is created only where none exists**, owned by the running
+  user, with any missing ancestors created as root, mode `0755`. An existing
+  directory is left untouched even if the running user can't write to it, since
+  the project chose that path; Docker's archive API has no create-only form, so
+  an upload rewrites the owner and mode of what it lands on, through a bind mount
+  and onto the host as well. A file at that path is an error naming the container.
+- **The identity files are read as untrusted bytes.** An absent `/etc/passwd`
+  (`scratch`) is an empty one. A symbolic link, a mount at that path, or a file
+  over 1 MiB is an error naming the container. Every line not being edited is
+  preserved byte-for-byte.
+
+A relative `cache` destination is refused at load beside `identity`, on every
+daemon class, so whether a project loads never depends on the daemon that later
+runs it.
 
 ### Passthrough hazards
 
@@ -183,7 +224,10 @@ rootless it reproduces the unreadable-bind-mount failure the probes found, and
 under userns-remap it lands on a subordinate uid like every other container
 user. It stays a passthrough — that is what an escape hatch is — but a run
 reaching such a container prints a warning, and `ratect doctor` reports a
-finding naming the hazard.
+finding naming the hazard. An `identity` whose running user is non-root because
+the image says so should meet the same mapping (inferred from the `--user` probe,
+not probed itself), so a run prints that warning too. `doctor` can't report it:
+the image's user isn't in the configuration, and the image may not be local.
 
 ## Alternatives considered
 
@@ -198,8 +242,24 @@ finding naming the hazard.
   would describe a mechanism the engine no longer performs — the naming bug
   this design escapes.
 - **"Don't run as root" as a supported intent.** Dropped (see Context). Its
-  loss also removes the one reason cache chown would have been needed on
-  macOS.
+  loss also removes the one reason Ratect's own choice of user would have needed
+  cache chown on macOS. An image's own non-root `USER` still meets a root-owned
+  fresh volume there: see Consequences.
+- **Taking ownership of caches for an image's non-root `USER`** on desktop and
+  remapped daemons. Rejected: it helps only while one uid uses the volume. A second
+  uid is still refused on the first uid's volume, and even under `1777` it can create files
+  but not change the other's (probed), so sharing a cache between identities
+  needs file modes only the tools or the image control. The upload also
+  widened a `700` cache to `755`, and on a remapped daemon would hand a host
+  directory to a subordinate uid (Docker's documented mapping, not probed). Ratect takes ownership only for a user it chose.
+- **The passwd edit alone for `$HOME`.** Rejected: an image's `ENV HOME` beats it
+  (probed).
+- **Refusing a `HOME` in `environment` beside `identity`.** Rejected: written by
+  hand, it says what its author wants, and a refusal needs a check across task
+  and `customise` overlays to prevent nothing silent.
+- **Naming an appended entry on these daemons after the host user**, as rootful
+  Linux does. Rejected: the process isn't the host user here, and on `scratch` it
+  would name uid 0 after them.
 - **Two independent knobs** (ownership and home as separate fields). Rejected:
   the quarter-states are the known failure modes — home with no owning entry,
   `--user` with no home — and no observed use wants one without the other.
@@ -252,6 +312,16 @@ finding naming the hazard.
   digits on a name clash) is expected to meet edges only practice will
   uncover; it is the part of this record most likely to be amended, and
   amending it would not disturb the rest of the decision.
+- **Accepted edge:** a non-root image `USER` on a desktop or remapped daemon
+  can't write a fresh named cache volume, so a project can pass on rootful Linux
+  CI and fail on a Mac. It fails on first write, and the fix is in the image: a
+  fresh volume takes its owner from an image directory at that path (probed).
+- **Not Ratect's to solve:** a cache shared by different uids or groups, which
+  its users have to arrange themselves.
+- **Accepted edge:** an entrypoint that drops privileges (`postgres`) runs as a
+  user other than the running user, whose home doesn't move.
+- **Accepted edge:** a `tmpfs` at `home` masks what was created there, so under a
+  non-root running user its options have to allow that user to write.
 - **On userns-remap, `identity` delivers only the home guarantee.** Host
   ownership of bind-mount writes is impossible there by design of the
   daemon, not something Ratect could fix; the warning and `doctor` finding
@@ -260,10 +330,11 @@ finding naming the hazard.
 - Effects on open work: [#107](https://github.com/or1can/ratect/issues/107)
   shrinks to "declare users the image lacks" or closes, since the image's
   users now survive; [#225](https://github.com/or1can/ratect/issues/225)'s
-  collision surface dissolves with the chown step it catalogued (chown remains
-  only for rootful-Linux caches and the created home);
+  collision surface dissolves with the chown step it catalogued (ownership is
+  taken only of root-owned named cache volumes on rootful Linux, and of a home
+  directory only by creating it);
   [#226](https://github.com/or1can/ratect/issues/226) becomes the `groups`
   passthrough plus the identity's own group handling. All three sit in this
   record's milestone; `ratect 0.10.0` carries none of it.
 - The glossary terms this design speaks — *host identity*, *image identity*,
-  *identity*, *passthrough* — are defined in [CONTEXT.md](../CONTEXT.md).
+  *identity*, *passthrough*, *running user* — are defined in [CONTEXT.md](../CONTEXT.md).
