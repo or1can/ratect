@@ -1725,6 +1725,55 @@ async fn server_version_is_unknown_when_the_daemon_reports_none() {
     assert_eq!(client.server_version().await.unwrap(), "unknown version");
 }
 
+/// Once per connection: a second asking is answered without a second `/info`.
+#[tokio::test]
+async fn daemon_class_is_read_from_docker_info_once_per_connection() {
+    let (client, log) = client_for_recording_daemon(|method, path| match (method, path) {
+        ("GET", "/info") => (
+            200,
+            r#"{"SecurityOptions":["name=seccomp,profile=builtin","name=rootless"]}"#.to_string(),
+        ),
+        _ => (404, String::new()),
+    })
+    .await;
+
+    assert_eq!(client.daemon_class().await.unwrap(), DaemonClass::Rootless);
+    assert_eq!(client.daemon_class().await.unwrap(), DaemonClass::Rootless);
+
+    let log = log.lock().unwrap();
+    let paths: Vec<&str> = log.iter().map(|request| request.path.as_str()).collect();
+    assert_eq!(paths, ["/info"]);
+}
+
+/// The stub is a `tcp://` host, so on whichever host OS this runs it is
+/// classified by what it reports, and never as Desktop.
+#[tokio::test]
+async fn daemon_class_of_a_tcp_daemon_is_what_it_reports() {
+    let (client, _) = client_for_recording_daemon(|_, _| {
+        (
+            200,
+            r#"{"SecurityOptions":["name=seccomp,profile=builtin","name=cgroupns"]}"#.to_string(),
+        )
+    })
+    .await;
+
+    assert_eq!(
+        client.daemon_class().await.unwrap(),
+        DaemonClass::RootfulLinux
+    );
+}
+
+#[tokio::test]
+async fn daemon_class_says_what_it_could_not_read() {
+    let (client, _) = client_for_recording_daemon(|_, _| (500, String::new())).await;
+
+    let error = client.daemon_class().await.unwrap_err();
+    assert!(
+        format!("{error:#}").contains("Failed to read the Docker daemon's security options"),
+        "{error:#}"
+    );
+}
+
 /// Batect's `DockerClientDaemonInformationSpec`, "be able to ping the
 /// daemon": the ping's `Builder-Version` header is what picks the builder
 /// when neither `DOCKER_BUILDKIT` nor `--enable-buildkit` does.

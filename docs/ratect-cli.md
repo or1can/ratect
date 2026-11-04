@@ -430,6 +430,13 @@ Answers "why did that fail?", or "will it?", without running a task.
 {{#include captures/doctor.ansi}}
 ```
 
+The `Docker daemon class` line says which kind of daemon this connection reached:
+`rootless` or `userns-remap` when the daemon reports it, `desktop` when Ratect runs
+on macOS or Windows and reaches it over a local socket, and `rootful Linux`
+otherwise. A daemon reached over the network is classified by what it reports, so
+it is never `desktop`. If the daemon answers but its class can't be read, that is
+a warning.
+
 A **problem** will fail a run — an unreachable daemon, a configuration that doesn't
 load, a `build_directory` or Dockerfile a build can't use. A **warning** works but is
 likely to bite: a floating image tag (`latest`, or no tag at all) means the same

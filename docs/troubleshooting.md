@@ -87,8 +87,6 @@ it into a support ticket, chat message, or CI log.
 see [Exit codes and error
 reporting](ratect-compat-cli.md#exit-codes-and-error-reporting).
 
-## Coming from Batect?
-
-Ratect's logs differ from Batect's on purpose — where they go, `--log-file`
+Coming from Batect? Ratect's logs differ from Batect's on purpose — where they go, `--log-file`
 or not, and what `--log-file` writes — as listed under
 [Differences from Batect](differences-from-batect.md#cli-flags).

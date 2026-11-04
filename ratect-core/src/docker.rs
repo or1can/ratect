@@ -41,8 +41,8 @@
 //! rather than run via a shell — `setup_commands` used to be a `sh -c` exception
 //! (closed once noticed it was never actually deliberate; see
 //! `config::SetupCommand`'s doc comment); and `ContainerOptions` bundles the
-//! still-growing set of per-container Docker options shared by `run_container`/
-//! `start_background_container` (0.13.0's `working_directory` through
+//! still-growing set of per-container Docker options `create_container` applies
+//! (0.13.0's `working_directory` through
 //! `enable_init_process`) — add new container-level fields there rather than as more
 //! flat parameters, converting from config types to plain values in
 //! `container_spec::derive_spec` (`docker.rs` deliberately never depends on
@@ -124,6 +124,7 @@
 //! usually exited, and Docker's default lists only running containers.
 
 use crate::cache::VolumeStore;
+use crate::daemon_class::{classify, DaemonClass, Transport};
 use crate::resources::ResourceInventory;
 use crate::ui::{printable, ToText};
 use crate::ui::{ContainerIoStreaming, EventSink, NullEventSink, TaskEvent};
@@ -1795,6 +1796,11 @@ fn is_special_docker_desktop_path(path: &Path) -> bool {
 /// `ContainerRuntime` and gets both for free.
 #[async_trait::async_trait]
 pub trait ContainerRuntime: ResourceInventory + VolumeStore {
+    /// The [`DaemonClass`] of the daemon this runtime talks to, resolved
+    /// once per connection. The one place a caller gets it from, so no call
+    /// site re-derives it.
+    async fn daemon_class(&self) -> Result<DaemonClass>;
+
     /// Pulls `image` and returns the ID of exactly the image pulled, as
     /// Batect's docker-client does — not `image`, a mutable tag another
     /// pull or `docker tag` could move before the container is created
@@ -2123,6 +2129,9 @@ pub struct DockerClient {
     /// (per `ratect` invocation, in practice) on first build — see
     /// `select_builder_version` for the decision itself.
     builder_version: tokio::sync::OnceCell<bollard::query_parameters::BuilderVersion>,
+    /// This connection's [`DaemonClass`], resolved on first asking — see
+    /// [`ContainerRuntime::daemon_class`].
+    daemon_class: tokio::sync::OnceCell<DaemonClass>,
     /// Where streamed pull/build progress detail goes for the user to see —
     /// `docker.rs` only ever posts the fine-grained progress variants (the
     /// milestones around them are `engine.rs`'s job, which knows the
@@ -2533,6 +2542,7 @@ impl DockerClient {
         Ok(Self {
             docker,
             builder_version: tokio::sync::OnceCell::new(),
+            daemon_class: tokio::sync::OnceCell::new(),
             event_sink: std::sync::Arc::new(NullEventSink),
             log_followers: LogFollowers::default(),
             enable_buildkit: false,
@@ -3048,6 +3058,24 @@ impl DockerClient {
 
 #[async_trait::async_trait]
 impl ContainerRuntime for DockerClient {
+    async fn daemon_class(&self) -> Result<DaemonClass> {
+        self.daemon_class
+            .get_or_try_init(|| async {
+                let info = self
+                    .docker
+                    .info()
+                    .await
+                    .context("Failed to read the Docker daemon's security options")?;
+                Ok(classify(
+                    info.security_options.as_deref().unwrap_or_default(),
+                    std::env::consts::OS,
+                    Transport::of_host(&self.daemon_host),
+                ))
+            })
+            .await
+            .copied()
+    }
+
     async fn pull_image(&self, image: &str) -> Result<String> {
         let (credentials, warning) =
             resolve_pull_credential(self.credential_resolver.as_ref(), image).await;

@@ -151,8 +151,8 @@ where that lives and stays current.
 
 The "run once", "pull once" and "build once" guarantees are in-memory and scoped to
 a **single invocation** — nothing persists between runs, so a `build_directory`
-container is rebuilt every time. Pulls and builds are memoized as shareable futures
-rather than plain sets, so two containers resolving the same image under the same
+container is rebuilt every time. Pulls and builds are memoized as once-cells holding
+their outcome rather than plain sets, so two containers resolving the same image under the same
 pull policy share one in-flight operation instead of racing. Dependency readiness, by contrast, is scoped
 to a single **task execution** and discarded when it finishes.
 
@@ -230,8 +230,8 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   second runs one `setup_commands` entry in the running container and returns its
   exit code and output for the engine to judge.
 
-Nothing here depends on `config` types: `engine.rs` converts config into plain
-values first, which is why the same options struct serves both container methods.
+Nothing here depends on `config` types: `engine.rs` converts config into a plain
+`ContainerSpec` first, which is what each container method takes.
 The module's own comment carries the gotchas — where each path calls Docker's
 `start` relative to attaching, why cleanup ownership is not to be split again, how
 `build_ssh` paths are classified — and is the thing to read before changing any of

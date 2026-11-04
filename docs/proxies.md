@@ -130,9 +130,7 @@ included — `no_proxy` is left alone, and no URL is rewritten. A container's
 own `build_args` are still passed. It is a [`ratect run`](ratect-cli.md#run-options) option, and a
 [`ratect-compat`](ratect-compat-cli.md#task-execution) flag.
 
-## Coming from Batect?
-
-Three deliberate differences: a `localhost` proxy is rewritten on Linux too,
+Coming from Batect? Three deliberate differences: a `localhost` proxy is rewritten on Linux too,
 where Batect propagates it verbatim; a loopback-bound proxy is diagnosed
 rather than left to fail; and `--no-proxy-vars` keeps the proxies from
 Docker's `config.json` out of a build, where Batect passes them whatever its

@@ -38,7 +38,7 @@ use ratect_core::diagnostics::{
     config_findings, docker_environment_findings, leftover_finding, load_failure_findings,
     wrapper_script_findings, ConversionCheck, Finding,
 };
-use ratect_core::docker::{DockerClient, DockerConnectionOptions};
+use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::exit_code::Word;
 use ratect_core::resources::Leftover;
@@ -1616,6 +1616,13 @@ async fn diagnose(
                 findings.push(Finding::Fine(format!(
                     "Docker daemon reachable ({version})"
                 )));
+                // A warning: the daemon answered, and a task can still run.
+                findings.push(match docker.daemon_class().await {
+                    Ok(class) => Finding::Fine(format!("Docker daemon class: {class}")),
+                    Err(error) => {
+                        Finding::Warning(format!("Docker daemon class unknown: {error:#}"))
+                    }
+                });
                 Some(docker)
             }
             Err(error) => {

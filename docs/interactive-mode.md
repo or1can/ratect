@@ -81,9 +81,7 @@ Where it sits among the container's other environment variables — what
 overrides it on a key collision — is [Environment
 precedence](ratect-compat-config-reference.md#environment-precedence).
 
-## Coming from Batect?
-
-One known, deliberate divergence: Batect's real-TTY gate checks only whether
+Coming from Batect? One known, deliberate divergence: Batect's real-TTY gate checks only whether
 its output is a real terminal; Ratect's requires *both* stdin and stdout to
 be. It is listed, with the Unix-only resize tracking, under [Differences from
 Batect](differences-from-batect.md#runtime-behavior-gaps).

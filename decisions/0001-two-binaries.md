@@ -97,7 +97,7 @@ the actual release-cutting mechanics.
   ([ADR-0002](0002-runtime-ownership-labels.md)).
 - **One shared `CHANGELOG.md`, not one per binary.** Most substantive work is in
   `ratect-core` and so reaches both binaries — the anonymous-volume fix
-  ([0.21.1](../RELEASES.md#ratect-compat)) is the pattern, not the exception —
+  (ratect-compat 0.22.0, in `CHANGELOG.md`) is the pattern, not the exception —
   so two files would be largely the same prose under different headings,
   drifting apart on every core change. (That's the opposite of the CLI
   reference docs, which *are* split per binary: those overlap by almost
