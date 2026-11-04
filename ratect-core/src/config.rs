@@ -4988,7 +4988,7 @@ fn check_home_directory(home_directory: &str) -> Result<()> {
         anyhow::bail!(
             "has an invalid 'run_as_current_user.home_directory': \
              '{}' contains a ':' or a control character, which would corrupt the \
-             generated /etc/passwd and /etc/shadow entries",
+             /etc/passwd entry it is written into",
             printable(home_directory)
         );
     }

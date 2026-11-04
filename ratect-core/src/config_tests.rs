@@ -6034,7 +6034,7 @@ fn run_as_current_user_accepts_a_home_directory_with_a_trailing_slash() {
 #[test]
 fn load_errors_when_run_as_current_user_home_directory_contains_a_colon() {
     // SEC-002: a ':' would shift the fields of the colon-delimited
-    // /etc/passwd/etc/shadow line `home_directory` is interpolated into.
+    // /etc/passwd line `home_directory` is interpolated into.
     let config = config_with_container(container_with_run_as_current_user(
         true,
         Some("/home/x:0:0:root:/root:/bin/sh"),
