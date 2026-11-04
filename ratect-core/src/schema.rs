@@ -621,6 +621,48 @@ fn make_native(json: &mut serde_json::Value) {
                 "examples": ["host", "none", "container:database"],
             }),
         );
+        // Add the native-only `user`/`group`/`groups` fields (ratect#234),
+        // same reasoning as `stop_signal` above. An integer has to be
+        // non-negative and a string has to be neither empty nor hold a `:`,
+        // which is what `config::NameOrId` and `validate_passthrough_identity`
+        // refuse.
+        let name_or_id = serde_json::json!({
+            "oneOf": [
+                { "type": "string", "pattern": "^[^:]+$" },
+                { "type": "integer", "minimum": 0 },
+            ],
+        });
+        properties.insert(
+            "user".to_string(),
+            serde_json::json!({
+                "oneOf": [name_or_id, { "type": "null" }],
+                "description": "The user this container runs as, and its setup commands \
+                                exec as: a name or id, handed to the runtime verbatim. A name \
+                                must already exist in the image. The image's own user applies \
+                                when unset.",
+                "examples": ["app", 1000],
+            }),
+        );
+        properties.insert(
+            "group".to_string(),
+            serde_json::json!({
+                "oneOf": [name_or_id, { "type": "null" }],
+                "description": "The primary group `user` runs with: a name or id, handed to \
+                                the runtime verbatim. Only valid alongside `user`.",
+                "examples": ["staff", 20],
+            }),
+        );
+        properties.insert(
+            "groups".to_string(),
+            serde_json::json!({
+                "type": ["array", "null"],
+                "items": name_or_id,
+                "description": "Supplementary groups for this container — Docker's \
+                                --group-add: names or ids, handed to the runtime verbatim. A \
+                                name must already exist in the image.",
+                "examples": [["docker", 999]],
+            }),
+        );
     }
 }
 

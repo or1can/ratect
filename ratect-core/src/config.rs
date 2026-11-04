@@ -530,6 +530,24 @@ pub struct Container {
     /// `dns` above. `ratect`-native only, like `ulimits` above (ratect#106).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub network_mode: Option<NetworkMode>,
+    /// The user this container runs as, and its `setup_commands` exec as — a
+    /// passthrough ([decisions/0011](../../decisions/0011-container-identity.md)):
+    /// handed to the runtime verbatim, which resolves a name against the
+    /// image's own files, so a name the image lacks is the runtime's own
+    /// start error. `None` leaves the image's own user alone. Container level
+    /// only, like `devices`. `ratect`-native only, like `ulimits` above.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub user: Option<NameOrId>,
+    /// The primary group [`user`](Self::user) runs with. Meaningless without
+    /// one, so `validate_passthrough_identity` refuses that. Same scope and
+    /// native-only status as `user`.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub group: Option<NameOrId>,
+    /// Supplementary groups — Docker's `--group-add`. Needs no
+    /// [`user`](Self::user): they add to whichever user the container runs
+    /// as. Same scope and native-only status as `user`.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub groups: Option<Vec<NameOrId>>,
 }
 
 impl Container {
@@ -540,6 +558,65 @@ impl Container {
     /// (`reject_image_expressions_in_compat`); `ratect.toml` evaluates it.
     pub fn image_is_expression(batect_shaped: bool) -> bool {
         !batect_shaped
+    }
+}
+
+/// One value of a container's [`Container::user`], [`group`](Container::group)
+/// or [`groups`](Container::groups): a name or a numeric id, written as a
+/// string or a bare integer. Held as the text the runtime is handed, so
+/// `1000` and `"1000"` are the same value. Parsing refuses what is neither (a
+/// negative number, a flag, a float), ahead of a Batect-format file's own
+/// native-only rejection, which refuses it too. A string's shape is judged
+/// after that rejection, by `validate_passthrough_identity`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct NameOrId(String);
+
+impl NameOrId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for NameOrId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct NameOrIdVisitor;
+
+        impl serde::de::Visitor<'_> for NameOrIdVisitor {
+            type Value = NameOrId;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a name or a numeric id, as a string or a non-negative integer")
+            }
+
+            fn visit_str<E: serde::de::Error>(
+                self,
+                value: &str,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(NameOrId(value.to_string()))
+            }
+
+            fn visit_u64<E: serde::de::Error>(
+                self,
+                value: u64,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(NameOrId(value.to_string()))
+            }
+
+            fn visit_i64<E: serde::de::Error>(
+                self,
+                value: i64,
+            ) -> std::result::Result<Self::Value, E> {
+                u64::try_from(value)
+                    .map(|value| NameOrId(value.to_string()))
+                    .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(value), &self))
+            }
+        }
+
+        deserializer.deserialize_any(NameOrIdVisitor)
     }
 }
 
@@ -3547,6 +3624,7 @@ impl ConfigFormat {
         reject_ulimits_in_compat(&shaped)?;
         reject_dns_in_compat(&shaped)?;
         reject_network_mode_in_compat(&shaped)?;
+        reject_passthrough_identity_in_compat(&shaped)?;
         validate_image_sources_in_compat(&shaped)?;
         reject_image_expressions_in_compat(&shaped)?;
         Ok(())
@@ -6071,6 +6149,8 @@ fn load_project_impl(
     // `expand_external_health_checks`, which would otherwise consume the
     // `external_health_check` this refuses.
     validate_network_modes(&config)?;
+    // Same reasoning: `group` is judged against the effective `user`.
+    validate_passthrough_identity(&config)?;
     // Last, and native-only: it *writes* to the config (the generated
     // companion containers and the dependency edges onto them), so
     // everything above judges what the user actually wrote. After `extends`
@@ -6385,6 +6465,92 @@ fn reject_network_mode_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> 
              not supported in Batect-compatible configuration."
             ),
         ));
+    }
+    Ok(())
+}
+
+/// `user`/`group`/`groups` are `ratect`-native fields (ratect#234), same
+/// reasoning as [`reject_stop_signal_in_compat`] — Batect's only way to name
+/// a container's user is `run_as_current_user`.
+fn reject_passthrough_identity_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    for entry in containers {
+        let container = entry.container;
+        let field = if container.user.is_some() {
+            "user"
+        } else if container.group.is_some() {
+            "group"
+        } else if container.groups.is_some() {
+            "groups"
+        } else {
+            continue;
+        };
+        let name = entry.name;
+        return Err(native_field_rejection(
+            entry,
+            format!(
+                "The container '{name}' uses '{field}', which is a ratect-native field \
+             not supported in Batect-compatible configuration."
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// What a container's [`Container::user`], [`group`](Container::group) and
+/// [`groups`](Container::groups) may say, none of it about whether a name
+/// exists: that is the runtime's to report, against the image's own files.
+///
+/// **After `resolve_extends`**, since `group` and `run_as_current_user` are
+/// judged against the `user` the container effectively has. Every container
+/// is judged, one only used as an `extends` base included, so these rules
+/// apply at load whichever containers a task runs. A `user` beside
+/// an enabled `run_as_current_user` is refused for as long as the native
+/// format keeps that field (#233): it would be two identity sources and a
+/// silent precedence, which
+/// [decisions/0011](../../decisions/0011-container-identity.md) rules out.
+///
+/// An empty value or one holding a `:` is refused too. No name holds a `:`,
+/// the field separator of the passwd and group files, and Docker would read
+/// `""` as the image's own user, so handing either over would bring back the
+/// packed `user[:group]` these fields replace, along with its unwritable
+/// `":20"`.
+fn validate_passthrough_identity(config: &Config) -> Result<()> {
+    for (name, container) in &config.containers {
+        anyhow::ensure!(
+            container.group.is_none() || container.user.is_some(),
+            "The container '{name}' has 'group' but no 'user', whether set on it or \
+             inherited through 'extends'. 'group' is the primary group 'user' runs with, so \
+             it needs one."
+        );
+        let runs_as_current_user = container
+            .run_as_current_user
+            .as_ref()
+            .is_some_and(|run_as_current_user| run_as_current_user.enabled);
+        anyhow::ensure!(
+            container.user.is_none() || !runs_as_current_user,
+            "The container '{name}' has both 'user' and an enabled 'run_as_current_user', \
+             set on it or inherited through 'extends', and each says who it runs as. It can \
+             only have one, and an inherited field can't be removed, only overridden."
+        );
+        let values = [("user", &container.user), ("group", &container.group)]
+            .into_iter()
+            .filter_map(|(field, value)| Some((field, value.as_ref()?)))
+            .chain(
+                container
+                    .groups
+                    .iter()
+                    .flatten()
+                    .map(|value| ("groups", value)),
+            );
+        for (field, value) in values {
+            let value = value.as_str();
+            anyhow::ensure!(
+                !value.is_empty() && !value.contains(':'),
+                "The container '{name}' has a '{field}' value, '{}', that is not a name or \
+                 an id: it must not be empty or contain a ':'.",
+                printable(value)
+            );
+        }
     }
     Ok(())
 }
@@ -7446,6 +7612,9 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         dns_search,
         dns_options,
         network_mode,
+        user,
+        group,
+        groups,
     } = parent;
     child.image = child.image.take().or(image);
     child.image_pull_policy = child.image_pull_policy.take().or(image_pull_policy);
@@ -7485,6 +7654,9 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.dns_search = child.dns_search.take().or(dns_search);
     child.dns_options = child.dns_options.take().or(dns_options);
     child.network_mode = child.network_mode.take().or(network_mode);
+    child.user = child.user.take().or(user);
+    child.group = child.group.take().or(group);
+    child.groups = child.groups.take().or(groups);
 }
 
 #[cfg(test)]

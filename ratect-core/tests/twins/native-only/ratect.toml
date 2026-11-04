@@ -21,6 +21,9 @@ ulimits = [
 dns = ["10.0.0.53"]
 dns_search = ["corp.example.com"]
 dns_options = ["ndots:2"]
+user = "app"
+group = "staff"
+groups = ["docker", 999]
 
 [containers.migrate]
 image = "alpine:3.18"

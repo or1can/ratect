@@ -170,7 +170,7 @@ struct SetupCommandContext<'a> {
     /// a command running in that same container. Both are deliberately
     /// *not* forwarded to a `run_in` target — see [`ExecTarget`].
     environment: Option<&'a HashMap<String, String>>,
-    user_mapping: Option<&'a crate::docker::UserMapping>,
+    process_user: Option<&'a str>,
     /// Container name -> id, for the dependencies this container was gated
     /// on, all of them already ready. The lookup a `run_in` target resolves
     /// through (ratect#111), and the reason the config loader restricts a
@@ -190,7 +190,7 @@ struct ExecTarget<'a> {
     description: String,
     working_directory: Option<&'a str>,
     environment: Option<&'a HashMap<String, String>>,
-    user_mapping: Option<&'a crate::docker::UserMapping>,
+    process_user: Option<&'a str>,
 }
 
 /// The outcome of a memoized async operation (an image pull/build, or a
@@ -1600,7 +1600,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         description: format!("'{target}' (a setup command of container '{name}')"),
                         working_directory: setup_command.working_directory.as_deref(),
                         environment: None,
-                        user_mapping: None,
+                        process_user: None,
                     }
                 }
                 None => ExecTarget {
@@ -1611,7 +1611,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .as_deref()
                         .or(context.working_directory),
                     environment: context.environment,
-                    user_mapping: context.user_mapping,
+                    process_user: context.process_user,
                 },
             };
 
@@ -1638,7 +1638,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         &setup_command.command,
                         target.working_directory,
                         target.environment,
-                        target.user_mapping,
+                        target.process_user,
                     )
                     .await
                     .with_context(|| {
@@ -1855,7 +1855,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 container_id,
                 working_directory: spec.shared.options.working_directory.as_deref(),
                 environment: spec.shared.environment.as_ref(),
-                user_mapping: spec.shared.user_mapping.as_ref(),
+                process_user: spec.shared.process_user.as_deref(),
                 dependency_ids,
             },
         )
@@ -4235,7 +4235,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             container_id: &container_id,
                             working_directory: spec.shared.options.working_directory.as_deref(),
                             environment: spec.shared.environment.as_ref(),
-                            user_mapping: spec.shared.user_mapping.as_ref(),
+                            process_user: spec.shared.process_user.as_deref(),
                             dependency_ids: &dependency_ids,
                         },
                     )

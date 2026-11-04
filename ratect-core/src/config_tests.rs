@@ -4249,6 +4249,9 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -5088,6 +5091,9 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -6961,6 +6967,10 @@ async fn native_only_fields_are_rejected_in_a_yaml_include_of_a_native_project()
         ("dns_search", "    dns_search:\n      - corp.example.com\n"),
         ("dns_options", "    dns_options:\n      - ndots:2\n"),
         ("network_mode", "    network_mode: host\n"),
+        ("user", "    user: app\n"),
+        ("user", "    user: 1000\n"),
+        ("group", "    group: staff\n"),
+        ("groups", "    groups:\n      - docker\n      - 999\n"),
         (
             "scope",
             "    volumes:\n      - type: cache\n        name: c\n        container: /c\n        \
@@ -13776,6 +13786,9 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -18532,4 +18545,301 @@ fn a_toml_error_without_a_snippet_is_escaped_keeping_its_layout() {
         escaped_toml_error(&error).to_string(),
         "x\\nError: forged\n"
     );
+}
+
+/// `user`, `group` and `groups` take a name or an id, written as a string or
+/// a bare integer, and hand the runtime the same text either way (#234,
+/// decisions/0011).
+#[tokio::test]
+async fn user_group_and_groups_parse_as_strings_and_bare_integers() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.named]
+image = "alpine:3.18"
+user = "app"
+group = "staff"
+groups = ["docker", 999]
+
+[containers.numeric]
+image = "alpine:3.18"
+user = 1000
+group = 20
+
+[containers.quoted]
+image = "alpine:3.18"
+user = "1000"
+group = "20"
+"#,
+    )
+    .await
+    .unwrap();
+
+    let text = |value: &Option<NameOrId>| value.as_ref().map(|v| v.as_str().to_string());
+    let named = &project.config.containers["named"];
+    assert_eq!(text(&named.user).as_deref(), Some("app"));
+    assert_eq!(text(&named.group).as_deref(), Some("staff"));
+    assert_eq!(
+        named
+            .groups
+            .iter()
+            .flatten()
+            .map(NameOrId::as_str)
+            .collect::<Vec<_>>(),
+        ["docker", "999"]
+    );
+    let numeric = &project.config.containers["numeric"];
+    let quoted = &project.config.containers["quoted"];
+    assert_eq!(text(&numeric.user).as_deref(), Some("1000"));
+    assert_eq!(text(&numeric.group).as_deref(), Some("20"));
+    assert_eq!(numeric.user, quoted.user);
+    assert_eq!(numeric.group, quoted.group);
+}
+
+/// A negative number is no id, and nothing a name could be written as.
+#[tokio::test]
+async fn a_negative_user_is_refused() {
+    let error = load_native_toml(
+        "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\nuser = -1\n",
+    )
+    .await
+    .expect_err("a negative id should be refused");
+    assert!(format!("{error:#}").contains("user"), "got: {error:#}");
+}
+
+/// Passwd and group files use `:` as their field separator, so no name holds
+/// one, and an empty value tells the runtime nothing. Refused rather than
+/// handed over: Docker reads `""` as the image's own user, and either of
+/// these in `user` would bring back the `user[:group]` packing the separate
+/// fields exist to avoid, including `":20"`, a group with no user.
+#[tokio::test]
+async fn a_value_that_cannot_be_a_name_or_id_is_refused_naming_the_container_and_field() {
+    for (field, declaration) in [
+        ("user", r#"user = """#),
+        ("user", r#"user = "1000:20""#),
+        ("user", r#"user = ":20""#),
+        ("group", "user = \"app\"\ngroup = \"\""),
+        ("group", "user = \"app\"\ngroup = \"a:b\""),
+        ("groups", r#"groups = ["docker", ""]"#),
+        ("groups", r#"groups = ["a:b"]"#),
+    ] {
+        let error = load_native_toml(&format!(
+            "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n{declaration}\n"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("{declaration} should be refused"));
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("'app'") && error.contains(&format!("'{field}'")),
+            "{declaration}: {error}"
+        );
+    }
+}
+
+/// `group` says which primary group `user` runs with, so without one it says
+/// nothing the runtime could be told.
+#[tokio::test]
+async fn group_without_user_is_refused_naming_the_container_and_field() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+group = "staff"
+"#,
+    )
+    .await
+    .expect_err("group without user should be refused");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("'app'") && error.contains("'group'") && error.contains("'user'"),
+        "got: {error}"
+    );
+}
+
+/// The rule is about what a container ends up with: `extends` can supply the
+/// `user` that makes a child's `group` legal.
+#[tokio::test]
+async fn group_without_user_is_judged_on_the_container_extends_resolves() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+
+[containers.child]
+extends = "base"
+group = "staff"
+"#,
+    )
+    .await
+    .expect_err("a group with no user, declared or inherited, should be refused");
+    assert!(format!("{error:#}").contains("'child'"), "got: {error:#}");
+
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+user = "app"
+
+[containers.child]
+extends = "base"
+group = "staff"
+groups = ["docker"]
+"#,
+    )
+    .await
+    .expect("a group whose user is inherited is legal");
+    let child = &project.config.containers["child"];
+    assert_eq!(child.user.as_ref().map(NameOrId::as_str), Some("app"));
+    assert_eq!(child.group.as_ref().map(NameOrId::as_str), Some("staff"));
+}
+
+/// A base is judged as the container it is, even if a child would complete
+/// it: a config that breaks the rule fails at load, whichever containers a
+/// task runs. The way out is moving `user` into the base.
+#[tokio::test]
+async fn a_base_with_group_but_no_user_is_refused_even_if_its_child_adds_one() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+group = "staff"
+
+[containers.child]
+extends = "base"
+image = "alpine:3.18"
+user = "app"
+"#,
+    )
+    .await
+    .expect_err("the base has a group and no user");
+    assert!(format!("{error:#}").contains("'base'"), "got: {error:#}");
+}
+
+/// `group` inherits separately from `user`, like any other field: a child
+/// overriding only `user` keeps its parent's `group`.
+#[tokio::test]
+async fn a_child_overriding_user_keeps_its_parents_group() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+user = "app"
+group = "staff"
+
+[containers.child]
+extends = "base"
+user = "root"
+"#,
+    )
+    .await
+    .unwrap();
+    let child = &project.config.containers["child"];
+    assert_eq!(child.user.as_ref().map(NameOrId::as_str), Some("root"));
+    assert_eq!(child.group.as_ref().map(NameOrId::as_str), Some("staff"));
+}
+
+/// `groups` needs no `user`: they add to whichever user the container runs as.
+#[tokio::test]
+async fn groups_without_user_are_fine() {
+    let project = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.app]
+image = "alpine:3.18"
+groups = ["docker"]
+"#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(project.config.containers["app"].user, None);
+}
+
+/// Until `run_as_current_user` leaves the native format (#233), a container
+/// could name two users. Refused rather than given a silent precedence
+/// (decisions/0011), wherever each comes from. A disabled
+/// `run_as_current_user` names none, and `groups` adds to either.
+#[tokio::test]
+async fn user_with_an_enabled_run_as_current_user_is_refused() {
+    let error = load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.base]
+image = "alpine:3.18"
+run_as_current_user = { enabled = true, home_directory = "/home/me" }
+
+[containers.child]
+extends = "base"
+user = "app"
+"#,
+    )
+    .await
+    .expect_err("two sources of a user should be refused");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("'child'")
+            && error.contains("'user'")
+            && error.contains("'run_as_current_user'"),
+        "got: {error}"
+    );
+
+    load_native_toml(
+        r#"
+project_name = "demo"
+
+[containers.disabled]
+image = "alpine:3.18"
+run_as_current_user = { enabled = false }
+user = "app"
+
+[containers.adds-groups]
+image = "alpine:3.18"
+run_as_current_user = { enabled = true, home_directory = "/home/me" }
+groups = ["docker"]
+"#,
+    )
+    .await
+    .expect("neither of these names two users");
+}
+
+/// `user` and friends are native-only (#234): a `batect.yml` using one is
+/// refused, naming the field, under the compat binary's own loader too.
+#[tokio::test]
+async fn user_group_and_groups_are_rejected_in_compat_mode() {
+    for (field, declaration) in [
+        ("user", "    user: app\n"),
+        ("user", "    user: 1000\n"),
+        ("group", "    group: staff\n"),
+        ("groups", "    groups:\n      - docker\n"),
+    ] {
+        let dir = unique_temp_dir();
+        let path = dir.join("batect.yml");
+        std::fs::write(
+            &path,
+            format!(
+                "project_name: demo\ncontainers:\n  app:\n    image: alpine\n{declaration}tasks: {{}}\n"
+            ),
+        )
+        .unwrap();
+        let err = load_project(&path, &LoadOutput::default())
+            .await
+            .unwrap_err();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            format!("{err:#}").contains(&format!("uses '{field}'")),
+            "expected a compat rejection of '{field}', got: {err:#}"
+        );
+    }
 }

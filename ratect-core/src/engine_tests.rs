@@ -52,7 +52,7 @@ type CapturedSpecs = Arc<Mutex<Vec<(String, crate::container_spec::ContainerSpec
 type ExecValue = (
     Option<String>,
     Option<HashMap<String, String>>,
-    Option<(u32, u32)>,
+    Option<String>,
 );
 type CapturedExecs = Arc<Mutex<HashMap<String, ExecValue>>>;
 /// `(stop_signal, stop_grace_period)` a prior `stop_and_remove_container`
@@ -995,7 +995,7 @@ impl FakeContainerRuntime {
             .and_then(|spec| spec.shared.health_check)
     }
 
-    /// The `(working_directory, environment, (uid, gid))` a prior
+    /// The `(working_directory, environment, user)` a prior
     /// `exec_in_container` call for `command` was given.
     fn exec_for(&self, command: &str) -> Option<ExecValue> {
         self.execs.lock().unwrap().get(command).cloned()
@@ -1391,7 +1391,7 @@ impl ContainerRuntime for FakeContainerRuntime {
         command: &str,
         working_directory: Option<&str>,
         environment: Option<&HashMap<String, String>>,
-        user_mapping: Option<&crate::docker::UserMapping>,
+        user: Option<&str>,
     ) -> Result<crate::docker::ExecResult> {
         let delay = self.exec_delays.lock().unwrap().get(command).copied();
         if let Some(delay) = delay {
@@ -1402,7 +1402,7 @@ impl ContainerRuntime for FakeContainerRuntime {
             (
                 working_directory.map(str::to_string),
                 environment.cloned(),
-                user_mapping.map(|m| (m.user.uid, m.user.gid)),
+                user.map(str::to_string),
             ),
         );
         self.push(format!("exec:{container_id}:{command}"));
@@ -1602,6 +1602,11 @@ impl VolumeStore for FakeContainerRuntime {
     }
 }
 
+/// A `user`/`group`/`groups` value, as the loader would read it.
+fn name_or_id(value: &str) -> crate::config::NameOrId {
+    serde_json::from_value(serde_json::json!(value)).unwrap()
+}
+
 fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
     Container {
         extends: None,
@@ -1645,6 +1650,9 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -1712,6 +1720,9 @@ fn config_with_cycle() -> Config {
             dns_search: None,
             dns_options: None,
             network_mode: None,
+            user: None,
+            group: None,
+            groups: None,
         },
     );
 
@@ -1820,6 +1831,9 @@ fn config_with_shared_prerequisite() -> Config {
             dns_search: None,
             dns_options: None,
             network_mode: None,
+            user: None,
+            group: None,
+            groups: None,
         },
     );
 
@@ -2810,6 +2824,9 @@ fn container_with_run_as_current_user(
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -3300,6 +3317,9 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             dns_search: None,
             dns_options: None,
             network_mode: None,
+            user: None,
+            group: None,
+            groups: None,
         },
     );
     let mut tasks = IndexMap::new();
@@ -3370,6 +3390,9 @@ fn container_with_build_directory(
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -4278,6 +4301,9 @@ async fn container_without_image_or_build_directory_errors() {
             dns_search: None,
             dns_options: None,
             network_mode: None,
+            user: None,
+            group: None,
+            groups: None,
         },
     );
     let mut tasks = IndexMap::new();
@@ -4925,7 +4951,132 @@ async fn a_setup_command_runs_as_its_containers_mapped_user() {
 
     let expected_user = crate::user::current_user().unwrap();
     let (_, _, user) = docker.exec_for("./apply-migrations.sh").unwrap();
-    assert_eq!(user, Some((expected_user.uid, expected_user.gid)));
+    assert_eq!(
+        user,
+        Some(format!("{}:{}", expected_user.uid, expected_user.gid))
+    );
+}
+
+/// A container's passthrough `user`/`group`/`groups` (#234) reach both a
+/// task's own container and a dependency, each from its own config, and with
+/// no identity-file synthesis: nothing here runs as the host user.
+#[tokio::test]
+async fn passthrough_user_and_groups_reach_a_task_container_and_a_dependency() {
+    let mut config = config_with_database_dependency(|database| {
+        database.user = Some(name_or_id("postgres"));
+        database.group = Some(name_or_id("staff"));
+        database.groups = Some(vec![name_or_id("docker"), name_or_id("999")]);
+    });
+    let app = config.containers.get_mut("app").unwrap();
+    app.user = Some(name_or_id("1000"));
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let database = docker.spec_for("database").unwrap();
+    assert_eq!(
+        database.shared.process_user.as_deref(),
+        Some("postgres:staff")
+    );
+    assert_eq!(
+        database.shared.options.groups,
+        Some(vec!["docker".to_string(), "999".to_string()])
+    );
+    assert_eq!(database.shared.user_mapping, None);
+    assert!(!database.shared.runs_as_host_user);
+
+    let app = docker.spec_for("app").unwrap();
+    assert_eq!(app.shared.process_user.as_deref(), Some("1000"));
+    assert_eq!(app.shared.options.groups, None);
+    assert_eq!(app.shared.user_mapping, None);
+    assert!(!app.shared.runs_as_host_user);
+}
+
+/// No passthrough and no `run_as_current_user`: the image's own user stands.
+#[tokio::test]
+async fn a_container_with_no_user_leaves_the_images_own_alone() {
+    let config = config_with_database_dependency(|_| {});
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    for name in ["app", "database"] {
+        let spec = docker.spec_for(name).unwrap();
+        assert_eq!(spec.shared.process_user, None, "{name}");
+        assert_eq!(spec.shared.options.groups, None, "{name}");
+    }
+}
+
+/// `run_as_current_user` still resolves to the mapped `uid:gid`, the one
+/// value both creating the container and exec'ing into it read.
+#[tokio::test]
+async fn run_as_current_user_resolves_to_the_mapped_process_user() {
+    let config = config_with_database_dependency(|database| {
+        *database = container_with_run_as_current_user("postgres:16", None, "/home/container-user");
+    });
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let expected_user = crate::user::current_user().unwrap();
+    assert_eq!(
+        docker.spec_for("database").unwrap().shared.process_user,
+        Some(format!("{}:{}", expected_user.uid, expected_user.gid))
+    );
+}
+
+/// A setup command in its own container execs as the passthrough user, with
+/// the group, so it sees the identity the main process does (#234).
+#[tokio::test]
+async fn a_setup_command_runs_as_its_containers_passthrough_user() {
+    let config = config_with_database_dependency(|database| {
+        database.user = Some(name_or_id("postgres"));
+        database.group = Some(name_or_id("staff"));
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./apply-migrations.sh".to_string(),
+            working_directory: None,
+            run_in: None,
+        }]);
+    });
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (_, _, user) = docker.exec_for("./apply-migrations.sh").unwrap();
+    assert_eq!(user.as_deref(), Some("postgres:staff"));
+}
+
+/// As with `run_as_current_user`, a passthrough `user` is the declaring
+/// container's: a `run_in` command runs as whatever its target runs as.
+#[tokio::test]
+async fn a_setup_command_with_run_in_does_not_take_the_declaring_containers_passthrough_user() {
+    let mut config = config_with_database_dependency(|database| {
+        database.user = Some(name_or_id("postgres"));
+        database.dependencies = Some(vec!["seed-client".to_string()]);
+        database.setup_commands = Some(vec![crate::config::SetupCommand {
+            command: "./seed.sh".to_string(),
+            working_directory: None,
+            run_in: Some("seed-client".to_string()),
+        }]);
+    });
+    config.containers.insert(
+        "seed-client".to_string(),
+        container("my-org/db-tools", None),
+    );
+
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(config, docker.clone());
+
+    engine.run_task("start", &[]).await.unwrap();
+
+    let (_, _, user) = docker.exec_for("./seed.sh").unwrap();
+    assert_eq!(user, None);
 }
 
 /// A setup command with `run_in` runs with no user mapping, even when the
@@ -11052,6 +11203,9 @@ async fn dependency_without_image_or_build_directory_errors() {
             dns_search: None,
             dns_options: None,
             network_mode: None,
+            user: None,
+            group: None,
+            groups: None,
         },
     );
     containers.insert(

@@ -11,7 +11,12 @@ replacement is its compatibility contract. Refined before implementation
 ([#237](https://github.com/or1can/ratect/issues/237)): the hazard warnings
 are output under [0017](0017-output-streams-and-styles.md), not `tracing`, and
 fire during a run, since the daemon class needs a connection loading doesn't
-make.
+make. Refined while implementing the passthroughs
+([#234](https://github.com/or1can/ratect/issues/234)): an empty value, one
+holding a `:` and a negative integer are load-time errors, since none is a name
+or an id and a `:` would bring back the packed form; and until `run_as_current_user` leaves
+the native format, `user` beside an enabled one is refused the way `identity`
+beside `user` will be.
 
 ## Context
 

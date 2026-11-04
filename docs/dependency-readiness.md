@@ -61,9 +61,11 @@ own container) starts:
    which then replaces this step, image `HEALTHCHECK` included.
 2. **Its `setup_commands` must succeed.** Each runs inside the running container
    (via Docker's `exec` mechanism), one at a time in declared order, with the
-   container's own `environment` and (under [User
-   mapping](ratect-compat-config-reference.md#user-mapping)) the same user/group
-   the container runs as. A command exiting non-zero fails the task, with its
+   container's own `environment` and the same user/group the container runs as
+   (under [User mapping](ratect-compat-config-reference.md#user-mapping) or, in
+   a `ratect.toml`,
+   [`user`/`group`](ratect-config-reference.md#usergroupgroups-running-as-a-specific-user)).
+   A command exiting non-zero fails the task, with its
    output in the error. In the transcript, `Running setup command psql -U
    postgres -c "ANALYZE visits;" (1 of 1) in db...` is this step, and `Starting
    app...` doesn't appear until `db has completed all setup commands.`

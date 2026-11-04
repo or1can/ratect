@@ -62,6 +62,9 @@ fn sample_container() -> Container {
         dns_search: None,
         dns_options: None,
         network_mode: None,
+        user: None,
+        group: None,
+        groups: None,
     }
 }
 
@@ -1144,4 +1147,42 @@ fn a_build_secret_refusal_quotes_a_line_break_in_the_id_and_path_escaped() {
         "The 'build_secrets' entry 'id\\nError: forged' reads \
          '/nonexistent\\nError: forged', which does not exist"
     );
+}
+
+/// A root host user is passed through as `0:0`, as in Batect's
+/// `determineUserAndGroup`, not treated as no user at all.
+#[test]
+fn derive_spec_maps_host_root_to_a_process_user_of_0_0() {
+    let container_config = sample_container();
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let mapping = crate::docker::UserMapping {
+        user: crate::user::CurrentUser {
+            uid: 0,
+            gid: 0,
+            username: "root".to_string(),
+            groupname: "root".to_string(),
+        },
+        home_directory: "/root".to_string(),
+        cache_directories: Vec::new(),
+    };
+
+    let spec = derive_spec(ContainerSpecInputs {
+        name: "app",
+        docker_name: "demo-app-abc123",
+        container_config: &container_config,
+        overlay: Overlay::Run(&empty_run()),
+        image: "alpine:3.18",
+        network: ContainerNetwork::Task("ratect-run-id".to_string()),
+        interactive: false,
+        additional_args: &[],
+        user_mapping: Some(&mapping),
+        volumes: None,
+        term_var: None,
+        proxy: None,
+        publish_ports: true,
+        role: ContainerRole::Task,
+        run_labels: &run_labels,
+    });
+
+    assert_eq!(spec.shared.process_user.as_deref(), Some("0:0"));
 }
