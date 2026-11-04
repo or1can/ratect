@@ -24,7 +24,7 @@ The line is **cross-cutting vs. version-scoped**:
   work it explains. Before [0008](0008-tracking-release-scope-with-github-issues.md),
   this lived inline in `RELEASES.md`'s own per-version entry instead, using
   the **"Scope, settled before building:" / "As built:"** subsection pattern
-  (see the git-includes and orphaned-resource entries, both predating that
+  (see the shared-cache and nested-Git-gate entries, both predating that
   decision) — retired alongside the live scope-then-strikethrough convention
   it was written for.
 
@@ -32,8 +32,8 @@ Practical trigger: a decision earns an ADR the moment it's about to be
 referenced from a *second* place. Most decisions never cross that line.
 
 We deliberately **do not backfill exhaustively** — an ADR is point-in-time by
-nature, so a mix of "recorded here" and "still inline in the roadmap" is the
-expected state, not debt. The seed set below is only the genuinely foundational,
+nature, so a mix of "recorded here" and "still inline in its release's issue or
+`RELEASES.md` entry" is the expected state, not debt. The seed set below is only the genuinely foundational,
 multiply-referenced decisions.
 
 ## Format
@@ -69,7 +69,7 @@ record refined this way.
 | # | Decision | Status |
 | --- | --- | --- |
 | [0001](0001-two-binaries.md) | Two binaries (`ratect` + `ratect-compat`) on a shared core | Accepted — shipped (0.20.0) |
-| [0002](0002-runtime-ownership-labels.md) | Runtime-ownership labels (`eu.orican.ratect.*`) | Accepted — shipped (ratect-compat 0.21.1 · ratect 0.2.0) |
+| [0002](0002-runtime-ownership-labels.md) | Runtime-ownership labels (`eu.orican.ratect.*`) | Accepted — shipped (ratect-compat 0.22.0 · ratect 0.2.0) |
 | [0003](0003-ratect-native-config-format.md) | `ratect`-native config format (TOML) | Accepted — shipped (ratect 0.3.0) |
 | [0004](0004-git-include-host-path-trust.md) | Trusting a Git include's host paths (`allow_host_paths`) | Accepted — implemented |
 | [0005](0005-build-ssh-keyring-placement.md) | Where `build_ssh`'s ssh-agent keyring lives | Accepted — implemented (ratect-compat 0.25.0) |

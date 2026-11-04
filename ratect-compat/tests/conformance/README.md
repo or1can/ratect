@@ -21,8 +21,8 @@ network or submodule dependency. Attribution is recorded in the repository's
 
 ## Deviations from the vendored originals
 
-Dependency and base-image versions inside this corpus are in scope for the
-repo's scheduled Renovate run (`.github/workflows/renovate.yml`) — a pinned
+Dependency and base-image versions inside this corpus are bumped by hand: the
+repo's scheduled Renovate run ignores `**/tests/**` (`renovate.json5`). A pinned
 version going stale is a real way for these tests to break, as
 `container-with-dependency`'s did below. A version bump on its own doesn't
 change what a fixture tests, so it isn't a deviation in the sense the rest of
@@ -76,8 +76,8 @@ command's own output — not on Batect's exact transcript. That is the primary w
 divergence is handled: assert what the container did, not how Batect framed it.
 
 Where `ratect-compat` diverges *behaviourally* on purpose (a documented
-simplification, not a bug), the harness records it as an explicit expectation
-with a `divergence` note, so a difference is an asserted, documented fact rather
+simplification, not a bug), the harness can record it as an explicit expectation
+with a `divergence` note (no case has needed one yet), so a difference is an asserted, documented fact rather
 than a red test. Over time this turns `differences-from-batect.md` from prose
 into an executable report.
 

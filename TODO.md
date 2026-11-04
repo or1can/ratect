@@ -122,8 +122,9 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
 
 - **6.** **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
    stalled stdout** (`ratect-core/src/ui.rs`) — `post()` runs
-   synchronously from tokio worker threads, so a stalled stdout (closed
-   pipe reader, `Ctrl-S`'d terminal) blocks whichever holds the Console
+   synchronously from tokio worker threads, so a stalled stdout (a reader
+   that stays open and stops reading, `Ctrl-S`'d terminal; a closed reader
+   ends the run instead) blocks whichever holds the Console
    mutex mid-write and queues every concurrent poster behind it, which
    in turn stalls whatever is draining the Docker attach/log stream that
    feeds it — the same container-blocks-because-nobody's-reading effect
@@ -133,8 +134,15 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
    the newline `println` always writes — is already fixed.) A real fix
    (an mpsc channel draining to one dedicated writer thread/task, the
    `tracing-appender` pattern) is a bigger change than the other items
-   here; low likelihood in practice (`ratect | head` closing early is
+   here; low likelihood in practice (`ratect | less` left paused is
    the realistic trigger), not attempted yet.
+
+- **19.** **Two terminal-resize failures in `ratect-core/src/docker.rs` are
+   logged, not printed.** `Failed to resize container TTY` and the failure to
+   install the `SIGWINCH` handler are `tracing::warn!`, where AGENTS.md
+   guideline 11 and decisions/0017 make a warning output on the event sink, so
+   `RUST_LOG=off` hides them. Fixing it means deciding where a warning goes
+   while a task container holds the terminal.
 
 ---
 

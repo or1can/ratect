@@ -16,7 +16,7 @@ one changelog is the honest shape for that. Two conventions follow from it:
   ratect-compat 0.33.0 · ratect 0.12.0 use, filters nothing.
 - **A release heading names every version in that release**, since a shared-core
   change is released for both binaries at once, each bumping its own number —
-  e.g. `## [ratect-compat 0.21.1 · ratect 0.2.0]`. A binary released on its own
+  e.g. `## [ratect-compat 0.22.0 · ratect 0.2.0]`. A binary released on its own
   names only itself.
 
 Headings before the two-binary split (0.21.0 and earlier) are `ratect-compat`'s own

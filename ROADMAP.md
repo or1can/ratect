@@ -65,15 +65,15 @@ Improving the developer experience through better tools and feedback.
   identity a container runs as against the actual uid/gid of a mounted path) need a
   real filesystem probe rather than a config read; container-level checks that need the
   *image* (its own `HEALTHCHECK`, whether an `entrypoint` exists) need a pull, so
-  they'd belong behind a flag rather than the default run; and four checks from
+  they'd belong behind a flag rather than the default run; and three checks from
   Batect's own unbuilt `doctor` wishlist remain: on a rootful Linux daemon, mounting a
   directory writable into a container that runs as root (the root-owned-files trap
   `identity` resolves there — see
   [decisions/0011](decisions/0011-container-identity.md)), mounting a directory over a
-  parent of the `identity` home directory, a proxy environment variable that isn't a
-  URL or doesn't use an `http`/`https` scheme, and the daemon's own proxy settings
-  not matching the local environment's (readable from the Docker API, so it belongs with the
-  daemon-reachability check rather than the config ones). Batect's fifth —
+  parent of the `identity` home directory, and a proxy environment variable that isn't a
+  URL or doesn't use an `http`/`https` scheme. The daemon's own proxy settings not
+  matching the local environment's is
+  [out of scope](.out-of-scope/doctor-daemon-proxy-mismatch-check.md). Batect's fifth —
   warning on container/task naming conventions — is deliberately skipped: Ratect
   has no convention to enforce, and inventing one to lint against would be the
   tool overreaching.
@@ -81,11 +81,10 @@ Improving the developer experience through better tools and feedback.
   shipped as Batect parity ([0.16.0](RELEASES.md#ratect-compat)). What remains is
   going *beyond* Batect — build context upload progress, richer pull progress
   (per-layer byte counts), any `ratect`-binary-specific presentation ideas — plus
-  four items from Batect's own unbuilt roadmap:
+  three items from Batect's own unbuilt roadmap ([cheaper `fancy` repaints](.out-of-scope/cheaper-fancy-repaints.md), a fourth, are out of scope):
   - **A countdown to the next health check** while waiting for a dependency ("next check in 3 seconds, will time out after 2 more retries") — the wait is currently opaque, which makes a slow-starting dependency indistinguishable from a hung one at the exact moment that distinction matters most.
   - **Wrap text in `fancy` output** rather than letting a long line run off the edge. Note `fancy.rs` already clips to the real display width via `unicode-width`, so the machinery to measure is there — this is about what to *do* at the boundary.
   - **A log-aggregation output mode** (Batect's example was starting a Seq instance and pointing every container's logs at it). Ratect's `EventSink` design makes an extra mode cheap to add; the open question is whether a task runner should be starting a log server on your behalf, or just be easy to point at one you already run.
-  - **Cheaper repaints in `fancy` mode.** Batect wanted to batch console updates rather than reprinting on every event. Ratect is already better in one direction — `fancy.rs`'s `repaint_startup` skips a repaint entirely when the content hasn't changed — and worse in another: it repaints the whole block per event, where Batect diffs and rewrites only the lines that changed (`fancy.rs`'s module doc lists this among its deliberate differences). Deliberately left as a future item rather than scoped: nobody has reported it and the cost hasn't been measured, so the honest first step is a measurement (a task with many dependencies emitting events rapidly) rather than an optimisation.
 - **Watch Mode**: Automatically re-running tasks when source files change.
 - **A version picker on the rendered docs site** — deliberately not built with the
   site itself ([#86](https://github.com/or1can/ratect/issues/86)): the site tracks
@@ -110,10 +109,8 @@ Exploring innovative features that go beyond the original Batect, as well as pla
   If a real case appears, the shape to reach for is a repo-keyed grant in the
   owner's own config, not a recursive boolean — see that ADR's Consequences
   for the security properties any change here must preserve.
-- **Wildcard Includes**: Support for including multiple files using glob patterns (e.g., `include: containers/*.yaml`). Batect wanted this too, and never built it.
 - **Configuration Merging/Replacement**: Ability to merge or override containers and tasks when including files.
 - **Image Lifecycle Management**: Tools for building and pushing images independently of task execution, and cleaning up unused images. How built images are named shipped first ([decisions/0018](decisions/0018-built-images-named-for-people-found-by-labels.md)); the lifecycle half it leads to is planned for ratect 0.17.0 — ownership labels on built images ([#599](https://github.com/or1can/ratect/issues/599)), cleaning up dangling rebuilds ([#600](https://github.com/or1can/ratect/issues/600)), and referring to a run's own images and containers from configuration ([#601](https://github.com/or1can/ratect/issues/601)). Independent build and push is still unscheduled.
-- **OCI annotations on built images**: a config field for build-time image labels (`source`, `revision`, `created` — distinct from `Container.labels`, which applies to the *container*, not the image it builds), as the project's own provenance on an image `build_directory` produces. Today that's a Dockerfile `LABEL`, which already works and needs nothing from Ratect. Ratect shouldn't guess these itself (shelling out to `git` in the build context would be wrong as often as right) — only worth building if someone actually wants the ergonomics. `ratect`-only, since Batect has no such field. Not to be confused with [decisions/0002](decisions/0002-runtime-ownership-labels.md)'s runtime-ownership labels, a different thing on a different object (a running container/network, not the image).
 - **Additional users in the container's `/etc/passwd`**: `ratect-compat`'s `run_as_current_user` (`user.rs`, ported from Batect's `RunAsCurrentUserConfigurationProvider`) replaces the image's `/etc/passwd`/`/etc/shadow`/`/etc/group` with only `root` and the host user, so a service account the image shipped disappears. The native format's `identity`, planned for ratect 0.13.0, adds to the image's own files instead ([decisions/0011](decisions/0011-container-identity.md)), so the image's users survive. What remains is whether declaring users the image lacks is still wanted — undecided until that lands ([#107](https://github.com/or1can/ratect/issues/107)).
 - **Secrets Management**: Integrated support for securely handling sensitive information like API keys and credentials.
 - **Plugin System**: A flexible architecture to allow users to extend Ratect's functionality with custom logic.
@@ -127,7 +124,6 @@ lost when the archived repository eventually becomes hard to consult.
 - **HTTP Includes** ([batect#1230](https://github.com/batect/batect/issues/1230)): a third `include` type fetching a config file over HTTP, so a bundle can be published and versioned alongside the images it uses, in the same artifact repository — Git includes make versioning and auth awkward for that. Needs the trust question answered first: an HTTP include is a fetch-and-execute of arbitrary configuration, so it inherits everything [decisions/0004](decisions/0004-git-include-host-path-trust.md) works through for Git includes, plus caching and integrity (a Git ref at least names a commit; a URL names nothing). `ratect`-only, most likely — `ratect-compat` has to keep Batect's own behavior
 for parity, same reasoning as `allow_nested_git_includes` (shipped `ratect`
 [0.4.0](RELEASES.md#ratect)).
-- **Arguments on a prerequisite reference** ([batect#1053](https://github.com/batect/batect/issues/1053)): today `-- ADDITIONAL_ARGS` reaches only the explicitly-invoked task, never its prerequisites, in both tools — so a `build` task that takes arguments can't be reused as a prerequisite with different ones. Batect's proposed spelling (`prerequisites: [run-gradle build]`) overloads the string; a native-format `ratect.toml` can give a prerequisite entry a proper object shape instead, which is a good argument for this being `ratect`-only.
 - **Tasks that run on the host** ([batect#78](https://github.com/batect/batect/issues/78), Batect's oldest open enhancement): a task that executes on the host rather than in a container, so one tool runs *every* task in a workflow and host steps can participate in the dependency graph. The largest philosophical departure on this list — it trades away the reproducibility that is the entire point of a container-based task runner — so it needs a decision about whether Ratect wants to be that tool at all, not just an implementation.
 - **Dependency relationships between containers and tasks**: letting a container declare that a task must run before it starts (Batect's example: the app container requires the build task), removing the need to repeat that task as a prerequisite on every task that starts the container. Sugar over `prerequisites`, not an alternative to [`run_to_completion`](docs/ratect-config-reference.md#run_to_completion-init-containers): the task it names would still run as its own fully isolated execution — own network, own containers, own cleanup — same as a `prerequisites` entry today, whether or not it ran concurrently with anything else. `run_to_completion` solves a different problem: staying *inside* one task's own dependency graph, sharing its network with siblings that must keep running.
 - **Clone Git includes in parallel**: `config.rs`'s include-resolution loop calls `ensure_cached` one entry at a time, so a project with several Git includes clones them serially on first use. The per-entry lock already exists; the open question Batect noted is what to do about a repository needing interactive authentication, which parallel cloning would interleave unreadably.

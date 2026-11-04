@@ -41,8 +41,8 @@
 //! rather than run via a shell — `setup_commands` used to be a `sh -c` exception
 //! (closed once noticed it was never actually deliberate; see
 //! `config::SetupCommand`'s doc comment); and `ContainerOptions` bundles the
-//! still-growing set of per-container Docker options shared by `run_container`/
-//! `start_background_container` (0.13.0's `working_directory` through
+//! still-growing set of per-container Docker options `create_container` applies
+//! (0.13.0's `working_directory` through
 //! `enable_init_process`) — add new container-level fields there rather than as more
 //! flat parameters, converting from config types to plain values in
 //! `container_spec::derive_spec` (`docker.rs` deliberately never depends on

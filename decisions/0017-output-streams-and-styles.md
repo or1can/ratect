@@ -71,7 +71,7 @@ and every later decision here follows from it.
   clean.
 
 So `fancy`'s repaint block, `simple`'s milestone lines and `all`'s prefixed
-lines are stderr. A user who redirects `2>/dev/null` has opted out of the
+lines, other than the task container's own, are stderr. A user who redirects `2>/dev/null` has opted out of the
 conversation, not out of the result; a `ratect` user who pipes stdout gets
 the container's output and nothing else, in every style (`ratect-compat`'s
 stdout keeps more — next).
