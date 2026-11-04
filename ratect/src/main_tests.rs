@@ -835,6 +835,77 @@ fn marked_breaking_changes_are_found_under_their_release() {
     );
 }
 
+/// The newest `CHANGELOG.md` section from before entries had to carry a leading
+/// marker; the check below reads only what is above it.
+const LAST_SECTION_BEFORE_ENTRY_MARKERS: &str = "## [ratect-compat 0.33.0 · ratect 0.12.0]";
+
+/// Entries in `changelog` that lead with a `ratect` verb, so are `ratect`-only,
+/// with nothing saying so: no leading marker, which would come before the verb,
+/// and no mention of `ratect-compat`, which makes it an entry about both.
+fn unmarked_ratect_verb_entries(changelog: &str) -> Vec<&str> {
+    let cli = Cli::command();
+    let verbs: Vec<&str> = cli.get_subcommands().map(|verb| verb.get_name()).collect();
+    changelog
+        .lines()
+        .take_while(|line| !line.starts_with(LAST_SECTION_BEFORE_ENTRY_MARKERS))
+        .filter(|line| {
+            line.strip_prefix("- `ratect ")
+                .and_then(|rest| rest.split([' ', '`']).next())
+                .is_some_and(|verb| verbs.contains(&verb))
+                && !line.contains("ratect-compat")
+        })
+        .collect()
+}
+
+/// `tools/changelog-section.py` leaves an entry out of a binary's release notes
+/// only on its leading marker, so an unmarked `ratect`-only entry would reach
+/// `ratect-compat`'s notes (AGENTS.md guideline 7).
+#[test]
+fn every_entry_leading_with_a_ratect_verb_is_marked() {
+    let changelog = include_str!("../../CHANGELOG.md");
+    assert_eq!(
+        unmarked_ratect_verb_entries(changelog),
+        Vec::<&str>::new(),
+        "start these CHANGELOG.md entries with '**ratect only:**'"
+    );
+}
+
+#[test]
+fn unmarked_ratect_verb_entries_are_found_above_the_last_unmarked_section() {
+    let changelog = "\
+## [Unreleased]
+
+### Changed
+
+- `ratect caches clean` reports each cache.
+- `ratect run` and `ratect-compat` agree now.
+- **ratect only:** `ratect doctor` checks more.
+- `ratect nonsense` is not a verb.
+- `ratect-compat --clean` is another binary.
+- Mentions `ratect tasks list` only in passing.
+  - `ratect config validate` is a sub-bullet.
+
+## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-12-01
+
+### Fixed
+
+- `ratect includes list` lists.
+
+## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
+
+### Fixed
+
+- `ratect resources clean` predates the markers.
+";
+    assert_eq!(
+        unmarked_ratect_verb_entries(changelog),
+        vec![
+            "- `ratect caches clean` reports each cache.",
+            "- `ratect includes list` lists.",
+        ]
+    );
+}
+
 /// A `ResourceInventory` whose removals of `refused` ids fail — enough to
 /// drive `remove_leftovers` without a daemon.
 struct RefusingInventory {

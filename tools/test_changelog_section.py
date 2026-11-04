@@ -62,7 +62,7 @@ COMBINED_CHANGELOG = """\
 ### Changed
 
 - something ratect-compat specific
-- **(ratect only)** something ratect specific
+- **ratect only:** something ratect specific
 
 ## [ratect-compat 0.26.0] - 2026-06-01
 
@@ -182,6 +182,252 @@ class HeadingMatchForABinaryTests(unittest.TestCase):
             changelog_section.changelog_section(changelog, "0.7.0", "ratect")
 
 
+MARKED_CHANGELOG = """\
+## [Unreleased]
+
+## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-12-01
+
+### Breaking
+
+- **ratect.toml:** a toml change
+- **ratect only:** a ratect change
+
+### Changed
+
+- applies to both
+- **ratect-compat only:** a compat change
+  wrapped onto a second line
+  - with a sub-bullet
+- `--log-file` (ratect-compat only) and `-f` (ratect only) both expand `~`
+
+### Fixed
+
+- **ratect-compat only:** another compat change
+
+## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
+
+### Added
+
+- older entry
+"""
+
+
+class FilteringForABinaryTests(unittest.TestCase):
+    def test_ratect_s_notes_omit_ratect_compat_s_entries(self):
+        section = changelog_section.changelog_section(MARKED_CHANGELOG, "0.13.0", "ratect")
+
+        self.assertEqual(
+            section,
+            """\
+### Breaking
+
+- **ratect.toml:** a toml change
+- **ratect only:** a ratect change
+
+### Changed
+
+- applies to both
+- `--log-file` (ratect-compat only) and `-f` (ratect only) both expand `~`
+""",
+        )
+
+    def test_ratect_compat_s_notes_omit_ratect_s_entries(self):
+        section = changelog_section.changelog_section(MARKED_CHANGELOG, "0.34.0", "ratect-compat")
+
+        self.assertEqual(
+            section,
+            """\
+### Changed
+
+- applies to both
+- **ratect-compat only:** a compat change
+  wrapped onto a second line
+  - with a sub-bullet
+- `--log-file` (ratect-compat only) and `-f` (ratect only) both expand `~`
+
+### Fixed
+
+- **ratect-compat only:** another compat change
+""",
+        )
+
+    def test_without_a_binary_nothing_is_filtered(self):
+        section = changelog_section.changelog_section(MARKED_CHANGELOG, "0.13.0")
+
+        self.assertEqual(
+            section,
+            """\
+### Breaking
+
+- **ratect.toml:** a toml change
+- **ratect only:** a ratect change
+
+### Changed
+
+- applies to both
+- **ratect-compat only:** a compat change
+  wrapped onto a second line
+  - with a sub-bullet
+- `--log-file` (ratect-compat only) and `-f` (ratect only) both expand `~`
+
+### Fixed
+
+- **ratect-compat only:** another compat change
+""",
+        )
+
+    def test_a_marker_further_into_the_entry_filters_nothing(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+### Changed
+
+- applies to both, but **ratect-compat only:** in one clause
+- (ratect-compat only) a parenthetical, even at the start
+"""
+
+        section = changelog_section.changelog_section(changelog, "2.0.0", "ratect")
+
+        self.assertIn("in one clause", section)
+        self.assertIn("even at the start", section)
+
+    def test_a_sub_bullet_that_looks_marked_stays_with_its_parent(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+### Changed
+
+- applies to both
+  - **ratect-compat only:** a detail of it
+"""
+
+        section = changelog_section.changelog_section(changelog, "2.0.0", "ratect")
+
+        self.assertIn("a detail of it", section)
+
+    def test_a_release_with_no_applicable_entries_has_an_empty_body(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+### Fixed
+
+- **ratect-compat only:** the one change
+
+## [0.9.0] - 2026-01-01
+
+- older entry
+"""
+
+        self.assertEqual(changelog_section.changelog_section(changelog, "2.0.0", "ratect"), "")
+
+    def test_a_section_with_nothing_marked_comes_through_unchanged(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+A theme paragraph.
+
+### Added
+
+- first
+  wrapped
+
+- loose second
+
+### Fixed
+
+### Removed
+
+- third
+"""
+
+        self.assertEqual(
+            changelog_section.changelog_section(changelog, "2.0.0", "ratect"),
+            changelog_section.changelog_section(changelog, "2.0.0"),
+        )
+
+    def test_prose_after_an_omitted_entry_is_kept(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+### Changed
+
+- **ratect-compat only:** omitted
+- kept
+
+A closing note.
+"""
+
+        section = changelog_section.changelog_section(changelog, "2.0.0", "ratect")
+
+        self.assertEqual(section, "### Changed\n\n- kept\n\nA closing note.\n")
+
+    def test_prose_after_an_omitted_last_entry_keeps_its_blank_line(self):
+        """Without it the note would read as a continuation of `- kept`."""
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+### Changed
+
+- kept
+- **ratect-compat only:** omitted
+
+A closing note.
+"""
+
+        section = changelog_section.changelog_section(changelog, "2.0.0", "ratect")
+
+        self.assertEqual(section, "### Changed\n\n- kept\n\nA closing note.\n")
+
+    def test_an_omitted_entry_in_a_loose_list_leaves_one_blank_line(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+### Changed
+
+- first
+
+- **ratect-compat only:** omitted
+
+- last
+"""
+
+        section = changelog_section.changelog_section(changelog, "2.0.0", "ratect")
+
+        self.assertEqual(section, "### Changed\n\n- first\n\n- last\n")
+
+    def test_a_subsection_emptied_by_filtering_goes_with_its_prose(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+### Changed
+
+- kept
+
+### Fixed
+
+- **ratect-compat only:** omitted
+
+A note on what was fixed.
+"""
+
+        section = changelog_section.changelog_section(changelog, "2.0.0", "ratect")
+
+        self.assertEqual(section, "### Changed\n\n- kept\n")
+
+    def test_a_theme_paragraph_alone_does_not_make_a_body(self):
+        changelog = """\
+## [ratect-compat 1.0.0 · ratect 2.0.0] - 2026-12-01
+
+A theme paragraph.
+
+### Fixed
+
+- **ratect-compat only:** the one change
+"""
+
+        self.assertEqual(changelog_section.changelog_section(changelog, "2.0.0", "ratect"), "")
+
+
 class MainTests(unittest.TestCase):
     def run_main(self, argv):
         out, err = StringIO(), StringIO()
@@ -238,6 +484,16 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(out, "")
             self.assertIn("0.27.0", err)
+
+    def test_a_release_with_no_applicable_entries_exits_zero_with_no_output(self):
+        import tempfile
+
+        changelog = "## [ratect 2.0.0] - 2026-12-01\n\n- **ratect-compat only:** gone\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write_changelog(Path(directory), changelog)
+
+            code, out, err = self.run_main(["--binary", "ratect", "2.0.0", str(path)])
+            self.assertEqual((code, out, err), (0, "", ""))
 
     def test_binary_option_accepts_only_the_two_package_names(self):
         with self.assertRaises(SystemExit):
