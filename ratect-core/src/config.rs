@@ -2751,7 +2751,7 @@ pub struct Task {
     /// outside-the-graph one in
     /// `reject_customisations_outside_the_task_graph`, which runs after
     /// `extends` because membership depends on `dependencies` a container
-    /// can inherit. Applied in `TaskEngine::start_dependency`.
+    /// can inherit. Applied in `TaskEngine::ensure_container_created`.
     pub customise: Option<IndexMap<String, TaskContainerCustomisation>>,
 }
 
@@ -2792,7 +2792,7 @@ pub struct TaskContainerCustomisation {
 ///
 /// Visited-set-guarded so a config cycle can't hang this pure walk — real
 /// cycle detection (which actually rejects a cycle as a user-facing error)
-/// still happens separately, in `TaskEngine::start_dependency`.
+/// still happens separately, in `engine.rs`'s `build_dependency_graph`.
 pub fn container_names_in_task<'a>(
     container: impl Fn(&str) -> Option<&'a Container>,
     root: &str,
