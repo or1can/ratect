@@ -216,6 +216,14 @@ const DIVERGENCES: &[Divergence] = &[
     Divergence {
         between: BOTH,
         case: "native-only",
+        pointer: "/containers/db-client/identity",
+        left: r#"null"#,
+        right: r#"{"home":"/home/twin"}"#,
+        because: "docs/ratect-config-reference.md#identity-a-guaranteed-home",
+    },
+    Divergence {
+        between: BOTH,
+        case: "native-only",
         pointer: "/containers/child/group",
         left: r#"null"#,
         right: r#""staff""#,

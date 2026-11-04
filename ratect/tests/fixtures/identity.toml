@@ -1,0 +1,18 @@
+# A native `ratect.toml` fixture for `identity`'s home guarantee (ratect#235,
+# decisions/0011), and the project the reference page points at. A rootful Linux
+# daemon refuses `identity`, so CI, which has one, can't run it: its test only
+# loads it, and the real behaviour was checked by hand on macOS. To repeat that:
+#
+#     ratect run -f ratect/tests/fixtures/identity.toml show-home
+#
+# which prints the configured home twice, then the directory created for it.
+ratect_version = "0.13.0"
+project_name = "ratect-identity-test"
+
+[containers.build-env]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+groups = ["wheel"]
+
+[tasks.show-home]
+run = { container = "build-env", command = """sh -c 'echo $HOME; getent passwd $(id -u); ls -ld ~'""" }

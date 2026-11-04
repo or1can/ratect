@@ -1847,7 +1847,9 @@ impl RecordedRequest {
 /// - every other request, answered by the test's route from its method and
 ///   path: an HTTP status and a JSON body. An error goes back the way
 ///   Docker sends one — a status and `{"message": "..."}` — which bollard
-///   surfaces as `DockerResponseServerError`. Every route here answers
+///   surfaces as `DockerResponseServerError`. A 200 to a `HEAD`, which has
+///   no body, sends the route's body as the archive stat's
+///   `X-Docker-Container-Path-Stat` header instead. Every route here answers
 ///   anything it doesn't script with a 404, which is still recorded, so a
 ///   test can assert nothing else was asked for;
 /// - recording: each request's method, version-stripped path, query and
@@ -1976,11 +1978,11 @@ impl StubDaemon {
             ),
             path => {
                 let (status, body) = route(&request.method, path);
-                (
-                    status,
-                    "Content-Type: application/json\r\n".to_string(),
-                    body,
-                )
+                let mut headers = "Content-Type: application/json\r\n".to_string();
+                if request.method == "HEAD" && status == 200 {
+                    headers.push_str(&format!("X-Docker-Container-Path-Stat: {body}\r\n"));
+                }
+                (status, headers, body)
             }
         };
         let body = if request.method == "HEAD" { "" } else { &body };
@@ -5313,4 +5315,323 @@ fn a_build_ssh_refusal_quotes_the_id_with_its_line_break_escaped() {
             .starts_with("The 'build_ssh' agent 'id\\nError: forged' lists both"),
         "{err}"
     );
+}
+
+// `DockerClient`'s half of `identity` (#235): the archive API's own answers,
+// each stat the header a real daemon (OrbStack) sent for that kind of path.
+const STAT_OF_A_REGULAR_FILE: &str = "eyJuYW1lIjoicGFzc3dkIiwic2l6ZSI6NzAyLCJtb2RlIjo0MjAsIm10aW1lIjoiMjAyNC0wNS0wNlQwODozODo1NSswMTowMCIsImxpbmtUYXJnZXQiOiIifQ==";
+const STAT_OF_A_SYMBOLIC_LINK: &str = "eyJuYW1lIjoic2giLCJzaXplIjoxMiwibW9kZSI6MTM0MjE4MjM5LCJtdGltZSI6IjIwMjYtMDQtMTVUMTc6MTQ6MDMrMDE6MDAiLCJsaW5rVGFyZ2V0IjoiL2Jpbi9idXN5Ym94In0=";
+const STAT_OF_A_DIRECTORY: &str = "eyJuYW1lIjoiZXRjIiwic2l6ZSI6NTYsIm1vZGUiOjIxNDc0ODQxNDEsIm10aW1lIjoiMjAyNi0xMS0wNFQxMzozNTozMi45MjkyNDE3NThaIiwibGlua1RhcmdldCI6IiJ9";
+
+async fn stat_answered_with(status: u16, body: &'static str) -> Result<Option<ContainerPathStat>> {
+    let (client, _) = client_for_recording_daemon(move |method, path| {
+        assert_eq!((method, path), ("HEAD", "/containers/new-id/archive"));
+        (status, body.to_string())
+    })
+    .await;
+    client.stat_container_path("new-id", "/etc/passwd").await
+}
+
+#[tokio::test]
+async fn stat_container_path_tells_what_is_at_the_path() {
+    for (body, kind, size) in [
+        (STAT_OF_A_REGULAR_FILE, ContainerPathKind::RegularFile, 702),
+        (STAT_OF_A_SYMBOLIC_LINK, ContainerPathKind::SymbolicLink, 12),
+        (STAT_OF_A_DIRECTORY, ContainerPathKind::Directory, 56),
+    ] {
+        assert_eq!(
+            stat_answered_with(200, body).await.unwrap(),
+            Some(ContainerPathStat { kind, size })
+        );
+    }
+}
+
+/// A device, socket or pipe is none of the kinds a caller can do anything with.
+#[test]
+fn a_special_file_is_another_kind_of_path() {
+    for mode in [
+        1 << 26 | 0o600,
+        1 << 25 | 0o600,
+        1 << 24 | 0o600,
+        1 << 26 | 1 << 21 | 0o620,
+    ] {
+        assert_eq!(
+            ContainerPathStat::from_go_file_mode(mode, 0).kind,
+            ContainerPathKind::Other
+        );
+    }
+}
+
+/// What `scratch` answers for `/etc/passwd`, and a bare `HEAD` has no message.
+#[tokio::test]
+async fn stat_container_path_reports_a_404_as_nothing_there() {
+    assert_eq!(stat_answered_with(404, "").await.unwrap(), None);
+}
+
+/// What a daemon answers for a path under a file. Names the path, not the id:
+/// the engine names the container.
+#[tokio::test]
+async fn stat_container_path_fails_on_any_other_refusal_naming_the_path() {
+    let error = stat_answered_with(500, "").await.unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("Failed to check '/etc/passwd'"), "{error}");
+    assert!(!error.contains("new-id"), "{error}");
+}
+
+fn passwd_fixture() -> ContainerFile {
+    ContainerFile {
+        contents: b"root:x:0:0::/root:/bin/sh\n".to_vec(),
+        mode: 0o640,
+        uid: 0,
+        gid: 42,
+    }
+}
+
+/// The archive `read_container_file` is sent, as text the stub can answer
+/// with: a tar of ASCII is valid UTF-8.
+fn passwd_archive() -> String {
+    String::from_utf8(build_container_file_tar("/etc/passwd", &passwd_fixture()).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn read_container_file_returns_the_files_bytes_mode_and_owner() {
+    let (client, log) = client_for_recording_daemon(|method, path| {
+        assert_eq!((method, path), ("GET", "/containers/new-id/archive"));
+        (200, passwd_archive())
+    })
+    .await;
+
+    let file = client
+        .read_container_file("new-id", "/etc/passwd")
+        .await
+        .unwrap();
+
+    assert_eq!(file, passwd_fixture());
+    assert_eq!(
+        log.lock().unwrap()[0].query_pairs(),
+        [("path".to_string(), "%2Fetc%2Fpasswd".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn read_container_file_fails_naming_the_path() {
+    for (status, body, expected) in [
+        (500, r#"{"message":"read refused"}"#, "read refused"),
+        (200, "not an archive", "Failed to read"),
+        (200, "", "no file"),
+    ] {
+        let (client, _) = client_for_recording_daemon(move |_, _| (status, body.to_string())).await;
+        let error = client
+            .read_container_file("new-id", "/etc/passwd")
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("Failed to read '/etc/passwd'"), "{error}");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+/// The file goes into its parent carrying its mode and owner, non-UTF-8 bytes
+/// and all, since the upload is what would otherwise reset them.
+#[tokio::test]
+async fn write_container_file_uploads_into_the_parent_keeping_mode_and_owner() {
+    let (client, log) = client_for_recording_daemon(|method, path| {
+        assert_eq!((method, path), ("PUT", "/containers/new-id/archive"));
+        (200, String::new())
+    })
+    .await;
+    let file = ContainerFile {
+        contents: b"caf\xe9:x:1:1::/c:/bin/sh\n".to_vec(),
+        ..passwd_fixture()
+    };
+
+    client
+        .write_container_file("new-id", "/etc/passwd", &file)
+        .await
+        .unwrap();
+
+    let request = log.lock().unwrap()[0].clone();
+    assert_eq!(
+        request.query_pairs(),
+        [("path".to_string(), "%2Fetc".to_string())]
+    );
+    assert_eq!(parse_container_file_tar(&request.body).unwrap(), file);
+    let mut archive = tar::Archive::new(&request.body[..]);
+    let entry = archive.entries().unwrap().next().unwrap().unwrap();
+    assert_eq!(entry.path().unwrap().to_str(), Some("passwd"));
+}
+
+#[tokio::test]
+async fn write_container_file_fails_naming_the_path() {
+    let (client, _) =
+        client_for_recording_daemon(|_, _| (500, r#"{"message":"write refused"}"#.to_string()))
+            .await;
+    let error = client
+        .write_container_file("new-id", "/etc/passwd", &passwd_fixture())
+        .await
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("Failed to write '/etc/passwd'"), "{error}");
+    assert!(error.contains("write refused"), "{error}");
+}
+
+/// One entry per directory to create, and none for what `into` already is:
+/// an entry for an existing path would rewrite its owner and mode.
+#[tokio::test]
+async fn create_container_directories_uploads_only_the_new_ones() {
+    let (client, log) = client_for_recording_daemon(|method, path| {
+        assert_eq!((method, path), ("PUT", "/containers/new-id/archive"));
+        (200, String::new())
+    })
+    .await;
+
+    client
+        .create_container_directories(
+            "new-id",
+            "/var",
+            "home/users/me",
+            crate::user::HomeOwner { uid: 1000, gid: 20 },
+        )
+        .await
+        .unwrap();
+
+    let request = log.lock().unwrap()[0].clone();
+    assert_eq!(
+        request.query_pairs(),
+        [("path".to_string(), "%2Fvar".to_string())]
+    );
+    let mut archive = tar::Archive::new(&request.body[..]);
+    let entries: Vec<_> = archive
+        .entries()
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let header = entry.header();
+            assert!(header.entry_type().is_dir());
+            (
+                entry.path().unwrap().to_string_lossy().into_owned(),
+                header.uid().unwrap(),
+                header.gid().unwrap(),
+                header.mode().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("home".to_string(), 0, 0, 0o755),
+            ("home/users".to_string(), 0, 0, 0o755),
+            ("home/users/me".to_string(), 1000, 20, 0o755),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn create_container_directories_fails_naming_what_it_was_creating() {
+    let (client, _) =
+        client_for_recording_daemon(|_, _| (500, r#"{"message":"mkdir refused"}"#.to_string()))
+            .await;
+    let error = client
+        .create_container_directories(
+            "new-id",
+            "/",
+            "home/me",
+            crate::user::HomeOwner { uid: 0, gid: 0 },
+        )
+        .await
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("Failed to create 'home/me' in '/'"),
+        "{error}"
+    );
+    assert!(error.contains("mkdir refused"), "{error}");
+}
+
+/// A `--tmpfs` is only in `HostConfig` (probed), so both places are read.
+#[tokio::test]
+async fn created_container_facts_reads_the_user_and_every_mount() {
+    let (client, _) = client_for_recording_daemon(|method, path| {
+        assert_eq!((method, path), ("GET", "/containers/new-id/json"));
+        (
+            200,
+            r#"{"Config":{"User":"node:20"},
+                "Mounts":[{"Type":"bind","Destination":"/mnt/bound"}],
+                "HostConfig":{"Tmpfs":{"/tmpfs":""}}}"#
+                .to_string(),
+        )
+    })
+    .await;
+
+    let facts = client.created_container_facts("new-id").await.unwrap();
+
+    assert_eq!(facts.user, "node:20");
+    assert_eq!(facts.mount_destinations, ["/mnt/bound"]);
+    assert_eq!(facts.tmpfs_destinations, ["/tmpfs"]);
+}
+
+#[tokio::test]
+async fn created_container_facts_has_an_empty_user_when_there_is_none() {
+    let (client, _) =
+        client_for_recording_daemon(|_, _| (200, r#"{"Config":{}}"#.to_string())).await;
+    let facts = client.created_container_facts("new-id").await.unwrap();
+    assert_eq!(facts, CreatedContainerFacts::default());
+}
+
+#[tokio::test]
+async fn created_container_facts_fails_without_the_docker_id() {
+    let (client, _) =
+        client_for_recording_daemon(|_, _| (500, r#"{"message":"inspect refused"}"#.to_string()))
+            .await;
+    let error = client.created_container_facts("new-id").await.unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("Failed to inspect"), "{error}");
+    assert!(error.contains("inspect refused"), "{error}");
+    assert!(!error.contains("new-id"), "{error}");
+}
+
+/// The first entry's owner is all that is wanted of a directory's archive, so a
+/// huge one, or one cut off after it, doesn't matter.
+#[tokio::test]
+async fn container_directory_uid_reads_the_first_entrys_owner() {
+    let archive = build_new_directories_tar(
+        Path::new("me"),
+        crate::user::HomeOwner { uid: 1000, gid: 20 },
+    )
+    .unwrap();
+    // Without the end-of-archive blocks, as a stream dropped early would be.
+    let first_entry = String::from_utf8(archive[..512].to_vec()).unwrap();
+    let (client, log) = client_for_recording_daemon(move |method, path| {
+        assert_eq!((method, path), ("GET", "/containers/new-id/archive"));
+        (200, first_entry.clone())
+    })
+    .await;
+
+    let uid = client
+        .container_directory_uid("new-id", "/home/me")
+        .await
+        .unwrap();
+
+    assert_eq!(uid, 1000);
+    assert_eq!(
+        log.lock().unwrap()[0].query_pairs(),
+        [("path".to_string(), "%2Fhome%2Fme".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn container_directory_uid_fails_naming_the_path() {
+    for (status, body, expected) in [
+        (500, r#"{"message":"read refused"}"#, "read refused"),
+        (200, "", "Failed to read '/home/me'"),
+    ] {
+        let (client, _) = client_for_recording_daemon(move |_, _| (status, body.to_string())).await;
+        let error = client
+            .container_directory_uid("new-id", "/home/me")
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("Failed to read '/home/me'"), "{error}");
+        assert!(error.contains(expected), "{error}");
+    }
 }

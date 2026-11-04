@@ -927,3 +927,27 @@ dockerfile = "Missing.Dockerfile"
         "{findings:?}"
     );
 }
+
+/// decisions/0014: an `identity.home` expression that evaluates to a bad value
+/// loads, and `config validate`/`doctor` warn rather than refuse.
+#[tokio::test]
+async fn a_bad_evaluated_identity_home_is_a_warning() {
+    let project = project_from(
+        "ratect.toml",
+        "project_name = \"demo\"\n[config_variables.home]\ndefault = \"relative\"\n\
+         [containers.app]\nimage = \"alpine:3.18\"\nidentity = { home = \"<home\" }\n",
+    )
+    .await;
+
+    let findings = findings_for(&project, no_host_env);
+
+    assert!(
+        findings.iter().any(|finding| matches!(
+            finding,
+            Finding::Warning(message)
+                if message.contains("'identity.home'")
+                    && message.contains("is not an absolute path")
+        )),
+        "{findings:?}"
+    );
+}

@@ -4619,3 +4619,22 @@ fn a_signal_while_connecting_wins_over_the_failed_connect() {
     assert_eq!(exit, Some(130), "stderr:\n{stderr}");
     assert!(!stderr.contains("Error:"), "stderr:\n{stderr}");
 }
+
+/// `identity`'s fixture (ratect#235), loaded and no more: the daemon this suite's
+/// `docker-integration` job has is rootful Linux, which refuses `identity`, so
+/// the container's behaviour is proven against the fake runtime, and by hand.
+#[test]
+fn the_identity_fixture_loads() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/identity.toml");
+    let output = ratect_command()
+        .args(["tasks", "list", "-o", "quiet", "-f"])
+        .arg(fixture)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "show-home\n");
+}

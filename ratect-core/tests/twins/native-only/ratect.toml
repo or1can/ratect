@@ -36,6 +36,7 @@ setup_commands = [{ command = "seed", run_in = "db-client" }]
 
 [containers.db-client]
 image = "alpine:3.18"
+identity = { home = "/home/twin" }
 
 [containers.api]
 image = "alpine:3.18"

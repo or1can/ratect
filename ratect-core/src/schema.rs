@@ -663,6 +663,32 @@ fn make_native(json: &mut serde_json::Value) {
                 "examples": [["docker", 999]],
             }),
         );
+        // Add the native-only `identity` field (ratect#235), same reasoning
+        // again. `home` has no `pattern`: it may hold an expression, which
+        // `config::check_home_directory` judges once it has a value.
+        properties.insert(
+            "identity".to_string(),
+            serde_json::json!({
+                "type": ["object", "null"],
+                "properties": {
+                    "home": {
+                        "type": "string",
+                        "description": "The home directory, an absolute path inside the \
+                                        container with no `..`, `:` or control characters. Holds an \
+                                        expression, judged once it has a value.",
+                        "examples": ["/home/me"],
+                    },
+                },
+                "required": ["home"],
+                "additionalProperties": false,
+                "description": "Gives this container a guaranteed home: `$HOME` and its \
+                                running user's passwd entry both say `home`, which is created \
+                                if nothing is there. Refused beside `user`, `group` or an \
+                                enabled `run_as_current_user`. A rootful Linux daemon refuses \
+                                it.",
+                "examples": [{ "home": "/home/me" }],
+            }),
+        );
     }
 }
 

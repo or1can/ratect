@@ -264,6 +264,13 @@ fn expressions(document: &toml::Table) -> Vec<(String, &str)> {
                 .get("run_as_current_user")
                 .and_then(|user| user.get("home_directory")),
         );
+        push(
+            &mut found,
+            field("identity.home"),
+            container
+                .get("identity")
+                .and_then(|identity| identity.get("home")),
+        );
     }
     for (name, task) in table(document.get("tasks")) {
         let run = task.get("run");

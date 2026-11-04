@@ -4252,6 +4252,7 @@ fn container_with_build(build_directory: &str, build_args: HashMap<String, Strin
         user: None,
         group: None,
         groups: None,
+        identity: None,
     }
 }
 
@@ -5094,6 +5095,7 @@ fn container_with_run_as_current_user(enabled: bool, home_directory: Option<&str
         user: None,
         group: None,
         groups: None,
+        identity: None,
     }
 }
 
@@ -6972,6 +6974,7 @@ async fn native_only_fields_are_rejected_in_a_yaml_include_of_a_native_project()
         ("user", "    user: 1000\n"),
         ("group", "    group: staff\n"),
         ("groups", "    groups:\n      - docker\n      - 999\n"),
+        ("identity", "    identity:\n      home: /home/me\n"),
         (
             "scope",
             "    volumes:\n      - type: cache\n        name: c\n        container: /c\n        \
@@ -13790,6 +13793,7 @@ fn container_with_environment(environment: HashMap<String, String>) -> Container
         user: None,
         group: None,
         groups: None,
+        identity: None,
     }
 }
 
@@ -18983,4 +18987,219 @@ async fn a_native_field_in_a_yaml_include_of_a_toml_root_says_to_move_the_contai
         error.ends_with("To use it, move that container into a TOML file."),
         "{error}"
     );
+}
+
+/// `identity` declares a home, and `home` is what the runtime path reads
+/// (#235, decisions/0011).
+#[tokio::test]
+async fn identity_parses_in_a_toml_file() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n\
+         identity = { home = \"/home/me\" }\ngroups = [\"docker\"]\n",
+    )
+    .await
+    .unwrap();
+
+    let identity = project.config.containers["app"].identity.as_ref().unwrap();
+    assert_eq!(identity.home, "/home/me");
+}
+
+/// A home is what `identity` declares, so one with no home says nothing, and
+/// an unknown field in it is as wrong as anywhere else.
+#[tokio::test]
+async fn identity_needs_a_home_and_nothing_else() {
+    for (declaration, expected) in [
+        ("identity = {}", "home"),
+        ("identity = { home = \"/h\", shell = \"sh\" }", "shell"),
+    ] {
+        let error = load_native_toml(&format!(
+            "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n{declaration}\n"
+        ))
+        .await
+        .expect_err(declaration);
+        assert!(format!("{error:#}").contains(expected), "got: {error:#}");
+    }
+}
+
+/// `run_as_current_user.home_directory`'s shape, named as `identity.home`, at
+/// load for a literal.
+#[tokio::test]
+async fn a_bad_literal_identity_home_fails_at_load_naming_the_container_and_field() {
+    for (home, expected) in [
+        ("relative", "is not an absolute path"),
+        ("/home/a:b", "contains a ':' or a control character"),
+        ("/home/a\\nroot", "contains a ':' or a control character"),
+        ("/", "has no directory name to create"),
+        ("/missing/../me", "contains a '..'"),
+    ] {
+        let error = load_native_toml(&format!(
+            "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n\
+             identity = {{ home = \"{home}\" }}\n"
+        ))
+        .await
+        .expect_err(home);
+        let error = format!("{error:#}");
+        assert!(error.contains("Container 'app'"), "{error}");
+        assert!(error.contains("'identity.home'"), "{error}");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+/// An expression can't be judged until it has a value (decisions/0014): it
+/// loads, then fails at evaluation, naming the field and the expression.
+#[tokio::test]
+async fn an_expression_identity_home_is_judged_when_evaluated() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n[config_variables.home]\ndefault = \"relative\"\n\
+         [containers.app]\nimage = \"alpine\"\nidentity = { home = \"<home\" }\n",
+    )
+    .await
+    .unwrap();
+
+    let error = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("'identity.home'"), "{error}");
+    assert!(error.contains("is not an absolute path"), "{error}");
+}
+
+/// A `..` is judged on an evaluated value as on a literal, and only for
+/// `identity`: `run_as_current_user.home_directory` is Batect's and keeps its
+/// own rules.
+#[tokio::test]
+async fn a_dotted_identity_home_is_refused_when_evaluated_and_only_there() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n[config_variables.home]\ndefault = \"/link/../me\"\n\
+         [containers.app]\nimage = \"alpine\"\nidentity = { home = \"<home\" }\n\
+         [containers.other]\nimage = \"alpine\"\n\
+         run_as_current_user = { enabled = true, home_directory = \"<home\" }\n",
+    )
+    .await
+    .unwrap();
+
+    project
+        .evaluate(["other"], [], &HashMap::new(), no_host_env)
+        .unwrap();
+    let error = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("'identity.home'"), "{error}");
+    assert!(error.contains("contains a '..'"), "{error}");
+}
+
+/// An expression evaluates to the value the container is given.
+#[tokio::test]
+async fn an_expression_identity_home_evaluates() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n[config_variables.home]\ndefault = \"/home/me\"\n\
+         [containers.app]\nimage = \"alpine\"\nidentity = { home = \"<home\" }\n",
+    )
+    .await
+    .unwrap();
+
+    let evaluated = project
+        .evaluate(["app"], [], &HashMap::new(), no_host_env)
+        .unwrap();
+    assert_eq!(
+        evaluated.containers["app"].identity.as_ref().unwrap().home,
+        "/home/me"
+    );
+}
+
+/// A `.yml` can't set a native-only field, whichever binary reads it.
+#[tokio::test]
+async fn identity_is_rejected_in_compat_mode() {
+    let dir = unique_temp_dir();
+    let path = dir.join("batect.yml");
+    std::fs::write(
+        &path,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    identity:\n      \
+         home: /home/me\ntasks: {}\n",
+    )
+    .unwrap();
+    let err = load_project(&path, &LoadOutput::default())
+        .await
+        .unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(format!("{err:#}").contains("uses 'identity'"), "{err:#}");
+}
+
+/// Each refused pair, written on one container and with `extends` supplying
+/// each side, since it is the resolved container that has them.
+#[tokio::test]
+async fn identity_refuses_what_it_cannot_sit_beside_however_it_got_there() {
+    const IDENTITY: &str = "identity = { home = \"/home/me\" }";
+    for (other, expected) in [
+        ("user = \"app\"", "'user'"),
+        ("user = \"app\"\ngroup = \"staff\"", "'user'"),
+        ("group = \"staff\"", "'group'"),
+        (
+            "run_as_current_user = { enabled = true, home_directory = \"/home/me\" }",
+            "'run_as_current_user'",
+        ),
+        (
+            "volumes = [{ type = \"cache\", name = \"c\", container = \"relative\" }]",
+            "relative",
+        ),
+    ] {
+        for (parent, child) in [
+            (format!("{IDENTITY}\n{other}"), String::new()),
+            (IDENTITY.to_string(), other.to_string()),
+            (other.to_string(), IDENTITY.to_string()),
+        ] {
+            let error = load_native_toml(&format!(
+                "project_name = \"demo\"\n[containers.base]\nimage = \"alpine\"\n{parent}\n\
+                 [containers.app]\nextends = \"base\"\n{child}\n"
+            ))
+            .await
+            .expect_err(other);
+            let error = format!("{error:#}");
+            assert!(error.contains("'identity'"), "{error}");
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+}
+
+/// Only those pairs: `groups` adds to whichever user the container runs as, a
+/// disabled `run_as_current_user` says nothing, and an absolute cache is fine.
+#[tokio::test]
+async fn identity_beside_groups_or_a_disabled_run_as_current_user_loads() {
+    for other in [
+        "groups = [\"docker\", 999]",
+        "run_as_current_user = { enabled = false }",
+        "volumes = [{ type = \"cache\", name = \"c\", container = \"/absolute\" }]",
+    ] {
+        load_native_toml(&format!(
+            "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n\
+             identity = {{ home = \"/home/me\" }}\n{other}\n"
+        ))
+        .await
+        .unwrap_or_else(|error| panic!("{other}: {error:#}"));
+    }
+}
+
+/// A child inherits its parent's `identity` whole, and its own replaces it.
+#[tokio::test]
+async fn identity_is_inherited_through_extends() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n[containers.base]\nimage = \"alpine\"\n\
+         identity = { home = \"/home/base\" }\n\
+         [containers.inherits]\nextends = \"base\"\n\
+         [containers.replaces]\nextends = \"base\"\nidentity = { home = \"/home/own\" }\n",
+    )
+    .await
+    .unwrap();
+
+    let home = |name: &str| {
+        project.config.containers[name]
+            .identity
+            .as_ref()
+            .unwrap()
+            .home
+            .clone()
+    };
+    assert_eq!(home("inherits"), "/home/base");
+    assert_eq!(home("replaces"), "/home/own");
 }

@@ -452,7 +452,7 @@ rather than a problem because a variable only CI sets is expected to be missing 
 a laptop, and it fails only a run that [reaches it](ratect-config-reference.md#config-variables-and-expressions):
 `ratect run build` there never evaluates `deploy`. The same goes for a value that
 evaluates but can't be used — an expression-valued
-`run_as_current_user.home_directory` that isn't an absolute path, or a
+`run_as_current_user.home_directory` or `identity.home` that isn't an absolute path, or a
 Git-included container's host path that evaluates to somewhere outside its
 boundary. A container with such a value is left out of the checks that read its
 values, so its image tag and `build_directory` aren't judged until it evaluates.
