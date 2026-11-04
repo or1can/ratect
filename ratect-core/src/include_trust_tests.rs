@@ -139,7 +139,7 @@ fn the_native_only_field_is_refused_in_a_compat_project() {
         false,
         None,
         YAML_ROOT,
-        Some(BatectFile::Root),
+        Some(BatectFile::YamlRootProject),
         &Remote::from("inner"),
         ConfigFormat::Compat,
     )
@@ -160,7 +160,7 @@ fn the_compat_refusal_names_the_bundle_that_wrote_the_field() {
         false,
         Some(&declaring),
         YAML_ROOT,
-        Some(BatectFile::Root),
+        Some(BatectFile::YamlRootProject),
         &Remote::from("inner"),
         ConfigFormat::Compat,
     )
@@ -180,7 +180,7 @@ fn a_compat_project_refuses_the_field_set_to_false_too() {
         false,
         None,
         YAML_ROOT,
-        Some(BatectFile::Root),
+        Some(BatectFile::YamlRootProject),
         &Remote::from("inner"),
         ConfigFormat::Compat
     )
@@ -190,7 +190,7 @@ fn a_compat_project_refuses_the_field_set_to_false_too() {
         false,
         None,
         YAML_ROOT,
-        Some(BatectFile::Root),
+        Some(BatectFile::YamlRootProject),
         &Remote::from("inner"),
         ConfigFormat::Compat
     )
@@ -215,7 +215,7 @@ fn a_native_project_refuses_the_native_only_fields_in_a_yaml_file_only() {
     ] {
         for (place, remedy) in [
             (
-                BatectFile::Root,
+                BatectFile::YamlRootProject,
                 "To set it, convert the project to TOML (ratect config convert).",
             ),
             (
@@ -225,6 +225,11 @@ fn a_native_project_refuses_the_native_only_fields_in_a_yaml_file_only() {
             (
                 BatectFile::Bundle,
                 "To set it, the bundle's author has to move that Git include into a TOML file.",
+            ),
+            (
+                BatectFile::BundleOfYamlRootProject,
+                "To set it, the bundle's author has to move that Git include into a TOML file, \
+                 and this project has to convert to TOML (ratect config convert).",
             ),
         ] {
             let message = format!(

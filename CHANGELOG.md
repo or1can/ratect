@@ -32,6 +32,8 @@ history, from when it was the only binary.
 ### Changed
 
 - Each binary's GitHub Release notes list only the changelog entries that apply to it.
+- **ratect only:** The error for a native-only field on a container in a `.yml` says how to use it: convert the project, move the container into a TOML file, or, in a bundle, have its author do so.
+- **ratect only:** The error for a native-only field on a Git include entry in a `.yml` a YAML root reaches no longer suggests a TOML file that root would refuse.
 
 ## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
 

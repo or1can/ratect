@@ -6907,6 +6907,7 @@ fn batect_shaped_for_test(containers: &IndexMap<String, Container>) -> Vec<Batec
             name: name.as_str(),
             container,
             origin: None,
+            way_out: None,
         })
         .collect()
 }
@@ -16813,6 +16814,7 @@ async fn a_native_only_field_in_a_bundle_file_names_it_within_the_bundle() {
         .unwrap();
     let error = ConfigFormat::Compat
         .reject_incompatible_fields(
+            &dir.join("batect.yml"),
             &loaded.config,
             &loaded.container_origins,
             &loaded.container_boundaries,
@@ -16829,6 +16831,7 @@ async fn a_native_only_field_in_a_bundle_file_names_it_within_the_bundle() {
         )),
         "{error}"
     );
+    assert!(!error.contains("To use it"), "{error}");
     assert!(
         !error.contains(&cache_root.display().to_string()),
         "{error}"
@@ -18842,4 +18845,142 @@ async fn user_group_and_groups_are_rejected_in_compat_mode() {
             "expected a compat rejection of '{field}', got: {err:#}"
         );
     }
+}
+
+/// A native-only field in a `.yml` is refused with the way out that file has
+/// (decisions/0021). Everything a YAML root includes is YAML too, so only
+/// converting the project gets any of its files to TOML.
+#[tokio::test]
+async fn a_native_field_in_a_yaml_root_or_its_include_says_to_convert_the_project() {
+    const CONTAINER: &str = "containers:\n  app:\n    image: alpine\n    user: app\n";
+    let dir = unique_temp_dir();
+    let root = dir.join("batect.yml");
+    std::fs::write(&root, format!("project_name: demo\n{CONTAINER}")).unwrap();
+    let in_root = load_project_native(&root, running_0_12(), &LoadOutput::default()).await;
+    std::fs::write(dir.join("frag.yml"), CONTAINER).unwrap();
+    std::fs::write(&root, "project_name: demo\ninclude:\n  - frag.yml\n").unwrap();
+    let in_include = load_project_native(&root, running_0_12(), &LoadOutput::default()).await;
+    std::fs::remove_dir_all(&dir).ok();
+
+    for result in [in_root, in_include] {
+        let error = format!("{:#}", result.expect_err("refused"));
+        assert!(
+            error.ends_with("To use it, convert the project to TOML (ratect config convert)."),
+            "{error}"
+        );
+    }
+}
+
+/// `ratect-compat` has no `config convert` verb and can't read TOML, so it
+/// gives no way out at all rather than one it can't follow.
+#[tokio::test]
+async fn a_native_field_under_ratect_compat_gives_no_way_out() {
+    let dir = unique_temp_dir();
+    let root = dir.join("batect.yml");
+    std::fs::write(
+        &root,
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    user: app\n",
+    )
+    .unwrap();
+    let error = load_project(&root, &LoadOutput::default())
+        .await
+        .expect_err("refused");
+    std::fs::remove_dir_all(&dir).ok();
+    let error = format!("{error:#}");
+    assert!(error.contains("uses 'user'"), "{error}");
+    assert!(!error.contains("To use it"), "{error}");
+    assert!(!error.contains("config convert"), "{error}");
+}
+
+/// A bundle's way out depends on what reaches it: a YAML root refuses TOML,
+/// so its author moving to TOML doesn't get the project there on its own.
+#[tokio::test]
+async fn a_native_field_in_a_bundle_says_what_its_author_and_this_project_must_do() {
+    for (root_file, root, way_out) in [
+        (
+            "ratect.toml",
+            format!(
+                "project_name = \"demo\"\n[[include]]\ntype = \"git\"\nrepo = \"{BUNDLE_REMOTE}\"\n\
+                 ref = \"{BUNDLE_REF}\"\npath = \"sig.yml\"\n"
+            ),
+            "To use it, the bundle's author has to move that container into a TOML file.",
+        ),
+        (
+            "batect.yml",
+            root_including_bundle_path("sig.yml", ""),
+            "To use it, the bundle's author has to move that container into a TOML file, and \
+             this project has to convert to TOML (ratect config convert).",
+        ),
+    ] {
+        let dir = unique_temp_dir();
+        let path = dir.join(root_file);
+        std::fs::write(&path, root).unwrap();
+        let files = HashMap::from([(
+            "sig.yml".to_string(),
+            "containers:\n  app:\n    image: alpine\n    user: app\n".to_string(),
+        )]);
+        let git = FakeGitClient::new().with_files(BUNDLE_REMOTE, BUNDLE_REF, files);
+        let cache_root = unique_temp_dir();
+        let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
+
+        let loaded = Config::load_from_file_native_with_git_cache(&path, &git_cache)
+            .await
+            .unwrap();
+        let error = ConfigFormat::Native
+            .reject_incompatible_fields(
+                &path,
+                &loaded.config,
+                &loaded.container_origins,
+                &loaded.container_boundaries,
+            )
+            .unwrap_err()
+            .to_string();
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&cache_root).ok();
+        assert!(error.ends_with(way_out), "{root_file}: {error}");
+    }
+}
+
+/// The same way out for a Git include entry in a local `.yml` of a YAML root:
+/// moving it into a TOML file is what that root refuses.
+#[tokio::test]
+async fn a_native_field_on_a_git_include_in_a_yaml_roots_include_says_to_convert_the_project() {
+    let dir = unique_temp_dir();
+    let root = dir.join("batect.yml");
+    std::fs::write(&root, "project_name: demo\ninclude:\n  - frag.yml\n").unwrap();
+    std::fs::write(
+        dir.join("frag.yml"),
+        "include:\n  - type: git\n    repo: /nonexistent/never-cloned\n    ref: v1\n    \
+         allow_nested_git_includes: true\n",
+    )
+    .unwrap();
+    let cache_root = unique_temp_dir();
+    let git_cache = GitIncludeCache::for_test(cache_root.clone(), FakeGitClient::new(), 1000);
+    let error = format!(
+        "{:#}",
+        Config::load_from_file_native_with_git_cache(&root, &git_cache)
+            .await
+            .expect_err("a .yml can't set a native-only field")
+    );
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::remove_dir_all(&cache_root).ok();
+    assert!(
+        error.contains("To set it, convert the project to TOML (ratect config convert)."),
+        "{error}"
+    );
+}
+
+/// A TOML root can include TOML, so the container alone has to move.
+#[tokio::test]
+async fn a_native_field_in_a_yaml_include_of_a_toml_root_says_to_move_the_container() {
+    let (_, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: alpine\n    groups:\n      - docker\n",
+    )
+    .await;
+    let error = format!("{:#}", result.expect_err("refused"));
+    assert!(
+        error.ends_with("To use it, move that container into a TOML file."),
+        "{error}"
+    );
 }

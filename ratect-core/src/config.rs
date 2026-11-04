@@ -3542,6 +3542,15 @@ impl ConfigFormat {
         matches!(self, ConfigFormat::Native)
     }
 
+    /// Whether a container declared in `origin` follows Batect's rules.
+    fn is_batect_shaped(&self, origin: Option<&Path>) -> bool {
+        // A container with no recorded file is Batect-shaped only where
+        // every file is.
+        origin.map_or(matches!(self, ConfigFormat::Compat), |origin| {
+            self.reads_as_batect(origin)
+        })
+    }
+
     /// Which of a project's containers must be judged by Batect's own
     /// rules: the ones declared in a **YAML file**, whichever project
     /// included it (ratect#214). A `.yml` is Batect's format, so a
@@ -3571,6 +3580,7 @@ impl ConfigFormat {
     /// itself.
     fn batect_shaped_containers<'a>(
         &self,
+        config_file: &Path,
         config: &'a Config,
         origins: &'a HashMap<String, PathBuf>,
         boundaries: &HashMap<String, Boundary>,
@@ -3580,15 +3590,16 @@ impl ConfigFormat {
             .iter()
             .filter_map(|(name, container)| {
                 let origin = origins.get(name).map(PathBuf::as_path);
-                // A container with no recorded file is Batect-shaped only
-                // where every file is.
-                let batect_shaped = origin.map_or(matches!(self, ConfigFormat::Compat), |origin| {
-                    self.reads_as_batect(origin)
-                });
-                batect_shaped.then_some(BatectShaped {
+                self.is_batect_shaped(origin).then_some(BatectShaped {
                     name: name.as_str(),
                     container,
                     origin: origin.map(|origin| describe_origin(origin, boundaries.get(name))),
+                    way_out: matches!(self, ConfigFormat::Native).then(|| {
+                        include_trust::BatectFile::of(
+                            boundaries.contains_key(name),
+                            self.reads_as_batect(config_file),
+                        )
+                    }),
                 })
             })
             .collect()
@@ -3609,11 +3620,12 @@ impl ConfigFormat {
     /// containers only, and against nothing at all when it has none.
     fn reject_incompatible_fields(
         &self,
+        config_file: &Path,
         config: &Config,
         origins: &HashMap<String, PathBuf>,
         boundaries: &HashMap<String, Boundary>,
     ) -> Result<()> {
-        let shaped = self.batect_shaped_containers(config, origins, boundaries);
+        let shaped = self.batect_shaped_containers(config_file, config, origins, boundaries);
         reject_extends_in_compat(&shaped)?;
         reject_run_to_completion_in_compat(&shaped)?;
         reject_external_health_check_in_compat(&shaped)?;
@@ -3641,6 +3653,10 @@ struct BatectShaped<'a> {
     /// going through the loader (tests, and `expand_external_health_checks`'
     /// generated companions, which are added after these checks have run).
     origin: Option<String>,
+    /// Which kind of file that is, for the way out of a native-only field.
+    /// `None` under `ratect-compat`, where converting isn't one: only `ratect`
+    /// reads TOML (decisions/0021).
+    way_out: Option<include_trust::BatectFile>,
 }
 
 /// How to name a loaded file, for a message the reader has to act on. A
@@ -3666,11 +3682,21 @@ fn describe_file(path: &Path, boundary: Option<&Boundary>) -> String {
     }
 }
 
-/// The rejection a native-only field raises, with the declaring file
-/// appended. Two things only the file can tell you: *which* of several
-/// included files to go and edit, and why a native project is talking
-/// about Batect compatibility at all (ratect#214).
+/// The rejection a native-only field raises: [`batect_rule_rejection`], plus
+/// the way out its file has (decisions/0021).
 fn native_field_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::Error {
+    let rejection = batect_rule_rejection(entry, message);
+    match entry.way_out {
+        Some(file) => anyhow::anyhow!("{rejection} To use it, {}.", file.remedy("that container")),
+        None => rejection,
+    }
+}
+
+/// A rejection under Batect's rules, with the declaring file appended. Two
+/// things only the file can tell you: *which* of several included files to go
+/// and edit, and why a native project is talking about Batect compatibility
+/// at all (ratect#214).
+fn batect_rule_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::Error {
     match &entry.origin {
         Some(origin) => anyhow::anyhow!(
             "{message} It is declared in {origin}, and a container declared in a \
@@ -4234,14 +4260,14 @@ impl LoadedConfig {
     /// container is its own supplier here.
     fn provenance(&self) -> Provenance {
         let batect_shaped = self
-            .format
-            .batect_shaped_containers(
-                &self.config,
-                &self.container_origins,
-                &self.container_boundaries,
-            )
-            .iter()
-            .map(|entry| entry.name.to_string())
+            .config
+            .containers
+            .keys()
+            .filter(|name| {
+                self.format
+                    .is_batect_shaped(self.container_origins.get(*name).map(PathBuf::as_path))
+            })
+            .cloned()
             .collect();
         Provenance {
             base_paths: self.container_base_paths.clone(),
@@ -4378,8 +4404,7 @@ impl Config {
         running: Option<crate::written_for::Version>,
     ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
-        // Kept to tell a `.yml` root's include entries from an included
-        // file's ([`include_trust::BatectFile`]).
+        // Kept to tell whether the root is YAML ([`include_trust::BatectFile`]).
         let root = root_path.clone();
         let root_file = format.parse(path, None)?;
         reject_misplaced_ratect_version(path, None, &root_file, format, true)?;
@@ -4420,13 +4445,7 @@ impl Config {
             // Before `boundary` becomes a Git include's own, below.
             let declared_in = describe_origin(&declaring_file, boundary.as_ref());
             let declared_in_batect = format.reads_as_batect(&declaring_file).then(|| {
-                if boundary.is_some() {
-                    include_trust::BatectFile::Bundle
-                } else if declaring_file == root {
-                    include_trust::BatectFile::Root
-                } else {
-                    include_trust::BatectFile::Owned
-                }
+                include_trust::BatectFile::of(boundary.is_some(), format.reads_as_batect(&root))
             });
             let (resolved, boundary) = match &include {
                 IncludeEntry::File { path } => {
@@ -6079,6 +6098,7 @@ fn load_project_impl(
     // Before `check_values` below — see
     // `ConfigFormat::reject_incompatible_fields`'s own doc comment for why.
     format.reject_incompatible_fields(
+        config_file,
         &loaded.config,
         &loaded.container_origins,
         &loaded.container_boundaries,
@@ -6210,7 +6230,7 @@ fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<(
         let container = entry.container;
         match (&container.image, &container.build_directory) {
             (Some(_), Some(_)) => {
-                return Err(native_field_rejection(
+                return Err(batect_rule_rejection(
                     entry,
                     format!(
                         "Container '{name}' has both 'image' and 'build_directory', but only \
@@ -6225,7 +6245,7 @@ fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<(
             // full stop is this one's own: a loaded file's container gets a
             // sentence naming that file appended.
             (None, None) => {
-                return Err(native_field_rejection(
+                return Err(batect_rule_rejection(
                     entry,
                     format!("Container '{name}' has neither 'image' nor 'build_directory' set."),
                 ));
@@ -6244,7 +6264,7 @@ fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<(
             ("build_secrets", container.build_secrets.is_some()),
         ];
         if let Some((field, _)) = build_only.iter().find(|(_, present)| *present) {
-            return Err(native_field_rejection(
+            return Err(batect_rule_rejection(
                 entry,
                 format!(
                     "Container '{name}' has '{field}', which cannot be used with 'image' — it \
@@ -6923,7 +6943,7 @@ fn reject_image_expressions_in_compat(containers: &[BatectShaped<'_>]) -> Result
     });
     if let Some((entry, image)) = offender {
         let container_name = entry.name;
-        return Err(native_field_rejection(
+        return Err(batect_rule_rejection(
             entry,
             format!(
                 // Names what to do, not a flag that would fix this file: the

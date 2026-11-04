@@ -97,9 +97,10 @@ The same goes for a Git include entry's native-only fields,
 that sets either one fails to load, under either binary, whatever its value.
 Under `ratect` the error names the field and the file, and the way out that
 file has: a root `.yml` needs the project converted ([`ratect config
-convert`](ratect-cli.md#config)), since a YAML root can't include a TOML file;
-an included `.yml` can move that Git include into a TOML file; and a bundle
-file needs its author to.
+convert`](ratect-cli.md#config)), since a YAML root can't include a TOML file,
+and so does a `.yml` it includes; a `.yml` a TOML root includes can move that
+Git include into a TOML file; and a bundle file needs its author to, plus the
+project converted if its root is YAML.
 `allow_host_paths` isn't one of them — both formats accept it.
 
 What a container does at *run time* follows the binary instead, not the file:
@@ -110,8 +111,8 @@ TOML one. Under `ratect-compat` it has Batect's. See [The task's own
 container](dependency-readiness.md#the-tasks-own-container).
 
 To use a native field on a container, move that container into a `.toml`
-file. Incremental migration exists so a project needn't be converted in one
-go (see [Migrating a Batect
+file. Under `ratect` the error gives the same ways out, for that container.
+Incremental migration exists so a project needn't be converted in one go (see [Migrating a Batect
 project](migrating-batect-project.md)), not so a YAML file can grow native
 features — and the unit you convert is a container, which is smaller than a
 file.
