@@ -69,7 +69,7 @@ Improving the developer experience through better tools and feedback.
   they'd belong behind a flag rather than the default run; and three checks from
   Batect's own unbuilt `doctor` wishlist remain: on a rootful Linux daemon, mounting a
   directory writable into a container that runs as root (the root-owned-files trap
-  `identity` resolves there — see
+  `identity` is to resolve there, in [#236](https://github.com/or1can/ratect/issues/236) — see
   [decisions/0011](decisions/0011-container-identity.md)), mounting a directory over a
   parent of the `identity` home directory, and a proxy environment variable that isn't a
   URL or doesn't use an `http`/`https` scheme. The daemon's own proxy settings not

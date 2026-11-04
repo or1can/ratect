@@ -54,7 +54,7 @@ evaluation reads what the machine running it supplies — see
      that takes one: `environment` values (container, task `run`, and task
      `customise.<container>`), `local` volume mount host paths (in a Batect-format file, only the object form's), `build_directory`, `build_args`, a `build_secrets` entry's
      `path`, a `build_ssh` entry's `paths`, `run_as_current_user.home_directory`
-     (not in a Batect-format file), and — `ratect.toml` only — `image`. A `cache`
+     (not in a Batect-format file), and — `ratect.toml` only — `image` and `identity.home`. A `cache`
      mount's `name`/`container` are plain strings, matching Batect: nothing to
      evaluate (see [Cache volumes](ratect-compat-config-reference.md#cache-volumes)).
      A value that can't be evaluated is an error naming the container or task,
@@ -201,7 +201,11 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   the user-mapping uploads. It hands the container's id back the moment that is
   done (inside its error, if an upload failed after Docker's create), and the engine
   registers it for cleanup there and then, so a container whose start later fails
-  or is cut short by another dependency failing is still removed. Its own step,
+  or is cut short by another dependency failing is still removed. For a container
+  with [`identity`](ratect-config-reference.md#identity-a-guaranteed-home), the engine
+  then edits the created container's `/etc/passwd` and prepares its home, and a
+  failure there counts as a failed create.
+  Its own step,
   separate from starting, because it waits for less: a container is created once
   its image and the network are ready (and any `network_mode = "container:<name>"`
   target has been created), and started only once the containers it

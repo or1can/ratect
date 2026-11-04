@@ -447,6 +447,31 @@
           ],
           "description": "Overrides the health check configuration baked into the image — see `HealthCheckConfig`. Applied at container creation; a dependency container with a health check (from here or from its image) must report healthy before its dependents start."
         },
+        "identity": {
+          "additionalProperties": false,
+          "description": "Gives this container a guaranteed home: `$HOME` and its running user's passwd entry both say `home`, which is created if nothing is there. Refused beside `user`, `group` or an enabled `run_as_current_user`. A rootful Linux daemon refuses it.",
+          "examples": [
+            {
+              "home": "/home/me"
+            }
+          ],
+          "properties": {
+            "home": {
+              "description": "The home directory, an absolute path inside the container with no `..`, `:` or control characters. Holds an expression, judged once it has a value.",
+              "examples": [
+                "/home/me"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "home"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "image": {
           "description": "The image to run, in Docker's own `name:tag` form. Supports expressions, so a tag can be chosen per run — e.g. \"my-repo/my-image:${IMAGE_TAG:-latest}\". Usually paired with `build_directory` as the alternative, though `extends` makes both — or neither — legal on one container.",
           "type": [

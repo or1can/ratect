@@ -139,8 +139,10 @@ use bollard::models::{
 };
 use bollard::query_parameters::AttachContainerOptionsBuilder;
 use bollard::query_parameters::BuildImageOptionsBuilder;
+use bollard::query_parameters::ContainerArchiveInfoOptionsBuilder;
 use bollard::query_parameters::CreateContainerOptionsBuilder;
 use bollard::query_parameters::CreateImageOptions;
+use bollard::query_parameters::DownloadFromContainerOptionsBuilder;
 use bollard::query_parameters::EventsOptionsBuilder;
 use bollard::query_parameters::InspectContainerOptions;
 use bollard::query_parameters::ResizeContainerTTYOptionsBuilder;
@@ -1461,6 +1463,158 @@ pub struct UserMapping {
     pub cache_directories: Vec<String>,
 }
 
+/// What Docker recorded about a created container that its identity depends
+/// on and its configuration can't say: the image may have supplied either.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CreatedContainerFacts {
+    /// `Config.User` as the image or the create request set it; empty means
+    /// root. See [`crate::user::edit_passwd_home`] for its forms.
+    pub user: String,
+    /// The container path of each bind mount and volume. The daemon makes
+    /// these, and any parents they lack, on the first archive call, as root.
+    pub mount_destinations: Vec<String>,
+    /// The container path of each `tmpfs`, as written. Unlike those, these
+    /// don't exist until the container runs, so a stat can't see them.
+    pub tmpfs_destinations: Vec<String>,
+}
+
+/// What [`ContainerRuntime::stat_container_path`] found at a path, the path
+/// itself and not what it may link to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerPathKind {
+    Directory,
+    RegularFile,
+    SymbolicLink,
+    /// A device, socket, or named pipe.
+    Other,
+}
+
+/// See [`ContainerRuntime::stat_container_path`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerPathStat {
+    pub kind: ContainerPathKind,
+    pub size: u64,
+}
+
+impl ContainerPathStat {
+    /// From the archive API's stat, whose `mode` is a Go `os.FileMode`: the
+    /// type bits sit above the permission bits, none of them for a regular
+    /// file.
+    fn from_go_file_mode(file_mode: u32, size: i64) -> Self {
+        const MODE_DIR: u32 = 1 << 31;
+        const MODE_SYMLINK: u32 = 1 << 27;
+        // Device, named pipe, socket, character device, irregular.
+        const MODE_OTHER: u32 = 1 << 26 | 1 << 25 | 1 << 24 | 1 << 21 | 1 << 19;
+        let kind = if file_mode & MODE_DIR != 0 {
+            ContainerPathKind::Directory
+        } else if file_mode & MODE_SYMLINK != 0 {
+            ContainerPathKind::SymbolicLink
+        } else if file_mode & MODE_OTHER != 0 {
+            ContainerPathKind::Other
+        } else {
+            ContainerPathKind::RegularFile
+        };
+        Self {
+            kind,
+            size: u64::try_from(size).unwrap_or(0),
+        }
+    }
+}
+
+/// A file in a created container, as bytes: an identity file is whatever its
+/// image shipped, and only some of it is the line being edited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerFile {
+    pub contents: Vec<u8>,
+    pub mode: u32,
+    pub uid: u64,
+    pub gid: u64,
+}
+
+/// The first file in a tar `archive`, which is all the archive API sends for a
+/// path that is one. Pure (no Docker involved), so it's unit-testable directly.
+fn parse_container_file_tar(archive: &[u8]) -> Result<ContainerFile> {
+    let mut archive = tar::Archive::new(archive);
+    let mut entry = archive
+        .entries()
+        .context("Failed to read the archive")?
+        .next()
+        .context("The archive holds no file")?
+        .context("Failed to read the archive")?;
+    anyhow::ensure!(
+        entry.header().entry_type().is_file(),
+        "The archive's first entry is not a regular file"
+    );
+    let mut contents = Vec::new();
+    std::io::Read::read_to_end(&mut entry, &mut contents)
+        .context("Failed to read the file out of the archive")?;
+    let header = entry.header();
+    Ok(ContainerFile {
+        contents,
+        mode: header.mode().context("Failed to read the file's mode")?,
+        uid: header.uid().context("Failed to read the file's owner")?,
+        gid: header.gid().context("Failed to read the file's group")?,
+    })
+}
+
+/// The owner of the first entry in `archive`, which may be incomplete, or `None`
+/// if it doesn't hold a whole header yet.
+fn first_entry_uid(archive: &[u8]) -> Option<u64> {
+    let mut archive = tar::Archive::new(archive);
+    let entry = archive.entries().ok()?.next()?.ok()?;
+    entry.header().uid().ok()
+}
+
+/// A one-file archive to extract into `path`'s parent, carrying `file`'s owner
+/// and mode. Pure, as [`parse_container_file_tar`] is.
+fn build_container_file_tar(path: &str, file: &ContainerFile) -> Result<Vec<u8>> {
+    let leaf_name = Path::new(path)
+        .file_name()
+        .with_context(|| format!("Invalid file '{}': no file name", printable(path)))?;
+    let mut header = tar::Header::new_gnu();
+    header.set_size(file.contents.len() as u64);
+    header.set_mode(file.mode);
+    header.set_uid(file.uid);
+    header.set_gid(file.gid);
+    let mut builder = tar::Builder::new(Vec::new());
+    builder
+        .append_data(&mut header, leaf_name, file.contents.as_slice())
+        .context("Failed to add the file to its archive")?;
+    builder
+        .into_inner()
+        .context("Failed to finalize the file's archive")
+}
+
+/// An archive creating every directory of `relative`, a path relative to where
+/// it is extracted: each ancestor root-owned, the last owned by `owner`, all
+/// mode `0755`. See [`ContainerRuntime::create_container_directories`] for what
+/// that does to one that exists. Pure, as [`parse_container_file_tar`] is.
+fn build_new_directories_tar(relative: &Path, owner: crate::user::HomeOwner) -> Result<Vec<u8>> {
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut path = PathBuf::new();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        path.push(component);
+        let (uid, gid) = if components.peek().is_none() {
+            (owner.uid, owner.gid)
+        } else {
+            (0, 0)
+        };
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_mode(0o755);
+        header.set_uid(uid.into());
+        header.set_gid(gid.into());
+        header.set_size(0);
+        builder
+            .append_data(&mut header, &path, std::io::empty())
+            .with_context(|| format!("Invalid directory '{}'", path.display()))?;
+    }
+    builder
+        .into_inner()
+        .context("Failed to finalize the directories' archive")
+}
+
 /// Appends a plain file entry (`name`, `contents`, `mode`) to `builder`,
 /// owned by root (`0:0` — these files must be root-owned regardless of which
 /// uid/gid the container itself runs as, matching real `/etc/passwd`-style
@@ -1880,7 +2034,9 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// `spec.shared.network` — the task's network with a network alias of
     /// `spec.shared.name` so other containers on it can reach it by that
     /// name, or a Docker network mode ([`ContainerNetwork`]) — then the
-    /// user-mapping upload (`spec.shared.user_mapping`).
+    /// user-mapping upload (`spec.shared.user_mapping`). `spec.shared.identity`
+    /// is [`crate::identity::apply`]'s to apply once this returns, through the
+    /// calls below.
     /// [`start_background_container`](Self::start_background_container) and
     /// [`run_container`](Self::run_container) then only start it.
     ///
@@ -1900,6 +2056,49 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
         &self,
         spec: &ContainerSpec,
     ) -> std::result::Result<String, CreateContainerError>;
+
+    /// What Docker recorded about `container_id`, once created.
+    async fn created_container_facts(&self, container_id: &str) -> Result<CreatedContainerFacts>;
+
+    /// What is at `path` in `container_id`, created but not started, or `None`
+    /// if nothing is. Goes through the archive API, so it sees a bind mount at
+    /// that path, but not a `tmpfs`, which exists only once the container runs.
+    async fn stat_container_path(
+        &self,
+        container_id: &str,
+        path: &str,
+    ) -> Result<Option<ContainerPathStat>>;
+
+    /// Reads the regular file at `path` in `container_id`, created but not
+    /// started. The caller decides from
+    /// [`stat_container_path`](Self::stat_container_path) whether to.
+    async fn read_container_file(&self, container_id: &str, path: &str) -> Result<ContainerFile>;
+
+    /// Writes `file` to `path` in `container_id`, created but not started,
+    /// replacing what is there. Needs `path`'s parent to exist.
+    async fn write_container_file(
+        &self,
+        container_id: &str,
+        path: &str,
+        file: &ContainerFile,
+    ) -> Result<()>;
+
+    /// The owner of the directory at `path` in `container_id`, created but not
+    /// started, which an archive's first entry says. The rest isn't read.
+    async fn container_directory_uid(&self, container_id: &str, path: &str) -> Result<u64>;
+
+    /// Creates `relative`'s directories under the existing directory `into`
+    /// in `container_id`, created but not started: each ancestor root-owned,
+    /// the last owned by `owner`, all mode `0755`. Whatever of `relative` exists
+    /// has its owner and mode rewritten, through a bind mount and onto the host
+    /// as well.
+    async fn create_container_directories(
+        &self,
+        container_id: &str,
+        into: &str,
+        relative: &str,
+        owner: crate::user::HomeOwner,
+    ) -> Result<()>;
 
     /// Starts `container_id` — created by
     /// [`create_container`](Self::create_container) from `spec` — in the
@@ -3436,6 +3635,139 @@ impl ContainerRuntime for DockerClient {
                 error,
             }),
         }
+    }
+
+    async fn created_container_facts(&self, container_id: &str) -> Result<CreatedContainerFacts> {
+        let inspection = self
+            .docker
+            .inspect_container(container_id, None::<InspectContainerOptions>)
+            .await
+            .context("Failed to inspect the created container")?;
+        let user = inspection
+            .config
+            .and_then(|config| config.user)
+            .unwrap_or_default();
+        let mount_destinations = inspection
+            .mounts
+            .into_iter()
+            .flatten()
+            .filter_map(|mount| mount.destination)
+            .collect();
+        // `--tmpfs` shows only in `HostConfig`, not `Mounts`.
+        let tmpfs_destinations = inspection
+            .host_config
+            .and_then(|host_config| host_config.tmpfs)
+            .into_iter()
+            .flatten()
+            .map(|(destination, _)| destination)
+            .collect();
+        Ok(CreatedContainerFacts {
+            user,
+            mount_destinations,
+            tmpfs_destinations,
+        })
+    }
+
+    async fn stat_container_path(
+        &self,
+        container_id: &str,
+        path: &str,
+    ) -> Result<Option<ContainerPathStat>> {
+        let options = ContainerArchiveInfoOptionsBuilder::default()
+            .path(path)
+            .build();
+        match self
+            .docker
+            .get_container_archive_info(container_id, Some(options))
+            .await
+        {
+            Ok(stat) => Ok(Some(ContainerPathStat::from_go_file_mode(
+                stat.file_mode,
+                stat.size,
+            ))),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => Ok(None),
+            Err(error) => {
+                Err(error).with_context(|| format!("Failed to check '{}'", printable(path)))
+            }
+        }
+    }
+
+    async fn read_container_file(&self, container_id: &str, path: &str) -> Result<ContainerFile> {
+        let shown = printable(path);
+        let options = DownloadFromContainerOptionsBuilder::default()
+            .path(path)
+            .build();
+        let mut stream = self
+            .docker
+            .download_from_container(container_id, Some(options));
+        let mut archive = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.with_context(|| format!("Failed to read '{shown}'"))?;
+            archive.extend_from_slice(&chunk);
+        }
+        parse_container_file_tar(&archive).with_context(|| format!("Failed to read '{shown}'"))
+    }
+
+    async fn container_directory_uid(&self, container_id: &str, path: &str) -> Result<u64> {
+        let shown = printable(path);
+        let options = DownloadFromContainerOptionsBuilder::default()
+            .path(path)
+            .build();
+        let mut stream = self
+            .docker
+            .download_from_container(container_id, Some(options));
+        let mut archive = Vec::new();
+        // Parsed afresh as chunks arrive, since an extended header can come
+        // first. Stops as soon as there is an entry: a directory's archive
+        // holds everything under it.
+        while let Some(chunk) = stream.next().await {
+            archive.extend_from_slice(&chunk.with_context(|| format!("Failed to read '{shown}'"))?);
+            if let Some(uid) = first_entry_uid(&archive) {
+                return Ok(uid);
+            }
+        }
+        anyhow::bail!("Failed to read '{shown}': the archive holds no entry")
+    }
+
+    async fn write_container_file(
+        &self,
+        container_id: &str,
+        path: &str,
+        file: &ContainerFile,
+    ) -> Result<()> {
+        let tar = build_container_file_tar(path, file)?;
+        let options = UploadToContainerOptionsBuilder::default()
+            .path(&owned_directory_parent(path))
+            .build();
+        self.docker
+            .upload_to_container(container_id, Some(options), bollard::body_full(tar.into()))
+            .await
+            .with_context(|| format!("Failed to write '{}'", printable(path)))
+    }
+
+    async fn create_container_directories(
+        &self,
+        container_id: &str,
+        into: &str,
+        relative: &str,
+        owner: crate::user::HomeOwner,
+    ) -> Result<()> {
+        let tar = build_new_directories_tar(Path::new(relative), owner)?;
+        let options = UploadToContainerOptionsBuilder::default()
+            .path(into)
+            .build();
+        self.docker
+            .upload_to_container(container_id, Some(options), bollard::body_full(tar.into()))
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to create '{}' in '{}'",
+                    printable(relative),
+                    printable(into)
+                )
+            })
     }
 
     async fn start_background_container(

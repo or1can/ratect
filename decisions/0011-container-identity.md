@@ -23,7 +23,15 @@ OrbStack, varying the image and the mounts, found the home guarantee failing. So
 identity sets `HOME` as well as editing the entry, a home directory is created
 only where none exists, identity files that are absent, unusual or lack the
 running user have rules of their own, and cache ownership is taken only on
-rootful Linux, and only of a root-owned named volume.
+rootful Linux, and only of a root-owned named volume. Refined while implementing
+that ([#235](https://github.com/or1can/ratect/issues/235)): a symbolic link at the
+home counts as existing, and a mount at `/etc` is refused as one at `/etc/passwd`
+is, since the write would reach the host the same way. A correctness pass on
+OrbStack then found a mount below the home making the daemon create it as root,
+which left a non-root running user unable to write to its own home, so that one
+case is handed over. It also found a `tmpfs` above the home hiding what is created,
+which is refused, and a `..` in `home` meaning different directories to Docker's
+stat and upload, which is refused at load.
 
 ## Context
 
@@ -175,8 +183,8 @@ and appending or editing — never replacing**:
   user owns is left alone, and so is a directory cache, which Ratect has already
   created as the host user.
 
-On **desktop** and **remapped** daemons: **`--user` is not applied and no cache
-or existing directory changes owner.** On desktop and rootless the ownership outcome already holds
+On **desktop** and **remapped** daemons: **`--user` is not applied, no cache changes
+owner, and no existing directory does beyond [the one case below](#the-home-guarantee).** On desktop and rootless the ownership outcome already holds
 (desktop file sharing maps it; rootless delivers it by construction), and
 under rootless, applying `--user` is actively destructive. On userns-remap it
 cannot be met at all — the host uid maps to a subordinate uid like every
@@ -204,13 +212,22 @@ On every daemon class, however the entry above was reached:
   this is no silent precedence, and the passwd home stays the configured path.
 - **A home directory is created only where none exists**, owned by the running
   user, with any missing ancestors created as root, mode `0755`. An existing
-  directory is left untouched even if the running user can't write to it, since
+  directory or symbolic link is left untouched even if the running user can't write to it, since
   the project chose that path; Docker's archive API has no create-only form, so
   an upload rewrites the owner and mode of what it lands on, through a bind mount
-  and onto the host as well. A file at that path is an error naming the container.
+  and onto the host as well. A file at that path is an error naming the container,
+  as is a `tmpfs` above it, which would hide what is created.
+- **A mount below the home is the exception to "untouched".** The daemon creates
+  each bind mount's and volume's destination and its parents as root on the first
+  archive call, even a stat, so by the time Ratect can look, a directory made for
+  `~/.ssh` looks like a root-owned one the image shipped. With a mount below `home`, none at
+  it, root as its owner and a non-root running user, it goes to the running user.
+  That also hands over a root-owned home an image shipped, which naming it as this
+  user's home asks for. It is in the container's layer, since nothing is mounted at
+  it, so the host is untouched.
 - **The identity files are read as untrusted bytes.** An absent `/etc/passwd`
-  (`scratch`) is an empty one. A symbolic link, a mount at that path, or a file
-  over 1 MiB is an error naming the container. Every line not being edited is
+  (`scratch`) is an empty one. A symbolic link, a mount at that path or at `/etc`,
+  or a file over 1 MiB is an error naming the container. Every line not being edited is
   preserved byte-for-byte.
 
 A relative `cache` destination is refused at load beside `identity`, on every
@@ -281,6 +298,13 @@ the image's user isn't in the configuration, and the image may not be local.
 - **A `umask` passthrough.** Out of scope: the runtime has no such option, so
   it is not a passthrough at all — it would need an entrypoint-wrapper
   mechanism of its own.
+- **A throwaway container to tell a daemon-made home from an image's**, created
+  with no mounts so a stat answers exactly. Rejected: a create and remove per
+  affected container, and one more thing to clean up on an interrupt, to spare a
+  root-owned image home that a non-root user can't write to anyway.
+- **Documenting a mount below the home as needing the image to create it.**
+  Rejected: `~/.ssh` and cache mounts are why `home` exists, and it would leave them
+  broken under a non-root image that doesn't ship that home.
 - **Podman's home for synthesized entries** (host `$HOME` if mounted, else the
   working directory). Rejected: both vary by host, which defeats the
   consistent-home requirement that is the reason `home` exists.
@@ -332,7 +356,7 @@ the image's user isn't in the configuration, and the image may not be local.
   users now survive; [#225](https://github.com/or1can/ratect/issues/225)'s
   collision surface dissolves with the chown step it catalogued (ownership is
   taken only of root-owned named cache volumes on rootful Linux, and of a home
-  directory only by creating it);
+  directory by creating it, or when a mount below it left it root-owned);
   [#226](https://github.com/or1can/ratect/issues/226) becomes the `groups`
   passthrough plus the identity's own group handling. All three sit in this
   record's milestone; `ratect 0.10.0` carries none of it.

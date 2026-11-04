@@ -548,6 +548,15 @@ pub struct Container {
     /// as. Same scope and native-only status as `user`.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub groups: Option<Vec<NameOrId>>,
+    /// Gives this container a guaranteed home, whatever its image says — see
+    /// [decisions/0011](../../decisions/0011-container-identity.md), which
+    /// says what that takes on each kind of daemon. Refused beside
+    /// [`user`](Self::user), [`group`](Self::group) or an enabled
+    /// `run_as_current_user`, each another identity source, by
+    /// `validate_identity`. Same scope and native-only status as
+    /// `user`.
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub identity: Option<Identity>,
 }
 
 impl Container {
@@ -558,6 +567,34 @@ impl Container {
     /// (`reject_image_expressions_in_compat`); `ratect.toml` evaluates it.
     pub fn image_is_expression(batect_shaped: bool) -> bool {
         !batect_shaped
+    }
+}
+
+/// A container's [`Container::identity`]. Only `ratect.toml` can write one, so
+/// `home` is always an expression, evaluated like any other, and its shape is
+/// judged as `run_as_current_user.home_directory`'s is: a literal at load, an
+/// expression when evaluated
+/// ([decisions/0014](../../decisions/0014-config-checked-at-load-evaluated-per-task.md)).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Identity {
+    /// The home directory, a path inside the container.
+    pub home: String,
+}
+
+impl<'de> Deserialize<'de> for Identity {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename = "Identity", deny_unknown_fields)]
+        struct AsWritten {
+            home: String,
+        }
+
+        let written = AsWritten::deserialize(deserializer)?;
+        Ok(Identity {
+            home: checked_expression(written.home)?,
+        })
     }
 }
 
@@ -3637,6 +3674,7 @@ impl ConfigFormat {
         reject_dns_in_compat(&shaped)?;
         reject_network_mode_in_compat(&shaped)?;
         reject_passthrough_identity_in_compat(&shaped)?;
+        reject_identity_in_compat(&shaped)?;
         validate_image_sources_in_compat(&shaped)?;
         reject_image_expressions_in_compat(&shaped)?;
         Ok(())
@@ -4889,13 +4927,18 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                     if !RunAsCurrentUser::home_directory_is_expression(anchor.batect_shaped)
                         || !crate::expressions::contains_expression(home_directory)
                     {
-                        check_home_directory(home_directory)?;
+                        check_home_directory("run_as_current_user.home_directory", home_directory)?;
                     }
                 } else if run_as_current_user.home_directory.is_some() {
                     anyhow::bail!(
                         "has 'run_as_current_user.home_directory' set, but \
                          'run_as_current_user.enabled' is not true",
                     );
+                }
+            }
+            if let Some(identity) = &container.identity {
+                if !crate::expressions::contains_expression(&identity.home) {
+                    check_identity_home(&identity.home)?;
                 }
             }
             Ok(())
@@ -4968,27 +5011,27 @@ fn check_literal_path(path: &str, anchor: &Anchor<'_>, contained: HostPathField)
     Ok(())
 }
 
-/// The shape a `run_as_current_user.home_directory` must have — judged at
-/// load on a literal ([`check_values`]) and on an evaluated expression
+/// The shape a container's home must have, whichever `field` names it
+/// (`run_as_current_user.home_directory` or `identity.home`) — judged at load
+/// on a literal ([`check_values`]) and on an evaluated expression
 /// ([`evaluate_container`]). Not `anchor_path`: this is a path *inside the
 /// container*, never resolved against a base path.
-fn check_home_directory(home_directory: &str) -> Result<()> {
+fn check_home_directory(field: &str, home_directory: &str) -> Result<()> {
     if !home_directory.starts_with('/') {
         anyhow::bail!(
-            "has an invalid 'run_as_current_user.home_directory': \
-             '{}' is not an absolute path",
+            "has an invalid '{field}': '{}' is not an absolute path",
             printable(home_directory)
         );
     }
-    // `home_directory` is interpolated raw into a colon-delimited
-    // `/etc/passwd`/`/etc/shadow` line (`user::generate_passwd_file`) — a `:`
-    // shifts that line's fields, and a newline/other control character
-    // injects an entirely new (attacker-chosen) entry.
+    // A home is interpolated raw into a colon-delimited `/etc/passwd` line
+    // (`user::generate_passwd_file`, `user::edit_passwd_home`) — a `:` shifts
+    // that line's fields, and a
+    // newline/other control character injects an entirely new
+    // (attacker-chosen) entry.
     if home_directory.contains(':') || home_directory.chars().any(char::is_control) {
         anyhow::bail!(
-            "has an invalid 'run_as_current_user.home_directory': \
-             '{}' contains a ':' or a control character, which would corrupt the \
-             generated /etc/passwd and /etc/shadow entries",
+            "has an invalid '{field}': '{}' contains a ':' or a control character, which \
+             would corrupt the /etc/passwd entry it is written into",
             printable(home_directory)
         );
     }
@@ -5001,9 +5044,27 @@ fn check_home_directory(home_directory: &str) -> Result<()> {
     // reaches Docker.
     if Path::new(home_directory).file_name().is_none() {
         anyhow::bail!(
-            "has an invalid 'run_as_current_user.home_directory': \
-             '{}' has no directory name to create",
+            "has an invalid '{field}': '{}' has no directory name to create",
             printable(home_directory)
+        );
+    }
+    Ok(())
+}
+
+/// [`check_home_directory`], and no `..`. Docker's stat follows a symbolic link
+/// before a `..`, as the kernel does, but its upload cleans the path first, so the
+/// two can mean different directories, and a home could be created somewhere
+/// other than where `$HOME` points. `run_as_current_user.home_directory` is
+/// Batect's, so it keeps its own rules.
+fn check_identity_home(home: &str) -> Result<()> {
+    check_home_directory("identity.home", home)?;
+    if Path::new(home)
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
+    {
+        anyhow::bail!(
+            "has an invalid 'identity.home': '{}' contains a '..'",
+            printable(home)
         );
     }
     Ok(())
@@ -5208,13 +5269,23 @@ fn evaluate_container(
                 let field = "'run_as_current_user.home_directory'";
                 let checked = evaluate_value(field, home_directory, host_env, config_vars)
                     .and_then(|value| {
-                        check_home_directory(&value)
+                        check_home_directory("run_as_current_user.home_directory", &value)
                             .with_context(|| deferred_check_context(field, home_directory))?;
                         Ok(value)
                     });
                 store_or_record(home_directory, checked, &mut failures);
             }
         }
+    }
+    if let Some(identity) = &mut container.identity {
+        let field = "'identity.home'";
+        let checked =
+            evaluate_value(field, &identity.home, host_env, config_vars).and_then(|value| {
+                check_identity_home(&value)
+                    .with_context(|| deferred_check_context(field, &identity.home))?;
+                Ok(value)
+            });
+        store_or_record(&mut identity.home, checked, &mut failures);
     }
     failures
 }
@@ -6169,6 +6240,9 @@ fn load_project_impl(
     // `expand_external_health_checks`, which would otherwise consume the
     // `external_health_check` this refuses.
     validate_network_modes(&config)?;
+    // Same reasoning: `identity` is judged against the effective `user`,
+    // `group`, `run_as_current_user` and `volumes`.
+    validate_identity(&config)?;
     // Same reasoning: `group` is judged against the effective `user`.
     validate_passthrough_identity(&config)?;
     // Last, and native-only: it *writes* to the config (the generated
@@ -6516,6 +6590,24 @@ fn reject_passthrough_identity_in_compat(containers: &[BatectShaped<'_>]) -> Res
     Ok(())
 }
 
+/// `identity` is a `ratect`-native field (ratect#235), same reasoning as
+/// [`reject_passthrough_identity_in_compat`].
+fn reject_identity_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
+    for entry in containers {
+        if entry.container.identity.is_some() {
+            let name = entry.name;
+            return Err(native_field_rejection(
+                entry,
+                format!(
+                    "The container '{name}' uses 'identity', which is a ratect-native field \
+                 not supported in Batect-compatible configuration."
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// What a container's [`Container::user`], [`group`](Container::group) and
 /// [`groups`](Container::groups) may say, none of it about whether a name
 /// exists: that is the runtime's to report, against the image's own files.
@@ -6570,6 +6662,57 @@ fn validate_passthrough_identity(config: &Config) -> Result<()> {
                  an id: it must not be empty or contain a ':'.",
                 printable(value)
             );
+        }
+    }
+    Ok(())
+}
+
+/// What a container with an [`identity`](Container::identity) can't also have,
+/// [`Identity::home`]'s own shape being [`check_values`]'s.
+///
+/// **After `resolve_extends`**, since `extends` can supply either side, and
+/// before [`validate_passthrough_identity`], so a `group` beside `identity` is
+/// told about `identity` rather than to add a `user` it would then be refused.
+/// `user`, `group` and an enabled `run_as_current_user` each say who the
+/// container runs as, the silent precedence
+/// [decisions/0011](../../decisions/0011-container-identity.md) rules out. A
+/// relative `cache` destination is refused on every daemon class, even though
+/// only rootful Linux would upload to one, so that whether a project loads never
+/// depends on the daemon that later runs it.
+fn validate_identity(config: &Config) -> Result<()> {
+    for (name, container) in &config.containers {
+        if container.identity.is_none() {
+            continue;
+        }
+        let runs_as_current_user = container
+            .run_as_current_user
+            .as_ref()
+            .is_some_and(|run_as_current_user| run_as_current_user.enabled);
+        let other = if container.user.is_some() {
+            Some("'user'")
+        } else if container.group.is_some() {
+            Some("'group'")
+        } else if runs_as_current_user {
+            Some("an enabled 'run_as_current_user'")
+        } else {
+            None
+        };
+        if let Some(other) = other {
+            anyhow::bail!(
+                "The container '{name}' has both 'identity' and {other}, set on it or \
+                 inherited through 'extends', and each says who it runs as. It can only \
+                 have one, and an inherited field can't be removed, only overridden."
+            );
+        }
+        for volume in container.volumes.iter().flatten() {
+            if let VolumeMount::Cache(cache) = volume {
+                anyhow::ensure!(
+                    cache.container.starts_with('/'),
+                    "The container '{name}' has 'identity' and a 'cache' volume mount at \
+                     '{}', which is relative: beside 'identity', it must be absolute.",
+                    printable(&cache.container)
+                );
+            }
         }
     }
     Ok(())
@@ -7635,6 +7778,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
         user,
         group,
         groups,
+        identity,
     } = parent;
     child.image = child.image.take().or(image);
     child.image_pull_policy = child.image_pull_policy.take().or(image_pull_policy);
@@ -7677,6 +7821,7 @@ fn inherit_container_fields(child: &mut Container, parent: Container) {
     child.user = child.user.take().or(user);
     child.group = child.group.take().or(group);
     child.groups = child.groups.take().or(groups);
+    child.identity = child.identity.take().or(identity);
 }
 
 #[cfg(test)]

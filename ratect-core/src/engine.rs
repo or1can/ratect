@@ -3310,12 +3310,16 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // with no id to remove it by, nothing else can say so: a line of its
         // own, since the cleanup report that follows ends on a command to
         // paste. Said as the wait stopping, not cleanup failing: under
-        // `--no-cleanup*` there is no cleanup to fail.
-        let mut unanswered: Vec<String> = pending
-            .into_iter()
-            .filter(|(_, create)| create.peek().is_none())
-            .map(|(name, _)| name)
-            .collect();
+        // `--no-cleanup*` there is no cleanup to fail. One with an id by then,
+        // cut short only in preparing it, is removed like any other.
+        let mut unanswered: Vec<String> = {
+            let known = created_containers.lock().unwrap();
+            pending
+                .into_iter()
+                .filter(|(name, create)| create.peek().is_none() && !known.contains_key(name))
+                .map(|(name, _)| name)
+                .collect()
+        };
         unanswered.sort();
         unanswered.dedup();
         if !unanswered.is_empty() {
@@ -3830,6 +3834,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .get(name)
                         .with_context(|| undeclared_container_bug(name))?;
                     let is_root = name == context.root;
+                    if container_config.identity.is_some() {
+                        crate::identity::check_supported(self.docker.as_ref(), name).await?;
+                    }
                     let image = self
                         .ensure_image_resolved(name, context.containers, context.image_cells)
                         .await?;
@@ -3954,14 +3961,33 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                         .lock()
                                         .unwrap()
                                         .insert(name.clone(), id.clone());
-                                    // Posted from the same place the id is
-                                    // registered, so a display's idea of what
-                                    // is outstanding can never disagree with
-                                    // what cleanup will actually remove.
-                                    if narrated && created.is_ok() {
-                                        self.event_sink
-                                            .post(TaskEvent::ContainerCreated { container: name });
+                                }
+                                let created = match created {
+                                    Ok(id) => {
+                                        let applied = crate::identity::apply(
+                                            self.docker.as_ref(),
+                                            &spec,
+                                            &id,
+                                        )
+                                        .await;
+                                        match applied {
+                                            Ok(()) => Ok(id),
+                                            Err(error) => {
+                                                Err(crate::docker::CreateContainerError {
+                                                    created: Some(id),
+                                                    error,
+                                                })
+                                            }
+                                        }
                                     }
+                                    failed => failed,
+                                };
+                                // Once the container is startable, so a display
+                                // never shows one as created whose preparation
+                                // then failed.
+                                if narrated && created.is_ok() {
+                                    self.event_sink
+                                        .post(TaskEvent::ContainerCreated { container: name });
                                 }
                                 *answer.lock().unwrap() = Some(created);
                             }))

@@ -65,6 +65,7 @@ fn sample_container() -> Container {
         user: None,
         group: None,
         groups: None,
+        identity: None,
     }
 }
 

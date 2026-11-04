@@ -307,12 +307,27 @@ pub struct SharedContainerSpec {
     /// in the image's own passwd/group, which many programs need to
     /// function at all.
     pub user_mapping: Option<UserMapping>,
+    /// `Some` when this container has an `identity`
+    /// ([decisions/0011](../../decisions/0011-container-identity.md)). When
+    /// present: [`environment`](Self::environment) holds `HOME` unless the
+    /// project wrote its own, and, after creation but before starting, the
+    /// container's own identity files are made to agree
+    /// ([`crate::identity::apply`]).
+    pub identity: Option<IdentityPlan>,
     pub network_options: NetworkOptions,
     /// Overrides the image's own `HEALTHCHECK` at creation — applying it is
     /// what makes `ContainerRuntime::wait_for_container_healthy` meaningful
     /// for images with no health check of their own.
     pub health_check: Option<HealthCheckOptions>,
     pub options: ContainerOptions,
+}
+
+/// What a container's `identity` asks of the run: what is left of it once the
+/// config has been evaluated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityPlan {
+    /// The configured home, a path inside the container.
+    pub home: String,
 }
 
 /// One resolved `local` or `cache` volume mount — what becomes one of
@@ -568,12 +583,26 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         working_directory_override.or(container_config.working_directory.as_deref());
     let entrypoint = entrypoint_override.or(container_config.entrypoint.as_deref());
     let proxy_vars = proxy.map(|proxy| &proxy.variables);
-    let environment = merged_environment(
+    let mut environment = merged_environment(
         term_var,
         proxy_vars,
         container_config.environment.as_ref(),
         environment_override,
     );
+    let identity = container_config
+        .identity
+        .as_ref()
+        .map(|identity| IdentityPlan {
+            home: identity.home.clone(),
+        });
+    // Over the image's own `ENV HOME`, which would otherwise beat the passwd
+    // edit, and under a `HOME` the project wrote, whose author stated it.
+    if let Some(identity) = &identity {
+        environment
+            .get_or_insert_default()
+            .entry("HOME".to_string())
+            .or_insert_with(|| identity.home.clone());
+    }
     let expanded_ports = merged_ports(container_config.ports.as_ref(), ports_override);
     let network_options = NetworkOptions {
         additional_hostnames: container_config.additional_hostnames.clone(),
@@ -622,6 +651,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
             runs_as_host_user: user_mapping.is_some(),
             process_user: process_user(container_config, user_mapping),
             user_mapping: user_mapping.cloned(),
+            identity,
             network_options,
             health_check: health_check_options(container_config),
             options: container_options,

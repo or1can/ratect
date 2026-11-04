@@ -899,6 +899,88 @@ The nearest real project is
   [`dns`](#dnsdns_searchdns_options-name-resolution): neither a task's `run`
   block nor a `customise` overlay accepts them.
 
+## `identity`: a guaranteed home
+
+A container can state its home, so `$HOME` doesn't depend on the image or the
+machine, and cache mounts and mounted ssh or Git configuration can be declared
+once.
+
+```toml
+[containers.build-env]
+image = "rust:1.90"
+identity = { home = "/home/me" }
+groups = ["docker"]
+```
+
+The nearest real project is
+[`ratect/tests/fixtures/identity.toml`](https://github.com/or1can/ratect/blob/main/ratect/tests/fixtures/identity.toml).
+
+Both places programs look then agree: `$HOME`, which Git reads, and the running
+user's `/etc/passwd` entry, which ssh's `~` reads. The running user is the
+image's own `USER`, or root if it has none. Ratect runs the container as that
+user and doesn't change it.
+
+**A rootful Linux daemon refuses it:** a run reaching a container with `identity`
+there fails, naming the container. It works on a local Docker Desktop, OrbStack or
+similar on macOS or Windows, and on rootless and userns-remap daemons.
+[`ratect doctor`](ratect-cli.md) says which kind of daemon you have.
+
+- **`home` is required**, and is an absolute path with a leaf name and no `..`, `:`
+  or control characters. It can hold an [expression](#config-variables-and-expressions).
+  A literal is judged when the file loads. An expression is judged when it is
+  evaluated, before Docker touches the container, and `ratect config validate`
+  and `ratect doctor` report a bad one as a warning.
+- **It can't be combined with `user`, `group` or an enabled
+  `run_as_current_user`**, or with a relative `cache` destination, once
+  [`extends`](#extends-inheritance-instead-of-yaml-anchors) has resolved the
+  container. These are rejected when the file loads. `groups` works with it, and
+  adds to the running user.
+- **Only the running user's home field changes.** Every other line of the image's
+  `/etc/passwd` stays as it was, and the file keeps its mode and owner. A name
+  selects the entry with that name, and a uid the first entry with that uid. A
+  line too short to have a home field gets one.
+- **A user with no entry:** a numeric `USER` gets one, named with its uid (`root`
+  for uid 0), with the numeric group from `USER` or else 0. A named group isn't
+  looked up: the process runs with it, but the entry and a created home have that
+  user's entry's gid, or 0. An image with no `/etc/passwd`
+  at all, such as `scratch`, is treated as having an empty one. A *named* `USER`
+  the image lacks gets nothing, and the runtime refuses to start the container.
+- **`/etc/passwd` isn't edited through anything.** A symbolic link, a mount at
+  that path or at `/etc`, or a file over 1 MiB fails the run, naming the container.
+- **`HOME` is set in the container's environment**, over any `ENV HOME` in the
+  image. A `HOME` in `environment` wins, though the passwd entry still says `home`.
+- **The home is only created where nothing exists**: owned by the running user,
+  mode `0755`, with any missing parent directories owned by root. An existing
+  directory or symbolic link, a bind mount included, keeps its owner and mode even
+  if the running user can't write to it. A symbolic link isn't followed, so one that
+  is dangling or leads to a file leaves the home unusable. A file there fails the
+  run, naming the container, and so does a `tmpfs` above the home, which would hide
+  it, unless something is mounted at the home itself.
+- **A mount below the home is the exception.** With a mount at `~/.ssh` or
+  `~/.cache`, Docker creates the home as root before Ratect can look at it. So when
+  a mount sits below the home, none is at it, it is owned by root and the running
+  user isn't root, it goes to the running user, mode `0755`. A root-owned home the
+  image shipped is handed over the same way.
+- **Fixed on the container's own definition**, like
+  [`dns`](#dnsdns_searchdns_options-name-resolution): neither a task's `run` block
+  nor a `customise` overlay accepts it.
+
+What this leaves as it is:
+
+- **Files baked into the image's old home** (`/root/.npmrc`, from a `RUN` step)
+  stop being found via `~`. They are still at their old path.
+- **An entrypoint that drops privileges** (`postgres`) runs as a user other than
+  the running user, and that user keeps its own home.
+- **A `tmpfs` at `home`** hides the directory created there, so under a non-root
+  running user its options have to allow that user to write.
+- **No `cache` mount changes owner.** A fresh named volume is root-owned, so a
+  non-root image `USER` can't write to one on these daemons, even when the home
+  above it is theirs. Fix that in the image:
+  a fresh volume takes its owner from an image directory at the same path.
+- **A cache shared between uids or groups is yours to arrange.** `chmod` alone
+  isn't enough: under `1777` a second user can create files in it but not change
+  the first user's.
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -924,6 +1006,7 @@ The container fields, by area:
 | External checks | `external_health_check` | [above](#external_health_check-checking-a-container-from-outside-it) *(native only)* |
 | User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
 | User passthrough | `user`, `group`, `groups` | [above](#usergroupgroups-running-as-a-specific-user) *(native only)* |
+| Home | `identity` | [above](#identity-a-guaranteed-home) *(native only)* |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
 
 ### Where the semantics differ
@@ -966,6 +1049,7 @@ follow the file: only a `.toml` file can set them.
 | Setting **`dns`/`dns_search`/`dns_options`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own name resolution — see [above](#dnsdns_searchdns_options-name-resolution) |
 | Setting **`network_mode`** on a container | Rejected when the file loads — Batect has no equivalent field | Takes that container off the task's network — see [above](#network_mode-leaving-the-tasks-network) |
 | Setting **`user`/`group`/`groups`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets the user and groups that container runs as — see [above](#usergroupgroups-running-as-a-specific-user) |
+| Setting **`identity`** on a container | Rejected when the file loads — Batect has no equivalent field | Gives that container a guaranteed home — see [above](#identity-a-guaranteed-home) |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
 
 The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
@@ -1033,6 +1117,7 @@ nor `build_directory` is still only reported when a task runs it.
 | Name resolution | — | [`dns`/`dns_search`/`dns_options`](#dnsdns_searchdns_options-name-resolution) on a container |
 | Network mode | always the task's network | [`network_mode`](#network_mode-leaving-the-tasks-network) on a container |
 | Named user and groups | — | [`user`/`group`/`groups`](#usergroupgroups-running-as-a-specific-user) on a container |
+| Guaranteed home | — | [`identity`](#identity-a-guaranteed-home) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | Task's own container's readiness gate | health check, then setup commands | none — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |

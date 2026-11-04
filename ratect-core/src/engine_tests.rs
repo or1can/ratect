@@ -275,12 +275,40 @@ struct FakeContainerRuntime {
     stop_windows: Arc<Mutex<HashMap<String, (tokio::time::Instant, Option<tokio::time::Instant>)>>>,
     // What `daemon_class` reports (see `with_daemon_class`).
     daemon_class: DaemonClass,
+    // Container name -> what it is created with and holds on disk, and the
+    // identity-file steps set to fail (see `with_image_user` and its
+    // neighbours).
+    created_facts: Arc<Mutex<HashMap<String, crate::docker::CreatedContainerFacts>>>,
+    container_paths: Arc<Mutex<HashMap<(String, String), FakeContainerPath>>>,
+    failing_identity_steps: Arc<Mutex<HashSet<String>>>,
+    identity_delay: Arc<Mutex<Option<std::time::Duration>>>,
+    // What `write_container_file`/`create_container_directories` were asked.
+    written_files: Arc<Mutex<Vec<(String, String, crate::docker::ContainerFile)>>>,
+    #[allow(clippy::type_complexity)]
+    created_directories: Arc<Mutex<Vec<(String, String, String, crate::user::HomeOwner)>>>,
+}
+
+/// What a fake container holds at one path.
+#[derive(Debug, Clone)]
+enum FakeContainerPath {
+    Directory,
+    DirectoryOwnedBy(u64),
+    SymbolicLink,
+    File(crate::docker::ContainerFile),
+    /// A regular file `size` bytes long, too big for anything to read it.
+    FileOfSize(u64),
 }
 
 impl Default for FakeContainerRuntime {
     fn default() -> Self {
         Self {
             daemon_class: DaemonClass::RootfulLinux,
+            created_facts: Default::default(),
+            container_paths: Default::default(),
+            failing_identity_steps: Default::default(),
+            identity_delay: Default::default(),
+            written_files: Default::default(),
+            created_directories: Default::default(),
             events: Default::default(),
             sequence: Default::default(),
             fail_run: Default::default(),
@@ -379,6 +407,93 @@ impl FakeContainerRuntime {
     fn with_daemon_class(mut self, class: DaemonClass) -> Self {
         self.daemon_class = class;
         self
+    }
+
+    /// Makes container `name`'s image configure `user` as its `User`.
+    fn with_image_user(self, name: &str, user: &str) -> Self {
+        self.created_facts
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_default()
+            .user = user.to_string();
+        self
+    }
+
+    /// Makes Docker report a mount at `destination` in container `name`. As
+    /// on a real daemon, the first archive call then finds `destination` and
+    /// any parents it lacked as directories owned by root.
+    fn with_mount(self, name: &str, destination: &str) -> Self {
+        self.created_facts
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_default()
+            .mount_destinations
+            .push(destination.to_string());
+        self
+    }
+
+    /// Makes Docker report a `tmpfs` at `destination` in container `name`,
+    /// which, unlike [`with_mount`](Self::with_mount)'s, no stat can see.
+    fn with_tmpfs(self, name: &str, destination: &str) -> Self {
+        self.created_facts
+            .lock()
+            .unwrap()
+            .entry(name.to_string())
+            .or_default()
+            .tmpfs_destinations
+            .push(destination.to_string());
+        self
+    }
+
+    /// Makes each identity call for a container wait `delay` first.
+    fn with_identity_delay(self, delay: std::time::Duration) -> Self {
+        *self.identity_delay.lock().unwrap() = Some(delay);
+        self
+    }
+
+    /// Puts `content` at `path` in container `name`, which otherwise holds
+    /// nothing at any path.
+    fn with_path(self, name: &str, path: &str, content: FakeContainerPath) -> Self {
+        self.container_paths
+            .lock()
+            .unwrap()
+            .insert((name.to_string(), path.to_string()), content);
+        self
+    }
+
+    /// Makes one identity-file step fail for every container: `inspect`,
+    /// `stat:<path>`, `read`, `write` or `mkdir`. The daemon's own words,
+    /// naming nothing: the container's name is the engine's to attach.
+    fn failing_identity_step(self, step: &str) -> Self {
+        self.failing_identity_steps
+            .lock()
+            .unwrap()
+            .insert(step.to_string());
+        self
+    }
+
+    async fn identity_delay(&self) {
+        let delay = *self.identity_delay.lock().unwrap();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
+    }
+
+    fn identity_step(&self, step: &str) -> Result<()> {
+        if self.failing_identity_steps.lock().unwrap().contains(step) {
+            anyhow::bail!("Docker responded with status code 500: {step} refused");
+        }
+        Ok(())
+    }
+
+    fn written_files(&self) -> Vec<(String, String, crate::docker::ContainerFile)> {
+        self.written_files.lock().unwrap().clone()
+    }
+
+    fn created_directories(&self) -> Vec<(String, String, String, crate::user::HomeOwner)> {
+        self.created_directories.lock().unwrap().clone()
     }
 
     /// Makes `run_container` for container `name` report its command
@@ -1109,6 +1224,13 @@ impl FakeContainerRuntime {
     }
 }
 
+/// The container `create_container` gave this id.
+fn fake_container_name(container_id: &str) -> &str {
+    container_id
+        .strip_prefix("sidecar-id-")
+        .expect("an id the fake's own create_container handed out")
+}
+
 #[async_trait::async_trait]
 impl ContainerRuntime for FakeContainerRuntime {
     async fn daemon_class(&self) -> Result<DaemonClass> {
@@ -1263,6 +1385,142 @@ impl ContainerRuntime for FakeContainerRuntime {
             });
         }
         Ok(container_id)
+    }
+
+    async fn created_container_facts(
+        &self,
+        container_id: &str,
+    ) -> Result<crate::docker::CreatedContainerFacts> {
+        self.identity_delay().await;
+        self.identity_step("inspect")?;
+        let facts = self.created_facts.lock().unwrap();
+        Ok(facts
+            .get(fake_container_name(container_id))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn stat_container_path(
+        &self,
+        container_id: &str,
+        path: &str,
+    ) -> Result<Option<crate::docker::ContainerPathStat>> {
+        use crate::docker::{ContainerPathKind, ContainerPathStat};
+        self.identity_step(&format!("stat:{path}"))?;
+        let name = fake_container_name(container_id);
+        let paths = self.container_paths.lock().unwrap();
+        // A real daemon's `Lstat` under a file is ENOTDIR: a 500, with nothing
+        // in a `HEAD`'s body to say why.
+        for ancestor in std::path::Path::new(path).ancestors().skip(1) {
+            let key = (name.to_string(), ancestor.to_string_lossy().into_owned());
+            if matches!(
+                paths.get(&key),
+                Some(FakeContainerPath::File(_) | FakeContainerPath::FileOfSize(_))
+            ) {
+                anyhow::bail!("Docker responded with status code 500: ");
+            }
+        }
+        let key = (name.to_string(), path.to_string());
+        let stat = paths.get(&key).map(|content| match content {
+            FakeContainerPath::Directory | FakeContainerPath::DirectoryOwnedBy(_) => {
+                ContainerPathStat {
+                    kind: ContainerPathKind::Directory,
+                    size: 64,
+                }
+            }
+            FakeContainerPath::SymbolicLink => ContainerPathStat {
+                kind: ContainerPathKind::SymbolicLink,
+                size: 12,
+            },
+            FakeContainerPath::File(file) => ContainerPathStat {
+                kind: ContainerPathKind::RegularFile,
+                size: file.contents.len() as u64,
+            },
+            FakeContainerPath::FileOfSize(size) => ContainerPathStat {
+                kind: ContainerPathKind::RegularFile,
+                size: *size,
+            },
+        });
+        if stat.is_some() {
+            return Ok(stat);
+        }
+        // A path's parents exist. The daemon makes every mount's destination,
+        // parents included, on the first archive call.
+        let facts = self.created_facts.lock().unwrap();
+        let mounts = facts
+            .get(name)
+            .map(|facts| facts.mount_destinations.as_slice())
+            .unwrap_or_default();
+        let present = paths
+            .keys()
+            .filter(|(owner, _)| owner == name)
+            .map(|(_, held)| held)
+            .chain(mounts)
+            .any(|held| std::path::Path::new(held).starts_with(path));
+        Ok(present.then_some(ContainerPathStat {
+            kind: ContainerPathKind::Directory,
+            size: 64,
+        }))
+    }
+
+    async fn container_directory_uid(&self, container_id: &str, path: &str) -> Result<u64> {
+        self.identity_step("owner")?;
+        let key = (
+            fake_container_name(container_id).to_string(),
+            path.to_string(),
+        );
+        Ok(match self.container_paths.lock().unwrap().get(&key) {
+            Some(FakeContainerPath::DirectoryOwnedBy(uid)) => *uid,
+            _ => 0,
+        })
+    }
+
+    async fn read_container_file(
+        &self,
+        container_id: &str,
+        path: &str,
+    ) -> Result<crate::docker::ContainerFile> {
+        self.identity_step("read")?;
+        let key = (
+            fake_container_name(container_id).to_string(),
+            path.to_string(),
+        );
+        match self.container_paths.lock().unwrap().get(&key) {
+            Some(FakeContainerPath::File(file)) => Ok(file.clone()),
+            other => panic!("nothing should read {path}, holding {other:?}"),
+        }
+    }
+
+    async fn write_container_file(
+        &self,
+        container_id: &str,
+        path: &str,
+        file: &crate::docker::ContainerFile,
+    ) -> Result<()> {
+        self.identity_step("write")?;
+        self.written_files.lock().unwrap().push((
+            fake_container_name(container_id).to_string(),
+            path.to_string(),
+            file.clone(),
+        ));
+        Ok(())
+    }
+
+    async fn create_container_directories(
+        &self,
+        container_id: &str,
+        into: &str,
+        relative: &str,
+        owner: crate::user::HomeOwner,
+    ) -> Result<()> {
+        self.identity_step("mkdir")?;
+        self.created_directories.lock().unwrap().push((
+            fake_container_name(container_id).to_string(),
+            into.to_string(),
+            relative.to_string(),
+            owner,
+        ));
+        Ok(())
     }
 
     async fn start_background_container(
@@ -1653,6 +1911,7 @@ fn container(image: &str, dependencies: Option<Vec<String>>) -> Container {
         user: None,
         group: None,
         groups: None,
+        identity: None,
     }
 }
 
@@ -1723,6 +1982,7 @@ fn config_with_cycle() -> Config {
             user: None,
             group: None,
             groups: None,
+            identity: None,
         },
     );
 
@@ -1834,6 +2094,7 @@ fn config_with_shared_prerequisite() -> Config {
             user: None,
             group: None,
             groups: None,
+            identity: None,
         },
     );
 
@@ -2827,6 +3088,7 @@ fn container_with_run_as_current_user(
         user: None,
         group: None,
         groups: None,
+        identity: None,
     }
 }
 
@@ -3320,6 +3582,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
             user: None,
             group: None,
             groups: None,
+            identity: None,
         },
     );
     let mut tasks = IndexMap::new();
@@ -3393,6 +3656,7 @@ fn container_with_build_directory(
         user: None,
         group: None,
         groups: None,
+        identity: None,
     }
 }
 
@@ -4304,6 +4568,7 @@ async fn container_without_image_or_build_directory_errors() {
             user: None,
             group: None,
             groups: None,
+            identity: None,
         },
     );
     let mut tasks = IndexMap::new();
@@ -11206,6 +11471,7 @@ async fn dependency_without_image_or_build_directory_errors() {
             user: None,
             group: None,
             groups: None,
+            identity: None,
         },
     );
     containers.insert(
@@ -18291,4 +18557,691 @@ async fn the_fake_runtime_reports_the_daemon_class_it_was_given() {
         let docker = FakeContainerRuntime::default().with_daemon_class(class);
         assert_eq!(docker.daemon_class().await.unwrap(), class);
     }
+}
+
+// `identity`'s home guarantee on Desktop, Rootless and UsernsRemap (#235,
+// decisions/0011), through the fake runtime. CI can't cover this path end to
+// end, because its daemon is rootful Linux, where `identity` is refused until
+// #236 lands: there is no `#[ignore]`d fixture behind these, and the real
+// behaviour was verified by hand on macOS.
+
+const NON_ROOTFUL_DAEMONS: [DaemonClass; 3] = [
+    DaemonClass::Desktop,
+    DaemonClass::Rootless,
+    DaemonClass::UsernsRemap,
+];
+
+const IMAGE_PASSWD: &[u8] =
+    b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n";
+
+fn image_passwd() -> FakeContainerPath {
+    FakeContainerPath::File(crate::docker::ContainerFile {
+        contents: IMAGE_PASSWD.to_vec(),
+        mode: 0o640,
+        uid: 0,
+        gid: 42,
+    })
+}
+
+/// `app`, the task's own container, with `identity`, depending on `db`, which
+/// has one too when asked: the two places the engine creates a container from.
+fn config_with_identity(configure: impl FnOnce(&mut Container)) -> Config {
+    let mut app = container("alpine:3.18", Some(vec!["db".to_string()]));
+    app.identity = Some(crate::config::Identity {
+        home: "/home/me".to_string(),
+    });
+    configure(&mut app);
+    let mut db = container("postgres:16", None);
+    db.identity = Some(crate::config::Identity {
+        home: "/var/home/db".to_string(),
+    });
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), app);
+    containers.insert("db".to_string(), db);
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// A fake on `class`, with `app` and `db` each holding the image's passwd file
+/// and `/var` for `db`'s home to start from.
+fn identity_runtime(class: DaemonClass) -> FakeContainerRuntime {
+    FakeContainerRuntime::default()
+        .with_daemon_class(class)
+        .with_path("app", "/etc/passwd", image_passwd())
+        .with_path("db", "/etc/passwd", image_passwd())
+        .with_path("db", "/var", FakeContainerPath::Directory)
+}
+
+fn home_owner(uid: u32, gid: u32) -> crate::user::HomeOwner {
+    crate::user::HomeOwner { uid, gid }
+}
+
+#[tokio::test]
+async fn identity_edits_the_running_users_home_for_a_task_container_and_a_dependency() {
+    for class in NON_ROOTFUL_DAEMONS {
+        let docker = identity_runtime(class).with_image_user("db", "node");
+        engine(config_with_identity(|_| {}), docker.clone())
+            .run_task("run", &[])
+            .await
+            .unwrap();
+
+        let mut written = docker.written_files();
+        written.sort_by(|a, b| a.0.cmp(&b.0));
+        let [(app, app_path, app_file), (db, db_path, db_file)] = &written[..] else {
+            panic!("{class:?}: {written:?}");
+        };
+        assert_eq!((app.as_str(), app_path.as_str()), ("app", "/etc/passwd"));
+        assert_eq!((db.as_str(), db_path.as_str()), ("db", "/etc/passwd"));
+        assert_eq!(
+            app_file.contents,
+            b"root:x:0:0:root:/home/me:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n",
+            "{class:?}: root, since the image names no user"
+        );
+        assert_eq!(
+            db_file.contents,
+            b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000::/var/home/db:/bin/sh\n",
+            "{class:?}: the image's user"
+        );
+        assert_eq!(
+            (app_file.mode, app_file.uid, app_file.gid),
+            (0o640, 0, 42),
+            "{class:?}: the rewritten file keeps its mode and owner"
+        );
+
+        for name in ["app", "db"] {
+            let spec = docker.spec_for(name).unwrap();
+            assert_eq!(spec.shared.process_user, None, "{class:?}: {name}");
+            assert!(!spec.shared.runs_as_host_user, "{class:?}: {name}");
+            assert_eq!(spec.shared.user_mapping, None, "{class:?}: {name}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn identity_sets_home_and_a_written_home_wins() {
+    for class in NON_ROOTFUL_DAEMONS {
+        let docker = identity_runtime(class);
+        let config = config_with_identity(|app| {
+            app.environment = Some(HashMap::from([(
+                "HOME".to_string(),
+                "/written".to_string(),
+            )]));
+        });
+        engine(config, docker.clone())
+            .run_task("run", &[])
+            .await
+            .unwrap();
+        let home =
+            |name: &str| docker.spec_for(name).unwrap().shared.environment.unwrap()["HOME"].clone();
+        assert_eq!(home("app"), "/written", "{class:?}");
+        assert_eq!(home("db"), "/var/home/db", "{class:?}");
+        // The passwd home stays the configured path whatever `HOME` says.
+        let written = docker.written_files();
+        let (_, _, file) = written.iter().find(|(name, ..)| name == "app").unwrap();
+        assert!(
+            file.contents.starts_with(b"root:x:0:0:root:/home/me:"),
+            "{class:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn identity_creates_a_missing_home_owned_by_the_running_user_with_ancestors_as_root() {
+    for class in NON_ROOTFUL_DAEMONS {
+        let docker = identity_runtime(class).with_image_user("db", "node");
+        engine(config_with_identity(|_| {}), docker.clone())
+            .run_task("run", &[])
+            .await
+            .unwrap();
+
+        let mut created = docker.created_directories();
+        created.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            created,
+            [
+                // Nothing of `/home/me` exists, so it starts at `/`.
+                (
+                    "app".to_string(),
+                    "/".to_string(),
+                    "home/me".to_string(),
+                    home_owner(0, 0)
+                ),
+                // `/var` exists, so it is no part of what is uploaded.
+                (
+                    "db".to_string(),
+                    "/var".to_string(),
+                    "home/db".to_string(),
+                    home_owner(1000, 1000)
+                ),
+            ],
+            "{class:?}"
+        );
+    }
+}
+
+/// Uploading onto an existing path rewrites its owner and mode, through a bind
+/// mount and onto the host as well, so nothing goes near one. A symbolic link
+/// is the same: it exists, and the project put it there.
+#[tokio::test]
+async fn identity_leaves_an_existing_home_untouched() {
+    for existing in [
+        FakeContainerPath::Directory,
+        FakeContainerPath::SymbolicLink,
+    ] {
+        for class in NON_ROOTFUL_DAEMONS {
+            let docker = identity_runtime(class)
+                .with_path("app", "/home/me", existing.clone())
+                .with_path("db", "/var/home/db", existing.clone());
+            engine(config_with_identity(|_| {}), docker.clone())
+                .run_task("run", &[])
+                .await
+                .unwrap();
+            assert_eq!(docker.created_directories(), [], "{class:?}: {existing:?}");
+            // The edit still happens: an existing home is still the home.
+            assert_eq!(docker.written_files().len(), 2, "{class:?}: {existing:?}");
+        }
+    }
+}
+
+/// Reaches the run, so a failure names `name` and what went wrong, and the
+/// container, which exists by then, is removed.
+async fn identity_failure(docker: &FakeContainerRuntime) -> String {
+    let error = engine(config_with_identity(|_| {}), docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap_err();
+    format!("{error:#}")
+}
+
+#[tokio::test]
+async fn a_file_at_identity_home_is_refused_naming_the_container() {
+    let file = FakeContainerPath::FileOfSize(3);
+    for (name, home) in [("app", "/home/me"), ("db", "/var/home/db")] {
+        for class in NON_ROOTFUL_DAEMONS {
+            let docker = identity_runtime(class).with_path(name, home, file.clone());
+            let error = identity_failure(&docker).await;
+            assert!(error.contains(&format!("container '{name}'")), "{error}");
+            assert!(error.contains(&format!("'{home}'")), "{error}");
+            assert!(error.contains("not a directory"), "{error}");
+            assert!(!error.contains("sidecar-id"), "{error}");
+            assert!(docker
+                .events()
+                .contains(&format!("sidecar-stop:sidecar-id-{name}")));
+        }
+    }
+}
+
+/// `/home` is a file, so a real daemon answers a stat of `/home/me` with a bare
+/// 500: found by looking from the top down, before asking about anything
+/// under it.
+#[tokio::test]
+async fn a_file_on_the_way_to_identity_home_is_refused_naming_the_container() {
+    let docker = identity_runtime(DaemonClass::Desktop).with_path(
+        "app",
+        "/home",
+        FakeContainerPath::FileOfSize(3),
+    );
+    let error = identity_failure(&docker).await;
+    assert!(error.contains("container 'app'"), "{error}");
+    assert!(error.contains("'/home'"), "{error}");
+    assert!(error.contains("not a directory"), "{error}");
+}
+
+/// A symlinked ancestor (`/home` to `/var/home`) is a directory to upload
+/// into: Docker follows it, inside the container.
+#[tokio::test]
+async fn identity_creates_a_home_through_a_symbolic_link_ancestor() {
+    let docker = identity_runtime(DaemonClass::Desktop).with_path(
+        "app",
+        "/home",
+        FakeContainerPath::SymbolicLink,
+    );
+    engine(config_with_identity(|_| {}), docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    assert!(docker.created_directories().contains(&(
+        "app".to_string(),
+        "/home".to_string(),
+        "me".to_string(),
+        home_owner(0, 0)
+    )));
+}
+
+/// A mount below the home makes the daemon create the home as root, on the first
+/// archive call and before anything here can look, and a non-root running user
+/// then can't write to its own home. It is handed over, and only then.
+#[tokio::test]
+async fn a_home_the_daemon_made_for_a_mount_below_it_goes_to_a_non_root_user() {
+    for class in NON_ROOTFUL_DAEMONS {
+        let docker = identity_runtime(class)
+            .with_image_user("app", "node")
+            .with_mount("app", "/home/me/.ssh")
+            .with_image_user("db", "node")
+            .with_mount("db", "/var/home/db/.cache");
+        engine(config_with_identity(|_| {}), docker.clone())
+            .run_task("run", &[])
+            .await
+            .unwrap();
+        let mut created = docker.created_directories();
+        created.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            created,
+            [
+                (
+                    "app".to_string(),
+                    "/home".to_string(),
+                    "me".to_string(),
+                    home_owner(1000, 1000)
+                ),
+                (
+                    "db".to_string(),
+                    "/var/home".to_string(),
+                    "db".to_string(),
+                    home_owner(1000, 1000)
+                ),
+            ],
+            "{class:?}"
+        );
+    }
+}
+
+/// Each way the home isn't that case keeps "an existing home is left alone".
+#[tokio::test]
+async fn a_home_with_a_mount_below_it_is_left_alone_otherwise() {
+    let below = "/home/me/.ssh";
+    let cases: [(&str, FakeContainerRuntime); 4] = [
+        (
+            "root needs nothing handing over",
+            identity_runtime(DaemonClass::Desktop).with_mount("app", below),
+        ),
+        (
+            "a home already owned by someone isn't root's to give away",
+            identity_runtime(DaemonClass::Desktop)
+                .with_image_user("app", "node")
+                .with_mount("app", below)
+                .with_path("app", "/home/me", FakeContainerPath::DirectoryOwnedBy(1234)),
+        ),
+        (
+            "a mount at the home itself would rewrite the host's directory",
+            identity_runtime(DaemonClass::Desktop)
+                .with_image_user("app", "node")
+                .with_mount("app", below)
+                .with_mount("app", "/home/me"),
+        ),
+        (
+            "a symbolic link wasn't made for a mount",
+            identity_runtime(DaemonClass::Desktop)
+                .with_image_user("app", "node")
+                .with_path("app", "/home/me", FakeContainerPath::SymbolicLink)
+                .with_mount("app", below),
+        ),
+    ];
+    for (case, docker) in cases {
+        engine(config_with_identity(|_| {}), docker.clone())
+            .run_task("run", &[])
+            .await
+            .unwrap();
+        assert!(
+            docker
+                .created_directories()
+                .iter()
+                .all(|(name, ..)| name != "app"),
+            "{case}"
+        );
+    }
+}
+
+/// A sibling mount doesn't count, nor does one at `/home/me2`, whose path merely
+/// starts with the home's text.
+#[tokio::test]
+async fn a_mount_beside_the_home_changes_nothing() {
+    let docker = identity_runtime(DaemonClass::Desktop)
+        .with_image_user("app", "node")
+        .with_mount("app", "/home/me2/.ssh")
+        .with_path("app", "/home/me", FakeContainerPath::Directory);
+    engine(config_with_identity(|_| {}), docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    assert!(docker
+        .created_directories()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+}
+
+/// The directory would be created in the image's layer, then hidden at start.
+#[tokio::test]
+async fn a_tmpfs_above_a_home_it_would_hide_is_refused_naming_the_container() {
+    let docker = identity_runtime(DaemonClass::Desktop).with_tmpfs("app", "/home");
+    let error = identity_failure(&docker).await;
+    assert!(error.contains("container 'app'"), "{error}");
+    assert!(error.contains("'/home/me'"), "{error}");
+    assert!(error.contains("tmpfs at '/home'"), "{error}");
+    assert!(docker
+        .created_directories()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+}
+
+/// A `tmpfs` at the home is the home, which the reference page covers, and one
+/// above it changes nothing if a mount at the home keeps it visible.
+#[tokio::test]
+async fn a_tmpfs_that_hides_nothing_is_allowed() {
+    let at_home = identity_runtime(DaemonClass::Desktop).with_tmpfs("app", "/home/me");
+    engine(config_with_identity(|_| {}), at_home)
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    let mounted = identity_runtime(DaemonClass::Desktop)
+        .with_tmpfs("app", "/home")
+        .with_mount("app", "/home/me");
+    engine(config_with_identity(|_| {}), mounted.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    assert!(mounted
+        .created_directories()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+}
+
+/// The mount refusals compare paths, since Docker forwards a `tmpfs` key as
+/// written.
+#[tokio::test]
+async fn a_passwd_mount_is_refused_however_its_path_is_written() {
+    for destination in ["/etc/", "/etc/passwd/", "/etc//passwd"] {
+        let docker = identity_runtime(DaemonClass::Desktop).with_tmpfs("app", destination);
+        let error = identity_failure(&docker).await;
+        assert!(error.contains("container 'app'"), "{destination}: {error}");
+        assert!(
+            error.contains("there is a mount at"),
+            "{destination}: {error}"
+        );
+    }
+}
+
+/// A container Docker has created is the engine's to remove from that moment,
+/// so a signal ending the wait during the identity calls still removes it, with
+/// no warning that it may exist.
+#[tokio::test(start_paused = true)]
+async fn a_signal_during_identity_still_removes_the_container() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = identity_runtime(DaemonClass::Desktop)
+        .with_identity_delay(std::time::Duration::from_secs(1_000_000));
+    let sink = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_identity(|_| {})),
+        docker.clone(),
+        Arc::new(sink.clone()),
+        Arc::clone(&interrupt),
+    );
+    let signaller = signal_later(
+        &interrupt,
+        &[
+            crate::interrupt::TerminationSignal::Interrupt,
+            crate::interrupt::TerminationSignal::Terminate,
+        ],
+    );
+
+    engine.run_task("run", &[]).await.unwrap_err();
+    signaller.await.unwrap();
+
+    let events = docker.events();
+    for name in ["app", "db"] {
+        assert!(
+            events.contains(&format!("force-remove:sidecar-id-{name}")),
+            "{name}: {events:?}"
+        );
+    }
+    let warnings = messages(&sink.events(), warning);
+    assert!(
+        !warnings.iter().any(|w| w.contains("Stopped waiting")),
+        "{warnings:?}"
+    );
+}
+
+/// `scratch`: there's nothing to read, and an entry to write all the same.
+#[tokio::test]
+async fn an_absent_passwd_file_counts_as_empty() {
+    let docker = FakeContainerRuntime::default()
+        .with_daemon_class(DaemonClass::Desktop)
+        .with_path("db", "/etc/passwd", image_passwd());
+    engine(config_with_identity(|_| {}), docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    let written = docker.written_files();
+    let (_, path, file) = written.iter().find(|(name, ..)| name == "app").unwrap();
+    assert_eq!(path, "/etc/passwd");
+    assert_eq!(file.contents, b"root:*:0:0::/home/me:/bin/sh\n");
+    assert_eq!((file.mode, file.uid, file.gid), (0o644, 0, 0));
+}
+
+#[tokio::test]
+async fn a_passwd_file_it_cannot_safely_edit_is_refused_naming_the_container() {
+    let big = 1024 * 1024 + 1;
+    let cases: [(FakeContainerRuntime, &str); 5] = [
+        (
+            FakeContainerRuntime::default().with_path(
+                "app",
+                "/etc/passwd",
+                FakeContainerPath::SymbolicLink,
+            ),
+            "symbolic link",
+        ),
+        (
+            FakeContainerRuntime::default().with_path(
+                "app",
+                "/etc/passwd",
+                FakeContainerPath::Directory,
+            ),
+            "not a regular file",
+        ),
+        (
+            FakeContainerRuntime::default().with_path(
+                "app",
+                "/etc/passwd",
+                FakeContainerPath::FileOfSize(big),
+            ),
+            "over 1 MiB",
+        ),
+        (
+            FakeContainerRuntime::default()
+                .with_path("app", "/etc/passwd", image_passwd())
+                .with_mount("app", "/etc/passwd"),
+            "mount",
+        ),
+        (
+            FakeContainerRuntime::default()
+                .with_path("app", "/etc/passwd", image_passwd())
+                .with_mount("app", "/etc"),
+            "mount",
+        ),
+    ];
+    for (docker, expected) in cases {
+        let docker = docker.with_daemon_class(DaemonClass::Rootless).with_path(
+            "db",
+            "/etc/passwd",
+            image_passwd(),
+        );
+        let error = identity_failure(&docker).await;
+        assert!(error.contains("container 'app'"), "{error}");
+        assert!(error.contains("/etc/passwd"), "{error}");
+        assert!(error.contains(expected), "{error}");
+        assert!(
+            docker
+                .written_files()
+                .iter()
+                .all(|(name, ..)| name != "app"),
+            "{expected}: nothing is written"
+        );
+    }
+}
+
+/// #345's rule, for every step: the daemon's words are in the chain, under the
+/// container the user configured, never its Docker id.
+#[tokio::test]
+async fn each_identity_step_the_daemon_refuses_fails_naming_the_container() {
+    for step in [
+        "inspect",
+        "stat:/etc/passwd",
+        "read",
+        "write",
+        "stat:/home",
+        "mkdir",
+    ] {
+        let docker = identity_runtime(DaemonClass::Desktop).failing_identity_step(step);
+        let error = identity_failure(&docker).await;
+        assert!(
+            error.contains("Failed to apply 'identity' to container '"),
+            "{step}: {error}"
+        );
+        assert!(
+            error.contains(&format!("{step} refused")),
+            "{step}: {error}"
+        );
+        assert!(!error.contains("sidecar-id"), "{step}: {error}");
+    }
+}
+
+/// Reading who owns a home made for a mount is one more step that can fail.
+#[tokio::test]
+async fn a_refused_home_owner_read_fails_naming_the_container() {
+    let docker = identity_runtime(DaemonClass::Desktop)
+        .with_image_user("app", "node")
+        .with_mount("app", "/home/me/.ssh")
+        .failing_identity_step("owner");
+    let error = identity_failure(&docker).await;
+    assert!(
+        error.contains("Failed to apply 'identity' to container 'app'"),
+        "{error}"
+    );
+    assert!(error.contains("owner refused"), "{error}");
+}
+
+/// A named user with no entry can't start, and the runtime says so: there is
+/// nobody to own a home, and no entry to add.
+#[tokio::test]
+async fn a_named_user_with_no_entry_is_left_for_the_runtime_to_report() {
+    let docker = identity_runtime(DaemonClass::Desktop).with_image_user("app", "missing");
+    engine(config_with_identity(|_| {}), docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    assert!(docker
+        .written_files()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+    assert!(docker
+        .created_directories()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+}
+
+#[tokio::test]
+async fn identity_passes_groups_through_and_touches_no_cache() {
+    for class in NON_ROOTFUL_DAEMONS {
+        let docker = identity_runtime(class)
+            .with_image_user("app", "node")
+            .with_image_user("db", "node");
+        let project =
+            std::env::temp_dir().join(format!("ratect-identity-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&project).unwrap();
+        let mut config = config_with_identity(|_| {});
+        for container in config.containers.values_mut() {
+            container.groups = Some(vec![name_or_id("docker")]);
+            container.volumes = Some(vec![crate::config::VolumeMount::Cache(
+                crate::config::CacheVolumeMount {
+                    name: "shared".to_string(),
+                    container: "/cache".to_string(),
+                    options: None,
+                    scope: Default::default(),
+                },
+            )]);
+        }
+        engine(config, docker.clone())
+            .with_settings(TaskEngineSettings {
+                cache: Some((crate::cache::CacheType::Volume, project.clone())),
+                ..Default::default()
+            })
+            .unwrap()
+            .run_task("run", &[])
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(&project).ok();
+
+        for name in ["app", "db"] {
+            assert_eq!(
+                docker
+                    .spec_for(name)
+                    .unwrap()
+                    .shared
+                    .options
+                    .groups
+                    .as_deref(),
+                Some(&["docker".to_string()][..]),
+                "{class:?}: {name}"
+            );
+        }
+        // Only the homes: not `/cache`, whatever the running user.
+        let created = docker.created_directories();
+        assert_eq!(created.len(), 2, "{class:?}: {created:?}");
+        assert!(
+            created
+                .iter()
+                .all(|(_, into, relative, _)| !format!("{into}/{relative}").contains("cache")),
+            "{class:?}: {created:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn identity_is_refused_on_rootful_linux_naming_the_container_before_creating_it() {
+    let docker = identity_runtime(DaemonClass::RootfulLinux);
+    let error = engine(config_with_identity(|_| {}), docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("container '"), "{error}");
+    assert!(error.contains("rootful Linux"), "{error}");
+    assert!(error.contains("not supported yet"), "{error}");
+    assert!(
+        !docker
+            .events()
+            .iter()
+            .any(|event| event.starts_with("create:app")),
+        "{:?}",
+        docker.events()
+    );
+    assert_eq!(docker.written_files().len(), 0);
+}
+
+/// Absent `identity`, no daemon class is asked for, and nothing is read or
+/// written: a rootful Linux daemon runs the same container it always did.
+#[tokio::test]
+async fn container_setup_is_unchanged_without_identity() {
+    let docker = FakeContainerRuntime::default()
+        .failing_identity_step("inspect")
+        .with_path("app", "/etc/passwd", image_passwd());
+    let mut config = config_with_identity(|app| app.identity = None);
+    config.containers["db"].identity = None;
+    engine(config, docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    assert_eq!(docker.written_files().len(), 0);
+    assert_eq!(docker.created_directories().len(), 0);
+    let spec = docker.spec_for("app").unwrap();
+    assert_eq!(spec.shared.identity, None);
+    let environment = spec.shared.environment.unwrap_or_default();
+    assert!(!environment.contains_key("HOME"));
 }
