@@ -485,3 +485,22 @@ fn only_on_unix_says_what_asked() {
         "'run_as_current_user' is only supported on Unix hosts"
     );
 }
+
+/// One decision for a configured `user` and an image's `Config.User`, whichever
+/// form either comes in.
+#[test]
+fn is_root_user_reads_every_form_a_user_comes_in() {
+    for user in ["", "0", "root", "0:0", "root:wheel", "0:1000", ":0", "00"] {
+        assert!(is_root_user(user), "{user:?}");
+    }
+    for user in [
+        "1000",
+        "1000:1000",
+        "1000:0",
+        "node",
+        "node:root",
+        "rootless",
+    ] {
+        assert!(!is_root_user(user), "{user:?}");
+    }
+}

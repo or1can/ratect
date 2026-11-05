@@ -36,7 +36,7 @@ use ratect_core::config::{
 };
 use ratect_core::diagnostics::{
     config_findings, docker_environment_findings, leftover_finding, load_failure_findings,
-    wrapper_script_findings, ConversionCheck, Finding,
+    remapped_daemon_findings, wrapper_script_findings, ConversionCheck, Finding,
 };
 use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -1610,6 +1610,7 @@ async fn diagnose(
     })
     .await;
     findings.extend(warnings.into_inner().unwrap());
+    let mut daemon_class = None;
     let docker = match docker {
         Ok(docker) => match docker.server_version().await {
             Ok(version) => {
@@ -1618,7 +1619,10 @@ async fn diagnose(
                 )));
                 // A warning: the daemon answered, and a task can still run.
                 findings.push(match docker.daemon_class().await {
-                    Ok(class) => Finding::Fine(format!("Docker daemon class: {class}")),
+                    Ok(class) => {
+                        daemon_class = Some(class);
+                        Finding::Fine(format!("Docker daemon class: {class}"))
+                    }
                     Err(error) => {
                         Finding::Warning(format!("Docker daemon class unknown: {error:#}"))
                     }
@@ -1659,6 +1663,7 @@ async fn diagnose(
                 project.config.tasks.len()
             )));
             findings.extend(config_findings(&project.config, &evaluation));
+            findings.extend(remapped_daemon_findings(&evaluation, daemon_class));
 
             // Now's the current time; leftover age isn't part of this
             // check, only whether any exist.

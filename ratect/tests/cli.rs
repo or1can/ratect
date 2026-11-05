@@ -4965,3 +4965,98 @@ run = {{ container = "app", command = """sh -c 'whoami; getent passwd $(id -u); 
         assert_eq!(metadata.uid(), uid, "{path} should be the host user's");
     }
 }
+
+/// `doctor`'s output and whether it succeeded, on `project` against a stand-in
+/// daemon reporting `info`.
+fn doctor_on(project: &Path, info: &'static str) -> (String, bool) {
+    let (port, _stop) = spawn_fake_plain_daemon_with_info(info);
+    let output = ratect_command()
+        .arg("-f")
+        .arg(project)
+        .arg("doctor")
+        .arg("--docker-host")
+        .arg(format!("tcp://127.0.0.1:{port}"))
+        .env_remove("DOCKER_TLS_VERIFY")
+        .output()
+        .expect("failed to run ratect");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        output.status.success(),
+    )
+}
+
+/// A project with one container for each hazard decisions/0011 warns about.
+fn remapped_hazards_project() -> PathBuf {
+    let path = unique_project_dir().join("ratect.toml");
+    std::fs::write(
+        &path,
+        r#"
+ratect_version = "0.12.0"
+project_name = "demo"
+
+[containers.with-user]
+image = "alpine:3.18.2"
+user = "guest"
+
+[containers.with-identity]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+
+[tasks.run]
+run = { container = "with-user" }
+"#,
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn doctor_warns_about_user_and_identity_on_a_remapped_daemon_and_succeeds() {
+    let project = remapped_hazards_project();
+
+    let (stdout, success) = doctor_on(&project, r#"{"SecurityOptions":["name=userns"]}"#);
+    assert!(success, "{stdout}");
+    assert!(
+        stdout.contains("warning Container 'with-user' has a non-root 'user' on a userns-remap"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("warning Container 'with-identity' has 'identity' on a userns-remap"),
+        "{stdout}"
+    );
+
+    let (stdout, success) = doctor_on(&project, r#"{"SecurityOptions":["name=rootless"]}"#);
+    assert!(success, "{stdout}");
+    assert!(
+        stdout.contains("warning Container 'with-user' has a non-root 'user' on a rootless"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("'with-identity'"), "{stdout}");
+}
+
+#[test]
+fn doctor_says_nothing_about_user_or_identity_on_other_daemons() {
+    let (stdout, success) = doctor_on(&remapped_hazards_project(), r#"{"SecurityOptions":[]}"#);
+    assert!(success, "{stdout}");
+    assert!(
+        stdout.contains("Docker daemon class: rootful Linux"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("'with-user'"), "{stdout}");
+    assert!(!stdout.contains("'with-identity'"), "{stdout}");
+}
+
+/// It connects to no daemon, so it has no class to judge either against.
+#[test]
+fn config_validate_says_nothing_about_user_or_identity() {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(remapped_hazards_project())
+        .args(["config", "validate"])
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(!stdout.contains("'with-user'"), "{stdout}");
+    assert!(!stdout.contains("'with-identity'"), "{stdout}");
+}

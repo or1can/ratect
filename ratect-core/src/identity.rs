@@ -38,6 +38,7 @@
 
 use crate::container_spec::{BindSource, ContainerSpec, IdentityPlan};
 use crate::daemon_class::DaemonClass;
+use crate::diagnostics::REMAPPED_MOUNT_ACCESS;
 use crate::docker::{ContainerFile, ContainerPathKind, ContainerRuntime, CreatedContainerFacts};
 use crate::ui::printable;
 use crate::user::{
@@ -60,6 +61,23 @@ const MAX_IDENTITY_FILE_SIZE: u64 = 1024 * 1024;
 
 fn failed_to_apply(name: &str) -> String {
     format!("Failed to apply 'identity' to container '{name}'")
+}
+
+/// What a run says about `name`, a container with `identity` whose image runs it
+/// as `image_user` (`Config.User`), on a daemon of `class`. `doctor` has no
+/// equivalent, since the image's user isn't in the configuration and the image may
+/// not be local.
+pub(crate) fn image_user_warning(
+    name: &str,
+    image_user: &str,
+    class: DaemonClass,
+) -> Option<String> {
+    (class.is_remapped() && !crate::user::is_root_user(image_user)).then(|| {
+        format!(
+            "Container '{name}' has 'identity', and its image runs it as the non-root user \
+             '{image_user}' on a {class} daemon — {REMAPPED_MOUNT_ACCESS}."
+        )
+    })
 }
 
 /// The user `name`'s `identity` makes the process run as: the host's, on a rootful
@@ -85,15 +103,19 @@ pub async fn host_user(docker: &impl ContainerRuntime, name: &str) -> Result<Opt
 /// is there. A host user also gets a group entry if there is room for one, and
 /// each writable named cache it can't otherwise use. Part of what makes the
 /// container startable, so the caller treats a failure as a failed create.
+///
+/// `warn` is told what `image_user_warning` finds as soon as the image's user
+/// is known, so the warning doesn't depend on anything here going on to succeed.
 pub async fn apply(
     docker: &impl ContainerRuntime,
     spec: &ContainerSpec,
     container_id: &str,
+    warn: impl Fn(String) + Send,
 ) -> Result<()> {
     let Some(identity) = &spec.shared.identity else {
         return Ok(());
     };
-    apply_plan(docker, spec, container_id, identity)
+    apply_plan(docker, spec, container_id, identity, warn)
         .await
         .with_context(|| failed_to_apply(&spec.shared.name))
 }
@@ -103,8 +125,15 @@ async fn apply_plan(
     spec: &ContainerSpec,
     container_id: &str,
     identity: &IdentityPlan,
+    warn: impl Fn(String) + Send,
 ) -> Result<()> {
     let facts = docker.created_container_facts(container_id).await?;
+    if identity.host_user.is_none() {
+        let class = docker.daemon_class().await?;
+        if let Some(warning) = image_user_warning(&spec.shared.name, &facts.user, class) {
+            warn(warning);
+        }
+    }
     let passwd = read_identity_file(docker, container_id, &facts, PASSWD_PATH).await?;
     if let Some(user) = &identity.host_user {
         return adopt_host_user(docker, spec, container_id, identity, user, &facts, passwd).await;

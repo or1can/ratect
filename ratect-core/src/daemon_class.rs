@@ -46,6 +46,14 @@ impl fmt::Display for DaemonClass {
     }
 }
 
+impl DaemonClass {
+    /// Whether container uids map to other uids on the host, as they do on
+    /// [`Rootless`](Self::Rootless) and [`UsernsRemap`](Self::UsernsRemap).
+    pub fn is_remapped(self) -> bool {
+        matches!(self, Self::Rootless | Self::UsernsRemap)
+    }
+}
+
 /// How a connection reaches its daemon, as far as classifying it cares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {

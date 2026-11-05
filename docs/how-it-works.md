@@ -144,8 +144,8 @@ where that lives and stays current.
    says otherwise), its environment layered as
    [Environment precedence](ratect-compat-config-reference.md#environment-precedence)
    states. Everything else on the container — ports, hostnames, working directory,
-   entrypoint, capabilities, devices, and the rest — is assembled here from the
-   config and handed to `docker.rs` as plain values; the [config
+   entrypoint, capabilities, devices, and the rest — is assembled by
+   `container_spec.rs` from the config and handed to `docker.rs` as plain values; the [config
    reference](ratect-compat-config-reference.md) is the list of what those fields mean, and which
    accept a task-level `run` override.
 
@@ -237,8 +237,8 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   second runs one `setup_commands` entry in the running container and returns its
   exit code and output for the engine to judge.
 
-Nothing here depends on `config` types: `engine.rs` converts config into a plain
-`ContainerSpec` first, which is what the methods that create and start a container
+Nothing here depends on `config` types: `container_spec.rs` converts config into a
+plain `ContainerSpec` first, which is what the methods that create and start a container
 take; the rest take its id and plain values.
 The module's own comment carries the gotchas — where each path calls Docker's
 `start` relative to attaching, why cleanup ownership is not to be split again, how
@@ -257,7 +257,8 @@ one rule: **stdout is the result, stderr is everything said about producing
 it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017-output-streams-and-styles.md)).
 
 - **Output** is what a user with `RUST_LOG` unset would be worse off without,
-  and never goes through `tracing`. The *result* — a run's task-container
+  and doesn't go through `tracing`, apart from two terminal-resize failures that
+  are logged instead. The *result* — a run's task-container
   output, a `tasks list` listing — is stdout. Everything *about* the run is
   stderr: errors (`Error: `), warnings (`Warning: `), notices (the interrupt
   notice, what `--no-cleanup*` left in place), in every style including

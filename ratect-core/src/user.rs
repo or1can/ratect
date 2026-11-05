@@ -220,6 +220,32 @@ fn parse_passwd_entry(line: &[u8]) -> Option<PasswdEntry<'_>> {
     })
 }
 
+/// The user and group of a `Config.User` value, either of them possibly empty.
+fn split_configured_user(configured_user: &str) -> (&str, &str) {
+    configured_user
+        .split_once(':')
+        .unwrap_or((configured_user, ""))
+}
+
+/// The uid `user`, the user half of a `Config.User` value, says outright: an
+/// empty one is root, and all-digit text is always a uid. `None` for a name.
+fn configured_uid(user: &str) -> Option<u32> {
+    if user.is_empty() {
+        Some(0)
+    } else {
+        user.parse().ok()
+    }
+}
+
+/// Whether `user` is root, as far as its text says: a configured `user`, or an
+/// image's `Config.User` in any of the forms [`edit_passwd_home`] takes. Another
+/// name for uid 0 isn't known without the image's `/etc/passwd`, so it counts as
+/// non-root.
+pub fn is_root_user(user: &str) -> bool {
+    let (user, _) = split_configured_user(user);
+    user == "root" || configured_uid(user) == Some(0)
+}
+
 /// Makes `home` the home of the running user in `passwd`, an image's
 /// `/etc/passwd`: the user its `configured_user` (`Config.User`: empty, `name`,
 /// `uid`, `name:group` or `uid:gid`) says, root when that is empty.
@@ -243,14 +269,8 @@ fn parse_passwd_entry(line: &[u8]) -> Option<PasswdEntry<'_>> {
 /// `home` was judged by `config::check_home_directory`, so it can't shift a
 /// field or start a line.
 pub fn edit_passwd_home(passwd: &[u8], configured_user: &str, home: &str) -> PasswdEdit {
-    let (user, group) = configured_user
-        .split_once(':')
-        .unwrap_or((configured_user, ""));
-    let uid = if user.is_empty() {
-        Some(0)
-    } else {
-        user.parse::<u32>().ok()
-    };
+    let (user, group) = split_configured_user(configured_user);
+    let uid = configured_uid(user);
     let group = group.parse::<u32>().ok();
 
     let selected = first_passwd_entry(passwd, |entry| match uid {

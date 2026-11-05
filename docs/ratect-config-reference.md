@@ -892,6 +892,11 @@ The nearest real project is
 - **Setup commands run as the same user.** A setup command with
   [`run_in`](#run_in-setup-commands-in-another-container) runs as its target's
   user instead.
+- **A non-root `user` on a rootless or userns-remap daemon gets a warning**, naming
+  the container and the field, when a run reaches it. It has only other users'
+  access to a bind mount the host user owns, so it usually can't write there or read
+  anything private. The run carries on, and
+  [`ratect doctor`](ratect-cli.md#doctor) reports the same.
 - **`user` and an enabled `run_as_current_user` can't be combined.** Each says
   who the container runs as, so setting both is rejected when the file loads.
   `groups` works with either.
@@ -925,6 +930,19 @@ on the daemon, and [`ratect doctor`](ratect-cli.md) says which kind you have:
 - **On a local Docker Desktop, OrbStack or similar on macOS or Windows, and on
   rootless and userns-remap daemons**, it is the image's own `USER`, or root if it
   has none. Ratect doesn't change it.
+
+A run warns on the remapped daemons, naming the container and `identity`, and carries
+on:
+
+- **On a userns-remap daemon**, always: every container user maps to a subordinate
+  host uid, root included, so the container has only other users' access to a bind
+  mount the host user owns, and what it does write has a subordinate owner. That
+  ownership has to be arranged on the host. The home is still guaranteed.
+  [`ratect doctor`](ratect-cli.md#doctor) reports this too.
+- **On a rootless or userns-remap daemon, when the image's `USER` isn't root**: it
+  meets the same mapping as a non-root
+  [`user`](#usergroupgroups-running-as-a-specific-user), with only other users' access
+  to such a mount. `doctor` doesn't report it, since it doesn't pull the image.
 
 These apply on every daemon:
 
