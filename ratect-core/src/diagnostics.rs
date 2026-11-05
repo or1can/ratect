@@ -14,7 +14,8 @@
 
 //! The checks behind `ratect doctor` and `ratect config validate` — what a
 //! [`Finding`] is, and the checks that produce one without a daemon
-//! connection of their own. Moved out of `ratect/src/main.rs` in 0.6.0, alongside
+//! connection of their own — and [`remapped_daemon_warning`], the hazards a run
+//! warns about and `doctor` reports in the same words. Moved out of `ratect/src/main.rs` in 0.6.0, alongside
 //! [`crate::resources`], for the same reason: these were pure functions bound
 //! to nothing, sitting in a binary because nobody had moved them yet.
 //!
@@ -32,8 +33,11 @@
 //! `Option<&D>` rather than requiring one, so a caller whose connection
 //! already failed can skip it without this module needing any opinion of its
 //! own on what "no connection" means or how that got decided.
+//! [`remapped_daemon_findings`] takes the class the same way, as a value the
+//! binary already read.
 
-use crate::config::{Config, VolumeMount, WholeProjectEvaluation};
+use crate::config::{Config, Container, VolumeMount, WholeProjectEvaluation};
+use crate::daemon_class::DaemonClass;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -259,6 +263,77 @@ pub fn docker_environment_findings(
     .filter_map(|(name, value)| crate::docker::boolean_variable::parse(name, value).err())
     .map(|error| Finding::Problem(error.to_string()))
     .collect()
+}
+
+/// What every non-host user on a remapped daemon runs into: probed for a `user`,
+/// an image's `USER` under `identity`, and on userns-remap for root as well
+/// (decisions/0011).
+pub(crate) const REMAPPED_MOUNT_ACCESS: &str = "it has only other users' access to a bind mount \
+     the host user owns, so it usually can't write there or read anything private";
+
+/// What `name`'s configuration runs into on a daemon of `class`, one of the two
+/// hazards [decisions/0011](../../decisions/0011-container-identity.md) warns
+/// about and never refuses: `identity` on userns-remap, and a non-root `user` on
+/// a remapped daemon. At most one, since the two fields can't be combined. The
+/// one wording of each, for a run's warning and `doctor`'s finding.
+pub fn remapped_daemon_warning(
+    name: &str,
+    container: &Container,
+    class: DaemonClass,
+) -> Option<String> {
+    if container.identity.is_some() {
+        return (class == DaemonClass::UsernsRemap).then(|| {
+            format!(
+                "Container '{name}' has 'identity' on a userns-remap daemon, which maps every \
+                 container user to a subordinate host uid — {REMAPPED_MOUNT_ACCESS}. Arrange \
+                 that ownership on the host. Its home is still guaranteed."
+            )
+        });
+    }
+    let user = container.user.as_ref()?.as_str();
+    if crate::user::is_root_user(user) {
+        return None;
+    }
+    match class {
+        DaemonClass::Rootless => Some(format!(
+            "Container '{name}' has a non-root 'user' on a rootless daemon, where only container \
+             root is the host user — {REMAPPED_MOUNT_ACCESS}."
+        )),
+        DaemonClass::UsernsRemap => Some(format!(
+            "Container '{name}' has a non-root 'user' on a userns-remap daemon, which maps every \
+             container user to a subordinate host uid — {REMAPPED_MOUNT_ACCESS}. Arrange that \
+             ownership on the host."
+        )),
+        DaemonClass::Desktop | DaemonClass::RootfulLinux => None,
+    }
+}
+
+/// `doctor`'s [`remapped_daemon_warning`] for every container that evaluated, by
+/// name, leaving out a base with no image and nothing to build, which nothing can
+/// run: the child that inherits its field is reported instead. `class` is `None`
+/// when it couldn't be read or nothing connected, which each have a finding of
+/// their own.
+pub fn remapped_daemon_findings(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+) -> Vec<Finding> {
+    let Some(class) = class else {
+        return Vec::new();
+    };
+    let mut warnings: Vec<(&String, String)> = evaluation
+        .evaluated
+        .containers
+        .iter()
+        .filter(|(_, container)| container.image.is_some() || container.build_directory.is_some())
+        .filter_map(|(name, container)| {
+            Some((name, remapped_daemon_warning(name, container, class)?))
+        })
+        .collect();
+    warnings.sort_unstable();
+    warnings
+        .into_iter()
+        .map(|(_, warning)| Finding::Warning(warning))
+        .collect()
 }
 
 /// Whether `content` is one of Batect's own wrapper scripts, by the notice

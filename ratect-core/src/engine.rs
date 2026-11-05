@@ -1140,6 +1140,8 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// `--tag-image`'s "did this container actually run" check once the
     /// whole invocation finishes (see `run_task`).
     containers_used: Mutex<HashSet<String>>,
+    /// Every warning [`warn_once`](Self::warn_once) has posted.
+    warned: Mutex<HashSet<String>>,
     /// A constructor argument (alongside `docker`), not a setting: this is a
     /// collaborator the engine talks to, not something it was told, and
     /// every caller has one to give it (a binary always constructs one,
@@ -1393,6 +1395,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             image_overrides: HashMap::new(),
             image_tags: HashMap::new(),
             containers_used: Mutex::new(HashSet::new()),
+            warned: Mutex::new(HashSet::new()),
             cleanup_after_success: true,
             cleanup_after_failure: true,
             max_parallelism: None,
@@ -1958,6 +1961,40 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                      network you trust. Use --no-proxy-vars if this run doesn't need the proxy."
                 )
                 .to_text(),
+            });
+        }
+    }
+
+    /// Warns about what `name`'s configuration runs into on this daemon
+    /// ([`crate::diagnostics::remapped_daemon_warning`]). Reached only for a
+    /// container this task's graph creates, so never one the run doesn't start.
+    /// Asks for the class only for a container with a field it could matter to,
+    /// and a class it can't read fails nothing here: an `identity` container has
+    /// already failed on that in `identity::host_user`, and any other runs
+    /// unwarned.
+    async fn warn_about_remapped_daemon(&self, name: &str, container: &Container) {
+        if container.identity.is_none() && container.user.is_none() {
+            return;
+        }
+        match self.docker.daemon_class().await {
+            Ok(class) => {
+                if let Some(warning) =
+                    crate::diagnostics::remapped_daemon_warning(name, container, class)
+                {
+                    self.warn_once(warning);
+                }
+            }
+            Err(error) => tracing::debug!("Daemon class unknown for '{name}': {error:#}"),
+        }
+    }
+
+    /// Posts `message` as a warning, unless this invocation already has. Each
+    /// task creates its own containers, so a prerequisite running the same one
+    /// would otherwise say the same thing again.
+    fn warn_once(&self, message: String) {
+        if self.warned.lock().unwrap().insert(message.clone()) {
+            self.event_sink.post(TaskEvent::Warning {
+                message: message.to_text(),
             });
         }
     }
@@ -3831,6 +3868,8 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         Some(_) => crate::identity::host_user(self.docker.as_ref(), name).await?,
                         None => None,
                     };
+                    self.warn_about_remapped_daemon(name, container_config)
+                        .await;
                     let image = self
                         .ensure_image_resolved(name, context.containers, context.image_cells)
                         .await?;
@@ -3963,6 +4002,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                                             self.docker.as_ref(),
                                             &spec,
                                             &id,
+                                            |warning| self.warn_once(warning),
                                         )
                                         .await;
                                         match applied {

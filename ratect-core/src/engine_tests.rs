@@ -275,6 +275,8 @@ struct FakeContainerRuntime {
     stop_windows: Arc<Mutex<HashMap<String, (tokio::time::Instant, Option<tokio::time::Instant>)>>>,
     // What `daemon_class` reports (see `with_daemon_class`).
     daemon_class: DaemonClass,
+    // Whether `daemon_class` fails instead (see `failing_daemon_class`).
+    daemon_class_fails: bool,
     // Container name -> what it is created with and holds on disk, and the
     // identity-file steps set to fail (see `with_image_user` and its
     // neighbours).
@@ -309,6 +311,7 @@ impl Default for FakeContainerRuntime {
     fn default() -> Self {
         Self {
             daemon_class: DaemonClass::RootfulLinux,
+            daemon_class_fails: false,
             created_facts: Default::default(),
             container_paths: Default::default(),
             failing_identity_steps: Default::default(),
@@ -413,6 +416,12 @@ impl FakeContainerRuntime {
     /// `RootfulLinux`.
     fn with_daemon_class(mut self, class: DaemonClass) -> Self {
         self.daemon_class = class;
+        self
+    }
+
+    /// Makes `daemon_class` fail, as a daemon whose `/info` can't be read does.
+    fn failing_daemon_class(mut self) -> Self {
+        self.daemon_class_fails = true;
         self
     }
 
@@ -1245,6 +1254,7 @@ fn fake_container_name(container_id: &str) -> &str {
 #[async_trait::async_trait]
 impl ContainerRuntime for FakeContainerRuntime {
     async fn daemon_class(&self) -> Result<DaemonClass> {
+        anyhow::ensure!(!self.daemon_class_fails, "the daemon's /info failed");
         Ok(self.daemon_class)
     }
 
@@ -19405,7 +19415,7 @@ async fn apply_adopting(
     volumes: Vec<crate::container_spec::BindMount>,
 ) -> Result<()> {
     let spec = adopting_spec(user, volumes).await;
-    crate::identity::apply(docker, &spec, "sidecar-id-app").await
+    crate::identity::apply(docker, &spec, "sidecar-id-app", |_| {}).await
 }
 
 fn written_to(docker: &FakeContainerRuntime, path: &str) -> Option<crate::docker::ContainerFile> {
@@ -19831,4 +19841,237 @@ async fn container_setup_is_unchanged_without_identity() {
     assert_eq!(spec.shared.identity, None);
     let environment = spec.shared.environment.unwrap_or_default();
     assert!(!environment.contains_key("HOME"));
+}
+
+// The hazards decisions/0011 warns about and never refuses (#237).
+
+/// `app`, with `configure` applied, running as task `run`, and `unrelated`, a
+/// container with both hazards' fields set that no task reaches.
+fn config_with_app(configure: impl FnOnce(&mut Container)) -> Config {
+    let mut app = container("alpine:3.18", None);
+    configure(&mut app);
+    let mut unrelated = container("alpine:3.18", None);
+    unrelated.user = Some(name_or_id("unrelated-user"));
+    let mut identity_unrelated = container("alpine:3.18", None);
+    identity_unrelated.identity = Some(crate::config::Identity {
+        home: "/home/unrelated".to_string(),
+    });
+    let mut containers = IndexMap::new();
+    containers.insert("app".to_string(), app);
+    containers.insert("unrelated".to_string(), unrelated);
+    containers.insert("identity-unrelated".to_string(), identity_unrelated);
+    let mut tasks = IndexMap::new();
+    tasks.insert("run".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+fn with_user(user: &str) -> impl FnOnce(&mut Container) + '_ {
+    move |app| app.user = Some(name_or_id(user))
+}
+
+/// Every warning `config` posts running `run` on `docker`, which completes.
+async fn warnings_running(config: Config, docker: FakeContainerRuntime) -> Vec<String> {
+    let sink = Arc::new(RecordingEventSink::default());
+    TaskEngine::new(
+        project(config),
+        docker,
+        sink.clone(),
+        crate::interrupt::Interrupt::new(),
+    )
+    .run_task("run", &[])
+    .await
+    .unwrap();
+    sink.events()
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::Warning { message } => Some(message.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_run_warns_about_a_non_root_user_on_a_remapped_daemon_and_completes() {
+    for class in [DaemonClass::Rootless, DaemonClass::UsernsRemap] {
+        let docker = FakeContainerRuntime::default().with_daemon_class(class);
+        let warnings = warnings_running(config_with_app(with_user("guest")), docker.clone()).await;
+        let [warning] = &warnings[..] else {
+            panic!("{class:?}: {warnings:?}");
+        };
+        assert!(warning.contains("'app'"), "{warning}");
+        assert!(warning.contains("'user'"), "{warning}");
+        assert!(docker.events().iter().any(|e| e.starts_with("run:app:")));
+    }
+}
+
+#[tokio::test]
+async fn a_run_warns_about_identity_on_userns_remap_and_completes() {
+    let docker = identity_runtime(DaemonClass::UsernsRemap);
+    let warnings = warnings_running(config_with_identity(|_| {}), docker.clone()).await;
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    for name in ["'app'", "'db'"] {
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains(name) && warning.contains("'identity'")),
+            "{name}: {warnings:?}"
+        );
+    }
+    assert!(docker.events().iter().any(|e| e.starts_with("run:app:")));
+}
+
+#[tokio::test]
+async fn a_run_says_nothing_where_there_is_no_hazard() {
+    for class in [DaemonClass::Desktop, DaemonClass::RootfulLinux] {
+        let docker = FakeContainerRuntime::default().with_daemon_class(class);
+        let warnings = warnings_running(config_with_app(with_user("guest")), docker).await;
+        assert_eq!(warnings, Vec::<String>::new(), "{class:?}");
+    }
+    let docker = FakeContainerRuntime::default().with_daemon_class(DaemonClass::Rootless);
+    let warnings = warnings_running(config_with_app(with_user("root")), docker).await;
+    assert_eq!(warnings, Vec::<String>::new());
+}
+
+/// `unrelated` and `identity-unrelated` each have a hazard's field, and this run
+/// never starts them. `app` has neither.
+#[tokio::test]
+async fn a_run_doesnt_warn_about_a_container_outside_the_tasks_graph() {
+    let docker = FakeContainerRuntime::default().with_daemon_class(DaemonClass::UsernsRemap);
+    let warnings = warnings_running(config_with_app(|_| {}), docker).await;
+    assert_eq!(warnings, Vec::<String>::new());
+}
+
+/// Each task creates `app` afresh, and the warning is the same each time.
+#[tokio::test]
+async fn a_prerequisite_running_the_same_container_doesnt_repeat_the_warning() {
+    let mut config = config_with_app(with_user("guest"));
+    config
+        .tasks
+        .insert("before".to_string(), task("app", "echo before"));
+    config.tasks.get_mut("run").unwrap().prerequisites = Some(vec!["before".to_string()]);
+    let docker = FakeContainerRuntime::default().with_daemon_class(DaemonClass::Rootless);
+    let warnings = warnings_running(config, docker).await;
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+}
+
+/// The `user` check is the first to ask a container with no `identity`'s
+/// daemon its class, and that container must still run.
+#[tokio::test]
+async fn a_daemon_class_that_cant_be_read_still_runs_a_container_with_user() {
+    let docker = FakeContainerRuntime::default().failing_daemon_class();
+    let warnings = warnings_running(config_with_app(with_user("guest")), docker.clone()).await;
+    assert_eq!(warnings, Vec::<String>::new());
+    assert!(docker.events().iter().any(|e| e.starts_with("run:app:")));
+}
+
+/// An `identity` container's own failure to read the class is unchanged.
+#[tokio::test]
+async fn a_daemon_class_that_cant_be_read_still_fails_identity() {
+    let docker = identity_runtime(DaemonClass::Desktop).failing_daemon_class();
+    let error = engine(config_with_identity(|_| {}), docker)
+        .run_task("run", &[])
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("'identity'"), "{error:#}");
+}
+
+#[tokio::test]
+async fn identity_warns_about_a_non_root_image_user_on_a_remapped_daemon() {
+    for class in [DaemonClass::Rootless, DaemonClass::UsernsRemap] {
+        let docker = identity_runtime(class).with_image_user("app", "node");
+        let warnings = warnings_running(config_with_identity(|_| {}), docker.clone()).await;
+        let image_warnings: Vec<_> = warnings
+            .iter()
+            .filter(|warning| warning.contains("non-root user"))
+            .collect();
+        let [warning] = &image_warnings[..] else {
+            panic!("{class:?}: {warnings:?}");
+        };
+        assert!(warning.contains("'app'"), "{warning}");
+        assert!(warning.contains("'identity'"), "{warning}");
+        assert!(warning.contains("'node'"), "{warning}");
+        assert!(docker.events().iter().any(|e| e.starts_with("run:app:")));
+    }
+}
+
+#[tokio::test]
+async fn identity_doesnt_warn_about_a_root_image_user_or_on_desktop() {
+    for user in ["", "0", "root", "0:0"] {
+        let docker = identity_runtime(DaemonClass::Rootless).with_image_user("app", user);
+        let warnings = warnings_running(config_with_identity(|_| {}), docker).await;
+        assert_eq!(warnings, Vec::<String>::new(), "{user:?}");
+    }
+    let docker = identity_runtime(DaemonClass::Desktop).with_image_user("app", "node");
+    let warnings = warnings_running(config_with_identity(|_| {}), docker).await;
+    assert_eq!(warnings, Vec::<String>::new());
+}
+
+/// A named user the image lacks leaves `identity` with nothing to edit, and the
+/// warning doesn't depend on that edit.
+#[tokio::test]
+async fn identity_warns_about_an_image_user_with_no_entry_to_edit() {
+    let docker = identity_runtime(DaemonClass::Rootless).with_image_user("app", "missing");
+    let warnings = warnings_running(config_with_identity(|_| {}), docker.clone()).await;
+    let [warning] = &warnings[..] else {
+        panic!("{warnings:?}");
+    };
+    assert!(warning.contains("'missing'"), "{warning}");
+    assert!(docker
+        .written_files()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+    assert!(docker.events().iter().any(|e| e.starts_with("run:app:")));
+}
+
+/// The warning is about the image's user, so a failed edit doesn't lose it.
+#[tokio::test]
+async fn identity_warns_about_the_image_user_even_when_the_run_then_fails() {
+    for step in ["read", "write"] {
+        let docker = identity_runtime(DaemonClass::Rootless)
+            .with_image_user("app", "node")
+            .failing_identity_step(step);
+        let sink = Arc::new(RecordingEventSink::default());
+        TaskEngine::new(
+            project(config_with_identity(|_| {})),
+            docker,
+            sink.clone(),
+            crate::interrupt::Interrupt::new(),
+        )
+        .run_task("run", &[])
+        .await
+        .unwrap_err();
+        assert!(
+            sink.events().iter().any(|event| matches!(
+                event,
+                TaskEvent::Warning { message } if message.to_string().contains("'node'")
+            )),
+            "{step}: {:?}",
+            sink.events()
+        );
+    }
+}
+
+#[test]
+fn a_non_root_image_user_under_identity_is_a_hazard_on_both_remapped_daemons() {
+    use crate::identity::image_user_warning;
+    for class in [DaemonClass::Rootless, DaemonClass::UsernsRemap] {
+        for user in ["node", "1000", "1000:1000"] {
+            let warning = image_user_warning("app", user, class).unwrap();
+            for expected in ["'app'", "'identity'", user, &class.to_string()] {
+                assert!(warning.contains(expected), "{expected}: {warning}");
+            }
+        }
+        for root in ["", "0", "root", "0:0", "root:wheel"] {
+            assert_eq!(image_user_warning("app", root, class), None, "{root:?}");
+        }
+    }
+    for class in [DaemonClass::Desktop, DaemonClass::RootfulLinux] {
+        assert_eq!(image_user_warning("app", "node", class), None, "{class:?}");
+    }
 }

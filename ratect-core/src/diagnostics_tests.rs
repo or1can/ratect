@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::config::LoadedProject;
+use crate::daemon_class::DaemonClass;
 use crate::docker::LabelledResource;
 use crate::resources::ResourceInventory;
 use std::collections::HashMap;
@@ -949,5 +950,218 @@ async fn a_bad_evaluated_identity_home_is_a_warning() {
                     && message.contains("is not an absolute path")
         )),
         "{findings:?}"
+    );
+}
+
+/// `user` and `identity` containers, each on its own and never in a task.
+async fn remapped_daemon_project() -> LoadedProject {
+    project_from(
+        "ratect.toml",
+        r#"
+ratect_version = "0.12.0"
+project_name = "demo"
+
+[containers.named]
+image = "alpine:3.18.2"
+user = "guest"
+
+[containers.numeric]
+image = "alpine:3.18.2"
+user = 1000
+
+[containers.root-by-id-text]
+image = "alpine:3.18.2"
+user = "0"
+
+[containers.root-by-id]
+image = "alpine:3.18.2"
+user = 0
+
+[containers.root-by-name]
+image = "alpine:3.18.2"
+user = "root"
+
+[containers.home]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+
+[containers.plain]
+image = "alpine:3.18.2"
+"#,
+    )
+    .await
+}
+
+fn remapped_warning_for(project: &LoadedProject, name: &str, class: DaemonClass) -> Option<String> {
+    remapped_daemon_warning(name, &project.config.containers[name], class)
+}
+
+#[tokio::test]
+async fn identity_is_a_hazard_only_on_userns_remap() {
+    let project = remapped_daemon_project().await;
+    let warning = remapped_warning_for(&project, "home", DaemonClass::UsernsRemap).unwrap();
+    for expected in [
+        "'home'",
+        "'identity'",
+        "userns-remap",
+        "on the host",
+        "home",
+    ] {
+        assert!(warning.contains(expected), "{expected}: {warning}");
+    }
+    for class in [
+        DaemonClass::Rootless,
+        DaemonClass::Desktop,
+        DaemonClass::RootfulLinux,
+    ] {
+        assert_eq!(
+            remapped_warning_for(&project, "home", class),
+            None,
+            "{class:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_non_root_user_is_a_hazard_on_both_remapped_daemons() {
+    let project = remapped_daemon_project().await;
+    for name in ["named", "numeric"] {
+        let rootless = remapped_warning_for(&project, name, DaemonClass::Rootless).unwrap();
+        for expected in [
+            &format!("'{name}'"),
+            "'user'",
+            "rootless",
+            "other users' access",
+        ] {
+            assert!(rootless.contains(expected), "{expected}: {rootless}");
+        }
+        let remap = remapped_warning_for(&project, name, DaemonClass::UsernsRemap).unwrap();
+        for expected in [
+            &format!("'{name}'"),
+            "'user'",
+            "userns-remap",
+            "on the host",
+        ] {
+            assert!(remap.contains(expected), "{expected}: {remap}");
+        }
+        for class in [DaemonClass::Desktop, DaemonClass::RootfulLinux] {
+            assert_eq!(
+                remapped_warning_for(&project, name, class),
+                None,
+                "{class:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn root_and_no_user_at_all_are_no_hazard_on_any_daemon() {
+    let project = remapped_daemon_project().await;
+    for name in ["root-by-id-text", "root-by-id", "root-by-name", "plain"] {
+        for class in [
+            DaemonClass::Rootless,
+            DaemonClass::UsernsRemap,
+            DaemonClass::Desktop,
+            DaemonClass::RootfulLinux,
+        ] {
+            assert_eq!(
+                remapped_warning_for(&project, name, class),
+                None,
+                "{name}: {class:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn remapped_daemon_findings_are_warnings_by_container_name() {
+    let project = remapped_daemon_project().await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let findings = remapped_daemon_findings(&evaluation, Some(DaemonClass::UsernsRemap));
+    let [Finding::Warning(home), Finding::Warning(named), Finding::Warning(numeric)] =
+        &findings[..]
+    else {
+        panic!("{findings:?}");
+    };
+    assert!(home.contains("'home'"), "{home}");
+    assert!(named.contains("'named'"), "{named}");
+    assert!(numeric.contains("'numeric'"), "{numeric}");
+}
+
+/// An unknown class and a failed connection each have their own finding, so
+/// this adds nothing to them.
+#[tokio::test]
+async fn remapped_daemon_findings_need_a_known_class() {
+    let project = remapped_daemon_project().await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    assert_eq!(remapped_daemon_findings(&evaluation, None), vec![]);
+}
+
+/// A value that can't be evaluated leaves its container out, as for the other
+/// checks reading evaluated values.
+#[tokio::test]
+async fn remapped_daemon_findings_leave_out_a_container_that_did_not_evaluate() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+ratect_version = "0.12.0"
+project_name = "demo"
+
+[containers.unset]
+image = "alpine:$UNSET_TAG"
+user = "guest"
+"#,
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    assert_eq!(
+        remapped_daemon_findings(&evaluation, Some(DaemonClass::Rootless)),
+        vec![]
+    );
+}
+
+/// A base has no image and nothing to build, so nothing can run it, and the
+/// child inheriting from it is the one reported.
+#[tokio::test]
+async fn remapped_daemon_findings_leave_out_a_base_nothing_can_run() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+ratect_version = "0.12.0"
+project_name = "demo"
+
+[containers.base-user]
+user = "guest"
+
+[containers.base-identity]
+identity = { home = "/home/me" }
+
+[containers.child]
+extends = "base-user"
+image = "alpine:3.18.2"
+
+[containers.child-of-identity]
+extends = "base-identity"
+build_directory = "."
+"#,
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let findings = remapped_daemon_findings(&evaluation, Some(DaemonClass::UsernsRemap));
+    let [Finding::Warning(child), Finding::Warning(child_of_identity)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    assert!(child.contains("'child'"), "{child}");
+    assert!(
+        child_of_identity.contains("'child-of-identity'"),
+        "{child_of_identity}"
     );
 }

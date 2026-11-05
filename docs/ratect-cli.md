@@ -437,6 +437,25 @@ otherwise. A daemon reached over the network is classified by what it reports, s
 it is never `desktop`. If the daemon answers but its class can't be read, that is
 a warning.
 
+The class also decides two warnings about containers in the project, whichever
+task reaches them, leaving out a base with no image or `build_directory`, which
+nothing can run:
+
+- **`identity` on a userns-remap daemon.** Every container user maps to a subordinate
+  host uid, root included, so the container has only other users' access to a bind
+  mount the host user owns, and what it does write has a subordinate owner. That
+  ownership has to be arranged on the host. Its
+  [home](ratect-config-reference.md#identity-a-guaranteed-home) is still guaranteed.
+- **A non-root `user` on a rootless or userns-remap daemon.** The container has only
+  other users' access to a bind mount the host user owns, so it usually can't write
+  there or read anything private. A `user` of `0` or `root` isn't reported.
+
+Neither stops a run, and a run reaching such a container warns about it too. `doctor`
+can't report the third thing a run warns about, an `identity` container whose image
+runs it as a non-root user on either daemon: the image's user isn't in the
+configuration, the image may not be local, and `doctor` doesn't pull it. `config
+validate` reports none of these, since it doesn't connect to a daemon.
+
 A **problem** will fail a run — an unreachable daemon, a configuration that doesn't
 load, a `build_directory` or Dockerfile a build can't use. A **warning** works but is
 likely to bite: a floating image tag (`latest`, or no tag at all) means the same
