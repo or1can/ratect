@@ -97,8 +97,8 @@
 //! bollard its socket — those keyrings are held in a local `Vec` and
 //! explicitly dropped *after* the build stream is drained, since dropping one
 //! stops the agent that every `RUN --mount=type=ssh` in the build depends on.
-//! `ensure_host_volume_directories_exist` (the `run_as_current_user` host-dir
-//! pre-creation step) only `mkdir -p`s a bind's source when it's a *host*
+//! `ensure_host_volume_directories_exist` (the host-dir pre-creation step of a
+//! container running as the host user) only `mkdir -p`s a bind's source when it's a *host*
 //! source (`BindSource::Host` — a `CacheType::Volume` cache is a
 //! `BindSource::Volume` name, 0.18.0, not a host path), *doesn't already
 //! exist* (an existing directory Docker reuses, or a single file/socket the
