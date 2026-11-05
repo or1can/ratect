@@ -37,7 +37,11 @@ pre-creation applies there, and only there, over a local socket, and a remote
 daemon's edge is recorded under Consequences. Probing it found a cache at
 `~/.cargo/registry` leaving `~/.cargo` root's, so the hand-over reaches every directory
 on the way to a mount, keeping its mode, rather than the home alone at `0755`, and
-leaves one inside another mount alone.
+leaves one inside another mount alone. Probed while implementing the hazard warnings
+([#237](https://github.com/or1can/ratect/issues/237)), on Docker 29.9.3 rootless and
+userns-remap: the mapping below holds, the access it leaves is stated, and an image's
+non-root `USER` under `identity` meets it as `user` does, so those are no longer
+inferences.
 
 
 ## Context
@@ -144,8 +148,10 @@ Resolved once per connection, from `docker info`:
   host ownership of bind-mount writes cannot be delivered by any `--user`
   value. Docker's own
   [userns-remap page](https://docs.docker.com/engine/security/userns-remap/)
-  says bind-mount "file ownership must be pre-arranged". That is Docker's
-  documented behaviour; it has not been probed against a real daemon.
+  says bind-mount "file ownership must be pre-arranged". Probed (#237): writes to a
+  world-writable mount landed on `100000` and `101234` for container 0 and 1234,
+  container root could neither write to a host-owned `0755` mount nor list a `0700`
+  one, and a directory chowned on the host to `101234` took 1234's writes.
 
   Both strings verified against moby's [`info.go`](https://github.com/moby/moby/blob/master/daemon/info.go)
   (`fillSecurityOptions`, where `name=userns` is added whenever the daemon's
@@ -253,15 +259,16 @@ runs it.
 
 ### Passthrough hazards
 
-A non-root `user` on a remapped daemon does not write as the host user: under
-rootless it reproduces the unreadable-bind-mount failure the probes found, and
-under userns-remap it lands on a subordinate uid like every other container
-user. It stays a passthrough — that is what an escape hatch is — but a run
-reaching such a container prints a warning, and `ratect doctor` reports a
-finding naming the hazard. An `identity` whose running user is non-root because
-the image says so should meet the same mapping (inferred from the `--user` probe,
-not probed itself), so a run prints that warning too. `doctor` can't report it:
-the image's user isn't in the configuration, and the image may not be local.
+A non-root `user` on a remapped daemon does not write as the host user: it has only
+other users' access to a bind mount the host user owns, so it can't write to a `0755`
+one or read a `0600` file or `0700` directory there (probed on both, #237). That
+includes the host's own uid as `user`, which under rootless is the failure the
+original probes found, and under userns-remap container root as well. It stays a
+passthrough — that is what an escape hatch is — but a run reaching such a container
+prints a warning, and `ratect doctor` reports a finding naming the hazard. An
+`identity` whose running user is non-root because the image says so meets the same
+mapping (probed on both, #237), so a run prints that warning too. `doctor` can't
+report it: the image's user isn't in the configuration, and the image may not be local.
 
 ## Alternatives considered
 
@@ -285,7 +292,7 @@ the image's user isn't in the configuration, and the image may not be local.
   but not change the other's (probed), so sharing a cache between identities
   needs file modes only the tools or the image control. The upload also
   widened a `700` cache to `755`, and on a remapped daemon would hand a host
-  directory to a subordinate uid (Docker's documented mapping, not probed). Ratect takes ownership only for a user it chose.
+  directory to a subordinate uid (the mapping probed in #237). Ratect takes ownership only for a user it chose.
 - **The passwd edit alone for `$HOME`.** Rejected: an image's `ENV HOME` beats it
   (probed).
 - **Refusing a `HOME` in `environment` beside `identity`.** Rejected: written by
@@ -377,8 +384,7 @@ the image's user isn't in the configuration, and the image may not be local.
 - **On userns-remap, `identity` delivers only the home guarantee.** Host
   ownership of bind-mount writes is impossible there by design of the
   daemon, not something Ratect could fix; the warning and `doctor` finding
-  say so rather than letting the declared intent go quietly unmet. Its
-  behaviour here rests on Docker's documentation, not a probe.
+  say so rather than letting the declared intent go quietly unmet.
 - Effects on open work: [#107](https://github.com/or1can/ratect/issues/107)
   shrinks to "declare users the image lacks" or closes, since the image's
   users now survive; [#225](https://github.com/or1can/ratect/issues/225)'s
