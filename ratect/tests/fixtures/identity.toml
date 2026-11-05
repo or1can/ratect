@@ -1,11 +1,14 @@
-# A native `ratect.toml` fixture for `identity`'s home guarantee (ratect#235,
-# decisions/0011), and the project the reference page points at. A rootful Linux
-# daemon refuses `identity`, so CI, which has one, can't run it: its test only
-# loads it, and the real behaviour was checked by hand on macOS. To repeat that:
+# A native `ratect.toml` fixture for `identity` (ratect#235, ratect#236,
+# decisions/0011), and the project the reference page points at. On a rootful
+# Linux daemon, which is what CI has, `identity_on_a_rootful_daemon_*` in
+# `ratect/tests/cli.rs` run its tasks, and bind mounts and an image holding the
+# host's own uid are in a project those tests write themselves. Elsewhere the
+# home guarantee alone applies, and was checked by hand on macOS. To repeat that:
 #
 #     ratect run -f ratect/tests/fixtures/identity.toml show-home
 #
-# which prints the configured home twice, then the directory created for it.
+# which prints the running user, its groups, then the configured home twice, then
+# the directory created for it.
 ratect_version = "0.13.0"
 project_name = "ratect-identity-test"
 
@@ -14,5 +17,54 @@ image = "alpine:3.18.2"
 identity = { home = "/home/me" }
 groups = ["wheel"]
 
+# The image has a `node` user, which adopting the host user has to leave there.
+[containers.node]
+image = "node:22.11.0-alpine3.20"
+identity = { home = "/home/me" }
+
+# `ENV HOME` in the image.
+[containers.from-image]
+build_directory = "identity-image"
+identity = { home = "/home/me" }
+
+# The same image's root-owned `700` directory, which a fresh volume takes its owner
+# and mode from. Its own container, so only the test that removes the volume makes it.
+[containers.private-cache-user]
+build_directory = "identity-image"
+identity = { home = "/home/me" }
+volumes = [
+    { type = "cache", name = "ratect-identity-test-private", container = "/private-cache", scope = "shared" },
+]
+
+[containers.cache-user]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+volumes = [
+    { type = "cache", name = "ratect-identity-test-fresh", container = "/cache", scope = "shared" },
+]
+
+# A cache below a directory only the daemon's making of the mount created.
+[containers.deep-cache-user]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+volumes = [
+    { type = "cache", name = "ratect-identity-test-deep", container = "/home/me/.tool/registry", scope = "shared" },
+]
+
 [tasks.show-home]
-run = { container = "build-env", command = """sh -c 'echo $HOME; getent passwd $(id -u); ls -ld ~'""" }
+run = { container = "build-env", command = """sh -c 'whoami; id -G; echo $HOME; getent passwd $(id -u); ls -ld ~'""" }
+
+[tasks.show-node]
+run = { container = "node", command = """sh -c 'getent passwd node'""" }
+
+[tasks.show-image-home]
+run = { container = "from-image", command = """sh -c 'echo $HOME'""" }
+
+[tasks.show-private-cache]
+run = { container = "private-cache-user", command = """sh -c 'stat -c "%a %u" /private-cache; touch /private-cache/marker'""" }
+
+[tasks.write-cache]
+run = { container = "cache-user", command = """sh -c 'cat /cache/marker 2>/dev/null; echo written > /cache/marker'""" }
+
+[tasks.write-beside-deep-cache]
+run = { container = "deep-cache-user", command = "touch /home/me/marker /home/me/.tool/marker /home/me/.tool/registry/marker" }

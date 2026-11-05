@@ -82,11 +82,11 @@ struct PasswdCase {
     passwd: &'static [u8],
     user: &'static str,
     contents: &'static [u8],
-    owner: Option<HomeOwner>,
+    owner: Option<DirectoryOwner>,
 }
 
-fn owner(uid: u32, gid: u32) -> Option<HomeOwner> {
-    Some(HomeOwner { uid, gid })
+fn owner(uid: u32, gid: u32) -> Option<DirectoryOwner> {
+    Some(DirectoryOwner { uid, gid })
 }
 
 const NODE: &[u8] = b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n";
@@ -283,4 +283,205 @@ fn edit_passwd_home_changes_only_the_running_users_home() {
         assert_eq!(edit.contents, case.contents, "{}", case.name);
         assert_eq!(edit.home_owner, case.owner, "{}", case.name);
     }
+}
+
+fn host_user(uid: u32, gid: u32, username: &str, groupname: &str) -> CurrentUser {
+    CurrentUser {
+        uid,
+        gid,
+        username: username.to_string(),
+        groupname: groupname.to_string(),
+    }
+}
+
+/// An image's `/etc/passwd` with the quirks real ones have: a comment, a blank
+/// line, a line that isn't UTF-8 and a line too short to have a home.
+const QUIRKY_PASSWD: &[u8] = b"# system users\n\nroot:x:0:0:root:/root:/bin/ash\n\
+    caf\xe9:x:70:70::/home/caf\xe9:/bin/sh\nshort:x:71:71\n";
+
+#[test]
+fn edit_passwd_for_host_user_covers_every_case() {
+    struct Case {
+        name: &'static str,
+        passwd: &'static [u8],
+        user: CurrentUser,
+        contents: &'static [u8],
+    }
+    let me = host_user(1000, 20, "me", "staff");
+    let cases = [
+        Case {
+            name: "uid absent: an entry named after the host user is appended",
+            passwd: b"root:x:0:0:root:/root:/bin/ash\n",
+            user: me.clone(),
+            contents: b"root:x:0:0:root:/root:/bin/ash\nme:*:1000:20::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "uid absent, name taken by another uid: named with the uid's digits",
+            passwd: b"me:x:70:70::/var/me:/bin/sh\n",
+            user: me.clone(),
+            contents: b"me:x:70:70::/var/me:/bin/sh\n1000:*:1000:20::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "uid present: its name, gid and everything else stay, only the home moves",
+            passwd: b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000:Node:/home/node:/bin/bash\n",
+            user: me.clone(),
+            contents: b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000:Node:/home/me:/bin/bash\n",
+        },
+        Case {
+            name: "uid present twice: the first entry, the one the runtime uses",
+            passwd: b"a:x:1000:1::/a:/bin/sh\nb:x:1000:2::/b:/bin/sh\n",
+            user: me.clone(),
+            contents: b"a:x:1000:1::/home/me:/bin/sh\nb:x:1000:2::/b:/bin/sh\n",
+        },
+        Case {
+            name: "uid present on a line too short to have a home: it gets one",
+            passwd: b"me2:x:1000:1\n",
+            user: me.clone(),
+            contents: b"me2:x:1000:1::/home/me\n",
+        },
+        Case {
+            name: "host root present: the same edit, on root",
+            passwd: b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n",
+            user: host_user(0, 0, "root", "root"),
+            contents: b"root:x:0:0:root:/home/me:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n",
+        },
+        Case {
+            name: "host root absent: the same append",
+            passwd: b"",
+            user: host_user(0, 0, "root", "root"),
+            contents: b"root:*:0:0::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "an absent file counts as empty",
+            passwd: b"",
+            user: me.clone(),
+            contents: b"me:*:1000:20::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "no trailing newline: the appended entry starts a new line",
+            passwd: b"root:x:0:0:root:/root:/bin/ash",
+            user: me.clone(),
+            contents: b"root:x:0:0:root:/root:/bin/ash\nme:*:1000:20::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "a name only in a comment isn't taken",
+            passwd: b"#me:x:70:70::/var/me:/bin/sh\n",
+            user: me.clone(),
+            contents: b"#me:x:70:70::/var/me:/bin/sh\nme:*:1000:20::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "every line not being edited keeps its bytes",
+            passwd: QUIRKY_PASSWD,
+            user: host_user(70, 20, "me", "staff"),
+            contents: b"# system users\n\nroot:x:0:0:root:/root:/bin/ash\n\
+                caf\xe9:x:70:70::/home/me:/bin/sh\nshort:x:71:71\n",
+        },
+    ];
+    for case in cases {
+        assert_eq!(
+            String::from_utf8_lossy(&edit_passwd_for_host_user(case.passwd, &case.user, HOME)),
+            String::from_utf8_lossy(case.contents),
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn edit_passwd_for_host_user_appends_after_every_quirk_untouched() {
+    let mut expected = QUIRKY_PASSWD.to_vec();
+    expected.extend_from_slice(b"me:*:1000:20::/home/me:/bin/sh\n");
+    assert_eq!(
+        edit_passwd_for_host_user(QUIRKY_PASSWD, &host_user(1000, 20, "me", "staff"), HOME),
+        expected
+    );
+}
+
+#[test]
+fn edit_group_for_host_user_covers_every_case() {
+    struct Case {
+        name: &'static str,
+        group: &'static [u8],
+        user: CurrentUser,
+        contents: Option<&'static [u8]>,
+    }
+    let me = host_user(1000, 20, "me", "staff");
+    let cases = [
+        Case {
+            name: "gid and name free: an entry is appended",
+            group: b"root:x:0:root\n",
+            user: me.clone(),
+            contents: Some(b"root:x:0:root\nstaff:x:20:\n"),
+        },
+        Case {
+            name: "gid taken: the entry is reused untouched",
+            group: b"dialout:x:20:node\n",
+            user: me.clone(),
+            contents: None,
+        },
+        Case {
+            name: "only the name taken: nothing is appended",
+            group: b"staff:x:50:\n",
+            user: me.clone(),
+            contents: None,
+        },
+        Case {
+            name: "gid and name both taken, on different entries: nothing is appended",
+            group: b"dialout:x:20:\nstaff:x:50:\n",
+            user: me.clone(),
+            contents: None,
+        },
+        Case {
+            name: "host root with a root group: reused",
+            group: b"root:x:0:\n",
+            user: host_user(0, 0, "root", "root"),
+            contents: None,
+        },
+        Case {
+            name: "an absent file counts as empty",
+            group: b"",
+            user: host_user(0, 0, "root", "root"),
+            contents: Some(b"root:x:0:\n"),
+        },
+        Case {
+            name: "no trailing newline: the appended entry starts a new line",
+            group: b"root:x:0:",
+            user: me.clone(),
+            contents: Some(b"root:x:0:\nstaff:x:20:\n"),
+        },
+        Case {
+            name: "a comment, a blank line and a line that isn't UTF-8 stay as they are",
+            group: b"# groups\n\ncaf\xe9:x:70:\nshort\n",
+            user: me.clone(),
+            contents: Some(b"# groups\n\ncaf\xe9:x:70:\nshort\nstaff:x:20:\n"),
+        },
+        Case {
+            name: "a gid or name only in a comment isn't taken",
+            group: b"#staff:x:20:\n",
+            user: me.clone(),
+            contents: Some(b"#staff:x:20:\nstaff:x:20:\n"),
+        },
+    ];
+    for case in cases {
+        assert_eq!(
+            edit_group_for_host_user(case.group, &case.user).as_deref(),
+            case.contents,
+            "{}",
+            case.name
+        );
+    }
+}
+
+/// Every caller says what asked, since `identity` reaches this on a Windows client
+/// with a remote rootful daemon, and `run_as_current_user` is no word of theirs.
+#[test]
+fn only_on_unix_says_what_asked() {
+    assert_eq!(
+        only_on_unix("'identity' on a rootful Linux daemon").to_string(),
+        "'identity' on a rootful Linux daemon is only supported on Unix hosts"
+    );
+    assert_eq!(
+        only_on_unix("'run_as_current_user'").to_string(),
+        "'run_as_current_user' is only supported on Unix hosts"
+    );
 }

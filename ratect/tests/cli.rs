@@ -4620,12 +4620,11 @@ fn a_signal_while_connecting_wins_over_the_failed_connect() {
     assert!(!stderr.contains("Error:"), "stderr:\n{stderr}");
 }
 
-/// `identity`'s fixture (ratect#235), loaded and no more: the daemon this suite's
-/// `docker-integration` job has is rootful Linux, which refuses `identity`, so
-/// the container's behaviour is proven against the fake runtime, and by hand.
+/// `identity`'s fixture (ratect#235), loaded, on any machine. The tests below run
+/// its tasks, but only on a rootful Linux daemon.
 #[test]
 fn the_identity_fixture_loads() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/identity.toml");
+    let fixture = identity_fixture_path();
     let output = ratect_command()
         .args(["tasks", "list", "-o", "quiet", "-f"])
         .arg(fixture)
@@ -4636,5 +4635,333 @@ fn the_identity_fixture_loads() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "show-home\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "show-home\nshow-image-home\nshow-node\nshow-private-cache\nwrite-beside-deep-cache\nwrite-cache\n"
+    );
+}
+
+fn identity_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/identity.toml")
+}
+
+/// Whether this daemon is one `identity` makes the process the host user on. A
+/// developer's Mac or rootless daemon isn't, and those skip the tests below. CI's
+/// is, and nothing there can make this `false`, as a skip would hide a failure.
+fn on_a_rootful_linux_daemon() -> bool {
+    let options = Command::new("docker")
+        .args(["info", "--format", "{{.SecurityOptions}}"])
+        .output()
+        .expect("failed to run docker info");
+    let options = String::from_utf8_lossy(&options.stdout);
+    let rootful =
+        cfg!(target_os = "linux") && !options.contains("rootless") && !options.contains("userns");
+    if !rootful {
+        eprintln!("skipped: needs a rootful Linux daemon");
+    }
+    rootful
+}
+
+fn host_id(flag: &str) -> u32 {
+    let output = Command::new("id").arg(flag).output().unwrap();
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+/// Runs `task` of the project at `config`, successfully, and returns its stdout.
+fn run_identity_task(config: &Path, task: &str) -> String {
+    let output = ratect_command()
+        .arg("-f")
+        .arg(config)
+        .args(["run", task])
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "{task}:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    stdout
+}
+
+/// `whoami` has a name to print, `$HOME` and the passwd entry both say the
+/// configured home, and `groups` adds to the host user's own.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_runs_as_the_host_user_with_a_name_and_a_home() {
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    let stdout = run_identity_task(&identity_fixture_path(), "show-home");
+    let lines: Vec<&str> = stdout.lines().collect();
+    let [whoami, groups, home, passwd, listed] = &lines[..] else {
+        panic!("{stdout}");
+    };
+    assert!(!whoami.trim().is_empty(), "{stdout}");
+    let groups: Vec<&str> = groups.split_whitespace().collect();
+    assert_eq!(groups[0], host_id("-g").to_string(), "{stdout}");
+    assert!(groups.contains(&"10"), "`wheel` in {groups:?}");
+    assert_eq!(*home, "/home/me", "{stdout}");
+    let fields: Vec<&str> = passwd.split(':').collect();
+    assert_eq!(fields[0], *whoami, "{stdout}");
+    assert_eq!(fields[2], host_id("-u").to_string(), "{stdout}");
+    assert_eq!(fields[5], "/home/me", "{stdout}");
+    assert!(listed.contains(whoami), "the home is the user's: {stdout}");
+}
+
+/// Adding to the image's files leaves its users there.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_keeps_the_images_own_users() {
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    let stdout = run_identity_task(&identity_fixture_path(), "show-node");
+    assert!(stdout.contains("node:x:1000:"), "{stdout}");
+}
+
+/// The image's `ENV HOME` would otherwise beat the passwd edit.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_sets_home_over_the_images_env() {
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    let stdout = run_identity_task(&identity_fixture_path(), "show-image-home");
+    assert_eq!(stdout.trim(), "/home/me");
+}
+
+/// Removes these volumes however the test ends.
+struct RemoveVolumes(&'static [&'static str]);
+
+impl RemoveVolumes {
+    fn remove(&self) {
+        for volume in self.0 {
+            let _ = Command::new("docker")
+                .args(["volume", "rm", "-f", volume])
+                .output();
+        }
+    }
+}
+
+impl Drop for RemoveVolumes {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
+fn volume_is_listed(volume: &str) -> bool {
+    let output = Command::new("docker")
+        .args(["volume", "ls", "-q", "--filter"])
+        .arg(format!("name=^{volume}$"))
+        .output()
+        .expect("failed to run docker volume ls");
+    String::from_utf8_lossy(&output.stdout).trim() == volume
+}
+
+/// A fresh volume is root's, and the host user can write to it. Run twice, since
+/// the first run starts clean by definition, and judged by `docker volume ls`,
+/// since an exit code passes whether or not this volume was the one used: the
+/// second run reads what the first wrote, on the volume that was listed.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_makes_a_fresh_cache_volume_writable() {
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    const VOLUME: &str = "ratect-shared-cache-ratect-identity-test-fresh";
+    let volumes = RemoveVolumes(&[VOLUME]);
+    volumes.remove();
+    assert!(!volume_is_listed(VOLUME), "left from an earlier run");
+
+    let first = run_identity_task(&identity_fixture_path(), "write-cache");
+    assert!(!first.contains("written"), "{first}");
+    assert!(volume_is_listed(VOLUME));
+
+    let second = run_identity_task(&identity_fixture_path(), "write-cache");
+    assert!(second.contains("written"), "{second}");
+    assert!(volume_is_listed(VOLUME));
+
+    volumes.remove();
+    assert!(!volume_is_listed(VOLUME));
+}
+
+/// A cache at `~/.tool/registry` makes the daemon create `~` and `~/.tool` as root,
+/// and the host user has to be able to write in both. Docker itself leaves them.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_hands_over_what_a_deep_mount_made() {
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    const VOLUME: &str = "ratect-shared-cache-ratect-identity-test-deep";
+    let volumes = RemoveVolumes(&[VOLUME]);
+    volumes.remove();
+    run_identity_task(&identity_fixture_path(), "write-beside-deep-cache");
+    assert!(volume_is_listed(VOLUME));
+}
+
+/// A writable cache below a read-only mount is a usual layout, and an upload into
+/// that mount is refused, so it can't be how the cache is taken.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn identity_on_a_rootful_daemon_claims_a_cache_below_a_read_only_mount() {
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    const VOLUME: &str = "ratect-shared-cache-ratect-identity-below-read-only";
+    let volumes = RemoveVolumes(&[VOLUME]);
+    volumes.remove();
+    let project = unique_project_dir();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveOnDrop(project.clone());
+    std::fs::create_dir(project.join("source")).unwrap();
+    let config = project.join("ratect.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"ratect_version = "{version}"
+project_name = "ratect-identity-below-read-only-test"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = {{ home = "/home/me" }}
+volumes = [
+    {{ local = "./source", container = "/code", options = "ro" }},
+    {{ type = "cache", name = "ratect-identity-below-read-only", container = "/code/target", scope = "shared" }},
+]
+
+[tasks.check]
+run = {{ container = "app", command = "touch /code/target/marker" }}
+"#,
+            version = written_for_version()
+        ),
+    )
+    .unwrap();
+
+    run_identity_task(&config, "check");
+    assert!(volume_is_listed(VOLUME));
+}
+
+/// Taking a volume keeps its mode, on the first run and on the one that finds it
+/// taken. It takes its `700` and root owner from the image's directory.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_keeps_a_claimed_volumes_mode() {
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    const VOLUME: &str = "ratect-shared-cache-ratect-identity-test-private";
+    let volumes = RemoveVolumes(&[VOLUME]);
+    volumes.remove();
+    for run in 1..=2 {
+        let stdout = run_identity_task(&identity_fixture_path(), "show-private-cache");
+        assert_eq!(stdout.trim(), format!("700 {}", host_id("-u")), "run {run}");
+        assert!(volume_is_listed(VOLUME), "run {run}");
+    }
+}
+
+/// Everything the host's own filesystem has to show, and an image with an entry
+/// at the runner's own uid, which needs that uid baked in, so this project is
+/// written here rather than checked in. A file written into a bind mount and the
+/// mount points nested inside it are the host user's, which only the
+/// `runs_as_host_user` this class sets arranges, and the entry keeps its name and
+/// gid. A runner that is root has no uid to give an image a second entry for,
+/// and root owns everything regardless.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn identity_on_a_rootful_daemon_leaves_host_files_owned_and_keeps_an_existing_entry() {
+    use std::os::unix::fs::MetadataExt;
+
+    let _guard = shared_docker();
+    let uid = host_id("-u");
+    if !on_a_rootful_linux_daemon() || uid == 0 {
+        return;
+    }
+    let scratch = unique_project_dir();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveOnDrop(scratch.clone());
+    let project = scratch.join("project");
+    let sources = scratch.join("sources");
+    std::fs::create_dir_all(project.join("image")).unwrap();
+    std::fs::create_dir_all(sources.join("directory")).unwrap();
+    std::fs::write(sources.join("file.txt"), "nested").unwrap();
+    std::fs::write(
+        project.join("image/Dockerfile"),
+        format!(
+            "FROM alpine:3.18.2\n\
+             RUN echo 'kept-name:x:{uid}:4242:kept gecos:/home/old:/bin/ash' >> /etc/passwd\n"
+        ),
+    )
+    .unwrap();
+    let config = project.join("ratect.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"ratect_version = "{version}"
+project_name = "ratect-identity-host-test"
+
+[containers.app]
+build_directory = "image"
+identity = {{ home = "/home/me" }}
+volumes = [
+    {{ local = ".", container = "/code" }},
+    {{ local = "../sources/directory", container = "/code/nested/directory" }},
+    {{ local = "../sources/file.txt", container = "/code/config/file.txt" }},
+]
+
+[tasks.check]
+run = {{ container = "app", command = """sh -c 'whoami; getent passwd $(id -u); touch /code/marker'""" }}
+"#,
+            version = written_for_version()
+        ),
+    )
+    .unwrap();
+
+    let stdout = run_identity_task(&config, "check");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "kept-name".to_string(),
+            format!("kept-name:x:{uid}:4242:kept gecos:/home/me:/bin/ash")
+        ],
+        "only the home moved"
+    );
+
+    for (path, is_file) in [
+        ("marker", true),
+        ("nested", false),
+        ("nested/directory", false),
+        ("config", false),
+        ("config/file.txt", true),
+    ] {
+        let metadata = std::fs::symlink_metadata(project.join(path))
+            .unwrap_or_else(|error| panic!("{path}: {error}"));
+        assert_eq!(metadata.is_file(), is_file, "{path}");
+        assert_eq!(metadata.uid(), uid, "{path} should be the host user's");
+    }
 }

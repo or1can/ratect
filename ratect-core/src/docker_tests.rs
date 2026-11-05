@@ -2288,6 +2288,7 @@ async fn create_request(network: ContainerNetwork) -> (Option<String>, serde_jso
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -3726,7 +3727,7 @@ fn only_paths_under_docker_desktops_own_directories_are_special() {
 async fn container_config_creates_host_directories_only_for_a_container_running_as_the_host_user() {
     let dir = unique_temp_dir();
     let missing = dir.join("missing");
-    let (client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
+    let (mut client, _) = client_for_recording_daemon(|_, _| (404, String::new())).await;
     let mut spec = spec_from(
         &crate::config::Container::default(),
         crate::labels::ContainerRole::Task,
@@ -3738,9 +3739,53 @@ async fn container_config_creates_host_directories_only_for_a_container_running_
 
     spec.shared.runs_as_host_user = true;
     client.container_config(&spec).unwrap();
+    assert!(!missing.exists(), "the stub daemon is on `tcp://`");
+
+    client.daemon_host = "unix:///var/run/docker.sock".to_string();
+    client.container_config(&spec).unwrap();
     assert!(missing.is_dir());
 
     fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Directories can only be made for a daemon sharing this filesystem, so
+/// `identity` makes none over the network, where one would land on the wrong
+/// machine, or fail a run for a path only the daemon's has. `run_as_current_user`
+/// is Batect's, which makes them whatever the connection.
+#[test]
+fn host_directories_are_created_only_for_a_local_daemon_unless_user_mapped() {
+    let mapping = UserMapping {
+        user: crate::user::CurrentUser {
+            uid: 1000,
+            gid: 20,
+            username: "me".to_string(),
+            groupname: "staff".to_string(),
+        },
+        home_directory: "/home/me".to_string(),
+        cache_directories: Vec::new(),
+    };
+    let mut spec = spec_from(
+        &crate::config::Container::default(),
+        crate::labels::ContainerRole::Task,
+    );
+    assert!(!creates_host_directories(
+        &spec.shared,
+        Transport::LocalSocket
+    ));
+
+    spec.shared.runs_as_host_user = true;
+    assert!(creates_host_directories(
+        &spec.shared,
+        Transport::LocalSocket
+    ));
+    assert!(!creates_host_directories(&spec.shared, Transport::Network));
+
+    spec.shared.user_mapping = Some(mapping);
+    assert!(creates_host_directories(
+        &spec.shared,
+        Transport::LocalSocket
+    ));
+    assert!(creates_host_directories(&spec.shared, Transport::Network));
 }
 
 fn build_spec_with(
@@ -4008,6 +4053,7 @@ fn spec_from(
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -5490,7 +5536,7 @@ async fn create_container_directories_uploads_only_the_new_ones() {
             "new-id",
             "/var",
             "home/users/me",
-            crate::user::HomeOwner { uid: 1000, gid: 20 },
+            crate::user::DirectoryOwner { uid: 1000, gid: 20 },
         )
         .await
         .unwrap();
@@ -5536,7 +5582,7 @@ async fn create_container_directories_fails_naming_what_it_was_creating() {
             "new-id",
             "/",
             "home/me",
-            crate::user::HomeOwner { uid: 0, gid: 0 },
+            crate::user::DirectoryOwner { uid: 0, gid: 0 },
         )
         .await
         .unwrap_err();
@@ -5593,10 +5639,10 @@ async fn created_container_facts_fails_without_the_docker_id() {
 /// The first entry's owner is all that is wanted of a directory's archive, so a
 /// huge one, or one cut off after it, doesn't matter.
 #[tokio::test]
-async fn container_directory_uid_reads_the_first_entrys_owner() {
+async fn container_directory_ownership_reads_the_first_entrys_owner_and_mode() {
     let archive = build_new_directories_tar(
         Path::new("me"),
-        crate::user::HomeOwner { uid: 1000, gid: 20 },
+        crate::user::DirectoryOwner { uid: 1000, gid: 20 },
     )
     .unwrap();
     // Without the end-of-archive blocks, as a stream dropped early would be.
@@ -5607,12 +5653,18 @@ async fn container_directory_uid_reads_the_first_entrys_owner() {
     })
     .await;
 
-    let uid = client
-        .container_directory_uid("new-id", "/home/me")
+    let ownership = client
+        .container_directory_ownership("new-id", "/home/me")
         .await
         .unwrap();
 
-    assert_eq!(uid, 1000);
+    assert_eq!(
+        ownership,
+        DirectoryOwnership {
+            uid: 1000,
+            mode: 0o755
+        }
+    );
     assert_eq!(
         log.lock().unwrap()[0].query_pairs(),
         [("path".to_string(), "%2Fhome%2Fme".to_string())]
@@ -5620,18 +5672,77 @@ async fn container_directory_uid_reads_the_first_entrys_owner() {
 }
 
 #[tokio::test]
-async fn container_directory_uid_fails_naming_the_path() {
+async fn container_directory_ownership_fails_naming_the_path() {
     for (status, body, expected) in [
         (500, r#"{"message":"read refused"}"#, "read refused"),
         (200, "", "Failed to read '/home/me'"),
     ] {
         let (client, _) = client_for_recording_daemon(move |_, _| (status, body.to_string())).await;
         let error = client
-            .container_directory_uid("new-id", "/home/me")
+            .container_directory_ownership("new-id", "/home/me")
             .await
             .unwrap_err();
         let error = format!("{error:#}");
         assert!(error.contains("Failed to read '/home/me'"), "{error}");
         assert!(error.contains(expected), "{error}");
     }
+}
+
+/// An upload at `/`, since the path's parent can be a read-only mount, whose one
+/// entry names the directory, which is what makes the daemon apply its owner and
+/// mode to a mount point. Nothing under it is in the archive, so nothing changes.
+#[tokio::test]
+async fn set_container_directory_ownership_uploads_one_entry_keeping_the_mode() {
+    let (client, log) = client_for_recording_daemon(|_, _| (200, String::new())).await;
+    let owner = crate::user::DirectoryOwner { uid: 1000, gid: 20 };
+
+    client
+        .set_container_directory_ownership("new-id", "/var/cache/app", owner, 0o700)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        log.lock().unwrap()[0].query_pairs(),
+        [("path".to_string(), "%2F".to_string())]
+    );
+    let tar = build_directory_ownership_tar("/var/cache/app", owner, 0o700).unwrap();
+    let mut archive = tar::Archive::new(tar.as_slice());
+    let entries: Vec<_> = archive
+        .entries()
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let header = entry.header();
+            assert_eq!(header.entry_type(), tar::EntryType::Directory);
+            (
+                header.path().unwrap().into_owned(),
+                header.uid().unwrap(),
+                header.gid().unwrap(),
+                header.mode().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [(PathBuf::from("var/cache/app/"), 1000, 20, 0o700)]
+    );
+}
+
+#[tokio::test]
+async fn set_container_directory_ownership_fails_naming_the_path() {
+    let (client, _) =
+        client_for_recording_daemon(|_, _| (500, r#"{"message":"upload refused"}"#.to_string()))
+            .await;
+    let error = client
+        .set_container_directory_ownership(
+            "new-id",
+            "/cache",
+            crate::user::DirectoryOwner { uid: 1000, gid: 20 },
+            0o755,
+        )
+        .await
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("'/cache'"), "{error}");
+    assert!(error.contains("upload refused"), "{error}");
 }

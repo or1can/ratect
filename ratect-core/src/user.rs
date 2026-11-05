@@ -20,17 +20,20 @@
 //! conflicting `root` entry.
 //!
 //! Those replace the image's files, which is `ratect-compat`'s contract.
-//! `identity` edits them instead ([`edit_passwd_home`], decisions/0011). Its
-//! input is whatever an image shipped, so it is bytes throughout, and a line it
-//! isn't editing is never decoded, reflowed or re-terminated.
+//! `identity` edits them instead (decisions/0011): [`edit_passwd_home`] where the
+//! running user stays the image's, and [`edit_passwd_for_host_user`] and
+//! [`edit_group_for_host_user`] where it becomes the host user. Their input is
+//! whatever an image shipped, so it is bytes throughout, and a line they aren't
+//! editing is never decoded, reflowed or re-terminated.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 /// The host user Ratect itself is running as — looked up once per
 /// `run_as_current_user`-enabled container (see
-/// `TaskEngine::resolve_user_mapping`), not cached, since there's only ever
-/// one real host user per process.
+/// `TaskEngine::resolve_user_mapping`) and once per `identity` container on a
+/// rootful Linux daemon (`identity::host_user`), not cached, since there's only
+/// ever one real host user per process.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentUser {
     pub uid: u32,
@@ -43,9 +46,9 @@ pub struct CurrentUser {
 /// own testing has been Unix-only so far (see the `crossterm` caveat for
 /// interactive mode), and there's no meaningful "current uid/gid" concept to
 /// map a container onto on other platforms, so this errors clearly rather
-/// than guessing.
+/// than guessing, saying `asked_by`, what needed the user.
 #[cfg(unix)]
-pub fn current_user() -> Result<CurrentUser> {
+pub fn current_user(_asked_by: &str) -> Result<CurrentUser> {
     use nix::unistd::{Gid, Group, Uid, User};
 
     let uid = Uid::current();
@@ -67,10 +70,14 @@ pub fn current_user() -> Result<CurrentUser> {
 }
 
 #[cfg(not(unix))]
-pub fn current_user() -> Result<CurrentUser> {
-    Err(anyhow::anyhow!(
-        "'run_as_current_user' is only supported on Unix hosts"
-    ))
+pub fn current_user(asked_by: &str) -> Result<CurrentUser> {
+    Err(only_on_unix(asked_by))
+}
+
+/// [`current_user`]'s failure on a host with no uid or gid to map onto.
+#[cfg_attr(unix, allow(dead_code))]
+fn only_on_unix(asked_by: &str) -> anyhow::Error {
+    anyhow::anyhow!("{asked_by} is only supported on Unix hosts")
 }
 
 /// The current host user's home directory — used to anchor the Git include
@@ -142,10 +149,10 @@ pub fn generate_group_file(user: &CurrentUser) -> String {
     }
 }
 
-/// Who owns a home directory `identity` creates: the numeric ids an archive
-/// entry takes, since Docker's archive API has no use for a name.
+/// Who `identity` makes a directory's owner: the numeric ids an archive entry
+/// takes, since Docker's archive API has no use for a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HomeOwner {
+pub struct DirectoryOwner {
     pub uid: u32,
     pub gid: u32,
 }
@@ -158,7 +165,7 @@ pub struct PasswdEdit {
     /// Who the running user turned out to be. `None` for a named user with no
     /// entry, where `contents` is the file unchanged: the container can't start
     /// as a user its image lacks, and the runtime says so when it tries.
-    pub home_owner: Option<HomeOwner>,
+    pub home_owner: Option<DirectoryOwner>,
 }
 
 /// One `/etc/passwd` line, read as the runtime reads it: a name, and whatever
@@ -177,20 +184,22 @@ struct PasswdEntry<'a> {
 
 const PASSWD_HOME_FIELD: usize = 5;
 
-fn parse_passwd_entry(line: &[u8]) -> Option<PasswdEntry<'_>> {
+/// Where in `line` its entry is, without the spaces around it. `None` for a
+/// comment or a blank line, which aren't entries.
+fn entry_range(line: &[u8]) -> Option<std::ops::Range<usize>> {
     let start = line.iter().position(|byte| !byte.is_ascii_whitespace())?;
     let end = line.iter().rposition(|byte| !byte.is_ascii_whitespace())? + 1;
+    (line[start] != b'#').then_some(start..end)
+}
+
+fn parse_id(field: Option<&&[u8]>) -> Option<u32> {
+    std::str::from_utf8(field?).ok()?.parse().ok()
+}
+
+fn parse_passwd_entry(line: &[u8]) -> Option<PasswdEntry<'_>> {
+    let std::ops::Range { start, end } = entry_range(line)?;
     let text = &line[start..end];
-    if text[0] == b'#' {
-        return None;
-    }
     let fields: Vec<&[u8]> = text.splitn(7, |byte| *byte == b':').collect();
-    let number = |index: usize| {
-        std::str::from_utf8(fields.get(index)?)
-            .ok()?
-            .parse::<u32>()
-            .ok()
-    };
     let (home, separators_needed) = match fields.get(PASSWD_HOME_FIELD) {
         Some(home) => {
             // Every field before the home, each with its separator.
@@ -204,8 +213,8 @@ fn parse_passwd_entry(line: &[u8]) -> Option<PasswdEntry<'_>> {
     };
     Some(PasswdEntry {
         name: fields[0],
-        uid: number(2),
-        gid: number(3),
+        uid: parse_id(fields.get(2)),
+        gid: parse_id(fields.get(3)),
         home,
         separators_needed,
     })
@@ -244,26 +253,18 @@ pub fn edit_passwd_home(passwd: &[u8], configured_user: &str, home: &str) -> Pas
     };
     let group = group.parse::<u32>().ok();
 
-    let mut position = 0;
-    for line in passwd.split_inclusive(|byte| *byte == b'\n') {
-        let selected = parse_passwd_entry(line).filter(|entry| match uid {
-            Some(uid) => entry.uid == Some(uid),
-            None => entry.name == user.as_bytes(),
-        });
-        if let Some(entry) = selected {
-            let mut contents = passwd[..position + entry.home.start].to_vec();
-            contents.resize(contents.len() + entry.separators_needed, b':');
-            contents.extend_from_slice(home.as_bytes());
-            contents.extend_from_slice(&passwd[position + entry.home.end..]);
-            return PasswdEdit {
-                contents,
-                home_owner: Some(HomeOwner {
-                    uid: entry.uid.unwrap_or(0),
-                    gid: group.or(entry.gid).unwrap_or(0),
-                }),
-            };
-        }
-        position += line.len();
+    let selected = first_passwd_entry(passwd, |entry| match uid {
+        Some(uid) => entry.uid == Some(uid),
+        None => entry.name == user.as_bytes(),
+    });
+    if let Some((position, entry)) = selected {
+        return PasswdEdit {
+            contents: with_passwd_home(passwd, position, &entry, home),
+            home_owner: Some(DirectoryOwner {
+                uid: entry.uid.unwrap_or(0),
+                gid: group.or(entry.gid).unwrap_or(0),
+            }),
+        };
     }
 
     let Some(uid) = uid else {
@@ -278,15 +279,97 @@ pub fn edit_passwd_home(passwd: &[u8], configured_user: &str, home: &str) -> Pas
     } else {
         uid.to_string()
     };
-    let mut contents = passwd.to_vec();
+    PasswdEdit {
+        contents: with_passwd_entry_appended(passwd, &name, uid, gid, home),
+        home_owner: Some(DirectoryOwner { uid, gid }),
+    }
+}
+
+/// Makes an image's `/etc/passwd` agree with `user`, the host user the process
+/// runs as on a rootful Linux daemon. Its uid's first entry, the one the runtime
+/// uses, keeps its name and gid and gets `home`; the process's gid is `--user`'s
+/// whatever the entry says. A uid with no entry gets one appended, named after
+/// `user`, or with the uid's digits if the image uses that name for another uid.
+///
+/// `home` is as [`edit_passwd_home`]'s is.
+pub fn edit_passwd_for_host_user(passwd: &[u8], user: &CurrentUser, home: &str) -> Vec<u8> {
+    if let Some((position, entry)) = first_passwd_entry(passwd, |entry| entry.uid == Some(user.uid))
+    {
+        return with_passwd_home(passwd, position, &entry, home);
+    }
+    let name_taken =
+        first_passwd_entry(passwd, |entry| entry.name == user.username.as_bytes()).is_some();
+    let name = if name_taken {
+        user.uid.to_string()
+    } else {
+        user.username.clone()
+    };
+    with_passwd_entry_appended(passwd, &name, user.uid, user.gid, home)
+}
+
+/// What an image's `/etc/group` should become for `user`, the host user the
+/// process runs as on a rootful Linux daemon, or `None` to leave it alone: an
+/// entry named after `user`'s group is appended only if neither its gid nor that
+/// name is in the file. A group entry only gives `id` and `ls` a name to print, so
+/// on a clash there is nothing worth inventing one for.
+pub fn edit_group_for_host_user(group: &[u8], user: &CurrentUser) -> Option<Vec<u8>> {
+    let taken = group.split_inclusive(|byte| *byte == b'\n').any(|line| {
+        let Some(entry) = entry_range(line) else {
+            return false;
+        };
+        let mut fields = line[entry].split(|byte| *byte == b':');
+        let name = fields.next();
+        let gid = fields.nth(1);
+        name == Some(user.groupname.as_bytes()) || parse_id(gid.as_ref()) == Some(user.gid)
+    });
+    (!taken).then(|| with_line_appended(group, &format!("{}:x:{}:", user.groupname, user.gid)))
+}
+
+/// The first entry of `passwd` that `selected` accepts, with where its line
+/// starts.
+fn first_passwd_entry<'a>(
+    passwd: &'a [u8],
+    selected: impl Fn(&PasswdEntry) -> bool,
+) -> Option<(usize, PasswdEntry<'a>)> {
+    let mut position = 0;
+    for line in passwd.split_inclusive(|byte| *byte == b'\n') {
+        if let Some(entry) = parse_passwd_entry(line).filter(&selected) {
+            return Some((position, entry));
+        }
+        position += line.len();
+    }
+    None
+}
+
+/// `passwd` with `entry`, on the line at `position`, given `home`.
+fn with_passwd_home(passwd: &[u8], position: usize, entry: &PasswdEntry, home: &str) -> Vec<u8> {
+    let mut contents = passwd[..position + entry.home.start].to_vec();
+    contents.resize(contents.len() + entry.separators_needed, b':');
+    contents.extend_from_slice(home.as_bytes());
+    contents.extend_from_slice(&passwd[position + entry.home.end..]);
+    contents
+}
+
+/// `passwd` with a new entry for `uid`, password `*`.
+fn with_passwd_entry_appended(
+    passwd: &[u8],
+    name: &str,
+    uid: u32,
+    gid: u32,
+    home: &str,
+) -> Vec<u8> {
+    with_line_appended(passwd, &format!("{name}:*:{uid}:{gid}::{home}:/bin/sh"))
+}
+
+/// `file` with `line` as its new last line.
+fn with_line_appended(file: &[u8], line: &str) -> Vec<u8> {
+    let mut contents = file.to_vec();
     if !contents.is_empty() && contents.last() != Some(&b'\n') {
         contents.push(b'\n');
     }
-    contents.extend_from_slice(format!("{name}:*:{uid}:{gid}::{home}:/bin/sh\n").as_bytes());
-    PasswdEdit {
-        contents,
-        home_owner: Some(HomeOwner { uid, gid }),
-    }
+    contents.extend_from_slice(line.as_bytes());
+    contents.push(b'\n');
+    contents
 }
 
 #[cfg(test)]

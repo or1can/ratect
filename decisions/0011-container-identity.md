@@ -31,7 +31,14 @@ OrbStack then found a mount below the home making the daemon create it as root,
 which left a non-root running user unable to write to its own home, so that one
 case is handed over. It also found a `tmpfs` above the home hiding what is created,
 which is refused, and a `..` in `home` meaning different directories to Docker's
-stat and upload, which is refused at load.
+stat and upload, which is refused at load. Refined while implementing rootful
+Linux ([#236](https://github.com/or1can/ratect/issues/236)): host-side mount
+pre-creation applies there, and only there, over a local socket, and a remote
+daemon's edge is recorded under Consequences. Probing it found a cache at
+`~/.cargo/registry` leaving `~/.cargo` root's, so the hand-over reaches every directory
+on the way to a mount, keeping its mode, rather than the home alone at `0755`, and
+leaves one inside another mount alone.
+
 
 ## Context
 
@@ -182,6 +189,12 @@ and appending or editing — never replacing**:
   every `identity` container one person runs has the same one. A volume another
   user owns is left alone, and so is a directory cache, which Ratect has already
   created as the host user.
+- Create what a mount needs on the host first, as the host user, as
+  `run_as_current_user` does: a missing bind source, or a mount point nested inside
+  a host mount, would otherwise be created by the daemon as root in the user's own
+  project. On desktop the files are already host-owned, a rootless daemon creates
+  them as the user, and on userns-remap ownership has to be arranged on the host
+  anyway.
 
 On **desktop** and **remapped** daemons: **`--user` is not applied, no cache changes
 owner, and no existing directory does beyond [the one case below](#the-home-guarantee).** On desktop and rootless the ownership outcome already holds
@@ -220,11 +233,15 @@ On every daemon class, however the entry above was reached:
 - **A mount below the home is the exception to "untouched".** The daemon creates
   each bind mount's and volume's destination and its parents as root on the first
   archive call, even a stat, so by the time Ratect can look, a directory made for
-  `~/.ssh` looks like a root-owned one the image shipped. With a mount below `home`, none at
-  it, root as its owner and a non-root running user, it goes to the running user.
-  That also hands over a root-owned home an image shipped, which naming it as this
-  user's home asks for. It is in the container's layer, since nothing is mounted at
-  it, so the host is untouched.
+  `~/.ssh` or `~/.cargo/registry` looks like a root-owned one the image shipped. Each
+  directory from `home` down to a mount, with root as its owner and a non-root running
+  user, goes to the running user, keeping its mode, unless it is at or inside another
+  mount. That also hands over a root-owned one an image shipped, which naming that
+  path as this user's home asks for, though not what is in it. It is all in the
+  container's layer, so the host is untouched. Docker offers nothing here: `--user`
+  with such a mount leaves these directories root's (probed). Podman chowns a working
+  directory and a fresh volume to the running user, but not their parents (read in
+  libpod, not probed).
 - **The identity files are read as untrusted bytes.** An absent `/etc/passwd`
   (`scratch`) is an empty one. A symbolic link, a mount at that path or at `/etc`,
   or a file over 1 MiB is an error naming the container. Every line not being edited is
@@ -344,8 +361,19 @@ the image's user isn't in the configuration, and the image may not be local.
   its users have to arrange themselves.
 - **Accepted edge:** an entrypoint that drops privileges (`postgres`) runs as a
   user other than the running user, whose home doesn't move.
+- **Accepted edge:** a `working_directory` below `home` that isn't a mount leaves it
+  and `home` root-owned, as Docker creates them (probed). Treating it as
+  a mount would hand over a project directory an image shipped, for a rare layout
+  that a mount at it avoids.
 - **Accepted edge:** a `tmpfs` at `home` masks what was created there, so under a
   non-root running user its options have to allow that user to write.
+- **Accepted edge:** a Mac or Linux client reaching a Linux daemon over `ssh://` or
+  `tcp://` classifies as rootful Linux, and the host identity stays that of the user
+  running Ratect. Ratect can't create directories on a remote host, so it skips the
+  pre-creation above unless the connection is a local socket, since on this machine
+  it would leave stray directories or fail a run over a path only the daemon has. The
+  daemon creates a missing source as root. A Windows client there has no host identity to adopt, so
+  the run fails naming `identity` and the container.
 - **On userns-remap, `identity` delivers only the home guarantee.** Host
   ownership of bind-mount writes is impossible there by design of the
   daemon, not something Ratect could fix; the warning and `doctor` finding

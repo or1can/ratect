@@ -139,15 +139,6 @@ fn dumb_term_environment() -> HashMap<String, String> {
     HashMap::from([("TERM".to_string(), "dumb".to_string())])
 }
 
-/// Whether a mount's Docker options mark it read-only — the `ro` flag in the
-/// comma-separated list Docker itself parses. `rw` is the default and needs
-/// no special casing.
-fn is_read_only(options: &Option<String>) -> bool {
-    options
-        .as_deref()
-        .is_some_and(|o| o.split(',').any(|flag| flag.trim() == "ro"))
-}
-
 /// What one container's setup-command gate needs that isn't in the commands
 /// themselves — the declaring container, and what it takes to `exec` into it.
 /// Bundled rather than passed as six parameters, matching
@@ -2349,7 +2340,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             return Ok(None);
         }
 
-        let user = crate::user::current_user()?;
+        let user = crate::user::current_user("'run_as_current_user'")?;
         let home_directory = run_as_current_user
             .home_directory
             .clone()
@@ -2367,7 +2358,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 // starts, where it previously worked. Nothing needs to write
                 // to it either, which is the whole point of `ro`. Batect
                 // doesn't skip it, so its run fails there instead.
-                crate::config::VolumeMount::Cache(cache) if !is_read_only(&cache.options) => {
+                crate::config::VolumeMount::Cache(cache)
+                    if !crate::container_spec::is_read_only(&cache.options) =>
+                {
                     Some(cache.container.clone())
                 }
                 _ => None,
@@ -3834,9 +3827,10 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .get(name)
                         .with_context(|| undeclared_container_bug(name))?;
                     let is_root = name == context.root;
-                    if container_config.identity.is_some() {
-                        crate::identity::check_supported(self.docker.as_ref(), name).await?;
-                    }
+                    let identity_host_user = match &container_config.identity {
+                        Some(_) => crate::identity::host_user(self.docker.as_ref(), name).await?,
+                        None => None,
+                    };
                     let image = self
                         .ensure_image_resolved(name, context.containers, context.image_cells)
                         .await?;
@@ -3904,6 +3898,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             interactive,
                             additional_args,
                             user_mapping: user_mapping.as_ref(),
+                            identity_host_user: identity_host_user.as_ref(),
                             volumes: volumes.as_ref(),
                             term_var: term_var.as_ref(),
                             proxy: proxy.as_ref(),

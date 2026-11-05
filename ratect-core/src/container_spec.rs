@@ -67,6 +67,7 @@ use crate::config::{BuildSecret, Container, NetworkMode, TaskContainerCustomisat
 use crate::docker::UserMapping;
 use crate::labels::{ContainerRole, RunLabels};
 use crate::proxy::ProxyEnvironment;
+use crate::user::CurrentUser;
 
 /// Which network a container is on — derived once, by [`resolve_network`],
 /// from its own `network_mode` and consumed as a whole by `docker.rs`, so
@@ -288,15 +289,17 @@ pub struct SharedContainerSpec {
     /// Whether this container runs as the host's own user. When it does,
     /// the host directories its mounts need are created first, as that user,
     /// so Docker's daemon doesn't auto-create them as `root:root`
-    /// (`docker.rs`'s `ensure_host_volume_directories_exist`). The one value
-    /// that decision consults, whatever made the container run as the host
-    /// user.
+    /// (`docker.rs`'s `ensure_host_volume_directories_exist`), unless an
+    /// `identity` is reaching its daemon over the network. The one value that
+    /// decision consults, whatever made the container run as the host user.
     pub runs_as_host_user: bool,
     /// The user this container's process and its own setup commands run as,
-    /// in the runtime's `user[:group]` form: the mapped `uid:gid` under
-    /// [`user_mapping`](Self::user_mapping), otherwise the passthrough `user`
-    /// and `group` as written. `None` leaves the image's own user alone.
-    /// The loader refuses a container with both, so neither takes precedence.
+    /// in the runtime's `user[:group]` form: the host's `uid:gid` under
+    /// [`user_mapping`](Self::user_mapping) or an
+    /// [`identity`](Self::identity) that adopts the host user, otherwise the
+    /// passthrough `user` and `group` as written. `None` leaves the image's own
+    /// user alone. The loader refuses a container with more than one of those,
+    /// so none takes precedence.
     pub process_user: Option<String>,
     /// `Some` when this container's own `run_as_current_user` is enabled.
     /// When present: [`process_user`](Self::process_user) is the mapped
@@ -323,11 +326,16 @@ pub struct SharedContainerSpec {
 }
 
 /// What a container's `identity` asks of the run: what is left of it once the
-/// config has been evaluated.
+/// config has been evaluated and the daemon's class is known.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IdentityPlan {
     /// The configured home, a path inside the container.
     pub home: String,
+    /// The user the process is to run as, on a rootful Linux daemon, the one
+    /// class where adopting the host identity means that
+    /// ([`crate::identity::host_user`]). `None` leaves the image's own user
+    /// alone.
+    pub host_user: Option<CurrentUser>,
 }
 
 /// One resolved `local` or `cache` volume mount — what becomes one of
@@ -374,6 +382,15 @@ impl BindMount {
             None => format!("{source}:{}", self.container),
         }
     }
+}
+
+/// Whether a mount's Docker options mark it read-only — the `ro` flag in the
+/// comma-separated list Docker itself parses. `rw` is the default and needs
+/// no special casing.
+pub(crate) fn is_read_only(options: &Option<String>) -> bool {
+    options
+        .as_deref()
+        .is_some_and(|o| o.split(',').any(|flag| flag.trim() == "ro"))
 }
 
 /// One container's complete, owned runtime specification — the argument
@@ -494,6 +511,8 @@ pub struct ContainerSpecInputs<'a> {
     /// Empty for a dependency — see [`ContainerSpec::additional_args`].
     pub additional_args: &'a [String],
     pub user_mapping: Option<&'a UserMapping>,
+    /// See [`IdentityPlan::host_user`].
+    pub identity_host_user: Option<&'a CurrentUser>,
     pub volumes: Option<&'a Vec<BindMount>>,
     /// The host's own `TERM` (when it has one), or `TERM=dumb` under the
     /// interleaved output policy — the same for every container, see
@@ -527,6 +546,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         interactive,
         additional_args,
         user_mapping,
+        identity_host_user,
         volumes,
         term_var,
         proxy,
@@ -594,6 +614,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         .as_ref()
         .map(|identity| IdentityPlan {
             home: identity.home.clone(),
+            host_user: identity_host_user.cloned(),
         });
     // Over the image's own `ENV HOME`, which would otherwise beat the passwd
     // edit, and under a `HOME` the project wrote, whose author stated it.
@@ -638,6 +659,13 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         dns_options: container_config.dns_options.clone(),
     };
     let labels = run_labels.for_container(name, role, container_config.labels.as_ref());
+    // From the plan rather than the input, so only a container with an
+    // `identity` can get one this way.
+    let host_user = user_mapping
+        .map(|mapping| &mapping.user)
+        .or(identity.as_ref().and_then(|plan| plan.host_user.as_ref()));
+    let runs_as_host_user = host_user.is_some();
+    let process_user = process_user(container_config, host_user);
 
     ContainerSpec {
         shared: SharedContainerSpec {
@@ -648,8 +676,8 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
             volumes: volumes.cloned(),
             environment,
             network,
-            runs_as_host_user: user_mapping.is_some(),
-            process_user: process_user(container_config, user_mapping),
+            runs_as_host_user,
+            process_user,
             user_mapping: user_mapping.cloned(),
             identity,
             network_options,
@@ -927,9 +955,9 @@ fn device_triples(
 }
 
 /// See [`SharedContainerSpec::process_user`].
-fn process_user(container: &Container, user_mapping: Option<&UserMapping>) -> Option<String> {
-    if let Some(mapping) = user_mapping {
-        return Some(format!("{}:{}", mapping.user.uid, mapping.user.gid));
+fn process_user(container: &Container, host_user: Option<&CurrentUser>) -> Option<String> {
+    if let Some(user) = host_user {
+        return Some(format!("{}:{}", user.uid, user.gid));
     }
     let user = container.user.as_ref()?.as_str();
     Some(match &container.group {

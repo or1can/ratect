@@ -1531,6 +1531,14 @@ pub struct ContainerFile {
     pub gid: u64,
 }
 
+/// A directory's owner and permission bits, as its archive entry says: the
+/// archive API's stat doesn't return the owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryOwnership {
+    pub uid: u64,
+    pub mode: u32,
+}
+
 /// The first file in a tar `archive`, which is all the archive API sends for a
 /// path that is one. Pure (no Docker involved), so it's unit-testable directly.
 fn parse_container_file_tar(archive: &[u8]) -> Result<ContainerFile> {
@@ -1557,12 +1565,16 @@ fn parse_container_file_tar(archive: &[u8]) -> Result<ContainerFile> {
     })
 }
 
-/// The owner of the first entry in `archive`, which may be incomplete, or `None`
-/// if it doesn't hold a whole header yet.
-fn first_entry_uid(archive: &[u8]) -> Option<u64> {
+/// The owner and mode of the first entry in `archive`, which may be incomplete,
+/// or `None` if it doesn't hold a whole header yet.
+fn first_entry_ownership(archive: &[u8]) -> Option<DirectoryOwnership> {
     let mut archive = tar::Archive::new(archive);
     let entry = archive.entries().ok()?.next()?.ok()?;
-    entry.header().uid().ok()
+    let header = entry.header();
+    Some(DirectoryOwnership {
+        uid: header.uid().ok()?,
+        mode: header.mode().ok()? & 0o7777,
+    })
 }
 
 /// A one-file archive to extract into `path`'s parent, carrying `file`'s owner
@@ -1589,7 +1601,10 @@ fn build_container_file_tar(path: &str, file: &ContainerFile) -> Result<Vec<u8>>
 /// it is extracted: each ancestor root-owned, the last owned by `owner`, all
 /// mode `0755`. See [`ContainerRuntime::create_container_directories`] for what
 /// that does to one that exists. Pure, as [`parse_container_file_tar`] is.
-fn build_new_directories_tar(relative: &Path, owner: crate::user::HomeOwner) -> Result<Vec<u8>> {
+fn build_new_directories_tar(
+    relative: &Path,
+    owner: crate::user::DirectoryOwner,
+) -> Result<Vec<u8>> {
     let mut builder = tar::Builder::new(Vec::new());
     let mut path = PathBuf::new();
     let mut components = relative.components().peekable();
@@ -1700,6 +1715,33 @@ fn build_owned_directory_tar(path: &str, uid: u32, gid: u32) -> Result<Vec<u8>> 
         .context("Failed to finalize directory archive")
 }
 
+/// An archive to extract at `/` that gives the existing directory at `path` to
+/// `owner` at `mode`. At `/`, not `path`'s parent as
+/// [`build_owned_directory_tar`]'s is, since the daemon refuses an upload into
+/// a read-only mount, and a writable mount can sit below one. Pure, as that is.
+fn build_directory_ownership_tar(
+    path: &str,
+    owner: crate::user::DirectoryOwner,
+    mode: u32,
+) -> Result<Vec<u8>> {
+    let relative = Path::new(path)
+        .strip_prefix("/")
+        .with_context(|| format!("'{}' is not an absolute path", printable(path)))?;
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(tar::EntryType::Directory);
+    header.set_mode(mode);
+    header.set_uid(owner.uid.into());
+    header.set_gid(owner.gid.into());
+    header.set_size(0);
+    let mut builder = tar::Builder::new(Vec::new());
+    builder
+        .append_data(&mut header, relative, std::io::empty())
+        .with_context(|| format!("Invalid directory '{}'", printable(path)))?;
+    builder
+        .into_inner()
+        .context("Failed to finalize the directory's archive")
+}
+
 /// The parent directory `build_owned_directory_tar`'s entry should be
 /// extracted into — `/` if `path` has no parent (e.g. `/home`).
 fn owned_directory_parent(path: &str) -> String {
@@ -1709,6 +1751,19 @@ fn owned_directory_parent(path: &str) -> String {
         .unwrap_or(Path::new("/"))
         .to_string_lossy()
         .into_owned()
+}
+
+/// Whether [`ensure_host_volume_directories_exist`] applies to this container: it
+/// runs as the host user, and this filesystem is the one its daemon mounts from.
+/// Over the network it isn't, and nothing here can reach that one, so the daemon
+/// makes what is missing. `run_as_current_user` makes them regardless, as Batect
+/// does.
+fn creates_host_directories(
+    shared: &crate::container_spec::SharedContainerSpec,
+    transport: Transport,
+) -> bool {
+    shared.runs_as_host_user
+        && (shared.user_mapping.is_some() || transport == Transport::LocalSocket)
 }
 
 /// Creates what a container running as the host user needs on the host and
@@ -2083,9 +2138,25 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
         file: &ContainerFile,
     ) -> Result<()>;
 
-    /// The owner of the directory at `path` in `container_id`, created but not
-    /// started, which an archive's first entry says. The rest isn't read.
-    async fn container_directory_uid(&self, container_id: &str, path: &str) -> Result<u64>;
+    /// The owner and mode of the directory at `path` in `container_id`, created
+    /// but not started, which an archive's first entry says. The rest isn't read.
+    async fn container_directory_ownership(
+        &self,
+        container_id: &str,
+        path: &str,
+    ) -> Result<DirectoryOwnership>;
+
+    /// Gives the existing directory at `path` in `container_id`, created but not
+    /// started, to `owner` at `mode`, leaving what is in it alone. Through a bind
+    /// mount or a volume at `path`, that reaches what is mounted, whatever is
+    /// mounted above it.
+    async fn set_container_directory_ownership(
+        &self,
+        container_id: &str,
+        path: &str,
+        owner: crate::user::DirectoryOwner,
+        mode: u32,
+    ) -> Result<()>;
 
     /// Creates `relative`'s directories under the existing directory `into`
     /// in `container_id`, created but not started: each ancestor root-owned,
@@ -2097,7 +2168,7 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
         container_id: &str,
         into: &str,
         relative: &str,
-        owner: crate::user::HomeOwner,
+        owner: crate::user::DirectoryOwner,
     ) -> Result<()>;
 
     /// Starts `container_id` — created by
@@ -2992,7 +3063,7 @@ impl DockerClient {
     fn container_config(&self, spec: &ContainerSpec) -> Result<Config> {
         let shared = &spec.shared;
         let options = &shared.options;
-        if shared.runs_as_host_user {
+        if creates_host_directories(shared, Transport::of_host(&self.daemon_host)) {
             ensure_host_volume_directories_exist(
                 shared.volumes.as_deref().unwrap_or_default(),
                 options.tmpfs.as_deref().unwrap_or_default(),
@@ -3710,7 +3781,11 @@ impl ContainerRuntime for DockerClient {
         parse_container_file_tar(&archive).with_context(|| format!("Failed to read '{shown}'"))
     }
 
-    async fn container_directory_uid(&self, container_id: &str, path: &str) -> Result<u64> {
+    async fn container_directory_ownership(
+        &self,
+        container_id: &str,
+        path: &str,
+    ) -> Result<DirectoryOwnership> {
         let shown = printable(path);
         let options = DownloadFromContainerOptionsBuilder::default()
             .path(path)
@@ -3724,11 +3799,26 @@ impl ContainerRuntime for DockerClient {
         // holds everything under it.
         while let Some(chunk) = stream.next().await {
             archive.extend_from_slice(&chunk.with_context(|| format!("Failed to read '{shown}'"))?);
-            if let Some(uid) = first_entry_uid(&archive) {
-                return Ok(uid);
+            if let Some(ownership) = first_entry_ownership(&archive) {
+                return Ok(ownership);
             }
         }
         anyhow::bail!("Failed to read '{shown}': the archive holds no entry")
+    }
+
+    async fn set_container_directory_ownership(
+        &self,
+        container_id: &str,
+        path: &str,
+        owner: crate::user::DirectoryOwner,
+        mode: u32,
+    ) -> Result<()> {
+        let tar = build_directory_ownership_tar(path, owner, mode)?;
+        let options = UploadToContainerOptionsBuilder::default().path("/").build();
+        self.docker
+            .upload_to_container(container_id, Some(options), bollard::body_full(tar.into()))
+            .await
+            .with_context(|| format!("Failed to take ownership of '{}'", printable(path)))
     }
 
     async fn write_container_file(
@@ -3752,7 +3842,7 @@ impl ContainerRuntime for DockerClient {
         container_id: &str,
         into: &str,
         relative: &str,
-        owner: crate::user::HomeOwner,
+        owner: crate::user::DirectoryOwner,
     ) -> Result<()> {
         let tar = build_new_directories_tar(Path::new(relative), owner)?;
         let options = UploadToContainerOptionsBuilder::default()

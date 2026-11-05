@@ -203,8 +203,9 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   registers it for cleanup there and then, so a container whose start later fails
   or is cut short by another dependency failing is still removed. For a container
   with [`identity`](ratect-config-reference.md#identity-a-guaranteed-home), the engine
-  then edits the created container's `/etc/passwd` and prepares its home, and a
-  failure there counts as a failed create.
+  then edits the created container's identity files, prepares its home and, on a
+  rootful Linux daemon, takes its root-owned caches, and a failure there counts as
+  a failed create.
   Its own step,
   separate from starting, because it waits for less: a container is created once
   its image and the network are ready (and any `network_mode = "container:<name>"`
