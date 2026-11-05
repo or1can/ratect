@@ -106,6 +106,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
         interactive: true,
         additional_args: &["extra".to_string()],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -124,6 +125,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -176,6 +178,7 @@ fn a_run_overlay_overrides_the_containers_own_fields() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -229,6 +232,7 @@ fn a_customise_overlay_has_no_command_or_entrypoint_override() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -552,6 +556,7 @@ fn derive_spec_carries_ulimits_as_plain_triples() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -586,6 +591,7 @@ fn derive_spec_leaves_ulimits_unset_when_the_container_declares_none() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -621,6 +627,7 @@ fn derive_spec_carries_the_containers_own_dns_settings() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -661,6 +668,7 @@ fn derive_spec_leaves_dns_unset_when_the_container_declares_none() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -738,6 +746,7 @@ fn spec_on_network(network: ContainerNetwork) -> ContainerSpec {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: Some(&proxy),
@@ -805,6 +814,7 @@ fn derive_spec_passes_an_unquoted_yaml_environment_value_on_as_written() {
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -877,6 +887,7 @@ fn an_empty_customisation_derives_the_same_spec_as_none() {
             interactive: false,
             additional_args: &[],
             user_mapping: None,
+            identity_host_user: None,
             volumes: None,
             term_var: None,
             proxy: None,
@@ -921,6 +932,7 @@ fn published_ports(container_ports: &[&str], run_ports: &[&str]) -> Vec<(u16, u1
         interactive: false,
         additional_args: &[],
         user_mapping: None,
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -1177,6 +1189,7 @@ fn derive_spec_maps_host_root_to_a_process_user_of_0_0() {
         interactive: false,
         additional_args: &[],
         user_mapping: Some(&mapping),
+        identity_host_user: None,
         volumes: None,
         term_var: None,
         proxy: None,
@@ -1186,4 +1199,49 @@ fn derive_spec_maps_host_root_to_a_process_user_of_0_0() {
     });
 
     assert_eq!(spec.shared.process_user.as_deref(), Some("0:0"));
+}
+
+/// A host user reaches the spec only through a container's own `identity`, so a
+/// container without one can't be made to run as the host user this way.
+#[test]
+fn derive_spec_takes_an_identity_host_user_only_with_an_identity() {
+    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let user = crate::user::CurrentUser {
+        uid: 1000,
+        gid: 20,
+        username: "me".to_string(),
+        groupname: "staff".to_string(),
+    };
+    let derive = |container_config: &Container| {
+        derive_spec(ContainerSpecInputs {
+            name: "app",
+            docker_name: "demo-app-abc123",
+            container_config,
+            overlay: Overlay::Run(&empty_run()),
+            image: "alpine:3.18",
+            network: ContainerNetwork::Task("ratect-run-id".to_string()),
+            interactive: false,
+            additional_args: &[],
+            user_mapping: None,
+            identity_host_user: Some(&user),
+            volumes: None,
+            term_var: None,
+            proxy: None,
+            publish_ports: true,
+            role: ContainerRole::Task,
+            run_labels: &run_labels,
+        })
+    };
+
+    let without = derive(&sample_container());
+    assert_eq!(without.shared.process_user, None);
+    assert!(!without.shared.runs_as_host_user);
+
+    let mut with_identity = sample_container();
+    with_identity.identity = Some(crate::config::Identity {
+        home: "/home/me".to_string(),
+    });
+    let with = derive(&with_identity);
+    assert_eq!(with.shared.process_user.as_deref(), Some("1000:20"));
+    assert!(with.shared.runs_as_host_user);
 }

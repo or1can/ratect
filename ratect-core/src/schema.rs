@@ -684,8 +684,8 @@ fn make_native(json: &mut serde_json::Value) {
                 "description": "Gives this container a guaranteed home: `$HOME` and its \
                                 running user's passwd entry both say `home`, which is created \
                                 if nothing is there. Refused beside `user`, `group` or an \
-                                enabled `run_as_current_user`. A rootful Linux daemon refuses \
-                                it.",
+                                enabled `run_as_current_user`. On a rootful Linux daemon it also \
+                                runs as the host user.",
                 "examples": [{ "home": "/home/me" }],
             }),
         );

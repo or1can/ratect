@@ -28,7 +28,7 @@ history, from when it was the only binary.
 
 - **ratect only:** `ratect doctor` reports the Docker daemon's class: `rootless`, `userns-remap`, `desktop` or `rootful Linux`.
 - **ratect only:** Containers in a `ratect.toml` take `user`, `group` and `groups`, handed to the runtime as written, with `group` needing `user`. Setup commands exec as the same user. A `.yml` refuses all three.
-- **ratect only:** Containers in a `ratect.toml` take `identity = { home = "…" }`: on Docker Desktop-style, rootless and userns-remap daemons, `$HOME` and the running user's passwd entry both say `home`, which is created if nothing is there. Refused on a rootful Linux daemon for now, and by a `.yml`.
+- **ratect only:** Containers in a `ratect.toml` take `identity = { home = "…" }`: `$HOME` and the running user's passwd entry both say `home`, which is created if nothing is there. On a rootful Linux daemon the container also runs as the host's uid and gid, adding to the image's `/etc/passwd` and `/etc/group`, creating host mount directories as that user and taking ownership of root-owned writable named caches. Refused by a `.yml`.
 
 ### Changed
 

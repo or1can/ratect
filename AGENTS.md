@@ -70,8 +70,8 @@ Ratect is a **Cargo workspace** with four crates (the
   | `docker.rs` (+ `ratect-core/src/docker/`) | All `bollard`/daemon interaction, behind the fakeable `ContainerRuntime` trait — connection selection (`--docker-host`/`-context`/`-tls*`) split into its own submodule, `connection.rs`, no reference to `ContainerRuntime` at all; BuildKit progress rendering in `build_output.rs`, stdin forwarding in `stdin.rs` |
   | `daemon_class.rs` | What kind of daemon a connection reached — Rootless, UsernsRemap, Desktop or RootfulLinux — as a pure function over its security options, Ratect's host OS and the transport; `ContainerRuntime::daemon_class` is where callers get it, see [0011](decisions/0011-container-identity.md) |
   | `ssh_agent.rs` | `build_ssh`'s in-process ssh-agent (RFC 9987) — kept extractable, see [0005](decisions/0005-build-ssh-keyring-placement.md) |
-  | `user.rs` | Host user lookup, the `/etc/passwd` generators for `run_as_current_user`, and `identity`'s pure edit of an image's own file |
-  | `identity.rs` | What `identity` does to a created container, through `ContainerRuntime`'s file calls: the refusal on rootful Linux, checking and rewriting `/etc/passwd`, creating the home where nothing exists and handing over one a mount made ([0011](decisions/0011-container-identity.md)) |
+  | `user.rs` | Host user lookup, the `/etc/passwd` generators for `run_as_current_user`, and `identity`'s pure edits of an image's own files |
+  | `identity.rs` | What `identity` does to a created container, through `ContainerRuntime`'s file calls: whether it adopts the host user, checking and rewriting `/etc/passwd` and `/etc/group`, creating the home where nothing exists, handing over what a mount made, and claiming root-owned caches ([0011](decisions/0011-container-identity.md)) |
   | `proxy.rs` | Proxy variable detection and propagation, the host-gateway entry a rewritten URL needs, and the loopback-bound proxy it can't fix |
   | `interrupt.rs` | Termination-signal (Ctrl+C, `SIGTERM`, `SIGHUP`) tracking — the signal half only; the engine decides what it means |
   | `engine.rs` | Task lifecycle, prerequisites, dependency graph, cleanup |

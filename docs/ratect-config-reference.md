@@ -903,7 +903,8 @@ The nearest real project is
 
 A container can state its home, so `$HOME` doesn't depend on the image or the
 machine, and cache mounts and mounted ssh or Git configuration can be declared
-once.
+once. On a rootful Linux daemon it also runs as you, so what it writes into a bind
+mount is yours.
 
 ```toml
 [containers.build-env]
@@ -916,14 +917,16 @@ The nearest real project is
 [`ratect/tests/fixtures/identity.toml`](https://github.com/or1can/ratect/blob/main/ratect/tests/fixtures/identity.toml).
 
 Both places programs look then agree: `$HOME`, which Git reads, and the running
-user's `/etc/passwd` entry, which ssh's `~` reads. The running user is the
-image's own `USER`, or root if it has none. Ratect runs the container as that
-user and doesn't change it.
+user's `/etc/passwd` entry, which ssh's `~` reads. Who the running user is depends
+on the daemon, and [`ratect doctor`](ratect-cli.md) says which kind you have:
 
-**A rootful Linux daemon refuses it:** a run reaching a container with `identity`
-there fails, naming the container. It works on a local Docker Desktop, OrbStack or
-similar on macOS or Windows, and on rootless and userns-remap daemons.
-[`ratect doctor`](ratect-cli.md) says which kind of daemon you have.
+- **On a rootful Linux daemon**, it is you: the container runs as your uid and gid.
+  See [On a rootful Linux daemon](#on-a-rootful-linux-daemon).
+- **On a local Docker Desktop, OrbStack or similar on macOS or Windows, and on
+  rootless and userns-remap daemons**, it is the image's own `USER`, or root if it
+  has none. Ratect doesn't change it.
+
+These apply on every daemon:
 
 - **`home` is required**, and is an absolute path with a leaf name and no `..`, `:`
   or control characters. It can hold an [expression](#config-variables-and-expressions).
@@ -935,18 +938,20 @@ similar on macOS or Windows, and on rootless and userns-remap daemons.
   [`extends`](#extends-inheritance-instead-of-yaml-anchors) has resolved the
   container. These are rejected when the file loads. `groups` works with it, and
   adds to the running user.
-- **Only the running user's home field changes.** Every other line of the image's
+- **Only the running user's entry changes.** Every other line of the image's
   `/etc/passwd` stays as it was, and the file keeps its mode and owner. A name
-  selects the entry with that name, and a uid the first entry with that uid. A
-  line too short to have a home field gets one.
-- **A user with no entry:** a numeric `USER` gets one, named with its uid (`root`
+  selects the entry with that name, and a uid the first entry with that uid. Only
+  its home field changes, added to a line too short to have one.
+- **A user with no entry**, on the daemons where the image's `USER` runs: a numeric
+  `USER` gets one, named with its uid (`root`
   for uid 0), with the numeric group from `USER` or else 0. A named group isn't
   looked up: the process runs with it, but the entry and a created home have that
   user's entry's gid, or 0. An image with no `/etc/passwd`
   at all, such as `scratch`, is treated as having an empty one. A *named* `USER`
   the image lacks gets nothing, and the runtime refuses to start the container.
-- **`/etc/passwd` isn't edited through anything.** A symbolic link, a mount at
-  that path or at `/etc`, or a file over 1 MiB fails the run, naming the container.
+- **`/etc/passwd` isn't edited through anything**, nor is `/etc/group` where it is
+  edited. A symbolic link, a mount at that path or at `/etc`, or a file over 1 MiB
+  fails the run, naming the container.
 - **`HOME` is set in the container's environment**, over any `ENV HOME` in the
   image. A `HOME` in `environment` wins, though the passwd entry still says `home`.
 - **The home is only created where nothing exists**: owned by the running user,
@@ -957,10 +962,11 @@ similar on macOS or Windows, and on rootless and userns-remap daemons.
   run, naming the container, and so does a `tmpfs` above the home, which would hide
   it, unless something is mounted at the home itself.
 - **A mount below the home is the exception.** With a mount at `~/.ssh` or
-  `~/.cache`, Docker creates the home as root before Ratect can look at it. So when
-  a mount sits below the home, none is at it, it is owned by root and the running
-  user isn't root, it goes to the running user, mode `0755`. A root-owned home the
-  image shipped is handed over the same way.
+  `~/.cargo/registry`, Docker creates the home and `~/.cargo` as root before Ratect
+  can look at them. So each directory from the home down to a mount goes to the
+  running user, keeping its mode, when it is owned by root, the running user isn't
+  root, and it isn't at or inside another mount. A root-owned one the image shipped
+  is handed over the same way, though not what is in it.
 - **Fixed on the container's own definition**, like
   [`dns`](#dnsdns_searchdns_options-name-resolution): neither a task's `run` block
   nor a `customise` overlay accepts it.
@@ -971,15 +977,50 @@ What this leaves as it is:
   stop being found via `~`. They are still at their old path.
 - **An entrypoint that drops privileges** (`postgres`) runs as a user other than
   the running user, and that user keeps its own home.
+- **A `working_directory` below the home that isn't a mount.** Docker creates it and
+  any missing parents, the home included, as root. A mount at it makes the home the
+  running user's, as above.
 - **A `tmpfs` at `home`** hides the directory created there, so under a non-root
   running user its options have to allow that user to write.
-- **No `cache` mount changes owner.** A fresh named volume is root-owned, so a
-  non-root image `USER` can't write to one on these daemons, even when the home
-  above it is theirs. Fix that in the image:
+- **No `cache` mount changes owner except on a rootful Linux daemon.** A fresh named
+  volume is root-owned, so a non-root image `USER` can't write to one on the other
+  daemons, even when the home above it is theirs. Fix that in the image:
   a fresh volume takes its owner from an image directory at the same path.
 - **A cache shared between uids or groups is yours to arrange.** `chmod` alone
   isn't enough: under `1777` a second user can create files in it but not change
   the first user's.
+
+### On a rootful Linux daemon
+
+The container runs as your uid and gid, and setup commands exec as the same. If you
+are root, the same steps run as root. The image's identity files are added to, never
+replaced:
+
+- **`/etc/passwd`, your uid present** (`node` at 1000 is the usual one): the first
+  such entry keeps its name and gid, and only its home changes. So `whoami` says `node`, and
+  the process still has your gid, not the entry's.
+- **`/etc/passwd`, your uid absent:** an entry is appended with your username, or
+  with your uid's digits if the image uses that name for another uid, password `*`,
+  your gid, `home`, and shell `/bin/sh`.
+- **`/etc/group`:** an entry named after your group is appended only if both its gid
+  and that name are free. If the gid exists, that entry is reused untouched. If only
+  the name is taken, nothing is added, and `id` prints your gid with no name.
+- **Host directories a mount needs** are created as you before the container is, when
+  the daemon is local: a missing bind mount source, and a mount point nested inside
+  another host mount.
+- **A `cache` named volume with `root` as its owner** becomes yours, keeping its
+  mode, unless it is read-only (`options = "ro"`) or you are root. That is what makes a
+  fresh volume writable. Only the volume's top directory changes: files already in
+  it keep their owner, so a cache filled as root needs
+  [cleaning](ratect-cli.md#caches-options) first. A volume another uid owns is left alone, so can't be
+  written to by you unless its mode allows. A directory cache gets nothing, since
+  you created it. A [shared](#shared-caches) cache follows the same rule.
+
+The home follows the rules above, so `home = "/root"` isn't writable by you unless
+a mount below it hands it over. With a daemon on another machine (`ssh://`, `tcp://`), your uid and
+gid are still the ones of the user running Ratect. Ratect creates no host directories
+for it, on either machine, so the daemon creates a missing source as root. Windows has no uid to
+adopt, so a Windows client reaching such a daemon fails the run, naming the container.
 
 ## Field reference
 
