@@ -1166,3 +1166,249 @@ build_directory = "."
         "{child_of_identity}"
     );
 }
+
+/// [`identity_home_mount_findings`] for a container `app` with `identity.home`
+/// `home` and those `volumes`.
+async fn home_mount_findings_for(home: &str, volumes: &str) -> Vec<Finding> {
+    let project = project_from(
+        "ratect.toml",
+        &format!(
+            r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = {{ home = "{home}" }}
+volumes = {volumes}
+"#
+        ),
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    identity_home_mount_findings(&evaluation)
+}
+
+#[tokio::test]
+async fn a_tmpfs_above_the_identity_home_is_a_problem() {
+    let findings = home_mount_findings_for(
+        "/mnt/up/me",
+        r#"[{ type = "tmpfs", container = "/mnt/up" }]"#,
+    )
+    .await;
+    let [Finding::Problem(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    for expected in [
+        "'app'",
+        "'/mnt/up/me'",
+        "tmpfs",
+        "'/mnt/up'",
+        "a run fails",
+        "hidden",
+    ] {
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn a_read_only_mount_above_the_identity_home_is_a_warning() {
+    for (volumes, kind) in [
+        (
+            r#"[{ local = "up", container = "/mnt/up", options = "ro" }]"#,
+            "bind mount",
+        ),
+        (
+            r#"[{ type = "cache", name = "up", container = "/mnt/up", options = "ro" }]"#,
+            "cache",
+        ),
+    ] {
+        let findings = home_mount_findings_for("/mnt/up/me", volumes).await;
+        let [Finding::Warning(message)] = &findings[..] else {
+            panic!("{findings:?}");
+        };
+        for expected in [
+            "'app'",
+            "'/mnt/up/me'",
+            "read-only",
+            kind,
+            "'/mnt/up'",
+            "fails unless the home already exists there",
+        ] {
+            assert!(message.contains(expected), "{expected}: {message}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_writable_bind_mount_above_the_identity_home_is_a_warning() {
+    let findings =
+        home_mount_findings_for("/mnt/up/me", r#"[{ local = "up", container = "/mnt/up" }]"#).await;
+    let [Finding::Warning(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    for expected in [
+        "'app'",
+        "'/mnt/up/me'",
+        "writable bind mount",
+        "'/mnt/up'",
+        "created on the host",
+    ] {
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
+}
+
+#[tokio::test]
+async fn a_writable_cache_above_the_identity_home_is_no_finding() {
+    let findings = home_mount_findings_for(
+        "/mnt/up/me",
+        r#"[{ type = "cache", name = "up", container = "/mnt/up" }]"#,
+    )
+    .await;
+    assert_eq!(findings, []);
+}
+
+#[tokio::test]
+async fn a_mount_at_the_identity_home_settles_it_whatever_is_above() {
+    let findings = home_mount_findings_for(
+        "/mnt/up/me",
+        r#"[
+            { type = "tmpfs", container = "/mnt/up" },
+            { local = "me", container = "/mnt/up/me/" },
+        ]"#,
+    )
+    .await;
+    assert_eq!(findings, []);
+}
+
+#[tokio::test]
+async fn only_the_deepest_mount_above_the_identity_home_decides() {
+    // Listed both ways round, so it can't be the list's order that decides.
+    for volumes in [
+        r#"[
+            { local = "up", container = "/mnt", options = "ro" },
+            { type = "cache", name = "up", container = "/mnt/up" },
+        ]"#,
+        r#"[
+            { type = "cache", name = "up", container = "/mnt/up" },
+            { local = "up", container = "/mnt", options = "ro" },
+        ]"#,
+    ] {
+        assert_eq!(home_mount_findings_for("/mnt/up/me", volumes).await, []);
+    }
+    let findings = home_mount_findings_for(
+        "/mnt/up/me",
+        r#"[
+            { type = "cache", name = "up", container = "/mnt" },
+            { type = "tmpfs", container = "/mnt/up" },
+        ]"#,
+    )
+    .await;
+    assert!(
+        matches!(&findings[..], [Finding::Problem(_)]),
+        "{findings:?}"
+    );
+}
+
+#[tokio::test]
+async fn mount_paths_compare_cleaned_and_by_whole_component() {
+    let cleaned = home_mount_findings_for(
+        "/mnt/up/me",
+        r#"[{ type = "tmpfs", container = "/mnt/up/" }]"#,
+    )
+    .await;
+    assert!(matches!(&cleaned[..], [Finding::Problem(_)]), "{cleaned:?}");
+    let not_a_parent = home_mount_findings_for(
+        "/mnt/upper/me",
+        r#"[{ type = "tmpfs", container = "/mnt/up" }]"#,
+    )
+    .await;
+    assert_eq!(not_a_parent, []);
+}
+
+#[tokio::test]
+async fn a_mount_below_or_beside_the_identity_home_is_no_finding() {
+    let findings = home_mount_findings_for(
+        "/mnt/up/me",
+        r#"[
+            { type = "tmpfs", container = "/mnt/up/me/.cache" },
+            { type = "tmpfs", container = "/srv" },
+        ]"#,
+    )
+    .await;
+    assert_eq!(findings, []);
+}
+
+#[tokio::test]
+async fn a_container_without_identity_or_that_nothing_can_run_has_no_home_finding() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "x"
+
+[containers.plain]
+image = "alpine:3.18.2"
+volumes = [{ type = "tmpfs", container = "/mnt" }]
+
+[containers.base]
+identity = { home = "/mnt/me" }
+volumes = [{ type = "tmpfs", container = "/mnt" }]
+"#,
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    assert_eq!(identity_home_mount_findings(&evaluation), []);
+}
+
+#[tokio::test]
+async fn a_home_set_by_an_expression_is_judged_on_its_value() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = { home = "$WHERE/me" }
+volumes = [{ type = "tmpfs", container = "/mnt/up" }]
+"#,
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), |name| {
+            (name == "WHERE").then(|| "/mnt/up".to_string())
+        })
+        .unwrap();
+    let findings = identity_home_mount_findings(&evaluation);
+    let [Finding::Problem(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    assert!(message.contains("'/mnt/up/me'"), "{message}");
+}
+
+/// Both verbs read it through `config_findings`.
+#[tokio::test]
+async fn config_findings_reports_a_mount_above_the_identity_home() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = { home = "/mnt/me" }
+volumes = [{ type = "tmpfs", container = "/mnt" }]
+"#,
+    )
+    .await;
+    let findings = findings_for(&project, no_host_env);
+    assert!(
+        findings.iter().any(
+            |finding| matches!(finding, Finding::Problem(message) if message.contains("tmpfs"))
+        ),
+        "{findings:?}"
+    );
+}

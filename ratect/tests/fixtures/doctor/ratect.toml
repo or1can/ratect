@@ -12,6 +12,8 @@
 #   It also names `cache` twice in its dependencies: the repeated-entry warning.
 # - `deploy`, reading `$DEPLOY_TOKEN`, which no task here needs: the warning for
 #   a value this machine can't evaluate, as long as it isn't set.
+# - `scratch`, whose identity home is under a writable bind mount: the warning
+#   about a mount above the home.
 # - `batect`, beside this file: the wrapper-script warning.
 # - `build`, on the pinned `build-env`: the one task here that actually runs.
 #   A `--no-cleanup-after-success` run of it is what gives the docs capture
@@ -36,6 +38,11 @@ dependencies = ["database", "cache", "cache"]
 [containers.deploy]
 image = "alpine:3.18.2"
 environment = { TOKEN = "$DEPLOY_TOKEN" }
+
+[containers.scratch]
+image = "alpine:3.18.2"
+identity = { home = "/work/me" }
+volumes = [{ local = ".", container = "/work" }]
 
 [tasks.build]
 description = "The one task here that runs"

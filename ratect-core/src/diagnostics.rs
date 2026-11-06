@@ -213,6 +213,8 @@ pub fn config_findings(config: &Config, evaluation: &WholeProjectEvaluation) -> 
     findings.extend(absolute.into_iter().map(Finding::Warning));
     findings.extend(unbuildable.into_iter().map(Finding::Problem));
 
+    findings.extend(identity_home_mount_findings(evaluation));
+
     findings
 }
 
@@ -308,11 +310,24 @@ pub fn remapped_daemon_warning(
     }
 }
 
-/// `doctor`'s [`remapped_daemon_warning`] for every container that evaluated, by
-/// name, leaving out a base with no image and nothing to build, which nothing can
-/// run: the child that inherits its field is reported instead. `class` is `None`
-/// when it couldn't be read or nothing connected, which each have a finding of
-/// their own.
+/// Every container that evaluated, by name, leaving out a base with no image and
+/// nothing to build, which nothing can run: the child that inherits its fields is
+/// reported instead.
+fn runnable_containers(evaluation: &WholeProjectEvaluation) -> Vec<(&String, &Container)> {
+    let mut containers: Vec<(&String, &Container)> = evaluation
+        .evaluated
+        .containers
+        .iter()
+        .filter(|(_, container)| container.image.is_some() || container.build_directory.is_some())
+        .collect();
+    containers.sort_unstable_by_key(|(name, _)| *name);
+    containers
+}
+
+/// `doctor`'s [`remapped_daemon_warning`] for each runnable container: see
+/// `runnable_containers`.
+/// `class` is `None` when it couldn't be read or nothing connected, which each
+/// have a finding of their own.
 pub fn remapped_daemon_findings(
     evaluation: &WholeProjectEvaluation,
     class: Option<DaemonClass>,
@@ -320,20 +335,80 @@ pub fn remapped_daemon_findings(
     let Some(class) = class else {
         return Vec::new();
     };
-    let mut warnings: Vec<(&String, String)> = evaluation
-        .evaluated
-        .containers
-        .iter()
-        .filter(|(_, container)| container.image.is_some() || container.build_directory.is_some())
-        .filter_map(|(name, container)| {
-            Some((name, remapped_daemon_warning(name, container, class)?))
-        })
-        .collect();
-    warnings.sort_unstable();
-    warnings
+    runnable_containers(evaluation)
         .into_iter()
-        .map(|(_, warning)| Finding::Warning(warning))
+        .filter_map(|(name, container)| remapped_daemon_warning(name, container, class))
+        .map(Finding::Warning)
         .collect()
+}
+
+/// What the deepest mount strictly above a container's `identity` home does to
+/// that home, for each container that can run: the home is created by upload
+/// before the container starts, so through a bind mount or volume, while a `tmpfs`
+/// applied at start would hide it, which a run refuses (`identity::prepare_home`).
+/// A mount at the home itself supplies it. Whether the home already exists can't
+/// always be known from here, so a finding allows for it. One the image ships gets
+/// past that refusal, and is then hidden, so the `tmpfs` is a problem either way.
+///
+/// Only the deepest mount is read, though a run refuses a `tmpfs` at any depth
+/// above a home it has to create, so one with a bind mount or cache between it and
+/// the home is judged by that deeper mount alone (#825). A `cache` counts as a volume whatever a run's
+/// `--cache-type` says, since neither caller has that flag's value.
+fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for (name, container) in runnable_containers(evaluation) {
+        let Some(identity) = &container.identity else {
+            continue;
+        };
+        let home = path_clean::clean(&identity.home);
+        let mounts = || container.volumes.iter().flatten();
+        if mounts().any(|mount| path_clean::clean(mount.container_path()) == home) {
+            continue;
+        }
+        let Some(above) = mounts()
+            .filter(|mount| home.starts_with(path_clean::clean(mount.container_path())))
+            .max_by_key(|mount| {
+                path_clean::clean(mount.container_path())
+                    .components()
+                    .count()
+            })
+        else {
+            continue;
+        };
+        let home = crate::ui::printable(&identity.home);
+        let at = crate::ui::printable(above.container_path());
+        let under = |mount: &str, consequence: &str| {
+            format!(
+                "container '{name}' has identity.home '{home}' under the {mount} at '{at}' — \
+                 {consequence}"
+            )
+        };
+        let read_only_consequence = "a run fails unless the home already exists there";
+        match above {
+            VolumeMount::Tmpfs(_) => findings.push(Finding::Problem(under(
+                "tmpfs",
+                "a run fails, or runs with the home hidden if the image already has it",
+            ))),
+            VolumeMount::Local(local) if crate::container_spec::is_read_only(&local.options) => {
+                findings.push(Finding::Warning(under(
+                    "read-only bind mount",
+                    read_only_consequence,
+                )))
+            }
+            VolumeMount::Local(_) => findings.push(Finding::Warning(under(
+                "writable bind mount",
+                "a home that doesn't exist yet is created on the host, in that directory",
+            ))),
+            VolumeMount::Cache(cache) if crate::container_spec::is_read_only(&cache.options) => {
+                findings.push(Finding::Warning(under(
+                    "read-only cache",
+                    read_only_consequence,
+                )))
+            }
+            VolumeMount::Cache(_) => {}
+        }
+    }
+    findings
 }
 
 /// Whether `content` is one of Batect's own wrapper scripts, by the notice

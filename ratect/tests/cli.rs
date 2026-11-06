@@ -3690,6 +3690,16 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
     );
     assert!(
         has_line(
+            "warning ",
+            &[
+                "container 'scratch' has identity.home '/work/me'",
+                "writable bind mount at '/work'"
+            ]
+        ),
+        "the mount above the identity home should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line(
             "problem ",
             &[
                 "container 'app': build_directory",

@@ -984,8 +984,13 @@ These apply on every daemon:
   directory or symbolic link, a bind mount included, keeps its owner and mode even
   if the running user can't write to it. A symbolic link isn't followed, so one that
   is dangling or leads to a file leaves the home unusable. A file there fails the
-  run, naming the container, and so does a `tmpfs` above the home, which would hide
-  it, unless something is mounted at the home itself.
+  run, naming the container, and so does a `tmpfs` above a home that isn't there, which
+  would hide it, unless something is mounted at the home itself.
+- **A mount above the home is where it gets created**, since that happens before the
+  container starts. Under a writable bind mount, a missing home lands on the host,
+  in that directory. Under a read-only mount, a missing home fails the
+  run, naming the container.
+  [`ratect doctor`](ratect-cli.md#doctor) and `ratect config validate` report both.
 - **A mount below the home is the exception.** With a mount at `~/.ssh` or
   `~/.cargo/registry`, Docker creates the home and `~/.cargo` as root before Ratect
   can look at them. So each directory from the home down to a mount goes to the

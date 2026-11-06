@@ -333,7 +333,7 @@ config-only checks (values this machine can't evaluate, a
 `build_directory`/Dockerfile a build can't use, an absolute `dockerfile`,
 floating image tags, dependencies with no
 `health_check`, an entry given more than once in one `dependencies` or
-`prerequisites` list), exiting non-zero on a problem. It never touches Docker, so it's the
+`prerequisites` list, a mount above an `identity` home), exiting non-zero on a problem. It never touches Docker, so it's the
 gate to run in CI when all you want to know is "is the config valid?", without a
 daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, and
 reads `ratect.local.toml` the same way, since evaluating the config can need them.
@@ -491,6 +491,24 @@ as `app`'s `cache` above. Batect refuses such a file; Ratect loads it and starts
 or runs the entry once, so the repeat is reported rather than refused. Entries are
 compared as written: a wildcard prerequisite given twice is a repeat, but a wildcard
 beside a task it matches is not.
+
+A mount above a container's
+[`identity` home](ratect-config-reference.md#identity-your-files-and-the-same-home-everywhere)
+is reported for what it does to that home, which is created through the mount before
+the container starts. The deepest mount strictly above the home decides, and a mount
+at the home itself supplies it, so that gets no finding whatever is above it:
+
+| Deepest mount above the home | Finding |
+| --- | --- |
+| `tmpfs` | Problem: the run fails, or, if the image already has the home, runs with it hidden |
+| Read-only bind mount or `cache` | Warning: the run fails unless the home already exists there |
+| Writable bind mount | Warning: a missing home is created on the host, in that directory |
+| Writable `cache` | None |
+
+Two cases aren't judged as a run would judge them. A `tmpfs` with a bind mount or
+`cache` between it and the home gets the deeper mount's finding, or none, though the
+run refuses that too, unless the home already exists in the deeper mount. And a `cache` under `--cache-type=directory`, a host directory, is judged as a volume,
+since neither `doctor` nor `config validate` takes that flag.
 
 If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
 wrapper script. Those aren't harmless: `./batect` still downloads and runs the
