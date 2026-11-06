@@ -74,6 +74,28 @@ pub fn current_user(asked_by: &str) -> Result<CurrentUser> {
     Err(only_on_unix(asked_by))
 }
 
+/// The ids Ratect runs as, needing no passwd or group entry as [`current_user`]
+/// does. `None` on a host with no uid or gid.
+#[cfg(unix)]
+pub fn current_owner() -> Option<DirectoryOwner> {
+    Some(DirectoryOwner {
+        uid: nix::unistd::getuid().as_raw(),
+        gid: nix::unistd::getgid().as_raw(),
+    })
+}
+
+/// See the Unix form.
+#[cfg(not(unix))]
+pub fn current_owner() -> Option<DirectoryOwner> {
+    None
+}
+
+/// Whether `path` exists on this host as something other than a directory, a
+/// socket or a file, following a symbolic link as a bind mount does.
+pub fn is_non_directory(path: &std::path::Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| !metadata.is_dir())
+}
+
 /// [`current_user`]'s failure on a host with no uid or gid to map onto.
 #[cfg_attr(unix, allow(dead_code))]
 fn only_on_unix(asked_by: &str) -> anyhow::Error {

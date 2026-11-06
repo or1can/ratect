@@ -446,8 +446,8 @@ only vendor-specific signals tell it from a native daemon
 [`identity` treats it as one](ratect-config-reference.md#on-a-rootful-linux-daemon).
 If the daemon answers but its class can't be read, that is a warning.
 
-The class also decides two warnings about containers in the project, whichever
-task reaches them, leaving out a base with no image or `build_directory`, which
+The class also decides two warnings a run gives too, about containers in the
+project, whichever task reaches them, leaving out a base with no image or `build_directory`, which
 nothing can run:
 
 - **`identity` on a userns-remap daemon.** Every container user maps to a subordinate
@@ -464,6 +464,19 @@ can't report the third thing a run warns about, an `identity` container whose im
 runs it as a non-root user on either daemon: the image's user isn't in the
 configuration, the image may not be local, and `doctor` doesn't pull it. `config
 validate` reports none of these, since it doesn't connect to a daemon.
+
+On a rootful Linux daemon, `doctor` also warns about each writable bind mount of a
+container that writes there as root, whose files may end up root-owned on the host,
+and suggests [`identity`](ratect-config-reference.md#on-a-rootful-linux-daemon), or
+`run_as_current_user` for a container in a `.yml` file, which can't set `identity`. That
+is a container with no `identity`, no enabled `run_as_current_user`, and either no
+`user` or a `user` of `0` or `root`. With no `user` it assumes root, since it doesn't
+pull the image to find out. It fires on Docker Desktop on Linux too, where the files
+are in fact the host user's, because that file sharing is what the class can't see.
+`identity` is still sound there. A mounted socket or single file isn't reported, since
+a write can't change its owner, except from a daemon reached over the network, whose
+paths aren't on this machine to look at. It says nothing when you are root, since root-owned files are then yours. A run
+doesn't warn about this, and neither does `config validate`.
 
 A **problem** will fail a run — an unreachable daemon, a configuration that doesn't
 load, a `build_directory` or Dockerfile a build can't use. A **warning** works but is

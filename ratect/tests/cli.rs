@@ -4152,6 +4152,48 @@ fn doctor_reports_the_daemon_class_as_fine() {
     );
 }
 
+/// What `doctor` adds about a project on a stand-in daemon that reports nothing,
+/// which over the network is rootful Linux whatever this host is.
+fn doctor_stdout_on_rootful_linux(project: &str) -> String {
+    let directory = unique_project_dir();
+    std::fs::write(directory.join("ratect.toml"), project).unwrap();
+    let (port, _stop) = spawn_fake_plain_daemon_with_info(r#"{"SecurityOptions":[]}"#);
+    let output = ratect_command()
+        .arg("-f")
+        .arg(directory.join("ratect.toml"))
+        .arg("doctor")
+        .arg("--docker-host")
+        .arg(format!("tcp://127.0.0.1:{port}"))
+        .env_remove("DOCKER_TLS_VERIFY")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&directory).unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The class reaches the check; its rules are `ratect-core`'s to test.
+#[test]
+fn doctor_warns_about_a_mount_written_as_root_on_rootful_linux() {
+    let stdout = doctor_stdout_on_rootful_linux(
+        r#"
+ratect_version = "0.13.0"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+volumes = [{ local = "/srv/code", container = "/code" }]
+"#,
+    );
+    assert!(
+        stdout.contains("ok      Docker daemon class: rootful Linux"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("warning container 'app' has no identity and no non-root user"),
+        "{stdout}"
+    );
+}
+
 /// A daemon whose `/info` can't be read (this one's is an empty list) still
 /// answered `/version`, so not knowing its class is a warning, not a problem.
 #[test]

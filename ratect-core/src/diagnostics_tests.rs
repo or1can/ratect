@@ -1412,3 +1412,266 @@ volumes = [{ type = "tmpfs", container = "/mnt" }]
         "{findings:?}"
     );
 }
+
+const HOST: DirectoryOwner = DirectoryOwner {
+    uid: 1000,
+    gid: 1000,
+};
+
+/// [`root_written_mount_findings`] for a container `app`, written in `fields`, with
+/// a daemon of `class`.
+async fn root_written_findings_for(fields: &str, class: DaemonClass) -> Vec<Finding> {
+    let project = project_from(
+        "ratect.toml",
+        &format!(
+            r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+{fields}
+"#
+        ),
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    root_written_mount_findings(
+        &evaluation,
+        Some(class),
+        Some(Transport::Network),
+        Some(HOST),
+    )
+}
+
+const WRITABLE_MOUNT: &str = r#"volumes = [{ local = "/srv/code", container = "/code" }]"#;
+
+#[tokio::test]
+async fn a_writable_mount_written_as_root_is_a_warning_on_rootful_linux() {
+    for fields in [
+        WRITABLE_MOUNT.to_string(),
+        format!("user = 0\n{WRITABLE_MOUNT}"),
+        format!("user = \"0\"\n{WRITABLE_MOUNT}"),
+        format!("user = \"root\"\n{WRITABLE_MOUNT}"),
+    ] {
+        let findings = root_written_findings_for(&fields, DaemonClass::RootfulLinux).await;
+        let [Finding::Warning(message)] = &findings[..] else {
+            panic!("{fields}: {findings:?}");
+        };
+        for expected in [
+            "'app'",
+            "'/srv/code'",
+            "'/code'",
+            "may end up root-owned",
+            "set identity",
+            "run_as_current_user in a .yml file",
+        ] {
+            assert!(message.contains(expected), "{expected}: {message}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn each_writable_mount_written_as_root_gets_its_own_warning() {
+    let findings = root_written_findings_for(
+        r#"volumes = [
+            { local = "/srv/code", container = "/code" },
+            { local = "/srv/out", container = "/out", options = "rw,cached" },
+        ]"#,
+        DaemonClass::RootfulLinux,
+    )
+    .await;
+    assert_eq!(findings.len(), 2, "{findings:?}");
+}
+
+#[tokio::test]
+async fn a_mount_not_written_as_root_is_no_finding() {
+    for fields in [
+        format!("identity = {{ home = \"/home/me\" }}\n{WRITABLE_MOUNT}"),
+        format!("user = \"guest\"\n{WRITABLE_MOUNT}"),
+        format!("user = 1000\n{WRITABLE_MOUNT}"),
+    ] {
+        assert_eq!(
+            root_written_findings_for(&fields, DaemonClass::RootfulLinux).await,
+            [],
+            "{fields}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn only_a_writable_host_mount_can_be_written_as_root() {
+    for volumes in [
+        r#"volumes = [{ local = "/srv/code", container = "/code", options = "ro" }]"#,
+        r#"volumes = [{ local = "/srv/code", container = "/code", options = "z,ro" }]"#,
+        r#"volumes = [{ type = "cache", name = "c", container = "/code" }]"#,
+        r#"volumes = [{ type = "tmpfs", container = "/code" }]"#,
+    ] {
+        assert_eq!(
+            root_written_findings_for(volumes, DaemonClass::RootfulLinux).await,
+            [],
+            "{volumes}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn root_written_mounts_are_only_a_hazard_on_rootful_linux() {
+    for class in [
+        DaemonClass::Desktop,
+        DaemonClass::Rootless,
+        DaemonClass::UsernsRemap,
+    ] {
+        assert_eq!(
+            root_written_findings_for(WRITABLE_MOUNT, class).await,
+            [],
+            "{class:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn root_written_mounts_need_a_known_class_and_a_container_that_can_run() {
+    let project = project_from(
+        "ratect.toml",
+        &format!(
+            r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+{WRITABLE_MOUNT}
+
+[containers.base]
+{WRITABLE_MOUNT}
+"#
+        ),
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    assert_eq!(
+        root_written_mount_findings(&evaluation, None, Some(Transport::Network), Some(HOST)),
+        []
+    );
+    let findings = root_written_mount_findings(
+        &evaluation,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::Network),
+        Some(HOST),
+    );
+    let [Finding::Warning(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    assert!(message.contains("'app'"), "{message}");
+}
+
+/// Root-owned files are a root host user's own, and `identity` would adopt root.
+#[tokio::test]
+async fn a_root_host_user_has_no_root_written_mounts() {
+    let project = project_from(
+        "ratect.toml",
+        &format!(
+            r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+{WRITABLE_MOUNT}
+"#
+        ),
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let class = Some(DaemonClass::RootfulLinux);
+    let root = DirectoryOwner { uid: 0, gid: 0 };
+    assert_eq!(
+        root_written_mount_findings(&evaluation, class, Some(Transport::Network), Some(root)),
+        []
+    );
+    assert_eq!(
+        root_written_mount_findings(&evaluation, class, Some(Transport::Network), None).len(),
+        1,
+        "a host with no uids still has the trap to report"
+    );
+}
+
+/// A write can't change a socket's or a single file's owner, but only this
+/// filesystem can say which a path is, and a missing path becomes a directory.
+#[tokio::test]
+async fn a_non_directory_is_left_out_only_over_a_local_socket() {
+    let project = project_from(
+        "ratect.toml",
+        &format!(
+            r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+{WRITABLE_MOUNT}
+"#
+        ),
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let class = Some(DaemonClass::RootfulLinux);
+    let findings = |transport, is_non_directory: bool| {
+        let read = std::cell::Cell::new(false);
+        let findings =
+            root_written_mount_findings_with(&evaluation, class, transport, Some(HOST), |path| {
+                assert_eq!(path, Path::new("/srv/code"));
+                read.set(true);
+                is_non_directory
+            });
+        (findings.len(), read.get())
+    };
+    assert_eq!(findings(Some(Transport::LocalSocket), true), (0, true));
+    assert_eq!(findings(Some(Transport::LocalSocket), false), (1, true));
+    assert_eq!(findings(Some(Transport::Network), true), (1, false));
+}
+
+/// A `.yml` container can't set `identity`, and an enabled `run_as_current_user`
+/// already runs it as the host user there.
+#[tokio::test]
+async fn run_as_current_user_is_not_written_as_root() {
+    let project = project_from(
+        "batect.yml",
+        r#"
+project_name: x
+containers:
+  mapped:
+    image: alpine:3.18.2
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/me
+    volumes:
+      - /srv/code:/code
+  disabled:
+    image: alpine:3.18.2
+    run_as_current_user:
+      enabled: false
+    volumes:
+      - /srv/code:/code
+"#,
+    )
+    .await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let findings = root_written_mount_findings(
+        &evaluation,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::Network),
+        Some(HOST),
+    );
+    let [Finding::Warning(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    assert!(message.contains("'disabled'"), "{message}");
+}

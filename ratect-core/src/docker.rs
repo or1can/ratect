@@ -2758,6 +2758,11 @@ mod stdin;
 pub use connection::DockerConnectionOptions;
 
 impl DockerClient {
+    /// How this client reaches its daemon.
+    pub fn transport(&self) -> Transport {
+        Transport::of_host(&self.daemon_host)
+    }
+
     /// The daemon's own version string, and — the actual point — proof
     /// that it can be reached at all. `DockerClient::new` already asked
     /// `/version` twice (to negotiate the API version and to check the

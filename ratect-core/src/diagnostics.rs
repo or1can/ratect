@@ -36,8 +36,9 @@
 //! [`remapped_daemon_findings`] takes the class the same way, as a value the
 //! binary already read.
 
-use crate::config::{Config, Container, VolumeMount, WholeProjectEvaluation};
-use crate::daemon_class::DaemonClass;
+use crate::config::{Config, Container, LocalVolumeMount, VolumeMount, WholeProjectEvaluation};
+use crate::daemon_class::{DaemonClass, Transport};
+use crate::user::DirectoryOwner;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -340,6 +341,100 @@ pub fn remapped_daemon_findings(
         .filter_map(|(name, container)| remapped_daemon_warning(name, container, class))
         .map(Finding::Warning)
         .collect()
+}
+
+/// `container`'s bind mounts that aren't read-only.
+fn writable_bind_mounts(container: &Container) -> impl Iterator<Item = &LocalVolumeMount> {
+    container
+        .volumes
+        .iter()
+        .flatten()
+        .filter_map(|mount| match mount {
+            VolumeMount::Local(local) if !crate::container_spec::is_read_only(&local.options) => {
+                Some(local)
+            }
+            _ => None,
+        })
+}
+
+/// Whether `container`, on a rootful Linux daemon, runs as the host user: what
+/// `SharedContainerSpec::runs_as_host_user` comes to there, for a check with no spec
+/// to read.
+fn runs_as_host_user_on_rootful_linux(container: &Container) -> bool {
+    container.identity.is_some()
+        || container
+            .run_as_current_user
+            .as_ref()
+            .is_some_and(|run_as_current_user| run_as_current_user.enabled)
+}
+
+/// The root-owned-files trap, for each writable bind mount of each of
+/// `runnable_containers` on a rootful Linux daemon, the one class it arises on:
+/// elsewhere the files are the host user's or a subordinate uid's whatever the
+/// configuration ([decisions/0011](../../decisions/0011-container-identity.md)). A `user`
+/// of `0` or `root` counts, and so does no `user`, since the image's isn't in the
+/// configuration and `doctor` doesn't pull it. `class` is as
+/// [`remapped_daemon_findings`] takes it.
+///
+/// "May", because Docker Desktop on Linux classifies as rootful Linux too (#817),
+/// and files land as the host user there. A `host_user` of root has nothing to
+/// report: root-owned files are its own, and `identity` would only adopt root.
+///
+/// Over a local socket, a mount whose host path is a socket or single file is left
+/// out, since a write can't change that path's owner. Over the network the path
+/// isn't on this filesystem, so nothing is read, and a missing one is a directory
+/// to come, which the daemon creates as root.
+pub fn root_written_mount_findings(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+) -> Vec<Finding> {
+    root_written_mount_findings_with(
+        evaluation,
+        class,
+        transport,
+        host_user,
+        crate::user::is_non_directory,
+    )
+}
+
+/// [`root_written_mount_findings`], given how to tell a path isn't a directory.
+fn root_written_mount_findings_with(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+    is_non_directory: impl Fn(&Path) -> bool,
+) -> Vec<Finding> {
+    if class != Some(DaemonClass::RootfulLinux) || host_user.is_some_and(|user| user.uid == 0) {
+        return Vec::new();
+    }
+    let mut findings = Vec::new();
+    for (name, container) in runnable_containers(evaluation) {
+        let runs_as_root = container
+            .user
+            .as_ref()
+            .is_none_or(|user| crate::user::is_root_user(user.as_str()));
+        if runs_as_host_user_on_rootful_linux(container) || !runs_as_root {
+            continue;
+        }
+        for local in writable_bind_mounts(container) {
+            if transport == Some(Transport::LocalSocket)
+                && is_non_directory(Path::new(&local.local))
+            {
+                continue;
+            }
+            findings.push(Finding::Warning(format!(
+                "container '{name}' has no identity and no non-root user, so what it writes to \
+                 the mount of '{}' at '{}' may end up root-owned on the host — set identity, \
+                 or run_as_current_user in a .yml file, to run it as the host user",
+                crate::ui::printable(&local.local),
+                crate::ui::printable(&local.container),
+            )));
+        }
+    }
+    findings
 }
 
 /// What the deepest mount strictly above a container's `identity` home does to

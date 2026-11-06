@@ -66,11 +66,8 @@ Improving the developer experience through better tools and feedback.
   identity a container runs as against the actual uid/gid of a mounted path) need a
   real filesystem probe rather than a config read; container-level checks that need the
   *image* (its own `HEALTHCHECK`, whether an `entrypoint` exists) need a pull, so
-  they'd belong behind a flag rather than the default run; and two checks from
-  Batect's own unbuilt `doctor` wishlist remain: on a rootful Linux daemon, mounting a
-  directory writable into a container that runs as root (the root-owned-files trap
-  `identity` resolves there — see
-  [decisions/0011](decisions/0011-container-identity.md)), and a proxy environment variable that isn't a
+  they'd belong behind a flag rather than the default run; and one check from
+  Batect's own unbuilt `doctor` wishlist remains: a proxy environment variable that isn't a
   URL or doesn't use an `http`/`https` scheme. The daemon's own proxy settings not
   matching the local environment's is
   [out of scope](.out-of-scope/doctor-daemon-proxy-mismatch-check.md). Batect's fifth —
