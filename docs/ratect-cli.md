@@ -529,10 +529,12 @@ at the home itself supplies it, so that gets no finding whatever is above it:
 | Writable bind mount | Warning: a missing home is created on the host, in that directory |
 | Writable `cache` | None |
 
-Two cases aren't judged as a run would judge them. A `tmpfs` with a bind mount or
-`cache` between it and the home gets the deeper mount's finding, or none, though the
-run refuses that too, unless the home already exists in the deeper mount. And a `cache` under `--cache-type=directory`, a host directory, is judged as a volume,
-since neither `doctor` nor `config validate` takes that flag.
+A `tmpfs` higher up changes nothing, since a deeper mount goes on top of it when the
+container starts. A `cache` under `--cache-type=directory`, a host directory, is judged
+as a volume, since neither `doctor` nor `config validate` takes that flag. Only the
+configuration's mounts are read, so a `VOLUME` the image declares between a `tmpfs` and
+the home gets the `tmpfs`'s problem, though the home is created in that volume and the
+run works.
 
 If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
 wrapper script. Those aren't harmless: `./batect` still downloads and runs the

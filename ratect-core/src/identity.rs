@@ -358,15 +358,26 @@ async fn prepare_home(
         }
         into = path;
     }
-    // Created in the image's layer, a `tmpfs` above it would hide it at start.
-    if let Some(tmpfs) = facts.tmpfs_destinations.iter().find(|tmpfs| {
-        let tmpfs = Path::new(tmpfs);
-        home_path != tmpfs && home_path.starts_with(tmpfs)
-    }) {
-        anyhow::bail!(
+    // A `tmpfs` above the home hides what is created, unless a deeper mount, which
+    // goes on top of it at start, is where that lands, or one at the home is the home.
+    let deepest_tmpfs = facts
+        .tmpfs_destinations
+        .iter()
+        .map(Path::new)
+        .filter(|tmpfs| home_path.starts_with(tmpfs))
+        .max_by_key(|tmpfs| tmpfs.components().count());
+    if let Some(tmpfs) = deepest_tmpfs {
+        let hides_nothing = tmpfs == home_path
+            || facts
+                .mount_destinations
+                .iter()
+                .map(Path::new)
+                .any(|mount| home_path.starts_with(mount) && mount.starts_with(tmpfs));
+        anyhow::ensure!(
+            hides_nothing,
             "'{}' can't be created: the tmpfs at '{}' would hide it",
             printable(home),
-            printable(tmpfs)
+            printable(&tmpfs.to_string_lossy())
         );
     }
     let relative = home_path

@@ -5052,6 +5052,84 @@ run = {{ container = "app", command = "touch /code/target/marker" }}
     assert!(volume_is_listed(VOLUME));
 }
 
+/// The home is created in the deeper mount before the container starts, and that
+/// mount goes on top of the `tmpfs` at start, so it is there and writable once the
+/// container runs. Asserted through what outlives the container, the host directory
+/// and a second run reading the volume, since the `tmpfs` doesn't. A `tmpfs` at the
+/// home is the home, whatever is above it.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn identity_home_in_a_mount_below_a_tmpfs_is_visible_and_writable() {
+    let _guard = shared_docker();
+    const VOLUME: &str = "ratect-shared-cache-ratect-identity-below-tmpfs";
+    let volumes = RemoveVolumes(&[VOLUME]);
+    volumes.remove();
+    let project = unique_project_dir();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveOnDrop(project.clone());
+    std::fs::create_dir(project.join("up")).unwrap();
+    let config = project.join("ratect.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"ratect_version = "{version}"
+project_name = "ratect-identity-below-tmpfs-test"
+
+[containers.bind]
+image = "alpine:3.18.2"
+identity = {{ home = "/mnt/up/me" }}
+volumes = [
+    {{ type = "tmpfs", container = "/mnt" }},
+    {{ local = "./up", container = "/mnt/up" }},
+]
+
+[containers.cache]
+image = "alpine:3.18.2"
+identity = {{ home = "/mnt/up/me" }}
+volumes = [
+    {{ type = "tmpfs", container = "/mnt" }},
+    {{ type = "cache", name = "ratect-identity-below-tmpfs", container = "/mnt/up", scope = "shared" }},
+]
+
+[containers.tmpfs-at-home]
+image = "alpine:3.18.2"
+identity = {{ home = "/mnt/me" }}
+volumes = [
+    {{ type = "tmpfs", container = "/mnt" }},
+    {{ type = "tmpfs", container = "/mnt/me" }},
+]
+
+[tasks.write-tmpfs-at-home]
+run = {{ container = "tmpfs-at-home", command = "touch /mnt/me/marker" }}
+
+[tasks.write-bind]
+run = {{ container = "bind", command = "touch /mnt/up/me/marker" }}
+
+[tasks.write-cache]
+run = {{ container = "cache", command = "touch /mnt/up/me/marker" }}
+
+[tasks.read-cache]
+run = {{ container = "cache", command = "ls /mnt/up/me/marker" }}
+"#,
+            version = written_for_version()
+        ),
+    )
+    .unwrap();
+
+    run_identity_task(&config, "write-bind");
+    assert!(project.join("up/me/marker").exists());
+    run_identity_task(&config, "write-cache");
+    assert!(volume_is_listed(VOLUME));
+    run_identity_task(&config, "read-cache");
+    run_identity_task(&config, "write-tmpfs-at-home");
+}
+
 /// Taking a volume keeps its mode, on the first run and on the one that finds it
 /// taken. It takes its `700` and root owner from the image's directory.
 #[test]
