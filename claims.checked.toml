@@ -10962,15 +10962,6 @@ subjects = {}
 
 [[mark]]
 file = "decisions/0011-container-identity.md"
-mode = "claim-words-about-elsewhere"
-unit = "a33243171da2372f"
-copies = 1
-note = "Probed on OrbStack: a file at the home and a tmpfs above it both fail naming the container; a mount at the home keeps a tmpfs above it from refusing, tested in a_tmpfs_that_hides_nothing_is_allowed."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
-
-[[mark]]
-file = "decisions/0011-container-identity.md"
 mode = "claim-words-counts"
 unit = "fa1ff8bf90243ddd"
 copies = 1
@@ -12437,15 +12428,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/caches-clean-shared.ansi" = "5871808c457cbc54", "docs/captures/caches-list.ansi" = "e7c39d3f43141dd1", "ratect/tests/fixtures/shared-cache.toml" = "7e5b1a37b6af8be3" }
 
 [[mark]]
-file = "ROADMAP.md"
-mode = "stale-claims"
-unit = "7907fc63f83118a2"
-copies = 1
-note = "Open doctor items name 'identity' and #doctor, both still present; this diff's ratect-cli.md doctor hunks only retarget the identity anchor and drop the removed field from the deferred-value list, and the 'root-owned-files trap identity resolves there' matches rootful-Linux wording in the reference."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".out-of-scope/cheaper-fancy-repaints.md" = "2fc55e567f1d7bf3", ".out-of-scope/doctor-daemon-proxy-mismatch-check.md" = "88a35c12d11c9481", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0011-container-identity.md" = "c41a4a13ccdb6eb4", "docs/SUMMARY.md" = "7638de6406544ed6", "docs/ratect-cli.md#doctor" = "6b0d9fca09e53e7e", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
-
-[[mark]]
 file = "decisions/0004-git-include-host-path-trust.md"
 mode = "stale-claims"
 unit = "0222d94d199feaee"
@@ -12489,15 +12471,6 @@ copies = 1
 note = "Only link is examples/node/ratect.toml's version bump; build, test and lint each still run npm ci with the npm-cache mount, and the file loads under the 0.13.0-dev binary."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "examples/node/ratect.toml" = "571bd4258b9ca3e5" }
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "689f6a627384c7dc"
-copies = 1
-note = "Identity, passthrough, running user and daemon class read against identity.rs and daemon_class.rs; this diff changes neither, and 0011's status addition doesn't alter them"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0011-container-identity.md" = "c41a4a13ccdb6eb4" }
 
 [[mark]]
 file = "decisions/0017-output-streams-and-styles.md"
@@ -12608,24 +12581,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "docs/ratect-cli.md"
-mode = "claim-words-counts"
-unit = "111f4425be2b4687"
-copies = 1
-note = "Both run: tmpfs above a bind mount and a cache refused while doctor gave the deeper mount's finding or none; --cache-type refused by doctor and config validate"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-config-reference.md"
-mode = "claim-words-about-elsewhere"
-unit = "a3a88fd0dd40f5f2"
-copies = 1
-note = "prepare_home read: returns before the tmpfs check when the home exists; run refused a tmpfs above a missing home, passed with one at the home and one the image ships"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "decisions/0003-ratect-native-config-format.md"
 mode = "stale-claims"
 unit = "78c655d2fb8dbbe2"
@@ -12660,42 +12615,6 @@ copies = 1
 note = "Read as the 0.3.0 forecast it is, against the shared Config types, the hand-written JsonSchema impls in schema.rs and native-only gating via ConfigFormat."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/docker.rs" = "04340fe0df4fe643", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/schema.rs" = "3c623a991c420654" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "stale-claims"
-unit = "ea7792a26f405e2a"
-copies = 1
-note = "Read as a dated measurement; the modules and build_ssh scatter it names checked to exist in ratect-core/src, old counts not re-derived."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/ratect-config-reference.md" = "0f1b318f37a2cffd", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/docker.rs" = "04340fe0df4fe643", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "7768cd69b4a95322" }
-
-[[mark]]
-file = "README.md"
-mode = "stale-claims"
-unit = "caf9f906b16a91cb"
-copies = 1
-note = "Documentation list read against docs/SUMMARY.md and by running tools/check-readme-docs-list.py, which exits 0; site URL and docs/index.md checked."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/comparison.md" = "7a79e657052cb953", "docs/connecting-to-docker.md" = "104af44c98ce8cf0", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "73ff6134c7aed8f2", "docs/index.md" = "44063ab501014a0d", "docs/installation.md" = "c1490b152407630e", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "21d8714ab50978d1", "docs/ratect-compat-cli.md" = "8ec2c7a1c4480c97", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "0f1b318f37a2cffd", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "7254d91a7f4d5996", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
-
-[[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "01b8016fdce455c4"
-copies = 1
-note = "Six ownership rules read against their models: ratect-config-reference's Semantics column, includes.md, faq.md, installation.md, comparison.md, task-lifecycle.md and CI's Tools Tests; page openings outside those not each read."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "402eaf75ff1b6cd32de1c96af5d68f59bd015ab7", "ROADMAP.md" = "b2bfb89c20e69299", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "c233b89f0025ba63", "docs/SUMMARY.md" = "7638de6406544ed6", "docs/comparison.md" = "7a79e657052cb953", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "73ff6134c7aed8f2", "docs/installation.md" = "c1490b152407630e", "docs/ratect-config-reference.md" = "0f1b318f37a2cffd", "docs/ratect-config-reference.md#field-reference" = "26b25fdae4a72f87", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "950db756a5aa16ab" }
-
-[[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "25e8a1870e46a028"
-copies = 1
-note = "Deferral claim read against ratect-config-reference.md's \"same meaning except where\" text and its differences table; 34 links into the compat reference against the section's \"~30\"."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "0f1b318f37a2cffd" }
 
 [[mark]]
 file = "decisions/0012-native-task-container-has-no-readiness-gate.md"
@@ -12824,15 +12743,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/docker.rs" = "04340fe0df4fe643" }
 
 [[mark]]
-file = "decisions/0015-native-project-records-its-written-for-version.md"
-mode = "stale-claims"
-unit = "ea7792a26f405e2a"
-copies = 1
-note = "Read as the pre-ratect_version state against deny_unknown_fields in config.rs, written_for.rs's detector and the no-wrapper text in docs/ratect-cli.md."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/ratect-cli.md" = "21d8714ab50978d1" }
-
-[[mark]]
 file = "decisions/0016-exit-codes.md"
 mode = "stale-claims"
 unit = "58129cb86125e87b"
@@ -12867,24 +12777,6 @@ copies = 1
 note = "Read against the docs/SUMMARY.md page list and the root-level contributor files it excludes."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "402eaf75ff1b6cd32de1c96af5d68f59bd015ab7", "ROADMAP.md" = "b2bfb89c20e69299" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "4ca303a3bf7ddf7b"
-copies = 1
-note = "Read against the ratect-core/src listing, Command order and DockerArgs in ratect/src/main.rs, convert's writer, ContainerRuntime's supertraits, and diagnostics.rs's new checks, which take the class as a value and open no connection."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "b98c1d9034f78800", "decisions/0003-ratect-native-config-format.md" = "dd654c0bc88ae7a8", "decisions/0005-build-ssh-keyring-placement.md" = "db18653c7eeef69a", "decisions/0011-container-identity.md" = "c41a4a13ccdb6eb4", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "73ff6134c7aed8f2", "docs/ratect-cli.md" = "21d8714ab50978d1", "docs/ratect-compat-cli.md" = "8ec2c7a1c4480c97", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "0f1b318f37a2cffd", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/container_spec.rs" = "7b6df39b5e4a74bf", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "44c8c29be0181592", "ratect-core/src/docker.rs" = "04340fe0df4fe643", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "36607bd1a81b88b6", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/exit_code.rs" = "780d6e93214b0a5c", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "fca6451a074735b7", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "50c387baa4d2e94e", "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "7768cd69b4a95322", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/written_for.rs" = "07bc816e0cc7d680", "ratect-core/src/yaml.rs" = "5ae3c40b21a564c8", "ratect/src/main.rs" = "3610e26f3b7e2165" }
-
-[[mark]]
-file = "decisions/0016-exit-codes.md"
-mode = "stale-claims"
-unit = "ea7792a26f405e2a"
-copies = 1
-note = "Read as the pre-0016 state against the shared mapping in exit_code.rs and its quote of docs/ratect-cli.md; Batect's codes not re-read."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/ratect-cli.md" = "21d8714ab50978d1" }
 
 [[mark]]
 file = "ratect-compat/tests/conformance/README.md"
@@ -12941,15 +12833,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/doctor.ansi" = "444f64c1b648e3e7" }
 
 [[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "53f9fac61c746451"
-copies = 1
-note = "Read against docs/captures/ and each include site, capture-output.py's terminal settings, book.toml's preprocessor, demo.cast, doctor's provenance in ratect-cli.md and the verify listings."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "book.toml" = "5a546a3c21f8110a", "docs/demo.cast" = "dea031efbde9ac70", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/ratect-cli.md" = "21d8714ab50978d1", "docs/ratect-config-reference.md" = "0f1b318f37a2cffd", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "4079a8c3c3045bdb", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "3628b23e963ecddb" }
-
-[[mark]]
 file = "TODO.md"
 mode = "stale-claims"
 unit = "9616cab717fb309a"
@@ -12984,15 +12867,6 @@ copies = 1
 note = "Rejected options read against the surviving generators in user.rs, generate_passwd_file in docker.rs, classify in daemon_class.rs and native run_as_current_user's removal; probes not re-run."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "ratect-compat/tests/fixtures/environment.yml" = "d1e313a4a10e05bd" }
-
-[[mark]]
-file = "decisions/0011-container-identity.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read against creates_host_directories in docker.rs, daemon_class's Display, only_on_unix in user.rs and identity.rs's home handling; this branch's mount checks contradict none of the edges; probes not re-run."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/ratect-config-reference.md" = "0f1b318f37a2cffd", "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
 
 [[mark]]
 file = "decisions/0017-output-streams-and-styles.md"
@@ -13076,15 +12950,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/container_spec.rs" = "7b6df39b5e4a74bf", "ratect-core/src/docker.rs" = "04340fe0df4fe643", "ratect-core/src/engine.rs" = "e1bdfc3d93699046" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "acec0e5a5304cd93"
-copies = 1
-note = "Read against claims.toml, .pre-commit-config.yaml, ci.yml's claims job and grant list, .cargo/audit.toml, DIVERGENCES/UNCOVERABLE/NOT_SETTABLE, the named tests, fixture counts of 99 and 21 and the ruleset."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".cargo/audit.toml" = "38865a10b6f80f7f", ".claude/settings.json" = "082465644ff79ed5", ".github/workflows/ci.yml" = "c4278bfd7532e0c5", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "decisions/0009-adopt-claims-plugin.md" = "5ec619eaa95ba122", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ab59178e15a2786f", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "764f4946130a6d17", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
-
-[[mark]]
 file = "ROADMAP.md"
 mode = "stale-claims"
 unit = "96ac0674b29ad7a7"
@@ -13119,3 +12984,147 @@ copies = 1
 note = "Read against load_project/load_project_native, the include queue, LoadedProject::evaluate, evaluated fields, local_is_expression and Boundary::check_path_allowed in include_trust.rs."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0014-config-checked-at-load-evaluated-per-task.md" = "186e0b75044a03f2", "ratect-core/src/cache.rs" = "3ec116da38161890", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7" }
+
+[[mark]]
+file = "decisions/0011-container-identity.md"
+mode = "claim-words-about-elsewhere"
+unit = "2c6ad195326999ee"
+copies = 1
+note = "Run on OrbStack and a Linux client on its socket: file refused by the existing test, deepest tmpfs refused, tmpfs above a mount at the home runs; the e2e test and engine tests cover each."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "d4a3a0212169c1af"
+copies = 1
+note = "Read identity_home_mount_findings: only container.volumes is read. Run on OrbStack with an image VOLUME /mnt/up below a tmpfs at /mnt: the home was writable while config validate reported the problem."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-about-elsewhere"
+unit = "46165910dba26e87"
+copies = 1
+note = "Run through ratect on OrbStack: deepest tmpfs refused naming /mnt/up, a bind mount at /mnt/up and a tmpfs at the home each worked below a tmpfs at /mnt; prepare_home's check read."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/engine_tests.rs"
+mode = "restatement-ngram"
+unit = "1378c29360eb6a18-3834df201a6ad533"
+copies = 1
+note = "Read against prepare_home: a tmpfs as the deepest mount still gets the home created in the layer and hidden, which is what this test comment says and the refused test proves."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "stale-claims"
+unit = "ea7792a26f405e2a"
+copies = 1
+note = "Read the Context section: a dated measurement of the architecture; it says nothing of tmpfs, identity or the doctor checks #825 touched."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/ratect-config-reference.md" = "84309d28b6971a7d", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/docker.rs" = "04340fe0df4fe643", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "7768cd69b4a95322" }
+
+[[mark]]
+file = "README.md"
+mode = "stale-claims"
+unit = "caf9f906b16a91cb"
+copies = 1
+note = "Read the Documentation list: page names only, and #825 adds and renames no page."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/comparison.md" = "7a79e657052cb953", "docs/connecting-to-docker.md" = "104af44c98ce8cf0", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "73ff6134c7aed8f2", "docs/index.md" = "44063ab501014a0d", "docs/installation.md" = "c1490b152407630e", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "8ef6b68b67b8984c", "docs/ratect-compat-cli.md" = "8ec2c7a1c4480c97", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "84309d28b6971a7d", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "7254d91a7f4d5996", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "01b8016fdce455c4"
+copies = 1
+note = "Read the section: rules for writing pages, with no claim about tmpfs or identity; #825's doc edits follow rule 3's present tense."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "402eaf75ff1b6cd32de1c96af5d68f59bd015ab7", "ROADMAP.md" = "b2bfb89c20e69299", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "c233b89f0025ba63", "docs/SUMMARY.md" = "7638de6406544ed6", "docs/comparison.md" = "7a79e657052cb953", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "73ff6134c7aed8f2", "docs/installation.md" = "c1490b152407630e", "docs/ratect-config-reference.md" = "84309d28b6971a7d", "docs/ratect-config-reference.md#field-reference" = "26b25fdae4a72f87", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "950db756a5aa16ab" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "25e8a1870e46a028"
+copies = 1
+note = "Read the section: rules for writing pages, with no claim about tmpfs or identity; #825's doc edits follow rule 3's present tense."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "84309d28b6971a7d" }
+
+[[mark]]
+file = "decisions/0015-native-project-records-its-written-for-version.md"
+mode = "stale-claims"
+unit = "ea7792a26f405e2a"
+copies = 1
+note = "Read the Context section: the wrapper and written-for reasoning; #825's ratect-cli.md edit is only the doctor section, which it doesn't describe."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/ratect-cli.md" = "8ef6b68b67b8984c" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "4ca303a3bf7ddf7b"
+copies = 1
+note = "Read the section: its identity.rs and diagnostics.rs rows describe the modules' responsibilities, which #825 doesn't move, and it states nothing about the tmpfs refusal."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "b98c1d9034f78800", "decisions/0003-ratect-native-config-format.md" = "dd654c0bc88ae7a8", "decisions/0005-build-ssh-keyring-placement.md" = "db18653c7eeef69a", "decisions/0011-container-identity.md" = "e4686b3d44c02358", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "73ff6134c7aed8f2", "docs/ratect-cli.md" = "8ef6b68b67b8984c", "docs/ratect-compat-cli.md" = "8ec2c7a1c4480c97", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "84309d28b6971a7d", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/container_spec.rs" = "7b6df39b5e4a74bf", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "4f2f4ce53308c984", "ratect-core/src/docker.rs" = "04340fe0df4fe643", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "36607bd1a81b88b6", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/exit_code.rs" = "780d6e93214b0a5c", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "fca6451a074735b7", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "50c387baa4d2e94e", "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "7768cd69b4a95322", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/written_for.rs" = "07bc816e0cc7d680", "ratect-core/src/yaml.rs" = "5ae3c40b21a564c8", "ratect/src/main.rs" = "3610e26f3b7e2165" }
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "stale-claims"
+unit = "ea7792a26f405e2a"
+copies = 1
+note = "Read the Context section: exit codes only; #825's ratect-cli.md edit is only the doctor section, and neither exit codes nor their mapping change."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/ratect-cli.md" = "8ef6b68b67b8984c" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "689f6a627384c7dc"
+copies = 1
+note = "Read the Identity section: terms for host, image and additional users; it doesn't mention the tmpfs refusal #825 narrows."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0011-container-identity.md" = "e4686b3d44c02358" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "53f9fac61c746451"
+copies = 1
+note = "Read the section: rules for writing pages, with no claim about tmpfs or identity; #825's doc edits follow rule 3's present tense."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "book.toml" = "5a546a3c21f8110a", "docs/demo.cast" = "dea031efbde9ac70", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/ratect-cli.md" = "8ef6b68b67b8984c", "docs/ratect-config-reference.md" = "84309d28b6971a7d", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "4079a8c3c3045bdb", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "3628b23e963ecddb" }
+
+[[mark]]
+file = "decisions/0011-container-identity.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read Consequences against prepare_home: the tmpfs at home edge still holds, tested in a_tmpfs_that_hides_nothing_is_allowed, and the section has no claim about a tmpfs above the home."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/ratect-config-reference.md" = "84309d28b6971a7d", "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "stale-claims"
+unit = "7907fc63f83118a2"
+copies = 1
+note = "Read the UX & Tooling section: doctor's open items need the image, which still stands; the doctor page's new sentence says the same of a VOLUME."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".out-of-scope/cheaper-fancy-repaints.md" = "2fc55e567f1d7bf3", ".out-of-scope/doctor-daemon-proxy-mismatch-check.md" = "88a35c12d11c9481", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "docs/SUMMARY.md" = "7638de6406544ed6", "docs/ratect-cli.md#doctor" = "1a481bd21464c240", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "acec0e5a5304cd93"
+copies = 1
+note = "Read the section: its identity.rs and diagnostics.rs rows describe the modules' responsibilities, which #825 doesn't move, and it states nothing about the tmpfs refusal."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "38865a10b6f80f7f", ".claude/settings.json" = "082465644ff79ed5", ".github/workflows/ci.yml" = "c4278bfd7532e0c5", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "decisions/0009-adopt-claims-plugin.md" = "5ec619eaa95ba122", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ab59178e15a2786f", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "335c2f9c60d0e2ee", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
