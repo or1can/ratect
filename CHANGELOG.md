@@ -34,6 +34,9 @@ history, from when it was the only binary.
 - **ratect only:** `identity` takes `additional_users`, each a required `name`, `uid` and `gid`, added to the container's `/etc/passwd` and `/etc/group` on every daemon. A name or uid the file already has fails the run.
 - **ratect only:** Containers in a `ratect.toml` take `user`, `group` and `groups`, handed to the runtime as written, with `group` needing `user`. Setup commands exec as the same user. A `.yml` refuses all three.
 - **ratect only:** Containers in a `ratect.toml` take `identity = { home = "…" }`: `$HOME` and the running user's passwd entry both say `home`, which is created if nothing is there. On a rootful Linux daemon the container also runs as the host's uid and gid, adding to the image's `/etc/passwd` and `/etc/group`, creating host mount directories as that user and taking ownership of root-owned writable named caches. Refused by a `.yml`.
+- **ratect only:** `ratect doctor` and `ratect config validate` report a mount above a container's `identity` home: a problem for a `tmpfs`, and a warning for a read-only mount or a writable bind mount.
+- **ratect only:** `ratect doctor` warns on a rootful Linux daemon about each writable bind mount, other than a socket or file over a local socket, of a container with no `identity`, no enabled `run_as_current_user`, and no non-root `user`.
+- **ratect only:** `ratect doctor` warns, over a local socket to a rootful Linux daemon, when a writable bind mount of a container that runs as the host user is owned by another uid.
 - **ratect only:** `ratect run` warns about `identity` on a userns-remap daemon, a non-root `user` on a rootless or userns-remap daemon, and `identity` under a non-root image `USER` on either. `ratect doctor` reports the first two as warnings. None of them stops a run.
 
 ### Changed

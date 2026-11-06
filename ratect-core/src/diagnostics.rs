@@ -33,11 +33,13 @@
 //! `Option<&D>` rather than requiring one, so a caller whose connection
 //! already failed can skip it without this module needing any opinion of its
 //! own on what "no connection" means or how that got decided.
-//! [`remapped_daemon_findings`] takes the class the same way, as a value the
-//! binary already read.
+//! [`remapped_daemon_findings`], [`root_written_mount_findings`] and
+//! [`mount_owner_findings`] take the class the same way, as a value the binary
+//! already read.
 
-use crate::config::{Config, Container, VolumeMount, WholeProjectEvaluation};
-use crate::daemon_class::DaemonClass;
+use crate::config::{Config, Container, LocalVolumeMount, VolumeMount, WholeProjectEvaluation};
+use crate::daemon_class::{DaemonClass, Transport};
+use crate::user::DirectoryOwner;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -213,6 +215,8 @@ pub fn config_findings(config: &Config, evaluation: &WholeProjectEvaluation) -> 
     findings.extend(absolute.into_iter().map(Finding::Warning));
     findings.extend(unbuildable.into_iter().map(Finding::Problem));
 
+    findings.extend(identity_home_mount_findings(evaluation));
+
     findings
 }
 
@@ -308,11 +312,24 @@ pub fn remapped_daemon_warning(
     }
 }
 
-/// `doctor`'s [`remapped_daemon_warning`] for every container that evaluated, by
-/// name, leaving out a base with no image and nothing to build, which nothing can
-/// run: the child that inherits its field is reported instead. `class` is `None`
-/// when it couldn't be read or nothing connected, which each have a finding of
-/// their own.
+/// Every container that evaluated, by name, leaving out a base with no image and
+/// nothing to build, which nothing can run: the child that inherits its fields is
+/// reported instead.
+fn runnable_containers(evaluation: &WholeProjectEvaluation) -> Vec<(&String, &Container)> {
+    let mut containers: Vec<(&String, &Container)> = evaluation
+        .evaluated
+        .containers
+        .iter()
+        .filter(|(_, container)| container.image.is_some() || container.build_directory.is_some())
+        .collect();
+    containers.sort_unstable_by_key(|(name, _)| *name);
+    containers
+}
+
+/// `doctor`'s [`remapped_daemon_warning`] for each runnable container: see
+/// `runnable_containers`.
+/// `class` is `None` when it couldn't be read or nothing connected, which each
+/// have a finding of their own.
 pub fn remapped_daemon_findings(
     evaluation: &WholeProjectEvaluation,
     class: Option<DaemonClass>,
@@ -320,20 +337,244 @@ pub fn remapped_daemon_findings(
     let Some(class) = class else {
         return Vec::new();
     };
-    let mut warnings: Vec<(&String, String)> = evaluation
-        .evaluated
-        .containers
-        .iter()
-        .filter(|(_, container)| container.image.is_some() || container.build_directory.is_some())
-        .filter_map(|(name, container)| {
-            Some((name, remapped_daemon_warning(name, container, class)?))
-        })
-        .collect();
-    warnings.sort_unstable();
-    warnings
+    runnable_containers(evaluation)
         .into_iter()
-        .map(|(_, warning)| Finding::Warning(warning))
+        .filter_map(|(name, container)| remapped_daemon_warning(name, container, class))
+        .map(Finding::Warning)
         .collect()
+}
+
+/// `container`'s bind mounts that aren't read-only.
+fn writable_bind_mounts(container: &Container) -> impl Iterator<Item = &LocalVolumeMount> {
+    container
+        .volumes
+        .iter()
+        .flatten()
+        .filter_map(|mount| match mount {
+            VolumeMount::Local(local) if !crate::container_spec::is_read_only(&local.options) => {
+                Some(local)
+            }
+            _ => None,
+        })
+}
+
+/// Whether `container`, on a rootful Linux daemon, runs as the host user: what
+/// `SharedContainerSpec::runs_as_host_user` comes to there, for a check with no spec
+/// to read.
+fn runs_as_host_user_on_rootful_linux(container: &Container) -> bool {
+    container.identity.is_some()
+        || container
+            .run_as_current_user
+            .as_ref()
+            .is_some_and(|run_as_current_user| run_as_current_user.enabled)
+}
+
+/// The root-owned-files trap, for each writable bind mount of each of
+/// `runnable_containers` on a rootful Linux daemon, the one class it arises on:
+/// elsewhere the files are the host user's or a subordinate uid's whatever the
+/// configuration ([decisions/0011](../../decisions/0011-container-identity.md)). A `user`
+/// of `0` or `root` counts, and so does no `user`, since the image's isn't in the
+/// configuration and `doctor` doesn't pull it. `class` is as
+/// [`remapped_daemon_findings`] takes it.
+///
+/// "May", because Docker Desktop on Linux classifies as rootful Linux too (#817),
+/// and files land as the host user there. A `host_user` of root has nothing to
+/// report: root-owned files are its own, and `identity` would only adopt root.
+///
+/// Over a local socket, a mount whose host path is a socket or single file is left
+/// out, since a write can't change that path's owner. Over the network the path
+/// isn't on this filesystem, so nothing is read, and a missing one is a directory
+/// to come, which the daemon creates as root.
+pub fn root_written_mount_findings(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+) -> Vec<Finding> {
+    root_written_mount_findings_with(
+        evaluation,
+        class,
+        transport,
+        host_user,
+        crate::user::is_non_directory,
+    )
+}
+
+/// [`root_written_mount_findings`], given how to tell a path isn't a directory.
+fn root_written_mount_findings_with(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+    is_non_directory: impl Fn(&Path) -> bool,
+) -> Vec<Finding> {
+    if class != Some(DaemonClass::RootfulLinux) || host_user.is_some_and(|user| user.uid == 0) {
+        return Vec::new();
+    }
+    let mut findings = Vec::new();
+    for (name, container) in runnable_containers(evaluation) {
+        let runs_as_root = container
+            .user
+            .as_ref()
+            .is_none_or(|user| crate::user::is_root_user(user.as_str()));
+        if runs_as_host_user_on_rootful_linux(container) || !runs_as_root {
+            continue;
+        }
+        for local in writable_bind_mounts(container) {
+            if transport == Some(Transport::LocalSocket)
+                && is_non_directory(Path::new(&local.local))
+            {
+                continue;
+            }
+            findings.push(Finding::Warning(format!(
+                "container '{name}' has no identity and no non-root user, so what it writes to \
+                 the mount of '{}' at '{}' may end up root-owned on the host — set identity, \
+                 or run_as_current_user in a .yml file, to run it as the host user",
+                crate::ui::printable(&local.local),
+                crate::ui::printable(&local.container),
+            )));
+        }
+    }
+    findings
+}
+
+/// A warning for each writable bind mount, of each of `runnable_containers` that
+/// runs as the host user, whose host path another uid owns, so a write there may be
+/// refused. Only on a rootful Linux daemon, where such a container's uid is the host
+/// user's own, and only over a local socket, since a remote daemon's mounts are on
+/// its filesystem, not this one. `class` and `transport` are `None` when nothing
+/// connected or the class couldn't be read, which have findings of their own, and
+/// `host_user` is `None` on a host with no uids.
+///
+/// "May", because group or other permissions can still allow it, and because
+/// Docker Desktop on Linux classifies as rootful Linux too (#817), where a bind
+/// mount looks like its user's own. A differing gid alone isn't reported, since
+/// owner permission bits apply to a matching uid, nor is anything for a root
+/// `host_user`, who can write to what anyone owns. A read-only mount has no write to
+/// refuse. An owner that can't be read means nothing to compare: a run tries to
+/// create what is missing.
+pub fn mount_owner_findings(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+) -> Vec<Finding> {
+    mount_owner_findings_with(
+        evaluation,
+        class,
+        transport,
+        host_user,
+        crate::user::path_owner,
+    )
+}
+
+/// [`mount_owner_findings`], given how to read a path's owner.
+fn mount_owner_findings_with(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+    path_owner: impl Fn(&Path) -> Option<DirectoryOwner>,
+) -> Vec<Finding> {
+    if class != Some(DaemonClass::RootfulLinux) || transport != Some(Transport::LocalSocket) {
+        return Vec::new();
+    }
+    let Some(host_user) = host_user.filter(|user| user.uid != 0) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for (name, container) in runnable_containers(evaluation) {
+        if !runs_as_host_user_on_rootful_linux(container) {
+            continue;
+        }
+        for local in writable_bind_mounts(container) {
+            let Some(owner) = path_owner(Path::new(&local.local)) else {
+                continue;
+            };
+            if owner.uid != host_user.uid {
+                findings.push(Finding::Warning(format!(
+                    "container '{name}' runs as the host user (uid {}, gid {}), but the mount of \
+                     '{}' at '{}' is owned by uid {}, gid {} — a write there may be refused",
+                    host_user.uid,
+                    host_user.gid,
+                    crate::ui::printable(&local.local),
+                    crate::ui::printable(&local.container),
+                    owner.uid,
+                    owner.gid,
+                )));
+            }
+        }
+    }
+    findings
+}
+
+/// What the deepest mount strictly above a container's `identity` home does to
+/// that home, for each container that can run: the home is created by upload
+/// before the container starts, so through a bind mount or volume, while a `tmpfs`
+/// applied at start would hide it, which a run refuses (`identity::prepare_home`).
+/// A mount at the home itself supplies it. Whether the home already exists can't
+/// always be known from here, so a finding allows for it. One the image ships gets
+/// past that refusal, and is then hidden, so the `tmpfs` is a problem either way.
+///
+/// Only the deepest mount is read, though a run refuses a `tmpfs` at any depth
+/// above a home it has to create, so one with a bind mount or cache between it and
+/// the home is judged by that deeper mount alone (#825). A `cache` counts as a volume whatever a run's
+/// `--cache-type` says, since neither caller has that flag's value.
+fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for (name, container) in runnable_containers(evaluation) {
+        let Some(identity) = &container.identity else {
+            continue;
+        };
+        let home = path_clean::clean(&identity.home);
+        let mounts = || container.volumes.iter().flatten();
+        if mounts().any(|mount| path_clean::clean(mount.container_path()) == home) {
+            continue;
+        }
+        let Some(above) = mounts()
+            .filter(|mount| home.starts_with(path_clean::clean(mount.container_path())))
+            .max_by_key(|mount| {
+                path_clean::clean(mount.container_path())
+                    .components()
+                    .count()
+            })
+        else {
+            continue;
+        };
+        let home = crate::ui::printable(&identity.home);
+        let at = crate::ui::printable(above.container_path());
+        let under = |mount: &str, consequence: &str| {
+            format!(
+                "container '{name}' has identity.home '{home}' under the {mount} at '{at}' — \
+                 {consequence}"
+            )
+        };
+        let read_only_consequence = "a run fails unless the home already exists there";
+        match above {
+            VolumeMount::Tmpfs(_) => findings.push(Finding::Problem(under(
+                "tmpfs",
+                "a run fails, or runs with the home hidden if the image already has it",
+            ))),
+            VolumeMount::Local(local) if crate::container_spec::is_read_only(&local.options) => {
+                findings.push(Finding::Warning(under(
+                    "read-only bind mount",
+                    read_only_consequence,
+                )))
+            }
+            VolumeMount::Local(_) => findings.push(Finding::Warning(under(
+                "writable bind mount",
+                "a home that doesn't exist yet is created on the host, in that directory",
+            ))),
+            VolumeMount::Cache(cache) if crate::container_spec::is_read_only(&cache.options) => {
+                findings.push(Finding::Warning(under(
+                    "read-only cache",
+                    read_only_consequence,
+                )))
+            }
+            VolumeMount::Cache(_) => {}
+        }
+    }
+    findings
 }
 
 /// Whether `content` is one of Batect's own wrapper scripts, by the notice

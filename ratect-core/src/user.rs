@@ -74,6 +74,28 @@ pub fn current_user(asked_by: &str) -> Result<CurrentUser> {
     Err(only_on_unix(asked_by))
 }
 
+/// The ids Ratect runs as, needing no passwd or group entry as [`current_user`]
+/// does. `None` on a host with no uid or gid.
+#[cfg(unix)]
+pub fn current_owner() -> Option<DirectoryOwner> {
+    Some(DirectoryOwner {
+        uid: nix::unistd::getuid().as_raw(),
+        gid: nix::unistd::getgid().as_raw(),
+    })
+}
+
+/// See the Unix form.
+#[cfg(not(unix))]
+pub fn current_owner() -> Option<DirectoryOwner> {
+    None
+}
+
+/// Whether `path` exists on this host as something other than a directory, a
+/// socket or a file, following a symbolic link as a bind mount does.
+pub fn is_non_directory(path: &std::path::Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| !metadata.is_dir())
+}
+
 /// [`current_user`]'s failure on a host with no uid or gid to map onto.
 #[cfg_attr(unix, allow(dead_code))]
 fn only_on_unix(asked_by: &str) -> anyhow::Error {
@@ -164,12 +186,32 @@ pub struct AdditionalUser {
     pub gid: u32,
 }
 
-/// Who `identity` makes a directory's owner: the numeric ids an archive entry
-/// takes, since Docker's archive API has no use for a name.
+/// A file's or directory's owner by numeric ids, as a stat reports them. Who
+/// `identity` makes a directory's owner is one, since Docker's archive API has no
+/// use for a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DirectoryOwner {
     pub uid: u32,
     pub gid: u32,
+}
+
+/// Who owns `path` on this host, following a symbolic link as a bind mount does.
+/// `None` for a path that can't be read, or on a host with no uid or gid.
+#[cfg(unix)]
+pub fn path_owner(path: &std::path::Path) -> Option<DirectoryOwner> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(DirectoryOwner {
+        uid: metadata.uid(),
+        gid: metadata.gid(),
+    })
+}
+
+/// See the Unix form.
+#[cfg(not(unix))]
+pub fn path_owner(_path: &std::path::Path) -> Option<DirectoryOwner> {
+    None
 }
 
 /// What [`edit_passwd_home`] made of an image's `/etc/passwd`.

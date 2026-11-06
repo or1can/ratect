@@ -1157,6 +1157,15 @@ pub struct TmpfsVolumeMount {
 }
 
 impl VolumeMount {
+    /// Where this mount lands inside the container, as written.
+    pub fn container_path(&self) -> &str {
+        match self {
+            Self::Local(mount) => &mount.container,
+            Self::Cache(mount) => &mount.container,
+            Self::Tmpfs(mount) => &mount.container,
+        }
+    }
+
     /// Parses Batect's `"local_path:container_path[:options]"` string form —
     /// always a `Local` mount; there's no compact string form for `cache`/
     /// `tmpfs` (matching Batect, whose string form only ever produces a

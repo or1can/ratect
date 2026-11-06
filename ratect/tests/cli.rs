@@ -3690,6 +3690,16 @@ fn doctor_reports_each_kind_of_config_finding_from_the_doctor_fixture() {
     );
     assert!(
         has_line(
+            "warning ",
+            &[
+                "container 'scratch' has identity.home '/work/me'",
+                "writable bind mount at '/work'"
+            ]
+        ),
+        "the mount above the identity home should be flagged:\n{stdout}"
+    );
+    assert!(
+        has_line(
             "problem ",
             &[
                 "container 'app': build_directory",
@@ -4138,6 +4148,113 @@ fn doctor_reports_the_daemon_class_as_fine() {
     );
     assert!(
         stdout.contains("ok      Docker daemon class: rootless"),
+        "{stdout}"
+    );
+}
+
+/// What `doctor` adds about a project on a stand-in daemon that reports nothing,
+/// which over the network is rootful Linux whatever this host is.
+fn doctor_stdout_on_rootful_linux(project: &str) -> String {
+    let directory = unique_project_dir();
+    std::fs::write(directory.join("ratect.toml"), project).unwrap();
+    let (port, _stop) = spawn_fake_plain_daemon_with_info(r#"{"SecurityOptions":[]}"#);
+    let output = ratect_command()
+        .arg("-f")
+        .arg(directory.join("ratect.toml"))
+        .arg("doctor")
+        .arg("--docker-host")
+        .arg(format!("tcp://127.0.0.1:{port}"))
+        .env_remove("DOCKER_TLS_VERIFY")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&directory).unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The class reaches the check; its rules are `ratect-core`'s to test.
+#[test]
+fn doctor_warns_about_a_mount_written_as_root_on_rootful_linux() {
+    let stdout = doctor_stdout_on_rootful_linux(
+        r#"
+ratect_version = "0.13.0"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+volumes = [{ local = "/srv/code", container = "/code" }]
+"#,
+    );
+    assert!(
+        stdout.contains("ok      Docker daemon class: rootful Linux"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("warning container 'app' has no identity and no non-root user"),
+        "{stdout}"
+    );
+}
+
+/// A remote daemon's mounts are on its own filesystem, so this one's aren't read:
+/// `/` isn't this test's user's, unless it is root.
+#[test]
+fn doctor_does_not_read_a_mounts_owner_for_a_daemon_over_the_network() {
+    let stdout = doctor_stdout_on_rootful_linux(
+        r#"
+ratect_version = "0.13.0"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+volumes = [{ local = "/", container = "/host" }]
+"#,
+    );
+    assert!(
+        stdout.contains("ok      Docker daemon class: rootful Linux"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("is owned by"), "{stdout}");
+}
+
+/// Requires a rootful Docker daemon on a local socket, so Linux. Run explicitly
+/// with `cargo test -- --ignored`.
+///
+/// The one path only a real local socket reaches: `doctor` reads a real mount's
+/// owner and compares it with this process's user. `/usr` is root's, so this also
+/// requires a non-root test run, as CI's is.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore]
+fn doctor_warns_about_a_mount_someone_else_owns_on_a_local_rootful_daemon() {
+    let directory = unique_project_dir();
+    std::fs::write(
+        directory.join("ratect.toml"),
+        r#"
+ratect_version = "0.13.0"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+volumes = [{ local = "/usr", container = "/host-usr" }]
+"#,
+    )
+    .unwrap();
+    let output = ratect_command()
+        .arg("-f")
+        .arg(directory.join("ratect.toml"))
+        .arg("doctor")
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&directory).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Docker daemon class: rootful Linux"),
+        "this test needs a rootful Linux daemon on a local socket:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("warning container 'app' runs as the host user")
+            && stdout.contains("'/usr' at '/host-usr' is owned by uid 0"),
         "{stdout}"
     );
 }

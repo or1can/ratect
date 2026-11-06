@@ -333,7 +333,7 @@ config-only checks (values this machine can't evaluate, a
 `build_directory`/Dockerfile a build can't use, an absolute `dockerfile`,
 floating image tags, dependencies with no
 `health_check`, an entry given more than once in one `dependencies` or
-`prerequisites` list), exiting non-zero on a problem. It never touches Docker, so it's the
+`prerequisites` list, a mount above an `identity` home), exiting non-zero on a problem. It never touches Docker, so it's the
 gate to run in CI when all you want to know is "is the config valid?", without a
 daemon. It takes the same `--config-var`/`--config-vars-file` options as `run`, and
 reads `ratect.local.toml` the same way, since evaluating the config can need them.
@@ -446,8 +446,8 @@ only vendor-specific signals tell it from a native daemon
 [`identity` treats it as one](ratect-config-reference.md#on-a-rootful-linux-daemon).
 If the daemon answers but its class can't be read, that is a warning.
 
-The class also decides two warnings about containers in the project, whichever
-task reaches them, leaving out a base with no image or `build_directory`, which
+The class also decides two warnings a run gives too, about containers in the
+project, whichever task reaches them, leaving out a base with no image or `build_directory`, which
 nothing can run:
 
 - **`identity` on a userns-remap daemon.** Every container user maps to a subordinate
@@ -464,6 +464,30 @@ can't report the third thing a run warns about, an `identity` container whose im
 runs it as a non-root user on either daemon: the image's user isn't in the
 configuration, the image may not be local, and `doctor` doesn't pull it. `config
 validate` reports none of these, since it doesn't connect to a daemon.
+
+On a rootful Linux daemon, `doctor` also warns about each writable bind mount of a
+container that writes there as root, whose files may end up root-owned on the host,
+and suggests [`identity`](ratect-config-reference.md#on-a-rootful-linux-daemon), or
+`run_as_current_user` for a container in a `.yml` file, which can't set `identity`. That
+is a container with no `identity`, no enabled `run_as_current_user`, and either no
+`user` or a `user` of `0` or `root`. With no `user` it assumes root, since it doesn't
+pull the image to find out. It fires on Docker Desktop on Linux too, where the files
+are in fact the host user's, because that file sharing is what the class can't see.
+`identity` is still sound there. A mounted socket or single file isn't reported, since
+a write can't change its owner, except from a daemon reached over the network, whose
+paths aren't on this machine to look at. It says nothing when you are root, since root-owned files are then yours. A run
+doesn't warn about this, and neither does `config validate`.
+
+Over a local socket to a rootful Linux daemon, `doctor` also reads who owns each
+writable bind mount's host path, for a container that runs as you: one with `identity`,
+or an enabled `run_as_current_user`. If another uid owns it, it warns that a write
+there may be refused, as it can be for a directory an earlier run left
+root-owned. "May", since group or other permissions can still allow it, and on Docker
+Desktop on Linux a bind mount looks like the container user's own, so the write may
+well succeed. A missing path isn't reported, since a run tries to create it as you, and nor is
+one whose owner can't be read, or anything when you are root. A daemon reached over the network isn't checked, because its mounts are on its
+own filesystem, and neither is any other class, where the container doesn't run as
+your uid. It's a warning, and `config validate` doesn't report it.
 
 A **problem** will fail a run — an unreachable daemon, a configuration that doesn't
 load, a `build_directory` or Dockerfile a build can't use. A **warning** works but is
@@ -491,6 +515,24 @@ as `app`'s `cache` above. Batect refuses such a file; Ratect loads it and starts
 or runs the entry once, so the repeat is reported rather than refused. Entries are
 compared as written: a wildcard prerequisite given twice is a repeat, but a wildcard
 beside a task it matches is not.
+
+A mount above a container's
+[`identity` home](ratect-config-reference.md#identity-your-files-and-the-same-home-everywhere)
+is reported for what it does to that home, which is created through the mount before
+the container starts. The deepest mount strictly above the home decides, and a mount
+at the home itself supplies it, so that gets no finding whatever is above it:
+
+| Deepest mount above the home | Finding |
+| --- | --- |
+| `tmpfs` | Problem: the run fails, or, if the image already has the home, runs with it hidden |
+| Read-only bind mount or `cache` | Warning: the run fails unless the home already exists there |
+| Writable bind mount | Warning: a missing home is created on the host, in that directory |
+| Writable `cache` | None |
+
+Two cases aren't judged as a run would judge them. A `tmpfs` with a bind mount or
+`cache` between it and the home gets the deeper mount's finding, or none, though the
+run refuses that too, unless the home already exists in the deeper mount. And a `cache` under `--cache-type=directory`, a host directory, is judged as a volume,
+since neither `doctor` nor `config validate` takes that flag.
 
 If you're **migrating from Batect**, `doctor` also flags a leftover `batect`/`batect.cmd`
 wrapper script. Those aren't harmless: `./batect` still downloads and runs the
