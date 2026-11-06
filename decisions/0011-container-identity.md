@@ -50,7 +50,12 @@ under Consequences. Refined while removing the field from the native format
 ([#238](https://github.com/or1can/ratect/issues/238)): a TOML container inheriting an
 enabled one from a YAML parent is refused too, since it could neither override nor
 remove it, and `config convert` maps an enabled one to `identity` and lists each
-container, a fresh cache volume's lost write access included.
+container, a fresh cache volume's lost write access included. Probed on OrbStack
+(Docker 29.8.2) after the `doctor` home checks found a run stricter than they were
+([#825](https://github.com/or1can/ratect/issues/825)): a home created in a mount
+below a `tmpfs` stays visible, since that mount goes on top of the `tmpfs` at start,
+so a `tmpfs` above the home is refused when it is the deepest mount there and nothing
+is mounted at the home.
 
 
 ## Context
@@ -254,7 +259,8 @@ On every daemon class, however the entry above was reached:
   the project chose that path; Docker's archive API has no create-only form, so
   an upload rewrites the owner and mode of what it lands on, through a bind mount
   and onto the host as well. A file at that path is an error naming the container,
-  as is a `tmpfs` above it, which would hide what is created.
+  as is a `tmpfs` as the deepest mount above it with nothing mounted at it, which
+  would hide what is created.
 - **A mount below the home is the exception to "untouched".** The daemon creates
   each bind mount's and volume's destination and its parents as root on the first
   archive call, even a stat, so by the time Ratect can look, a directory made for

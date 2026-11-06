@@ -516,10 +516,9 @@ fn mount_owner_findings_with(
 /// always be known from here, so a finding allows for it. One the image ships gets
 /// past that refusal, and is then hidden, so the `tmpfs` is a problem either way.
 ///
-/// Only the deepest mount is read, though a run refuses a `tmpfs` at any depth
-/// above a home it has to create, so one with a bind mount or cache between it and
-/// the home is judged by that deeper mount alone (#825). A `cache` counts as a volume whatever a run's
-/// `--cache-type` says, since neither caller has that flag's value.
+/// Only the deepest mount is read, since it goes on top of any `tmpfs` above it at
+/// start, and a run comes to the same answer. A `cache` counts as a volume
+/// whatever a run's `--cache-type` says, since neither caller has that flag's value.
 fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (name, container) in runnable_containers(evaluation) {

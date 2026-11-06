@@ -1282,6 +1282,47 @@ async fn a_mount_at_the_identity_home_settles_it_whatever_is_above() {
     assert_eq!(findings, []);
 }
 
+/// A run creates the home in the deeper mount, which goes on top of the `tmpfs` at
+/// start, so each finding here is what a run does (`identity::prepare_home`).
+#[tokio::test]
+async fn a_tmpfs_above_a_deeper_mount_above_the_identity_home_is_judged_by_that_mount() {
+    assert_eq!(
+        home_mount_findings_for(
+            "/mnt/up/me",
+            r#"[
+                { type = "tmpfs", container = "/mnt" },
+                { type = "cache", name = "up", container = "/mnt/up" },
+            ]"#,
+        )
+        .await,
+        []
+    );
+    for (volume, expected) in [
+        (
+            r#"{ local = "up", container = "/mnt/up" }"#,
+            "created on the host",
+        ),
+        (
+            r#"{ local = "up", container = "/mnt/up", options = "ro" }"#,
+            "a run fails unless the home already exists",
+        ),
+        (
+            r#"{ type = "cache", name = "up", container = "/mnt/up", options = "ro" }"#,
+            "a run fails unless the home already exists",
+        ),
+    ] {
+        let findings = home_mount_findings_for(
+            "/mnt/up/me",
+            &format!(r#"[{{ type = "tmpfs", container = "/mnt" }}, {volume}]"#),
+        )
+        .await;
+        assert!(
+            matches!(&findings[..], [Finding::Warning(message)] if message.contains(expected)),
+            "{volume}: {findings:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn only_the_deepest_mount_above_the_identity_home_decides() {
     // Listed both ways round, so it can't be the list's order that decides.

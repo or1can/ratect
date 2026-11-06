@@ -19119,6 +19119,109 @@ async fn a_tmpfs_that_hides_nothing_is_allowed() {
         .created_directories()
         .iter()
         .all(|(name, ..)| name != "app"));
+    let tmpfs_at_home = identity_runtime(DaemonClass::Desktop)
+        .with_tmpfs("app", "/home")
+        .with_tmpfs("app", "/home/me");
+    engine(config_with_identity(|_| {}), tmpfs_at_home)
+        .run_task("run", &[])
+        .await
+        .unwrap();
+}
+
+/// A deeper mount goes on top of the `tmpfs` at start, so the home created in it
+/// stays visible. The upload goes into that mount, as any home under one does.
+#[tokio::test]
+async fn a_tmpfs_above_a_deeper_mount_above_a_missing_home_is_allowed() {
+    let docker = identity_runtime(DaemonClass::Desktop)
+        .with_tmpfs("app", "/mnt")
+        .with_mount("app", "/mnt/up");
+    let config =
+        config_with_identity(|app| app.identity.as_mut().unwrap().home = "/mnt/up/me".to_string());
+    engine(config, docker.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    let created = docker.created_directories();
+    assert!(
+        created.iter().any(|(name, into, relative, _)| (
+            name.as_str(),
+            into.as_str(),
+            relative.as_str()
+        ) == ("app", "/mnt/up", "me")),
+        "{created:?}"
+    );
+}
+
+/// What decides is the deepest mount above the home, wherever anything else is:
+/// a mount above the `tmpfs` doesn't save what the `tmpfs` hides, and neither does
+/// one beside the home.
+#[tokio::test]
+async fn a_tmpfs_that_is_the_deepest_mount_above_a_missing_home_is_refused() {
+    let cases = [
+        (
+            "/mnt/up",
+            identity_runtime(DaemonClass::Desktop)
+                .with_mount("app", "/mnt")
+                .with_tmpfs("app", "/mnt/up"),
+        ),
+        (
+            "/mnt/up/inner",
+            identity_runtime(DaemonClass::Desktop)
+                .with_tmpfs("app", "/mnt")
+                .with_mount("app", "/mnt/up")
+                .with_tmpfs("app", "/mnt/up/inner"),
+        ),
+        (
+            "/mnt",
+            identity_runtime(DaemonClass::Desktop)
+                .with_tmpfs("app", "/mnt")
+                .with_mount("app", "/mnt/other"),
+        ),
+    ];
+    for (tmpfs, docker) in cases {
+        let config = config_with_identity(|app| {
+            app.identity.as_mut().unwrap().home = format!("{tmpfs}/me");
+        });
+        let error = engine(config, docker.clone())
+            .run_task("run", &[])
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains(&format!("tmpfs at '{tmpfs}'")), "{error}");
+        assert!(
+            docker
+                .created_directories()
+                .iter()
+                .all(|(name, ..)| name != "app"),
+            "{tmpfs}"
+        );
+    }
+}
+
+/// Docker forwards a `tmpfs` key as written, so which mount is deepest is read from
+/// the paths, not from how they are spelled.
+#[tokio::test]
+async fn a_tmpfs_above_a_missing_home_is_judged_however_its_path_is_written() {
+    for destination in ["/mnt/", "//mnt", "/mnt/."] {
+        let config = || {
+            config_with_identity(|app| {
+                app.identity.as_mut().unwrap().home = "/mnt/up/me".to_string();
+            })
+        };
+        let refused = identity_runtime(DaemonClass::Desktop).with_tmpfs("app", destination);
+        let error = engine(config(), refused)
+            .run_task("run", &[])
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("would hide"), "{destination}");
+        let allowed = identity_runtime(DaemonClass::Desktop)
+            .with_tmpfs("app", destination)
+            .with_mount("app", "/mnt/up");
+        engine(config(), allowed)
+            .run_task("run", &[])
+            .await
+            .unwrap();
+    }
 }
 
 /// The mount refusals compare paths, since Docker forwards a `tmpfs` key as
