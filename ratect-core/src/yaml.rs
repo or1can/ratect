@@ -65,11 +65,10 @@
 //! repeating it, also as in kaml, and the same key in two mappings is two
 //! keys.
 //!
-//! **A default only Batect has.** Where Batect's runtime defaults a field
-//! that `ratect.toml` requires, the field's own reader asks
-//! [`batect_defaults_apply`] — true only inside [`from_str`], so the YAML
-//! file being read decides, and a TOML file never gets the default.
-//! `run_as_current_user.enabled` is the one such field (#374).
+//! **A field whose reading depends on the format.** Its reader asks
+//! [`reading_batect_format`] — true only inside [`from_str`], so the YAML file
+//! being read decides. `config::reading_batect_format`'s callers are the
+//! fields that do.
 //!
 //! **An error is one line, escaped** (#770). `noyalib` quotes a key in the
 //! path it reports and in its own messages (`unknown field: x`) as written, so
@@ -106,10 +105,8 @@ pub(crate) fn from_str<T: DeserializeOwned + 'static>(text: &str) -> noyalib::Re
     Ok(value)
 }
 
-/// Whether a field Batect defaults and `ratect.toml` requires takes
-/// Batect's default — that is, whether the text being read is Batect-format
-/// YAML. See the module notes.
-pub(crate) fn batect_defaults_apply() -> bool {
+/// Whether the text being read is Batect-format YAML. See the module notes.
+pub(crate) fn reading_batect_format() -> bool {
     READING.with(Cell::get)
 }
 

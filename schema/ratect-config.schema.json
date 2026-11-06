@@ -449,7 +449,7 @@
         },
         "identity": {
           "additionalProperties": false,
-          "description": "Gives this container a guaranteed home: `$HOME` and its running user's passwd entry both say `home`, which is created if nothing is there. Refused beside `user`, `group` or an enabled `run_as_current_user`. On a rootful Linux daemon it also runs as the host user.",
+          "description": "Gives this container a guaranteed home: `$HOME` and its running user's passwd entry both say `home`, which is created if nothing is there. Refused beside `user` or `group`. On a rootful Linux daemon it also runs as the host user.",
           "examples": [
             {
               "home": "/home/me"
@@ -585,17 +585,6 @@
             "boolean",
             "null"
           ]
-        },
-        "run_as_current_user": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RunAsCurrentUser"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Runs the container as the host's own user rather than the image's default, so files it writes to a mounted volume aren't root-owned."
         },
         "run_to_completion": {
           "description": "Runs this dependency to completion instead of leaving it detached — Kubernetes-style init-container behavior. Started, run to completion (not detached), and considered ready once it exits with status 0; a non-zero exit fails the task run. Mutually exclusive with `health_check`/`setup_commands`.",
@@ -937,27 +926,6 @@
           "type": "string"
         }
       ]
-    },
-    "RunAsCurrentUser": {
-      "additionalProperties": false,
-      "description": "Runs this container as the host's own user/group instead of whatever the image defaults to (see the load-time validation of `home_directory` and `TaskEngine::resolve_user_mapping`). `home_directory` is required when `enabled` is `true` (and rejected otherwise) — Ratect never guesses one, matching Batect.",
-      "properties": {
-        "enabled": {
-          "description": "Whether to run as the host's own user. Required — there's no default.",
-          "type": "boolean"
-        },
-        "home_directory": {
-          "description": "The home directory to create inside the container for that user. Must be an absolute path; it's a path inside the container, so it's never resolved against anything on the host.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "enabled"
-      ],
-      "type": "object"
     },
     "SetupCommand": {
       "additionalProperties": false,

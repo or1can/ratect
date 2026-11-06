@@ -334,6 +334,7 @@
               "type": "null"
             }
           ],
+          "default": null,
           "description": "Runs the container as the host's own user rather than the image's default, so files it writes to a mounted volume aren't root-owned."
         },
         "setup_commands": {
@@ -613,7 +614,7 @@
           "type": "boolean"
         },
         "home_directory": {
-          "description": "The home directory to create inside the container for that user. Must be an absolute path; it's a path inside the container, so it's never resolved against anything on the host.",
+          "description": "The home directory to create inside the container for that user. Must be an absolute path; it's a path inside the container, so it's never resolved against anything on the host. Used as written, never an expression, as in Batect.",
           "type": [
             "string",
             "null"

@@ -93,7 +93,7 @@ const ANY: &str = "*";
 const BOTH: &[Between] = &[Between::Twins, Between::Converted];
 /// A difference between the twins that the converter doesn't share: it writes
 /// the `batect.yml`'s text into a `ratect.toml`, which reads it as the twin
-/// does. (A difference only the converter makes — a known bug in it, cited by
+/// does, and the same `identity` for its `run_as_current_user`. (A difference only the converter makes — a known bug in it, cited by
 /// its issue until fixed — would list `Between::Converted` alone; none does
 /// today.)
 const TWINS: &[Between] = &[Between::Twins];
@@ -103,6 +103,12 @@ const TWINS: &[Between] = &[Between::Twins];
 const EXTERNAL_HEALTH_CHECK: &str =
     "docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it";
 
+/// Where the reference explains what a `batect.yml`'s `run_as_current_user`
+/// is in a `ratect.toml`, which the converter writes too, so its output agrees
+/// with the twin.
+const RUN_AS_CURRENT_USER_TO_IDENTITY: &str =
+    "docs/ratect-config-reference.md#coming-from-run_as_current_user";
+
 /// Every way the twins, or the converter's output, differ — the executable
 /// record of how the two formats differ. Behaviour keyed on
 /// `LoadedProject::dialect` rather than on the configuration, such as a task's
@@ -111,11 +117,35 @@ const EXTERNAL_HEALTH_CHECK: &str =
 const DIVERGENCES: &[Divergence] = &[
     Divergence {
         between: TWINS,
+        case: "image-container",
+        pointer: "/containers/app/run_as_current_user",
+        left: r#"{"enabled":true,"home_directory":"/home/twin"}"#,
+        right: r#"null"#,
+        because: RUN_AS_CURRENT_USER_TO_IDENTITY,
+    },
+    Divergence {
+        between: TWINS,
+        case: "image-container",
+        pointer: "/containers/app/identity",
+        left: r#"null"#,
+        right: r#"{"home":"/home/twin"}"#,
+        because: RUN_AS_CURRENT_USER_TO_IDENTITY,
+    },
+    Divergence {
+        between: TWINS,
         case: "literal-in-yaml",
-        pointer: "/containers/app/run_as_current_user/home_directory",
-        left: r#""/home/$TWIN_HOST_VAR""#,
-        right: r#""/home/from-the-host""#,
-        because: "ratect#462: batect.yml uses home_directory as written",
+        pointer: "/containers/app/run_as_current_user",
+        left: r#"{"enabled":true,"home_directory":"/home/$TWIN_HOST_VAR"}"#,
+        right: r#"null"#,
+        because: "ratect#462: batect.yml uses home_directory as written; ratect#238",
+    },
+    Divergence {
+        between: TWINS,
+        case: "literal-in-yaml",
+        pointer: "/containers/app/identity",
+        left: r#"null"#,
+        right: r#"{"home":"/home/from-the-host"}"#,
+        because: "ratect#462: ratect.toml evaluates identity.home; ratect#238",
     },
     Divergence {
         between: TWINS,
@@ -219,7 +249,7 @@ const DIVERGENCES: &[Divergence] = &[
         pointer: "/containers/db-client/identity",
         left: r#"null"#,
         right: r#"{"additional_users":[{"gid":1600,"name":"svc","uid":1500}],"home":"/home/twin"}"#,
-        because: "docs/ratect-config-reference.md#identity-a-guaranteed-home",
+        because: "docs/ratect-config-reference.md#identity-your-files-and-the-same-home-everywhere",
     },
     Divergence {
         between: BOTH,

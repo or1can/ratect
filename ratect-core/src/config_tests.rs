@@ -6062,33 +6062,6 @@ fn load_errors_when_run_as_current_user_home_directory_contains_a_newline() {
 }
 
 #[test]
-fn evaluate_interpolates_run_as_current_user_home_directory() {
-    let mut config = config_with_container(container_with_run_as_current_user(
-        true,
-        Some("/home/$HOST_VAR"),
-    ));
-
-    config
-        .check_and_evaluate_with(
-            Path::new("/base"),
-            &HashMap::new(),
-            &HashMap::new(),
-            |name| (name == "HOST_VAR").then(|| "container-user".to_string()),
-        )
-        .unwrap();
-
-    assert_eq!(
-        config.containers["build-env"]
-            .run_as_current_user
-            .as_ref()
-            .unwrap()
-            .home_directory
-            .as_deref(),
-        Some("/home/container-user")
-    );
-}
-
-#[test]
 fn load_leaves_disabled_run_as_current_user_unaffected() {
     let config = config_with_container(container_with_run_as_current_user(false, None));
 
@@ -6162,22 +6135,104 @@ async fn a_yaml_home_directory_without_enabled_fails_the_pairing_rule() {
     assert!(!message.contains("missing field"), "{message}");
 }
 
-/// `ratect.toml` keeps `enabled` required (#374): its `run_as_current_user`
-/// is being redesigned (decisions/0011), so Batect's default isn't carried
-/// over to it.
-#[test]
-fn a_toml_run_as_current_user_without_enabled_is_refused() {
-    for table in ["", "home_directory = \"/home/x\"\n"] {
-        let message = toml::from_str::<ConfigFile>(&format!(
-            "project_name = \"demo\"\n\
-             [containers.app]\n\
-             image = \"alpine\"\n\
-             [containers.app.run_as_current_user]\n\
-             {table}"
-        ))
-        .unwrap_err()
-        .to_string();
-        assert!(message.contains("missing field `enabled`"), "{message}");
+/// A TOML file can't set `run_as_current_user` at all (#238), whatever it
+/// wrote there, so the refusal names the container and `identity` rather than
+/// a key of a field that no longer exists. In the root and in a TOML include.
+#[tokio::test]
+async fn run_as_current_user_in_a_toml_file_is_refused_naming_the_container_and_identity() {
+    for value in [
+        "{ enabled = true, home_directory = \"/home/me\" }",
+        "{ enabled = false }",
+        "{ enabled = false, home_directory = \"/home/me\" }",
+        "{}",
+        "{ foo = 1 }",
+        "3",
+    ] {
+        let container =
+            format!("[containers.app]\nimage = \"alpine\"\nrun_as_current_user = {value}\n");
+        let (_, included) = load_native_including("frag.toml", &container).await;
+        for result in [
+            load_native_toml(&format!("project_name = \"demo\"\n{container}")).await,
+            included,
+        ] {
+            let error = format!("{:#}", result.expect_err(value));
+            assert!(error.contains("'app'"), "{value}: {error}");
+            assert!(error.contains("'run_as_current_user'"), "{value}: {error}");
+            assert!(error.contains("'identity'"), "{value}: {error}");
+        }
+    }
+}
+
+/// `project_name` and a container `base` in `extra.yml`, with `base_fields`
+/// on it, and `child_fields` on a TOML container `app` extending it.
+async fn load_native_extending_yaml(
+    base_fields: &str,
+    child_fields: &str,
+) -> Result<LoadedProject> {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("extra.yml"),
+        format!("containers:\n  base:\n    image: alpine:3.18\n{base_fields}"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        format!(
+            "project_name = \"demo\"\ninclude = [{{ path = \"extra.yml\" }}]\n\n\
+             [containers.app]\nextends = \"base\"\n{child_fields}\n"
+        ),
+    )
+    .unwrap();
+    let result = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await;
+    std::fs::remove_dir_all(&dir).ok();
+    result
+}
+
+const ENABLED_IN_YAML: &str =
+    "    run_as_current_user:\n      enabled: true\n      home_directory: /home/me\n";
+
+/// `extends` can carry the field across the format boundary, and a TOML child
+/// can neither override nor remove it, so the refusal also names the parent.
+/// A disabled one says nothing about who the container runs as, so it loads.
+#[tokio::test]
+async fn a_toml_child_inheriting_an_enabled_run_as_current_user_from_yaml_is_refused() {
+    let error = load_native_extending_yaml(ENABLED_IN_YAML, "")
+        .await
+        .expect_err("a TOML container can't run Batect's replace path");
+    let error = format!("{error:#}");
+    for named in ["'app'", "'base'", "'run_as_current_user'", "'identity'"] {
+        assert!(error.contains(named), "{named} in: {error}");
+    }
+
+    let project = load_native_extending_yaml(
+        "    run_as_current_user:\n      enabled: false\n",
+        "identity = { home = \"/home/me\" }",
+    )
+    .await
+    .expect("a disabled field names no user");
+    assert!(project.config.containers["app"].identity.is_some());
+}
+
+/// The existing refusals still answer first where the child has another
+/// identity source, naming the two it can't have together.
+#[tokio::test]
+async fn an_inherited_enabled_run_as_current_user_is_refused_beside_user_and_identity() {
+    for (child, expected) in [
+        ("user = \"app\"", "'user'"),
+        ("identity = { home = \"/home/me\" }", "'identity'"),
+    ] {
+        let error = load_native_extending_yaml(ENABLED_IN_YAML, child)
+            .await
+            .expect_err(child);
+        let error = format!("{error:#}");
+        for named in ["'app'", "'run_as_current_user'", expected] {
+            assert!(error.contains(named), "{named} in: {error}");
+        }
     }
 }
 
@@ -6201,22 +6256,11 @@ async fn an_empty_run_as_current_user_in_a_yaml_include_of_a_native_project_load
 }
 
 /// Defaulting `enabled` doesn't loosen the mapping: an unknown key is still
-/// refused in either format.
+/// refused.
 #[test]
-fn an_unknown_run_as_current_user_key_is_refused_in_both_formats() {
+fn an_unknown_run_as_current_user_key_is_refused_in_yaml() {
     let yaml = yaml_config_file_error(&yaml_with_run_as_current_user("{foo: 1}"));
     assert!(yaml.contains("unknown field"), "{yaml}");
-    let toml = toml::from_str::<ConfigFile>(
-        "project_name = \"demo\"\n\
-         [containers.app]\n\
-         image = \"alpine\"\n\
-         [containers.app.run_as_current_user]\n\
-         enabled = false\n\
-         foo = 1\n",
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(toml.contains("unknown field `foo`"), "{toml}");
 }
 
 /// A fresh, unique scratch directory for tests that need to write real
@@ -9489,40 +9533,24 @@ environment = { A = "b" }
 
 /// The same class as the `run_to_completion` conflict below: a rule
 /// spanning `volumes` and `run_as_current_user` cannot run before
-/// `extends`, because either side can be inherited. Both directions load
-/// cleanly if it does, and the relative path then surfaces from the Docker
-/// layer identified only by a container id — the failure the rule exists to
-/// prevent.
+/// `extends`, because a YAML parent can supply the second to a TOML child
+/// adding the first. It loads cleanly if it does, and the relative path then
+/// surfaces from the Docker layer identified only by a container id — the
+/// failure the rule exists to prevent.
 #[tokio::test]
-async fn a_relative_cache_mount_is_rejected_however_extends_splits_the_two_fields() {
-    let volumes = r#"volumes = [{ type = "cache", name = "c", container = "relative/path" }]"#;
-    let user = r#"run_as_current_user = { enabled = true, home_directory = "/home/u" }"#;
-    for (base, child) in [(volumes, user), (user, volumes)] {
-        let err = load_native_toml(&format!(
-            r#"
-project_name = "demo"
-
-[containers.base]
-image = "alpine:3.18"
-{base}
-
-[containers.app]
-extends = "base"
-{child}
-
-[tasks.t]
-run = {{ container = "app", command = "true" }}
-"#
-        ))
-        .await
-        .unwrap_err();
-        assert!(
-            format!("{err:#}").contains("is not an absolute path")
-                && format!("{err:#}").contains("'app'"),
-            "expected the inherited combination to be rejected, naming the container, \
-             got: {err:#}"
-        );
-    }
+async fn a_relative_cache_mount_is_rejected_beside_an_inherited_run_as_current_user() {
+    let err = load_native_extending_yaml(
+        ENABLED_IN_YAML,
+        r#"volumes = [{ type = "cache", name = "c", container = "relative/path" }]"#,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("is not an absolute path")
+            && format!("{err:#}").contains("'app'"),
+        "expected the inherited combination to be rejected, naming the container, \
+         got: {err:#}"
+    );
 }
 
 /// The conflict rules are about a container's *effective* configuration, so
@@ -10000,7 +10028,7 @@ project_name = "demo"
 
 [containers.app]
 image = "alpine:3.18"
-run_as_current_user = {{ enabled = true, home_directory = "{home_directory}" }}
+identity = {{ home = "{home_directory}" }}
 
 [tasks.test.run]
 container = "app"
@@ -10033,13 +10061,8 @@ container = "app"
         .evaluate(["app"], [], &HashMap::new(), absolute)
         .unwrap();
     assert_eq!(
-        evaluated.containers["app"]
-            .run_as_current_user
-            .as_ref()
-            .unwrap()
-            .home_directory
-            .as_deref(),
-        Some("/home/me")
+        evaluated.containers["app"].identity.as_ref().unwrap().home,
+        "/home/me"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
@@ -10128,7 +10151,7 @@ project_name = "demo"
 
 [containers.app]
 image = "alpine:3.18"
-run_as_current_user = { enabled = true, home_directory = "$HOME_DIR" }
+identity = { home = "$HOME_DIR" }
 "#,
     )
     .unwrap();
@@ -10148,10 +10171,7 @@ run_as_current_user = { enabled = true, home_directory = "$HOME_DIR" }
     assert_eq!(messages.len(), 1, "{messages:?}");
     let message = &messages[0];
     assert!(message.contains("Container 'app'"), "{message}");
-    assert!(
-        message.contains("'run_as_current_user.home_directory'"),
-        "{message}"
-    );
+    assert!(message.contains("'identity.home'"), "{message}");
     assert!(message.contains("$HOME_DIR"), "{message}");
     assert!(message.contains("is not an absolute path"), "{message}");
 
@@ -14853,10 +14873,10 @@ async fn a_batect_format_home_directory_is_not_an_expression() {
 }
 
 /// The file decides, not the project: a YAML file a native project includes
-/// is Batect-shaped, so its `home_directory` is literal too, while one in the
-/// project's own TOML is still an expression.
+/// is Batect-shaped, so it keeps the field, its `home_directory` literal, while
+/// the project's own TOML can't set the field at all (#238).
 #[tokio::test]
-async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
+async fn run_as_current_user_is_kept_in_a_yaml_include_and_refused_in_toml() {
     let dir = unique_temp_dir();
     std::fs::write(
         dir.join("extra.yml"),
@@ -14864,14 +14884,8 @@ async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
          run_as_current_user:\n      enabled: true\n      home_directory: /home/<user\n",
     )
     .unwrap();
-    std::fs::write(
-        dir.join("ratect.toml"),
-        "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n\n\
-         [config_variables.user]\ndefault = \"dev\"\n\n\
-         [containers.from-toml]\nimage = \"alpine:3.18\"\n\
-         run_as_current_user = { enabled = true, home_directory = \"/home/<user\" }\n",
-    )
-    .unwrap();
+    let root = "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n";
+    std::fs::write(dir.join("ratect.toml"), root).unwrap();
     let project = load_project_native(
         &dir.join("ratect.toml"),
         running_0_12(),
@@ -14879,53 +14893,11 @@ async fn home_directory_is_literal_in_a_yaml_include_and_evaluated_in_toml() {
     )
     .await
     .unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
     let evaluated = project
-        .evaluate(["from-yaml", "from-toml"], [], &HashMap::new(), no_host_env)
-        .unwrap();
-    let home = |name: &str| {
-        evaluated.containers[name]
-            .run_as_current_user
-            .as_ref()
-            .unwrap()
-            .home_directory
-            .clone()
-    };
-    assert_eq!(home("from-yaml").as_deref(), Some("/home/<user"));
-    assert_eq!(home("from-toml").as_deref(), Some("/home/dev"));
-}
-
-/// Literal travels with the value, not the container: a native container
-/// inheriting a YAML-declared parent's `run_as_current_user` keeps it as
-/// written, since the parent's file is where it was written.
-#[tokio::test]
-async fn an_inherited_batect_format_home_directory_stays_literal() {
-    let dir = unique_temp_dir();
-    std::fs::write(
-        dir.join("extra.yml"),
-        "containers:\n  base:\n    image: alpine:3.18\n    \
-         run_as_current_user:\n      enabled: true\n      home_directory: /home/<user\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("ratect.toml"),
-        "project_name = \"demo\"\ninclude = [{ path = \"extra.yml\" }]\n\n\
-         [containers.child]\nextends = \"base\"\n",
-    )
-    .unwrap();
-    let project = load_project_native(
-        &dir.join("ratect.toml"),
-        running_0_12(),
-        &LoadOutput::default(),
-    )
-    .await
-    .unwrap();
-    std::fs::remove_dir_all(&dir).unwrap();
-    let evaluated = project
-        .evaluate(["child"], [], &HashMap::new(), no_host_env)
+        .evaluate(["from-yaml"], [], &HashMap::new(), no_host_env)
         .expect("an undeclared '<user' is literal text here, never evaluated");
     assert_eq!(
-        evaluated.containers["child"]
+        evaluated.containers["from-yaml"]
             .run_as_current_user
             .as_ref()
             .unwrap()
@@ -14933,6 +14905,24 @@ async fn an_inherited_batect_format_home_directory_stays_literal() {
             .as_deref(),
         Some("/home/<user")
     );
+
+    std::fs::write(
+        dir.join("ratect.toml"),
+        format!(
+            "{root}\n[containers.from-toml]\nimage = \"alpine:3.18\"\n\
+             run_as_current_user = {{ enabled = true, home_directory = \"/home/<user\" }}\n"
+        ),
+    )
+    .unwrap();
+    let error = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .expect_err("a TOML file can't set the field");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(format!("{error:#}").contains("'from-toml'"), "{error:#}");
 }
 
 /// Literal still gets the shape checks: a relative `home_directory` in a
@@ -15501,10 +15491,11 @@ async fn image_alongside_a_build_field_is_refused_in_yaml_and_allowed_in_toml() 
 
 /// A Batect-format `home_directory` is literal, so it is judged when the file
 /// loads even if it looks like an expression — in a `.yml` include of a native
-/// project too, where the same text in a `.toml` include is deferred to
-/// evaluation (see `a_home_directory_is_judged_at_load_only_when_it_is_a_literal`).
+/// project too, where the same text as a `.toml` include's `identity.home` is
+/// deferred to evaluation (see
+/// `a_home_directory_is_judged_at_load_only_when_it_is_a_literal`).
 #[tokio::test]
-async fn a_yaml_includes_home_directory_is_judged_at_load_and_a_toml_ones_is_not() {
+async fn a_yaml_includes_home_directory_is_judged_at_load_and_a_toml_identity_home_is_not() {
     let (_, result) = load_native_including(
         "frag.yml",
         "containers:\n  app:\n    image: alpine:3.18\n    \
@@ -15516,8 +15507,7 @@ async fn a_yaml_includes_home_directory_is_judged_at_load_and_a_toml_ones_is_not
 
     let (_, result) = load_native_including(
         "frag.toml",
-        "[containers.app]\nimage = \"alpine:3.18\"\n\
-         run_as_current_user = { enabled = true, home_directory = \"$HOME/me\" }\n",
+        "[containers.app]\nimage = \"alpine:3.18\"\nidentity = { home = \"$HOME/me\" }\n",
     )
     .await;
     result.expect("an expression is judged when it is evaluated, not at load");
@@ -16083,9 +16073,8 @@ async fn a_backslash_in_image_is_literal_in_batect_format_and_escapes_in_native(
     assert_eq!(image(toml).as_deref(), Some("repo/img:ab"));
 }
 
-/// The value travels with the file that wrote it, as for `home_directory`
-/// (#462): a native container inheriting a YAML-declared parent's `image`
-/// keeps it as written.
+/// The value travels with the file that wrote it: a native container
+/// inheriting a YAML-declared parent's `image` keeps it as written.
 #[tokio::test]
 async fn an_inherited_batect_format_image_stays_literal() {
     let dir = unique_temp_dir();
@@ -17552,10 +17541,16 @@ tasks:
 
 // --- A bundle's written-for version (decisions/0020) ---
 
-/// The version these tests run as: the release the first rows landed in, so
-/// every row in the real table applies to an unmarked bundle.
+/// The version these tests run as: the release the first rows landed in.
 fn running_0_12() -> crate::written_for::Version {
     "0.12.0".parse().unwrap()
+}
+
+/// The version the bundle tests run as: the release of the latest row in the
+/// real table, so every row applies to an unmarked bundle, and a bundle
+/// written for this version is covered by all of them.
+fn running_0_13() -> crate::written_for::Version {
+    "0.13.0".parse().unwrap()
 }
 
 /// A native project whose root includes one bundle, `files` committed at
@@ -17567,7 +17562,7 @@ fn native_project_including_a_bundle(files: &[(&str, &str)], entry: &str) -> (Pa
     std::fs::write(
         project.join("ratect.toml"),
         format!(
-            "project_name = \"demo\"\nratect_version = \"0.12.0\"\n\n[[include]]\ntype = \"git\"\n\
+            "project_name = \"demo\"\nratect_version = \"0.13.0\"\n\n[[include]]\ntype = \"git\"\n\
              repo = \"{}\"\nref = \"v1\"\n{entry}",
             bundle.display()
         ),
@@ -17603,7 +17598,7 @@ async fn an_unmarked_bundle_is_refused_whatever_the_root_declares() {
     let (bundle, project) =
         native_project_including_a_bundle(&[("ratect-bundle.toml", BUNDLE_TASK)], "");
 
-    let error = load_bundled(&project, running_0_12())
+    let error = load_bundled(&project, running_0_13())
         .await
         .expect_err("an unmarked bundle predates every row");
     let error = format!("{error:#}");
@@ -17615,7 +17610,7 @@ async fn an_unmarked_bundle_is_refused_whatever_the_root_declares() {
         "doesn't set 'ratect_version'",
         "ratect 0.12.0: ",
         "raise its 'ratect_version'",
-        "set 'reviewed_ratect_version' to 0.12.0",
+        "set 'reviewed_ratect_version' to 0.13.0",
     ] {
         assert!(error.contains(expected), "missing {expected:?} in: {error}");
     }
@@ -17642,7 +17637,7 @@ async fn a_refusals_detectors_read_only_the_files_its_version_covers() {
         )],
         "",
     );
-    let refusal = load_bundled(&project, running_0_12())
+    let refusal = load_bundled(&project, running_0_13())
         .await
         .expect_err("an unmarked bundle predates every row")
         .downcast::<crate::written_for::Refusal>()
@@ -17676,9 +17671,9 @@ async fn a_refusals_detectors_read_only_the_files_its_version_covers() {
     // The same root, unmarked: refused itself, before the load.
     let unmarked = std::fs::read_to_string(&root)
         .unwrap()
-        .replace("ratect_version = \"0.12.0\"\n", "");
+        .replace("ratect_version = \"0.13.0\"\n", "");
     std::fs::write(&root, unmarked).unwrap();
-    let project_refusal = crate::written_for::check(&root, running_0_12())
+    let project_refusal = crate::written_for::check(&root, running_0_13())
         .expect_err("an unmarked root predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17732,7 +17727,7 @@ fn bundle_row_outcome(
 async fn a_yaml_file_in_scope_leaves_a_detected_row_unknown() {
     let bundle = git_bundle_repo(&[(
         "ratect-bundle.toml",
-        "ratect_version = \"0.12.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+        "ratect_version = \"0.13.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
     )]);
     let project = unique_temp_dir();
     let root = project.join("ratect.toml");
@@ -17749,7 +17744,7 @@ async fn a_yaml_file_in_scope_leaves_a_detected_row_unknown() {
         ),
     )
     .unwrap();
-    let refusal = crate::written_for::check(&root, running_0_12())
+    let refusal = crate::written_for::check(&root, running_0_13())
         .expect_err("an unmarked root predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17785,7 +17780,7 @@ async fn a_detector_finds_a_use_in_a_local_include() {
          [containers.app.environment]\nBACKSLASH = 'a\\b'\nREFERENCE = '<foo.txt'\n",
     )
     .unwrap();
-    let refusal = crate::written_for::check(&root, running_0_12())
+    let refusal = crate::written_for::check(&root, running_0_13())
         .expect_err("an unmarked root predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17827,7 +17822,7 @@ async fn a_detector_finds_a_use_in_a_local_include() {
 async fn a_yaml_roots_refusal_never_finds_nothing_for_want_of_toml() {
     let bundle = git_bundle_repo(&[(
         "ratect-bundle.toml",
-        "ratect_version = \"0.12.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+        "ratect_version = \"0.13.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
     )]);
     let project = unique_temp_dir();
     let root = project.join("batect.yml");
@@ -17841,7 +17836,7 @@ async fn a_yaml_roots_refusal_never_finds_nothing_for_want_of_toml() {
     .unwrap();
     let cache_root = unique_temp_dir();
     let trial = trial_load(&root, &cache_root).await;
-    let refusal = crate::written_for::check_yaml_root(&root, trial.toml_files(), running_0_12())
+    let refusal = crate::written_for::check_yaml_root(&root, trial.toml_files(), running_0_13())
         .expect_err("a YAML root including a TOML file predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17860,7 +17855,7 @@ async fn a_yaml_roots_refusal_never_finds_nothing_for_want_of_toml() {
 async fn bundled_refusal(project: &Path) -> String {
     format!(
         "{:#}",
-        load_bundled(project, running_0_12())
+        load_bundled(project, running_0_13())
             .await
             .expect_err("the bundle should be refused")
     )
@@ -17872,14 +17867,14 @@ async fn bundled_refusal(project: &Path) -> String {
 #[tokio::test]
 async fn a_bundle_loads_once_its_version_or_its_review_covers_every_row() {
     for (bundle_declares, entry) in [
-        ("ratect_version = \"0.12.0\"\n", ""),
-        ("", "reviewed_ratect_version = \"0.12.0\"\n"),
+        ("ratect_version = \"0.13.0\"\n", ""),
+        ("", "reviewed_ratect_version = \"0.13.0\"\n"),
         (
             "ratect_version = \"0.11.0\"\n",
-            "reviewed_ratect_version = \"0.12.0\"\n",
+            "reviewed_ratect_version = \"0.13.0\"\n",
         ),
         (
-            "ratect_version = \"0.12.0\"\n",
+            "ratect_version = \"0.13.0\"\n",
             "reviewed_ratect_version = \"0.11.0\"\n",
         ),
     ] {
@@ -17891,7 +17886,7 @@ async fn a_bundle_loads_once_its_version_or_its_review_covers_every_row() {
             entry,
         );
 
-        let config = load_bundled(&project, running_0_12())
+        let config = load_bundled(&project, running_0_13())
             .await
             .unwrap_or_else(|error| panic!("{bundle_declares:?} {entry:?}: {error:#}"));
         assert!(config.config.tasks.contains_key("bundled"));
@@ -17932,14 +17927,14 @@ async fn a_bundle_from_the_future_is_refused_before_it_is_parsed() {
     let (bundle, project) = native_project_including_a_bundle(
         &[(
             "ratect-bundle.toml",
-            &format!("ratect_version = \"0.13.0\"\nfield_from_the_future = true\n{BUNDLE_TASK}"),
+            &format!("ratect_version = \"0.14.0\"\nfield_from_the_future = true\n{BUNDLE_TASK}"),
         )],
         "",
     );
 
     let error = bundled_refusal(&project).await;
     for expected in [
-        "its 'ratect_version' is 0.13.0, so it needs ratect 0.13 or later",
+        "its 'ratect_version' is 0.14.0, so it needs ratect 0.14 or later",
         "Upgrade ratect, or set the include's 'ref'",
     ] {
         assert!(error.contains(expected), "missing {expected:?} in: {error}");
@@ -17956,12 +17951,12 @@ async fn a_bundle_from_the_future_is_refused_before_it_is_parsed() {
 async fn a_review_from_the_future_is_refused() {
     let (bundle, project) = native_project_including_a_bundle(
         &[("ratect-bundle.toml", BUNDLE_TASK)],
-        "reviewed_ratect_version = \"0.13.0\"\n",
+        "reviewed_ratect_version = \"0.14.0\"\n",
     );
 
     let error = bundled_refusal(&project).await;
     assert!(
-        error.contains("the include's 'reviewed_ratect_version' is 0.13.0, newer than this ratect"),
+        error.contains("the include's 'reviewed_ratect_version' is 0.14.0, newer than this ratect"),
         "got: {error}"
     );
 
@@ -17995,11 +17990,11 @@ async fn ratect_version_is_refused_in_a_bundle_file_no_git_include_names() {
         &[
             (
                 "ratect-bundle.toml",
-                "ratect_version = \"0.12.0\"\ninclude = [\"more.toml\"]\n",
+                "ratect_version = \"0.13.0\"\ninclude = [\"more.toml\"]\n",
             ),
             (
                 "more.toml",
-                &format!("ratect_version = \"0.12.0\"\n{BUNDLE_TASK}"),
+                &format!("ratect_version = \"0.13.0\"\n{BUNDLE_TASK}"),
             ),
         ],
         "",
@@ -18024,7 +18019,7 @@ async fn ratect_version_is_refused_in_a_yaml_bundle_entry_file() {
     let (bundle, project) = native_project_including_a_bundle(
         &[(
             "batect-bundle.yml",
-            "ratect_version: 0.12.0\ntasks:\n  bundled:\n    run:\n      container: c\n",
+            "ratect_version: 0.13.0\ntasks:\n  bundled:\n    run:\n      container: c\n",
         )],
         "",
     );
@@ -18047,7 +18042,7 @@ async fn ratect_version_is_still_refused_in_an_owned_included_file() {
         "project_name = \"demo\"\ninclude = [\"more.toml\"]\n",
     )
     .unwrap();
-    std::fs::write(project.join("more.toml"), "ratect_version = \"0.12.0\"\n").unwrap();
+    std::fs::write(project.join("more.toml"), "ratect_version = \"0.13.0\"\n").unwrap();
 
     let error = bundled_refusal(&project).await;
     assert!(
@@ -18064,14 +18059,14 @@ async fn ratect_version_is_still_refused_in_an_owned_included_file() {
 async fn a_nested_bundle_is_covered_by_its_parents_entry_for_it() {
     for (acknowledgement, loads) in [
         ("", false),
-        ("reviewed_ratect_version = \"0.12.0\"\n", true),
+        ("reviewed_ratect_version = \"0.13.0\"\n", true),
     ] {
         let inner = git_bundle_repo(&[("ratect-bundle.toml", BUNDLE_TASK)]);
         let (outer, project) = native_project_including_a_bundle(
             &[(
                 "ratect-bundle.toml",
                 &format!(
-                    "ratect_version = \"0.12.0\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\n\
+                    "ratect_version = \"0.13.0\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\n\
                      ref = \"v1\"\n{acknowledgement}",
                     inner.display()
                 ),
@@ -18079,7 +18074,7 @@ async fn a_nested_bundle_is_covered_by_its_parents_entry_for_it() {
             "allow_nested_git_includes = true\n",
         );
 
-        let result = load_bundled(&project, running_0_12()).await;
+        let result = load_bundled(&project, running_0_13()).await;
         if loads {
             result.unwrap();
         } else {
@@ -18112,7 +18107,7 @@ async fn a_refusal_for_an_include_in_a_yaml_file_says_how_to_reach_toml_first() 
     let project = unique_temp_dir();
     std::fs::write(
         project.join("ratect.toml"),
-        "project_name = \"demo\"\nratect_version = \"0.12.0\"\n\
+        "project_name = \"demo\"\nratect_version = \"0.13.0\"\n\
          include = [{ path = \"shared.yml\" }]\n",
     )
     .unwrap();
@@ -18128,7 +18123,7 @@ async fn a_refusal_for_an_include_in_a_yaml_file_says_how_to_reach_toml_first() 
     let error = bundled_refusal(&project).await;
     assert!(
         error.contains(&format!(
-            "set 'reviewed_ratect_version' to 0.12.0 on its include in {:?}, which a \
+            "set 'reviewed_ratect_version' to 0.13.0 on its include in {:?}, which a \
              Batect-format (YAML) file can't set: first, move that Git include into a TOML file.",
             project.join("shared.yml")
         )),
@@ -18153,7 +18148,7 @@ async fn a_refusal_for_an_include_in_a_yaml_file_says_how_to_reach_toml_first() 
         Config::load_from_file_native_written_for(
             &project.join("batect.yml"),
             &git_cache,
-            running_0_12()
+            running_0_13()
         )
         .await
         .expect_err("the bundle should be refused")
@@ -18179,7 +18174,7 @@ async fn every_entry_reaching_a_bundle_must_cover_it() {
                 "\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n{}",
                 bundle.display(),
                 if reviewed {
-                    "reviewed_ratect_version = \"0.12.0\"\n"
+                    "reviewed_ratect_version = \"0.13.0\"\n"
                 } else {
                     ""
                 }
@@ -18227,7 +18222,7 @@ async fn a_yaml_bundle_is_judged_only_once_it_reaches_a_toml_file() {
         ("last.toml", BUNDLE_TASK),
     ];
     let (bundle, project) = native_project_including_a_bundle(&yaml_only, "");
-    load_bundled(&project, running_0_12()).await.unwrap();
+    load_bundled(&project, running_0_13()).await.unwrap();
     std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
 
@@ -18247,8 +18242,8 @@ async fn a_yaml_bundle_is_judged_only_once_it_reaches_a_toml_file() {
     std::fs::remove_dir_all(&project).ok();
 
     let (bundle, project) =
-        native_project_including_a_bundle(&reaching_toml, "reviewed_ratect_version = \"0.12.0\"\n");
-    load_bundled(&project, running_0_12()).await.unwrap();
+        native_project_including_a_bundle(&reaching_toml, "reviewed_ratect_version = \"0.13.0\"\n");
+    load_bundled(&project, running_0_13()).await.unwrap();
     std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
 }
@@ -18257,7 +18252,7 @@ async fn a_yaml_bundle_is_judged_only_once_it_reaches_a_toml_file() {
 #[test]
 fn reviewed_ratect_version_is_refused_on_a_local_include() {
     let error = toml::from_str::<ConfigFile>(
-        "[[include]]\npath = \"more.toml\"\nreviewed_ratect_version = \"0.12.0\"\n",
+        "[[include]]\npath = \"more.toml\"\nreviewed_ratect_version = \"0.13.0\"\n",
     )
     .unwrap_err();
     assert!(
@@ -18276,7 +18271,7 @@ async fn ratect_compat_refuses_reviewed_ratect_version() {
     std::fs::write(
         project.join("batect.yml"),
         "project_name: demo\ninclude:\n  - type: git\n    repo: https://example.com/never-cloned.git\n    \
-         ref: v1\n    reviewed_ratect_version: 0.12.0\n",
+         ref: v1\n    reviewed_ratect_version: 0.13.0\n",
     )
     .unwrap();
     let cache_root = unique_temp_dir();
@@ -18306,7 +18301,7 @@ async fn an_invalid_review_names_the_include_without_its_credentials() {
     std::fs::write(
         project.join("ratect.toml"),
         format!(
-            "project_name = \"demo\"\nratect_version = \"0.12.0\"\n\n[[include]]\ntype = \"git\"\n\
+            "project_name = \"demo\"\nratect_version = \"0.13.0\"\n\n[[include]]\ntype = \"git\"\n\
              repo = \"{REMOTE}\"\nref = \"v1\"\nreviewed_ratect_version = \"latest\"\n"
         ),
     )
@@ -18324,7 +18319,7 @@ async fn an_invalid_review_names_the_include_without_its_credentials() {
         Config::load_from_file_native_written_for(
             &project.join("ratect.toml"),
             &git_cache,
-            running_0_12()
+            running_0_13()
         )
         .await
         .unwrap_err()
@@ -18773,52 +18768,17 @@ groups = ["docker"]
     assert_eq!(project.config.containers["app"].user, None);
 }
 
-/// Until `run_as_current_user` leaves the native format (#233), a container
-/// could name two users. Refused rather than given a silent precedence
-/// (decisions/0011), wherever each comes from. A disabled
-/// `run_as_current_user` names none, and `groups` adds to either.
+/// A disabled `run_as_current_user` inherited from a YAML parent names no
+/// user, so it leaves a child free to name one.
 #[tokio::test]
-async fn user_with_an_enabled_run_as_current_user_is_refused() {
-    let error = load_native_toml(
-        r#"
-project_name = "demo"
-
-[containers.base]
-image = "alpine:3.18"
-run_as_current_user = { enabled = true, home_directory = "/home/me" }
-
-[containers.child]
-extends = "base"
-user = "app"
-"#,
+async fn user_beside_an_inherited_disabled_run_as_current_user_loads() {
+    let project = load_native_extending_yaml(
+        "    run_as_current_user:\n      enabled: false\n",
+        "user = \"app\"",
     )
     .await
-    .expect_err("two sources of a user should be refused");
-    let error = format!("{error:#}");
-    assert!(
-        error.contains("'child'")
-            && error.contains("'user'")
-            && error.contains("'run_as_current_user'"),
-        "got: {error}"
-    );
-
-    load_native_toml(
-        r#"
-project_name = "demo"
-
-[containers.disabled]
-image = "alpine:3.18"
-run_as_current_user = { enabled = false }
-user = "app"
-
-[containers.adds-groups]
-image = "alpine:3.18"
-run_as_current_user = { enabled = true, home_directory = "/home/me" }
-groups = ["docker"]
-"#,
-    )
-    .await
-    .expect("neither of these names two users");
+    .expect("only one of these names a user");
+    assert!(project.config.containers["app"].user.is_some());
 }
 
 /// `user` and friends are native-only (#234): a `batect.yml` using one is
@@ -19176,18 +19136,19 @@ async fn an_expression_identity_home_is_judged_when_evaluated() {
 /// own rules.
 #[tokio::test]
 async fn a_dotted_identity_home_is_refused_when_evaluated_and_only_there() {
+    load_compat_yaml(&yaml_with_run_as_current_user(
+        "{enabled: true, home_directory: /link/../me}",
+    ))
+    .await
+    .unwrap();
+
     let project = load_native_toml(
         "project_name = \"demo\"\n[config_variables.home]\ndefault = \"/link/../me\"\n\
-         [containers.app]\nimage = \"alpine\"\nidentity = { home = \"<home\" }\n\
-         [containers.other]\nimage = \"alpine\"\n\
-         run_as_current_user = { enabled = true, home_directory = \"<home\" }\n",
+         [containers.app]\nimage = \"alpine\"\nidentity = { home = \"<home\" }\n",
     )
     .await
     .unwrap();
 
-    project
-        .evaluate(["other"], [], &HashMap::new(), no_host_env)
-        .unwrap();
     let error = project
         .evaluate(["app"], [], &HashMap::new(), no_host_env)
         .unwrap_err();
@@ -19243,10 +19204,6 @@ async fn identity_refuses_what_it_cannot_sit_beside_however_it_got_there() {
         ("user = \"app\"\ngroup = \"staff\"", "'user'"),
         ("group = \"staff\"", "'group'"),
         (
-            "run_as_current_user = { enabled = true, home_directory = \"/home/me\" }",
-            "'run_as_current_user'",
-        ),
-        (
             "volumes = [{ type = \"cache\", name = \"c\", container = \"relative\" }]",
             "relative",
         ),
@@ -19269,13 +19226,12 @@ async fn identity_refuses_what_it_cannot_sit_beside_however_it_got_there() {
     }
 }
 
-/// Only those pairs: `groups` adds to whichever user the container runs as, a
-/// disabled `run_as_current_user` says nothing, and an absolute cache is fine.
+/// Only those pairs: `groups` adds to whichever user the container runs as,
+/// and an absolute cache is fine.
 #[tokio::test]
-async fn identity_beside_groups_or_a_disabled_run_as_current_user_loads() {
+async fn identity_beside_groups_or_an_absolute_cache_loads() {
     for other in [
         "groups = [\"docker\", 999]",
-        "run_as_current_user = { enabled = false }",
         "volumes = [{ type = \"cache\", name = \"c\", container = \"/absolute\" }]",
     ] {
         load_native_toml(&format!(

@@ -16,6 +16,10 @@ inherited `build_directory` with an image. `ratect config convert` was built wit
 and suggests removing only the files it converted; since ratect#574 it writes one
 `.toml` per file the project owns, each proved to round-trip on its own (see
 `ratect-core/src/convert.rs`).
+Since [ratect#238](https://github.com/or1can/ratect/issues/238), `config convert` turns an
+enabled `run_as_current_user` into `identity` and drops a disabled one before its round
+trip, so that proof covers the converted file rather than the source, and each such
+container is listed because how it runs changes.
 
 ## Context
 

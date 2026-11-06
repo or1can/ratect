@@ -831,13 +831,14 @@ async fn conversion_checks_are_ordered_by_container_then_kind() {
         vec![
             ("a", ConversionCheckKind::CompactVolumeExpression),
             ("b", ConversionCheckKind::UngatedTaskContainer),
+            ("b", ConversionCheckKind::RunAsCurrentUserBecomesIdentity),
             ("b", ConversionCheckKind::HomeDirectoryExpression),
             ("b", ConversionCheckKind::CompactVolumeExpression),
             ("b", ConversionCheckKind::CompactVolumeExpression),
         ]
     );
-    assert!(checks[3].message.contains("'$HOME/2'"), "{checks:?}");
-    assert!(checks[4].message.contains("'$HOME/1'"), "{checks:?}");
+    assert!(checks[4].message.contains("'$HOME/2'"), "{checks:?}");
+    assert!(checks[5].message.contains("'$HOME/1'"), "{checks:?}");
     assert_eq!(
         checks[0].finding(),
         Finding::Warning(checks[0].message.clone())

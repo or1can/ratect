@@ -722,7 +722,13 @@ async fn a_malformed_literal_converts_escaped_and_keeps_its_value() {
         .iter()
         .map(|check| check.kind)
         .collect();
-    assert_eq!(checks, vec![ConversionCheckKind::CompactVolumeExpression]);
+    assert_eq!(
+        checks,
+        vec![
+            ConversionCheckKind::RunAsCurrentUserBecomesIdentity,
+            ConversionCheckKind::CompactVolumeExpression
+        ]
+    );
 
     let native = load_project_native(
         &dir.join("ratect.toml"),
@@ -750,14 +756,197 @@ async fn a_malformed_literal_converts_escaped_and_keeps_its_value() {
     assert!(locals[0].ends_with("/a$"), "{locals:?}");
     assert_eq!(locals[1], "/h/b");
     assert!(locals[2].ends_with("/$HOME/c$"), "{locals:?}");
-    assert_eq!(
-        app.run_as_current_user
-            .as_ref()
-            .unwrap()
-            .home_directory
-            .as_deref(),
-        Some("/home/a < b")
+    assert_eq!(app.identity.as_ref().unwrap().home, "/home/a < b");
+}
+
+/// What convert does with the field, #238: an enabled one becomes `identity`,
+/// and a disabled one, which did nothing, is gone with no check. Listed by
+/// container name, with no check for a container that never had it, and the
+/// converted file loads under `ratect`.
+#[tokio::test]
+async fn an_enabled_run_as_current_user_becomes_identity_and_a_disabled_one_is_dropped() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            "project_name: demo\ncontainers:\n  z:\n    image: alpine:3.18\n    \
+             run_as_current_user:\n      enabled: true\n      home_directory: /home/z\n  \
+             a:\n    image: alpine:3.18\n    \
+             run_as_current_user:\n      enabled: true\n      home_directory: /home/a\n  \
+             off:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: false\n  \
+             empty:\n    image: alpine:3.18\n    run_as_current_user: {}\n  \
+             without:\n    image: alpine:3.18\n",
+        )],
     );
+    let converted = convert(&dir.join("batect.yml")).await.unwrap();
+    write_converted(&converted);
+
+    let checks = &converted.files[0].checks;
+    let listed: Vec<(Option<&str>, ConversionCheckKind)> = checks
+        .iter()
+        .map(|check| (check.container.as_deref(), check.kind))
+        .collect();
+    let kind = ConversionCheckKind::RunAsCurrentUserBecomesIdentity;
+    assert_eq!(listed, vec![(Some("a"), kind), (Some("z"), kind)]);
+    let message = &checks[0].message;
+    for said in [
+        "'a'",
+        "identity",
+        "replaced",
+        "--user",
+        "#coming-from-run_as_current_user",
+    ] {
+        assert!(message.contains(said), "{said} in: {message}");
+    }
+
+    assert!(!converted.files[0].toml.contains("run_as_current_user"));
+    let native = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &crate::ui::LoadOutput::default(),
+    )
+    .await
+    .unwrap();
+    let home = |name: &str| {
+        let identity = native.config.containers[name].identity.as_ref();
+        identity.map(|identity| identity.home.as_str())
+    };
+    assert_eq!(home("a"), Some("/home/a"));
+    assert_eq!(home("z"), Some("/home/z"));
+    for name in ["off", "empty", "without"] {
+        assert_eq!(home(name), None, "{name}");
+    }
+}
+
+/// A `$` or `<` in an enabled home is carried across unescaped, most likely
+/// having been meant as a reference, and listed naming `identity.home`. A
+/// disabled one's isn't: the field and its value are dropped, so there is
+/// nothing left to check.
+#[tokio::test]
+async fn a_converted_home_keeps_its_reference_with_a_check_naming_identity_home() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+             run_as_current_user:\n      enabled: true\n      home_directory: /home/$me\n  \
+             off:\n    image: alpine:3.18\n    \
+             run_as_current_user:\n      enabled: false\n      home_directory: /home/$me\n",
+        )],
+    );
+    let converted = convert(&dir.join("batect.yml")).await.unwrap();
+    assert!(
+        converted.files[0].toml.contains(r#"home = "/home/$me""#),
+        "{}",
+        converted.files[0].toml
+    );
+    let homes: Vec<&ConversionCheck> = converted.files[0]
+        .checks
+        .iter()
+        .filter(|check| check.kind == ConversionCheckKind::HomeDirectoryExpression)
+        .collect();
+    assert_eq!(homes.len(), 1, "{homes:#?}");
+    assert!(homes[0].message.contains("identity.home"), "{homes:#?}");
+    assert!(homes[0].message.contains("'/home/$me'"), "{homes:#?}");
+}
+
+/// A fresh `cache` volume changes owner only on a rootful Linux daemon, so a
+/// converted container with one may lose write access to it elsewhere: said
+/// only where the container has a writable one.
+#[tokio::test]
+async fn a_converted_containers_check_mentions_a_writable_cache_it_has() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    let cache = |name: &str, options: &str| {
+        format!(
+            "    volumes:\n      - type: cache\n        name: {name}\n        \
+             container: /c\n{options}"
+        )
+    };
+    let enabled = "    run_as_current_user:\n      enabled: true\n      home_directory: /home/me\n";
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            &format!(
+                "project_name: demo\ncontainers:\n  a:\n    image: alpine:3.18\n{enabled}{}  \
+                 b:\n    image: alpine:3.18\n{enabled}{}  c:\n    image: alpine:3.18\n{enabled}",
+                cache("one", ""),
+                cache("two", "        options: ro\n"),
+            ),
+        )],
+    );
+    let converted = convert(&dir.join("batect.yml")).await.unwrap();
+    let says_cache: Vec<bool> = converted.files[0]
+        .checks
+        .iter()
+        .map(|check| check.message.contains("cache"))
+        .collect();
+    assert_eq!(says_cache, vec![true, false, false]);
+}
+
+/// `identity` refuses a `..` that a Batect-format home may hold, and convert
+/// copies values rather than rewriting them, so its check says so.
+#[tokio::test]
+async fn a_converted_home_holding_a_parent_component_is_listed_as_refused() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+             run_as_current_user:\n      enabled: true\n      home_directory: /link/../me\n",
+        )],
+    );
+    let converted = convert(&dir.join("batect.yml")).await.unwrap();
+    let message = &converted.files[0].checks[0].message;
+    assert!(message.contains("'..'"), "{message}");
+    assert!(message.contains("won't run"), "{message}");
+}
+
+/// A source can't set both, since a Batect-format load refuses `identity`, but
+/// convert doesn't judge its source, and writing one over the other would lose
+/// a value in silence.
+#[tokio::test]
+async fn an_enabled_run_as_current_user_beside_identity_fails_the_conversion() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+             identity:\n      home: /other\n    \
+             run_as_current_user:\n      enabled: true\n      home_directory: /home/me\n",
+        )],
+    );
+    let error = format!("{:#}", convert(&dir.join("batect.yml")).await.unwrap_err());
+    assert!(error.contains("'app'"), "{error}");
+    assert!(error.contains("'identity'"), "{error}");
+}
+
+/// An enabled field with no home has nothing to convert to, since `identity`
+/// requires one; a Batect-format load refuses the source too.
+#[tokio::test]
+async fn an_enabled_run_as_current_user_with_no_home_fails_the_conversion() {
+    let scratch = scratch();
+    let dir = &scratch.0;
+    write_project(
+        dir,
+        &[(
+            "batect.yml",
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+             run_as_current_user:\n      enabled: true\n",
+        )],
+    );
+    let error = format!("{:#}", convert(&dir.join("batect.yml")).await.unwrap_err());
+    assert!(error.contains("'app'"), "{error}");
+    assert!(error.contains("'home_directory'"), "{error}");
 }
 
 /// #628: a Batect-format file uses its `image`, compact volume host paths and
@@ -791,6 +980,7 @@ async fn a_backslash_in_a_literal_field_converts_escaped_and_keeps_its_value() {
     assert_eq!(
         checks,
         vec![
+            ConversionCheckKind::RunAsCurrentUserBecomesIdentity,
             ConversionCheckKind::CompactVolumeExpression,
             ConversionCheckKind::CompactVolumeExpression
         ]
@@ -836,14 +1026,7 @@ async fn a_backslash_in_a_literal_field_converts_escaped_and_keeps_its_value() {
     assert!(locals[0].ends_with(r"/foo\bar"), "{locals:?}");
     assert_eq!(locals[1], r"/h\x");
     assert!(locals[2].ends_with(r"/a\/h"), "{locals:?}");
-    assert_eq!(
-        app.run_as_current_user
-            .as_ref()
-            .unwrap()
-            .home_directory
-            .as_deref(),
-        Some(r"/home/a\b")
-    );
+    assert_eq!(app.identity.as_ref().unwrap().home, r"/home/a\b");
 }
 
 /// #395: a root with no `project_name` converts to one naming the project

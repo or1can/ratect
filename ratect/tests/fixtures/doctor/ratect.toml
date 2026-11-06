@@ -16,7 +16,7 @@
 # - `build`, on the pinned `build-env`: the one task here that actually runs.
 #   A `--no-cleanup-after-success` run of it is what gives the docs capture
 #   its leftover-resources warning.
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "ratect-doctor-fixture"
 
 [containers.build-env]

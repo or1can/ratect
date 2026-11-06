@@ -58,15 +58,19 @@ convert`](ratect-cli.md#config) doesn't carry comments over, though it does
 check each file round-trips losslessly before writing anything. The same
 configuration runs differently in a few respects under `ratect`: a task's own
 container has no readiness gate (see [Dependency
-Readiness](dependency-readiness.md#the-tasks-own-container)), an expression in
-`run_as_current_user.home_directory` or a string-form `volumes` entry's host path
+Readiness](dependency-readiness.md#the-tasks-own-container)), an enabled
+`run_as_current_user` becomes `identity`, the same goal with a mechanism that depends
+on the daemon, so its `--user` may go (see [Coming from
+`run_as_current_user`](ratect-config-reference.md#coming-from-run_as_current_user)), an
+expression in that `home_directory` or a string-form `volumes` entry's host path
 is evaluated rather than used as written (see [Where the semantics
 differ](ratect-config-reference.md#where-the-semantics-differ)), and a Git
 include's bundle may offer a `ratect-bundle.toml` or declare Git includes of its
 own (see [the `config convert` section](ratect-cli.md#config)). `config convert`
 lists each task container whose `health_check` or `setup_commands` the first
-affects, each `home_directory` or volume the second does, and each Git include
-the third does, after converting and in each converted file's own header; a
+affects, each container the second does, each `home_directory` or volume the third
+does, and each Git include the fourth does, after converting and in each converted
+file's own header; a
 health check from the image itself can't be seen without the image. Review each
 file against [Configuration Reference](ratect-config-reference.md)
 before deleting the originals — this is the fastest route to fully native, but
