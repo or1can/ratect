@@ -43,7 +43,10 @@ userns-remap: the mapping below holds, the access it leaves is stated, and an im
 non-root `USER` under `identity` meets it as `user` does, so those are no longer
 inferences. Extended before release ([#107](https://github.com/or1can/ratect/issues/107)):
 `identity` can declare users the image lacks, under
-[Additional users](#additional-users).
+[Additional users](#additional-users). Probed before release
+([#817](https://github.com/or1can/ratect/issues/817)): Docker Desktop on Linux stays
+rootful Linux, under [Daemon classification](#daemon-classification), at a cost stated
+under Consequences.
 
 
 ## Context
@@ -163,11 +166,21 @@ Resolved once per connection, from `docker info`:
 - **Desktop** — Ratect's own host is macOS or Windows *and* the connection is
   a local socket. This is the heuristic the design owns explicitly: OrbStack,
   Docker Desktop and rootful Ubuntu all report the identical
-  `SecurityOptions`, so there is no daemon-side signal. Classifying by
+  `SecurityOptions`, so there is no daemon-side signal short of a vendor list. Classifying by
   host-plus-transport covers colima and future runtimes without a vendor list,
   and a remote daemon reached from a Mac (`ssh://`, `tcp://`) correctly falls
   through to what it reports itself.
-- **Rootful Linux** — the remainder.
+- **Rootful Linux** — the remainder. That includes Docker Desktop on Linux,
+  deliberately, though it is a VM with file sharing as well. `identity` works there, as
+  it does on native Linux CI, and only vendor-specific signals identify it: see
+  Alternatives. [Probed](https://github.com/or1can/ratect/issues/817#issuecomment-6661813666)
+  (#817) on Docker Desktop 4.98.0, engine 29.9.2, default file sharing, host user 1001:
+  it reports neither `name=rootless` nor `name=userns`. The default user, `--user 1001:1001`
+  and `--user 1000:1000` each saw a bind mount as their own and wrote to it, with the host
+  owner staying 1001:1001, and `identity` through `ratect run` exited 0 with the
+  same result. That is one version on one host, a GitHub Actions runner, so under nested
+  virtualization, which Docker doesn't support. Older versions, synchronized file shares,
+  `identity`'s writable `cache` mounts and a non-nested host weren't probed.
 
 ### Resolving `identity`
 
@@ -348,7 +361,12 @@ report it: the image's user isn't in the configuration, and the image may not be
 - **Classify desktop daemons by `OperatingSystem` string.** Rejected: a vendor
   list ("Docker Desktop", "OrbStack", …) that misses colima today and every
   future runtime, when host-plus-transport classifies by the thing that
-  actually matters (a VM with file sharing).
+  actually matters (a VM with file sharing), on macOS and Windows.
+- **Classifying Docker Desktop on Linux as Desktop** (#817). Rejected: what identifies
+  it is vendor-specific (`OperatingSystem`, the `com.docker.desktop.address` label, the
+  `linuxkit` kernel), so it would be the vendor list rejected above, and one entry
+  wouldn't cover other VM-based runtimes on Linux. Its per-user socket path is a
+  client-side convention a user can change.
 - **Docker-style `user = "name[:group]"`.** Rejected: two meanings in one
   string; the split fields make "primary group without user" a load-time
   error instead of an unwritable value.
@@ -414,6 +432,11 @@ report it: the image's user isn't in the configuration, and the image may not be
   it would leave stray directories or fail a run over a path only the daemon has. The
   daemon creates a missing source as root. A Windows client there has no host identity to adopt, so
   the run fails naming `identity` and the container.
+- **Accepted cost:** Desktop's own reason applies to Docker Desktop on Linux too, since
+  host ownership already holds there (probed, #817). So `--user` and the identity-file
+  edits that go with it are unnecessary on that daemon, `ratect doctor` calling it
+  `rootful Linux` isn't accurate, and a project runs as the host user there but as the
+  image's user on Docker Desktop on a Mac.
 - **On userns-remap, `identity` delivers only the home guarantee**, and any additional
   users' entries. Host
   ownership of bind-mount writes is impossible there by design of the
