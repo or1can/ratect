@@ -33,8 +33,9 @@
 //! `Option<&D>` rather than requiring one, so a caller whose connection
 //! already failed can skip it without this module needing any opinion of its
 //! own on what "no connection" means or how that got decided.
-//! [`remapped_daemon_findings`] takes the class the same way, as a value the
-//! binary already read.
+//! [`remapped_daemon_findings`], [`root_written_mount_findings`] and
+//! [`mount_owner_findings`] take the class the same way, as a value the binary
+//! already read.
 
 use crate::config::{Config, Container, LocalVolumeMount, VolumeMount, WholeProjectEvaluation};
 use crate::daemon_class::{DaemonClass, Transport};
@@ -432,6 +433,76 @@ fn root_written_mount_findings_with(
                 crate::ui::printable(&local.local),
                 crate::ui::printable(&local.container),
             )));
+        }
+    }
+    findings
+}
+
+/// A warning for each writable bind mount, of each of `runnable_containers` that
+/// runs as the host user, whose host path another uid owns, so a write there may be
+/// refused. Only on a rootful Linux daemon, where such a container's uid is the host
+/// user's own, and only over a local socket, since a remote daemon's mounts are on
+/// its filesystem, not this one. `class` and `transport` are `None` when nothing
+/// connected or the class couldn't be read, which have findings of their own, and
+/// `host_user` is `None` on a host with no uids.
+///
+/// "May", because group or other permissions can still allow it, and because
+/// Docker Desktop on Linux classifies as rootful Linux too (#817), where a bind
+/// mount looks like its user's own. A differing gid alone isn't reported, since
+/// owner permission bits apply to a matching uid, nor is anything for a root
+/// `host_user`, who can write to what anyone owns. A read-only mount has no write to
+/// refuse. An owner that can't be read means nothing to compare: a run tries to
+/// create what is missing.
+pub fn mount_owner_findings(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+) -> Vec<Finding> {
+    mount_owner_findings_with(
+        evaluation,
+        class,
+        transport,
+        host_user,
+        crate::user::path_owner,
+    )
+}
+
+/// [`mount_owner_findings`], given how to read a path's owner.
+fn mount_owner_findings_with(
+    evaluation: &WholeProjectEvaluation,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    host_user: Option<DirectoryOwner>,
+    path_owner: impl Fn(&Path) -> Option<DirectoryOwner>,
+) -> Vec<Finding> {
+    if class != Some(DaemonClass::RootfulLinux) || transport != Some(Transport::LocalSocket) {
+        return Vec::new();
+    }
+    let Some(host_user) = host_user.filter(|user| user.uid != 0) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for (name, container) in runnable_containers(evaluation) {
+        if !runs_as_host_user_on_rootful_linux(container) {
+            continue;
+        }
+        for local in writable_bind_mounts(container) {
+            let Some(owner) = path_owner(Path::new(&local.local)) else {
+                continue;
+            };
+            if owner.uid != host_user.uid {
+                findings.push(Finding::Warning(format!(
+                    "container '{name}' runs as the host user (uid {}, gid {}), but the mount of \
+                     '{}' at '{}' is owned by uid {}, gid {} — a write there may be refused",
+                    host_user.uid,
+                    host_user.gid,
+                    crate::ui::printable(&local.local),
+                    crate::ui::printable(&local.container),
+                    owner.uid,
+                    owner.gid,
+                )));
+            }
         }
     }
     findings

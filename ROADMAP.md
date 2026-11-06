@@ -62,9 +62,7 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
 Improving the developer experience through better tools and feedback.
 
 - **`ratect doctor`**: shipped — see [CLI reference](docs/ratect-cli.md#doctor) for
-  what it checks today. Still open: host-container permission issues (the host
-  identity a container runs as against the actual uid/gid of a mounted path) need a
-  real filesystem probe rather than a config read; container-level checks that need the
+  what it checks today. Still open: container-level checks that need the
   *image* (its own `HEALTHCHECK`, whether an `entrypoint` exists) need a pull, so
   they'd belong behind a flag rather than the default run; and one check from
   Batect's own unbuilt `doctor` wishlist remains: a proxy environment variable that isn't a

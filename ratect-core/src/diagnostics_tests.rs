@@ -1675,3 +1675,297 @@ containers:
     };
     assert!(message.contains("'disabled'"), "{message}");
 }
+
+/// [`mount_owner_findings_with`] for `project`, whose every path is owned by
+/// `owner`, as host user [`HOST`], with the paths it probed.
+fn owner_findings_for(
+    project: &LoadedProject,
+    class: Option<DaemonClass>,
+    transport: Option<Transport>,
+    owner: DirectoryOwner,
+) -> (Vec<Finding>, Vec<String>) {
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let probed = std::cell::RefCell::new(Vec::new());
+    let findings = mount_owner_findings_with(&evaluation, class, transport, Some(HOST), |path| {
+        probed.borrow_mut().push(path.display().to_string());
+        Some(owner)
+    });
+    (findings, probed.into_inner())
+}
+
+const OTHER: DirectoryOwner = DirectoryOwner { uid: 0, gid: 0 };
+
+async fn identity_project() -> LoadedProject {
+    project_from(
+        "ratect.toml",
+        r#"
+project_name = "x"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+volumes = [{ local = "/srv/code", container = "/code" }]
+"#,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_mount_owned_by_someone_else_is_a_warning_under_identity() {
+    let project = identity_project().await;
+    let (findings, _) = owner_findings_for(
+        &project,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        OTHER,
+    );
+    let [Finding::Warning(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    for expected in [
+        "'app'",
+        "'/srv/code'",
+        "'/code'",
+        "uid 1000, gid 1000",
+        "uid 0, gid 0",
+        "may be refused",
+    ] {
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
+}
+
+/// Owner permission bits apply to a matching uid, whatever the group.
+#[tokio::test]
+async fn only_a_differing_uid_is_a_mismatch() {
+    let project = identity_project().await;
+    let findings_for_owner = |owner| {
+        owner_findings_for(
+            &project,
+            Some(DaemonClass::RootfulLinux),
+            Some(Transport::LocalSocket),
+            owner,
+        )
+        .0
+    };
+    assert_eq!(
+        findings_for_owner(DirectoryOwner { uid: 1000, gid: 50 }),
+        []
+    );
+    assert_eq!(
+        findings_for_owner(DirectoryOwner { uid: 50, gid: 1000 }).len(),
+        1
+    );
+}
+
+/// Root can write to what anyone owns, so nothing is probed.
+#[tokio::test]
+async fn a_root_host_user_has_no_mount_owner_findings() {
+    let project = identity_project().await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let findings = mount_owner_findings_with(
+        &evaluation,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        Some(DirectoryOwner { uid: 0, gid: 0 }),
+        |_| panic!("root's mounts shouldn't be probed"),
+    );
+    assert_eq!(findings, []);
+}
+
+#[tokio::test]
+async fn a_mount_the_host_user_owns_is_no_finding() {
+    let project = identity_project().await;
+    let (findings, probed) = owner_findings_for(
+        &project,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        HOST,
+    );
+    assert_eq!(findings, []);
+    assert_eq!(probed, ["/srv/code"]);
+}
+
+#[tokio::test]
+async fn an_enabled_run_as_current_user_is_probed_too() {
+    let project = project_from(
+        "batect.yml",
+        r#"
+project_name: x
+containers:
+  mapped:
+    image: alpine:3.18.2
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/me
+    volumes:
+      - /srv/code:/code
+  disabled:
+    image: alpine:3.18.2
+    run_as_current_user:
+      enabled: false
+    volumes:
+      - /srv/other:/other
+"#,
+    )
+    .await;
+    let (findings, probed) = owner_findings_for(
+        &project,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        OTHER,
+    );
+    let [Finding::Warning(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    assert!(message.contains("'mapped'"), "{message}");
+    assert_eq!(probed, ["/srv/code"]);
+}
+
+/// Nothing to compare, and the filesystem isn't touched.
+#[tokio::test]
+async fn nothing_is_probed_except_on_a_rootful_linux_daemon_over_a_local_socket() {
+    let project = identity_project().await;
+    for (class, transport) in [
+        (Some(DaemonClass::Desktop), Some(Transport::LocalSocket)),
+        (Some(DaemonClass::Rootless), Some(Transport::LocalSocket)),
+        (Some(DaemonClass::UsernsRemap), Some(Transport::LocalSocket)),
+        (Some(DaemonClass::RootfulLinux), Some(Transport::Network)),
+        (None, None),
+    ] {
+        let (findings, probed) = owner_findings_for(&project, class, transport, OTHER);
+        assert_eq!(findings, [], "{class:?} {transport:?}");
+        assert!(probed.is_empty(), "{class:?} {transport:?}: {probed:?}");
+    }
+}
+
+#[tokio::test]
+async fn only_a_writable_host_mount_of_a_container_that_can_run_is_probed() {
+    let project = project_from(
+        "ratect.toml",
+        r#"
+project_name = "x"
+
+[containers.plain]
+image = "alpine:3.18.2"
+volumes = [{ local = "/srv/plain", container = "/plain" }]
+
+[containers.base]
+identity = { home = "/home/me" }
+volumes = [{ local = "/srv/base", container = "/base" }]
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = { home = "/home/me" }
+volumes = [
+    { local = "/srv/read-only", container = "/read-only", options = "ro" },
+    { type = "cache", name = "c", container = "/cache" },
+    { type = "tmpfs", container = "/tmpfs" },
+]
+"#,
+    )
+    .await;
+    let (findings, probed) = owner_findings_for(
+        &project,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        OTHER,
+    );
+    assert_eq!(findings, []);
+    assert!(probed.is_empty(), "{probed:?}");
+}
+
+/// A run tries to create what is missing, as the host user, and one this process
+/// can't read says nothing about who owns it.
+#[tokio::test]
+async fn a_path_that_cannot_be_probed_is_no_finding() {
+    let project = identity_project().await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let findings = mount_owner_findings_with(
+        &evaluation,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        Some(HOST),
+        |_| None,
+    );
+    assert_eq!(findings, []);
+}
+
+#[tokio::test]
+async fn with_no_host_user_to_compare_against_there_is_no_finding() {
+    let project = identity_project().await;
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    let findings = mount_owner_findings_with(
+        &evaluation,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        None,
+        |_| Some(OTHER),
+    );
+    assert_eq!(findings, []);
+}
+
+/// The case both host-user checks exist for: a `.yml` a native project includes,
+/// whose container can't set `identity`.
+#[tokio::test]
+async fn an_included_run_as_current_user_runs_as_the_host_user() {
+    let directory =
+        std::env::temp_dir().join(format!("ratect-doctor-include-test-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("mapped.yml"),
+        r#"
+containers:
+  mapped:
+    image: alpine:3.18.2
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/me
+    volumes:
+      - /srv/code:/code
+"#,
+    )
+    .unwrap();
+    let root = directory.join("ratect.toml");
+    std::fs::write(&root, "project_name = \"x\"\ninclude = [\"mapped.yml\"]\n").unwrap();
+    let project = crate::config::load_project_native(
+        &root,
+        running_0_12(),
+        &crate::ui::LoadOutput::default(),
+    )
+    .await
+    .expect("fixture config should load");
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    let (findings, probed) = owner_findings_for(
+        &project,
+        Some(DaemonClass::RootfulLinux),
+        Some(Transport::LocalSocket),
+        OTHER,
+    );
+    let [Finding::Warning(message)] = &findings[..] else {
+        panic!("{findings:?}");
+    };
+    assert!(message.contains("'mapped'"), "{message}");
+    assert_eq!(probed, ["/srv/code"]);
+
+    let evaluation = project
+        .evaluate_whole_project(&HashMap::new(), no_host_env)
+        .unwrap();
+    assert_eq!(
+        root_written_mount_findings(
+            &evaluation,
+            Some(DaemonClass::RootfulLinux),
+            Some(Transport::Network),
+            Some(HOST)
+        ),
+        []
+    );
+}

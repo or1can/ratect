@@ -36,8 +36,8 @@ use ratect_core::config::{
 };
 use ratect_core::diagnostics::{
     config_findings, docker_environment_findings, leftover_finding, load_failure_findings,
-    remapped_daemon_findings, root_written_mount_findings, wrapper_script_findings,
-    ConversionCheck, Finding,
+    mount_owner_findings, remapped_daemon_findings, root_written_mount_findings,
+    wrapper_script_findings, ConversionCheck, Finding,
 };
 use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
@@ -1668,6 +1668,12 @@ async fn diagnose(
             let transport = docker.as_ref().map(DockerClient::transport);
             let host_user = ratect_core::user::current_owner();
             findings.extend(root_written_mount_findings(
+                &evaluation,
+                daemon_class,
+                transport,
+                host_user,
+            ));
+            findings.extend(mount_owner_findings(
                 &evaluation,
                 daemon_class,
                 transport,

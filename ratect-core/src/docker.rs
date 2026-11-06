@@ -3068,7 +3068,7 @@ impl DockerClient {
     fn container_config(&self, spec: &ContainerSpec) -> Result<Config> {
         let shared = &spec.shared;
         let options = &shared.options;
-        if creates_host_directories(shared, Transport::of_host(&self.daemon_host)) {
+        if creates_host_directories(shared, self.transport()) {
             ensure_host_volume_directories_exist(
                 shared.volumes.as_deref().unwrap_or_default(),
                 options.tmpfs.as_deref().unwrap_or_default(),
@@ -3345,7 +3345,7 @@ impl ContainerRuntime for DockerClient {
                 Ok(classify(
                     info.security_options.as_deref().unwrap_or_default(),
                     std::env::consts::OS,
-                    Transport::of_host(&self.daemon_host),
+                    self.transport(),
                 ))
             })
             .await

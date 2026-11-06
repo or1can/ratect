@@ -618,3 +618,24 @@ fn is_non_directory_is_true_only_of_something_there_that_is_not_a_directory() {
 fn with_additional_groups_with_none_leaves_the_file_alone() {
     assert_eq!(with_additional_groups(b"quirk", &[]), b"quirk");
 }
+
+#[cfg(unix)]
+#[test]
+fn path_owner_reads_a_paths_owner_and_follows_a_link() {
+    use std::os::unix::fs::MetadataExt;
+
+    let directory = std::env::temp_dir().join(format!("ratect-path-owner-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let link = directory.join("link");
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&directory, &link).unwrap();
+    let metadata = std::fs::metadata(&directory).unwrap();
+    let expected = DirectoryOwner {
+        uid: metadata.uid(),
+        gid: metadata.gid(),
+    };
+    assert_eq!(path_owner(&directory), Some(expected));
+    assert_eq!(path_owner(&link), Some(expected));
+    assert_eq!(path_owner(&directory.join("missing")), None);
+    std::fs::remove_dir_all(&directory).unwrap();
+}

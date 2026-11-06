@@ -478,6 +478,17 @@ a write can't change its owner, except from a daemon reached over the network, w
 paths aren't on this machine to look at. It says nothing when you are root, since root-owned files are then yours. A run
 doesn't warn about this, and neither does `config validate`.
 
+Over a local socket to a rootful Linux daemon, `doctor` also reads who owns each
+writable bind mount's host path, for a container that runs as you: one with `identity`,
+or an enabled `run_as_current_user`. If another uid owns it, it warns that a write
+there may be refused, as it can be for a directory an earlier run left
+root-owned. "May", since group or other permissions can still allow it, and on Docker
+Desktop on Linux a bind mount looks like the container user's own, so the write may
+well succeed. A missing path isn't reported, since a run tries to create it as you, and nor is
+one whose owner can't be read, or anything when you are root. A daemon reached over the network isn't checked, because its mounts are on its
+own filesystem, and neither is any other class, where the container doesn't run as
+your uid. It's a warning, and `config validate` doesn't report it.
+
 A **problem** will fail a run — an unreachable daemon, a configuration that doesn't
 load, a `build_directory` or Dockerfile a build can't use. A **warning** works but is
 likely to bite: a floating image tag (`latest`, or no tag at all) means the same
