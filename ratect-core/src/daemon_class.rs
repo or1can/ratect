@@ -20,9 +20,11 @@
 //!
 //! **Desktop is a heuristic, and owned as one.** OrbStack, Docker Desktop and
 //! rootful Ubuntu report identical `SecurityOptions`, so no daemon-side signal
-//! tells them apart. Ratect's own host plus the transport covers colima and
+//! short of a vendor list tells them apart. Ratect's own host plus the transport covers colima and
 //! future runtimes without a vendor list, and leaves a remote daemon reached
-//! from a Mac to what it reports about itself.
+//! from a Mac to what it reports about itself. It also leaves Docker Desktop on
+//! Linux as rootful Linux, deliberately: that is a VM with file sharing too, but
+//! only vendor-specific signals identify it (#817).
 
 use std::fmt;
 
@@ -80,7 +82,8 @@ impl Transport {
 /// What the daemon reports wins over where it is: `name=rootless` first, then
 /// `name=userns`, each matched against a whole entry, since moby emits both
 /// bare. Only then Desktop (macOS or Windows, over a local socket), and
-/// [`RootfulLinux`](DaemonClass::RootfulLinux) for the remainder.
+/// [`RootfulLinux`](DaemonClass::RootfulLinux) for the remainder, which includes
+/// Docker Desktop on Linux by decision.
 pub fn classify(security_options: &[String], host_os: &str, transport: Transport) -> DaemonClass {
     let reports = |entry: &str| security_options.iter().any(|option| option == entry);
     if reports("name=rootless") {

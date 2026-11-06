@@ -925,8 +925,9 @@ Both places programs look then agree: `$HOME`, which Git reads, and the running
 user's `/etc/passwd` entry, which ssh's `~` reads. Who the running user is depends
 on the daemon, and [`ratect doctor`](ratect-cli.md) says which kind you have:
 
-- **On a rootful Linux daemon**, it is you: the container runs as your uid and gid.
-  See [On a rootful Linux daemon](#on-a-rootful-linux-daemon).
+- **On a rootful Linux daemon**, which includes Docker Desktop on Linux, it is you:
+  the container runs as your uid and gid. See
+  [On a rootful Linux daemon](#on-a-rootful-linux-daemon).
 - **On a local Docker Desktop, OrbStack or similar on macOS or Windows, and on
   rootless and userns-remap daemons**, it is the image's own `USER`, or root if it
   has none. Ratect doesn't change it.
@@ -1079,6 +1080,14 @@ a mount below it hands it over. With a daemon on another machine (`ssh://`, `tcp
 gid are still the ones of the user running Ratect. Ratect creates no host directories
 for it, on either machine, so the daemon creates a missing source as root. Windows has no uid to
 adopt, so a Windows client reaching such a daemon fails the run, naming the container.
+
+Docker Desktop on Linux counts as a rootful Linux daemon, so Ratect takes these steps
+there, and `ratect doctor` calls it `rootful Linux`. That is deliberate: only
+vendor-specific signals tell it from a native daemon
+([why, and what was probed](https://github.com/or1can/ratect/blob/main/decisions/0011-container-identity.md#daemon-classification)).
+On the one version probed, with default file sharing, what a container wrote to a bind
+mount stayed yours whichever user it ran as, so running as you may not be what delivers
+that there. The same project on Docker Desktop on a Mac runs as the image's `USER`.
 
 ## Field reference
 

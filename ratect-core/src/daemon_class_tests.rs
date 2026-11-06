@@ -131,6 +131,17 @@ fn a_rootful_daemon_on_linux_is_rootful_linux_over_either_transport() {
     }
 }
 
+/// #817: Docker Desktop on Linux stays rootful Linux by decision, though it is a
+/// VM with file sharing as Desktop is. `ROOTFUL` is exactly what it reported when
+/// probed (ADR 0011).
+#[test]
+fn docker_desktop_on_linux_is_rootful_linux() {
+    assert_eq!(
+        classify(&options(ROOTFUL), "linux", Transport::LocalSocket),
+        DaemonClass::RootfulLinux
+    );
+}
+
 #[test]
 fn a_daemon_reporting_no_options_is_classified_by_host_and_transport() {
     assert_eq!(

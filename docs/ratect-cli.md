@@ -434,8 +434,11 @@ The `Docker daemon class` line says which kind of daemon this connection reached
 `rootless` or `userns-remap` when the daemon reports it, `desktop` when Ratect runs
 on macOS or Windows and reaches it over a local socket, and `rootful Linux`
 otherwise. A daemon reached over the network is classified by what it reports, so
-it is never `desktop`. If the daemon answers but its class can't be read, that is
-a warning.
+it is never `desktop`. Docker Desktop on Linux is `rootful Linux`, deliberately:
+only vendor-specific signals tell it from a native daemon
+([why](../decisions/0011-container-identity.md#daemon-classification)), and
+[`identity` treats it as one](ratect-config-reference.md#on-a-rootful-linux-daemon).
+If the daemon answers but its class can't be read, that is a warning.
 
 The class also decides two warnings about containers in the project, whichever
 task reaches them, leaving out a base with no image or `build_directory`, which
