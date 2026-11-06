@@ -5446,15 +5446,6 @@ subjects = {}
 [[mark]]
 file = "docs/ratect-cli.md"
 mode = "claim-words-totalising"
-unit = "9043fec56ccfca83"
-copies = 1
-note = "config validate on a test project reported a floating tag, a dependency without health_check, duplicate dependencies and prerequisites, a missing build_directory and an absolute dockerfile, then exited 1 on the problems."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-cli.md"
-mode = "claim-words-totalising"
 unit = "9c0b6c0c2be6e6e9"
 copies = 1
 note = "config convert: volume 'foo\\bar' -> 'foo\\\\bar'. 'foo\\$X' -> 'foo\\\\$X', listed as a check."
@@ -11123,15 +11114,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "docs/ratect-config-reference.md"
-mode = "claim-words-about-elsewhere"
-unit = "0e88faff8ef01949"
-copies = 1
-note = "Probed: a file at the home and a tmpfs above it both fail naming the container; the mounted-at-home exception tested in a_tmpfs_that_hides_nothing_is_allowed."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "ratect-core/src/diagnostics.rs"
 mode = "restatement-ngram"
 unit = "7a643444a63693d2-50ffbd5d919c5d65"
@@ -11346,24 +11328,6 @@ copies = 1
 note = "Checked `build_context_tar` returns `Vec<u8>`, dist-workspace.toml has no Windows target, every non-Unix `cfg` outside user.rs and interrupt.rs is the resize listener or a test fake, the classifier and refusal exist, and `SIGWINCH` uses `tokio::signal::unix`; Batect's items and CI coverage were not checked."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0010-release-binary-distribution.md" = "c233b89f0025ba63", "ratect-core/src/docker.rs" = "83dbcc69d8f6778b" }
-
-[[mark]]
-file = "ROADMAP.md"
-mode = "claim-words-counts"
-unit = "ce2d633d34204e90"
-copies = 1
-note = "Read the sentence: its three wishlist checks are still absent from diagnostics.rs by grep, and #121 is the open doctor issue for the first; the 'identity resolves there' clause now matches identity.rs's host-user path."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0011-container-identity.md" = "f1df0f8db93bf1b9" }
-
-[[mark]]
-file = "ROADMAP.md"
-mode = "claim-words-about-elsewhere"
-unit = "ce2d633d34204e90"
-copies = 1
-note = "Same read: 'see decisions/0011' points at the rootful section this branch keeps, and Batect's wishlist itself was not re-read."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0011-container-identity.md" = "f1df0f8db93bf1b9" }
 
 [[mark]]
 file = "decisions/0011-container-identity.md"
@@ -11623,15 +11587,6 @@ mode = "claim-words-about-elsewhere"
 unit = "8d9d3b5bcf81a802"
 copies = 1
 note = "As for its counts mark: docker.rs:1371, :1397 and TODO.md item 19; RUST_LOG=off run showed Warning: lines still on stderr (#237)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-cli.md"
-mode = "claim-words-counts"
-unit = "d12f7a419f0bb984"
-copies = 1
-note = "Two: remapped_daemon_warning in diagnostics.rs has the identity and user branches; remapped_daemon_findings filters a base, tested by remapped_daemon_findings_leave_out_a_base_nothing_can_run."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -13090,5 +13045,68 @@ mode = "temporal-words-version"
 unit = "adaca3957fd62c21"
 copies = 1
 note = "Capture's last line says set 'ratect_version' to 0.13.0; ran it"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "claim-words-counts"
+unit = "5d3f2dc6595f3b09"
+copies = 1
+note = "Only proxy-scheme check named as remaining; grep finds no proxy check in diagnostics.rs or diagnose, and doctor has no pull, so image checks do need one; 119, 121 and 122 removed from the list as shipped"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "claim-words-about-elsewhere"
+unit = "5d3f2dc6595f3b09"
+copies = 1
+note = "Link target docs/ratect-cli.md#doctor read and lists the shipped checks; proxy check absent from diagnostics.rs; .out-of-scope file exists"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "f60c4f1871397007"
+copies = 1
+note = "Each listed check read in config_findings, identity_home_mount_findings added by this branch; config validate run on a project and reported the mount findings"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "3926fd0843109c9f"
+copies = 1
+note = "remapped_daemon_warning has the two cases in the list below; warn_about_remapped_daemon gives the same words to a run; the two further class checks are stated separately as doctor-only"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "0257b1521874c8b7"
+copies = 1
+note = "Run on a real rootful Linux daemon: missing path silent, root silent; unreadable owner by a_path_that_cannot_be_probed_is_no_finding; creates_host_directories read for tries to create"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "111f4425be2b4687"
+copies = 1
+note = "Both run: tmpfs above a bind mount and a cache refused while doctor gave the deeper mount's finding or none; --cache-type refused by doctor and config validate"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-about-elsewhere"
+unit = "a3a88fd0dd40f5f2"
+copies = 1
+note = "prepare_home read: returns before the tmpfs check when the home exists; run refused a tmpfs above a missing home, passed with one at the home and one the image ships"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
