@@ -2,7 +2,7 @@
 
 Contributor-facing records of the **cross-cutting** decisions that shape Ratect —
 the ones referenced from more than one place, that don't belong to any single
-version's [`ROADMAP.md`](../ROADMAP.md) entry. This is *not* user documentation
+version's [`RELEASES.md`](../RELEASES.md) entry. This is *not* user documentation
 (that's [`docs/`](../docs/)) and not a changelog (that's
 [`CHANGELOG.md`](../CHANGELOG.md)); it's the "why" behind the load-bearing
 choices, kept where they can be linked to instead of re-explained.
@@ -52,7 +52,7 @@ clearly than the bullet it replaces, not less. Sections:
 - **Consequences** — what this commits us to, including the awkward parts.
 
 When a decision is superseded, mark the old record's status and link forward;
-never delete one (same append-only spirit as the roadmap's versioned lists).
+never delete one (same append-only spirit as `RELEASES.md`'s entries).
 
 Append-only protects a decision once the release that implements it ships.
 Before that, while the release is still `-dev`, a refinement found by

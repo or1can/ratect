@@ -26,7 +26,7 @@ repo's scheduled Renovate run ignores `**/tests/**` (`renovate.json5`). A pinned
 version going stale is a real way for these tests to break, as
 `container-with-dependency`'s did below. A version bump on its own doesn't
 change what a fixture tests, so it isn't a deviation in the sense the rest of
-this section means; reviewing one of Renovate's PRs against this corpus still
+this section means; reviewing one against this corpus still
 means confirming the bump doesn't change the test's observable intent (what
 it asserts, not just whether it currently passes) before merging, the same
 scrutiny the nginx bump below got by hand.
