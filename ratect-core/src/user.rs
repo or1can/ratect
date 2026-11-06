@@ -149,6 +149,21 @@ pub fn generate_group_file(user: &CurrentUser) -> String {
     }
 }
 
+/// One of an `identity`'s additional users, as the file declares it, and as
+/// [`with_additional_users`] takes it: here rather than in `config` since
+/// [`crate::container_spec::IdentityPlan`] carries it to the runtime's side of that
+/// boundary. The ids are required, since Ratect has no way to allocate one that an
+/// image it hasn't seen leaves free. What can be judged from the file alone is
+/// judged by `config::validate_additional_users`, and a clash with the image's own
+/// entries or the running user by [`with_additional_users`], when both are known.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdditionalUser {
+    pub name: String,
+    pub uid: u32,
+    pub gid: u32,
+}
+
 /// Who `identity` makes a directory's owner: the numeric ids an archive entry
 /// takes, since Docker's archive API has no use for a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -333,16 +348,66 @@ pub fn edit_passwd_for_host_user(passwd: &[u8], user: &CurrentUser, home: &str) 
 /// name is in the file. A group entry only gives `id` and `ls` a name to print, so
 /// on a clash there is nothing worth inventing one for.
 pub fn edit_group_for_host_user(group: &[u8], user: &CurrentUser) -> Option<Vec<u8>> {
-    let taken = group.split_inclusive(|byte| *byte == b'\n').any(|line| {
+    let taken = group_entry_taken(group, &user.groupname, user.gid);
+    (!taken).then(|| with_line_appended(group, &format!("{}:x:{}:", user.groupname, user.gid)))
+}
+
+/// Who a clash found in the file can be with. Which of them it is can't be told
+/// from the file, and a clash with the host user is only on some machines.
+const CLASH_IS_WITH: &str = "that is the image's user or the running user";
+
+/// `passwd`, by now holding the image's entries and the running user's, with an
+/// entry appended for each of `users`: password `*`, and a home nothing creates
+/// (`/nonexistent`, the name for that), since Ratect makes no directories for
+/// them. A name or uid already there is an error rather than an entry overwritten
+/// or a lookup left to find whichever comes first, and so is the running user's,
+/// which can't be told apart from the image's here and isn't an additional user
+/// either way. A gid already there isn't, since sharing one is ordinary.
+///
+/// `users` were judged by `config::validate_additional_users`, so a name can't
+/// shift a field or start a line, and they can't clash with each other.
+pub fn with_additional_users(passwd: &[u8], users: &[AdditionalUser]) -> Result<Vec<u8>> {
+    let mut contents = passwd.to_vec();
+    for AdditionalUser { name, uid, gid } in users {
+        if let Some((_, entry)) = first_passwd_entry(passwd, |entry| entry.uid == Some(*uid)) {
+            anyhow::bail!(
+                "additional user '{name}' has uid {uid}, which '/etc/passwd' already gives to \
+                 '{}': {CLASH_IS_WITH}",
+                entry.name.escape_ascii()
+            );
+        }
+        anyhow::ensure!(
+            first_passwd_entry(passwd, |entry| entry.name == name.as_bytes()).is_none(),
+            "additional user '{name}' has a name '/etc/passwd' already has: {CLASH_IS_WITH}"
+        );
+        contents = with_passwd_entry_appended(&contents, name, *uid, *gid, "/nonexistent");
+    }
+    Ok(contents)
+}
+
+/// `group` with an entry named after each of `users`, for its gid, by the rule
+/// [`edit_group_for_host_user`] gives its reasons for.
+pub fn with_additional_groups(group: &[u8], users: &[AdditionalUser]) -> Vec<u8> {
+    let mut contents = group.to_vec();
+    for AdditionalUser { name, gid, .. } in users {
+        if !group_entry_taken(&contents, name, *gid) {
+            contents = with_line_appended(&contents, &format!("{name}:x:{gid}:"));
+        }
+    }
+    contents
+}
+
+/// Whether `group` has an entry named `name` or for `gid`.
+fn group_entry_taken(group: &[u8], name: &str, gid: u32) -> bool {
+    group.split_inclusive(|byte| *byte == b'\n').any(|line| {
         let Some(entry) = entry_range(line) else {
             return false;
         };
         let mut fields = line[entry].split(|byte| *byte == b':');
-        let name = fields.next();
-        let gid = fields.nth(1);
-        name == Some(user.groupname.as_bytes()) || parse_id(gid.as_ref()) == Some(user.gid)
-    });
-    (!taken).then(|| with_line_appended(group, &format!("{}:x:{}:", user.groupname, user.gid)))
+        let entry_name = fields.next();
+        let entry_gid = fields.nth(1);
+        entry_name == Some(name.as_bytes()) || parse_id(entry_gid.as_ref()) == Some(gid)
+    })
 }
 
 /// The first entry of `passwd` that `selected` accepts, with where its line

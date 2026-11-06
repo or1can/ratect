@@ -128,6 +128,7 @@ use crate::include_trust::{
     self, Boundary, Bundle, BundleId, EffectiveGrants, Grants, HostPathField,
 };
 use crate::ui::{printable, LoadOutput, Text};
+use crate::user::AdditionalUser;
 
 /// Batect's one built-in config variable, resolvable via
 /// `<{batect.project_directory}` without being declared in `config_variables` — always
@@ -579,6 +580,11 @@ impl Container {
 pub struct Identity {
     /// The home directory, a path inside the container.
     pub home: String,
+    /// Users the image lacks, which something in the container expects to find
+    /// by name or id. They are only entries in its identity files: Ratect starts
+    /// nothing as one, and makes no directory for one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub additional_users: Vec<AdditionalUser>,
 }
 
 impl<'de> Deserialize<'de> for Identity {
@@ -589,11 +595,14 @@ impl<'de> Deserialize<'de> for Identity {
         #[serde(rename = "Identity", deny_unknown_fields)]
         struct AsWritten {
             home: String,
+            #[serde(default)]
+            additional_users: Vec<AdditionalUser>,
         }
 
         let written = AsWritten::deserialize(deserializer)?;
         Ok(Identity {
             home: checked_expression(written.home)?,
+            additional_users: written.additional_users,
         })
     }
 }
@@ -5136,7 +5145,7 @@ fn evaluate_value(
 /// load and uses anything else as written), `environment`, local `volumes`
 /// host paths, `build_directory`, `build_args`, `build_secrets` paths,
 /// `build_ssh` paths and (outside a Batect-format file, #462)
-/// `run_as_current_user.home_directory` — then resolves each host path
+/// `run_as_current_user.home_directory` and `identity.home` — then resolves each host path
 /// against the file that declared it and judges what [`check_values`] could
 /// only judge on a literal. Each of these fields' readers checks its syntax
 /// as the file is read ([`checked_expression`]), so a field added here needs
@@ -6668,7 +6677,8 @@ fn validate_passthrough_identity(config: &Config) -> Result<()> {
 }
 
 /// What a container with an [`identity`](Container::identity) can't also have,
-/// [`Identity::home`]'s own shape being [`check_values`]'s.
+/// [`Identity::home`]'s own shape being [`check_values`]'s, and whether its
+/// additional users are well formed.
 ///
 /// **After `resolve_extends`**, since `extends` can supply either side, and
 /// before [`validate_passthrough_identity`], so a `group` beside `identity` is
@@ -6681,9 +6691,10 @@ fn validate_passthrough_identity(config: &Config) -> Result<()> {
 /// depends on the daemon that later runs it.
 fn validate_identity(config: &Config) -> Result<()> {
     for (name, container) in &config.containers {
-        if container.identity.is_none() {
+        let Some(identity) = &container.identity else {
             continue;
-        }
+        };
+        validate_additional_users(name, &identity.additional_users)?;
         let runs_as_current_user = container
             .run_as_current_user
             .as_ref()
@@ -6711,6 +6722,59 @@ fn validate_identity(config: &Config) -> Result<()> {
                     "The container '{name}' has 'identity' and a 'cache' volume mount at \
                      '{}', which is relative: beside 'identity', it must be absolute.",
                     printable(&cache.container)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `name` is made of the characters a user name is: what
+/// `make_native`'s `pattern` for one says too.
+pub(crate) fn is_user_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|rest| rest.is_ascii_alphanumeric() || "_.-".contains(rest))
+}
+
+/// What can be judged about a container's additional users from the file alone
+/// (#107). Each name goes into a line of `/etc/passwd` and `/etc/group`, so it is
+/// held to the characters a user name is made of, which also rules out all-digit
+/// text, always a uid to the runtime. Id 0 is root's. Entries sharing a name or a
+/// uid would make which one a lookup finds depend on their order, and one sharing
+/// a gid would get no group entry of its own.
+fn validate_additional_users(container: &str, users: &[AdditionalUser]) -> Result<()> {
+    for (index, user) in users.iter().enumerate() {
+        let name = &user.name;
+        anyhow::ensure!(
+            is_user_name(name),
+            "The container '{container}' has an additional user named '{}', which is not a \
+             user name: it must start with a letter or '_', and hold only letters, digits, \
+             '_', '.' and '-'.",
+            printable(name)
+        );
+        anyhow::ensure!(
+            user.uid != 0 && user.gid != 0,
+            "In the container '{container}', additional user '{name}' has {} 0, which is \
+             root's.",
+            if user.uid == 0 { "uid" } else { "gid" }
+        );
+        for earlier in &users[..index] {
+            anyhow::ensure!(
+                earlier.name != *name,
+                "The container '{container}' has more than one additional user named '{name}'."
+            );
+            for (field, earlier_id, id) in [
+                ("uid", earlier.uid, user.uid),
+                ("gid", earlier.gid, user.gid),
+            ] {
+                anyhow::ensure!(
+                    earlier_id != id,
+                    "In the container '{container}', additional users '{}' and '{name}' both \
+                     have {field} {id}. Each needs its own.",
+                    earlier.name
                 );
             }
         }

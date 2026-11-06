@@ -456,6 +456,45 @@
             }
           ],
           "properties": {
+            "additional_users": {
+              "description": "Users the image lacks, added to /etc/passwd and /etc/group for something in the container to find. A name or uid already in /etc/passwd fails the run.",
+              "examples": [
+                [
+                  {
+                    "gid": 1500,
+                    "name": "svc",
+                    "uid": 1500
+                  }
+                ]
+              ],
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "gid": {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "name": {
+                    "description": "The user's name, which is also the name of its group if that is added.",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$",
+                    "type": "string"
+                  },
+                  "uid": {
+                    "maximum": 4294967295,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "name",
+                  "uid",
+                  "gid"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
             "home": {
               "description": "The home directory, an absolute path inside the container with no `..`, `:` or control characters. Holds an expression, judged once it has a value.",
               "examples": [

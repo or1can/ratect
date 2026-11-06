@@ -504,3 +504,93 @@ fn is_root_user_reads_every_form_a_user_comes_in() {
         assert!(!is_root_user(user), "{user:?}");
     }
 }
+
+fn additional_user(name: &str, uid: u32, gid: u32) -> crate::user::AdditionalUser {
+    crate::user::AdditionalUser {
+        name: name.to_string(),
+        uid,
+        gid,
+    }
+}
+
+#[test]
+fn with_additional_users_appends_each_after_every_line_untouched() {
+    let contents = with_additional_users(
+        b"root:x:0:0::/root:/bin/sh\nno-newline:x:7:7::/:/bin/sh",
+        &[
+            additional_user("svc", 1500, 1600),
+            additional_user("tool", 1501, 1601),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(contents).unwrap(),
+        "root:x:0:0::/root:/bin/sh\nno-newline:x:7:7::/:/bin/sh\n\
+         svc:*:1500:1600::/nonexistent:/bin/sh\n\
+         tool:*:1501:1601::/nonexistent:/bin/sh\n"
+    );
+}
+
+#[test]
+fn with_additional_users_appends_to_an_empty_file() {
+    assert_eq!(
+        with_additional_users(b"", &[additional_user("svc", 1500, 1600)]).unwrap(),
+        b"svc:*:1500:1600::/nonexistent:/bin/sh\n"
+    );
+}
+
+#[test]
+fn with_additional_users_with_none_leaves_the_file_alone() {
+    assert_eq!(with_additional_users(b"quirk", &[]).unwrap(), b"quirk");
+}
+
+/// An entry already there may be the image's or the running user's, which by
+/// now is one of them, so a clash is refused rather than resolved either way.
+#[test]
+fn with_additional_users_refuses_a_name_or_uid_already_in_the_file() {
+    const PASSWD: &[u8] = b"root:x:0:0::/root:/bin/sh\nnode:x:1000:1000::/home/node:/bin/sh\n";
+    for (user, expected) in [
+        (
+            additional_user("svc", 1000, 1600),
+            "additional user 'svc' has uid 1000, which '/etc/passwd' already gives to 'node'",
+        ),
+        (
+            additional_user("node", 1500, 1600),
+            "additional user 'node' has a name '/etc/passwd' already has",
+        ),
+        (
+            additional_user("node", 1000, 1000),
+            "additional user 'node' has uid 1000, which '/etc/passwd' already gives to 'node'",
+        ),
+    ] {
+        let error = format!("{:#}", with_additional_users(PASSWD, &[user]).unwrap_err());
+        assert!(error.contains(expected), "got: {error}");
+        assert!(
+            error.contains("the image's user or the running user"),
+            "it can be either, and only one is fixed in the image: {error}"
+        );
+    }
+}
+
+/// A group entry only gives `id` and `ls` a name to print, so the rule is the
+/// host user's: a gid or name already there means nothing is added.
+#[test]
+fn with_additional_groups_appends_only_where_both_the_gid_and_the_name_are_free() {
+    let contents = with_additional_groups(
+        b"staff:x:20:\ntaken:x:30:",
+        &[
+            additional_user("svc", 1500, 1600),
+            additional_user("gid-there", 1501, 20),
+            additional_user("taken", 1502, 1602),
+        ],
+    );
+    assert_eq!(
+        String::from_utf8(contents).unwrap(),
+        "staff:x:20:\ntaken:x:30:\nsvc:x:1600:\n"
+    );
+}
+
+#[test]
+fn with_additional_groups_with_none_leaves_the_file_alone() {
+    assert_eq!(with_additional_groups(b"quirk", &[]), b"quirk");
+}

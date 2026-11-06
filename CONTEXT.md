@@ -95,6 +95,9 @@ files.
 with a stated home directory. What adopting means is resolved against the
 daemon, not fixed by the declaration.
 
+**Additional user** — a user an identity declares because the image lacks it: an
+entry in the container's identity files, which Ratect starts nothing as.
+
 **Passthrough** — a container field handed to the runtime verbatim; Ratect
 neither resolves nor synthesizes anything from it.
 

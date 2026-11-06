@@ -67,7 +67,7 @@ use crate::config::{BuildSecret, Container, NetworkMode, TaskContainerCustomisat
 use crate::docker::UserMapping;
 use crate::labels::{ContainerRole, RunLabels};
 use crate::proxy::ProxyEnvironment;
-use crate::user::CurrentUser;
+use crate::user::{AdditionalUser, CurrentUser};
 
 /// Which network a container is on — derived once, by [`resolve_network`],
 /// from its own `network_mode` and consumed as a whole by `docker.rs`, so
@@ -336,6 +336,9 @@ pub struct IdentityPlan {
     /// ([`crate::identity::host_user`]). `None` leaves the image's own user
     /// alone.
     pub host_user: Option<CurrentUser>,
+    /// Entries for users the image lacks, added beside the running user's on
+    /// every class, unless that user can't start ([`crate::identity::apply`]).
+    pub additional_users: Vec<AdditionalUser>,
 }
 
 /// One resolved `local` or `cache` volume mount — what becomes one of
@@ -615,6 +618,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         .map(|identity| IdentityPlan {
             home: identity.home.clone(),
             host_user: identity_host_user.cloned(),
+            additional_users: identity.additional_users.clone(),
         });
     // Over the image's own `ENV HOME`, which would otherwise beat the passwd
     // edit, and under a `HOME` the project wrote, whose author stated it.

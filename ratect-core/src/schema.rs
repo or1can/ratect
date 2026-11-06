@@ -56,10 +56,11 @@
 //! [config reference](https://github.com/or1can/ratect/blob/main/docs/ratect-compat-config-reference.md#editor-autocompletion-and-validation)
 //! and the [`ratect.toml` reference](https://github.com/or1can/ratect/blob/main/docs/ratect-config-reference.md#editor-support)
 //! for the user-facing halves. The native one is the same generated base put
-//! through `make_native`, which applies *exactly* the two differences that define
-//! the format: it drops the compact string form from the
+//! through `make_native`, which applies the differences that define the format: it
+//! drops the compact string form from the
 //! `volumes`/`ports`/`devices`/`include` `oneOf`s (object-only), and adds the
-//! native-only `extends` field the compat schema skips. Everything else is shared
+//! native-only fields the compat schema skips, `extends` and `identity` among them,
+//! written by hand. Everything else is shared
 //! because both formats parse into one `Config`. One asymmetry that's deliberate:
 //! only the compat schema carries a `patternProperties` entry admitting top-level
 //! `.`-prefixed keys (YAML extensions — TOML has no anchors for one to hold). The
@@ -677,6 +678,36 @@ fn make_native(json: &mut serde_json::Value) {
                                         container with no `..`, `:` or control characters. Holds an \
                                         expression, judged once it has a value.",
                         "examples": ["/home/me"],
+                    },
+                    "additional_users": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$",
+                                    "description": "The user's name, which is also the name of \
+                                                    its group if that is added.",
+                                },
+                                "uid": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": u32::MAX,
+                                },
+                                "gid": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": u32::MAX,
+                                },
+                            },
+                            "required": ["name", "uid", "gid"],
+                            "additionalProperties": false,
+                        },
+                        "description": "Users the image lacks, added to /etc/passwd and \
+                                        /etc/group for something in the container to find. A \
+                                        name or uid already in /etc/passwd fails the run.",
+                        "examples": [[{ "name": "svc", "uid": 1500, "gid": 1500 }]],
                     },
                 },
                 "required": ["home"],

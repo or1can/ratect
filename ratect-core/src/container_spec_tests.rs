@@ -1240,6 +1240,7 @@ fn derive_spec_takes_an_identity_host_user_only_with_an_identity() {
     let mut with_identity = sample_container();
     with_identity.identity = Some(crate::config::Identity {
         home: "/home/me".to_string(),
+        additional_users: vec![],
     });
     let with = derive(&with_identity);
     assert_eq!(with.shared.process_user.as_deref(), Some("1000:20"));

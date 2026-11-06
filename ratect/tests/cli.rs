@@ -4621,7 +4621,7 @@ fn a_signal_while_connecting_wins_over_the_failed_connect() {
 }
 
 /// `identity`'s fixture (ratect#235), loaded, on any machine. The tests below run
-/// its tasks, but only on a rootful Linux daemon.
+/// its tasks, nearly all only on a rootful Linux daemon.
 #[test]
 fn the_identity_fixture_loads() {
     let fixture = identity_fixture_path();
@@ -4637,7 +4637,7 @@ fn the_identity_fixture_loads() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "show-home\nshow-image-home\nshow-node\nshow-private-cache\nwrite-beside-deep-cache\nwrite-cache\n"
+        "show-additional-users\nshow-home\nshow-image-home\nshow-node\nshow-private-cache\nwrite-beside-deep-cache\nwrite-cache\n"
     );
 }
 
@@ -4712,6 +4712,26 @@ fn identity_on_a_rootful_daemon_runs_as_the_host_user_with_a_name_and_a_home() {
     assert_eq!(fields[2], host_id("-u").to_string(), "{stdout}");
     assert_eq!(fields[5], "/home/me", "{stdout}");
     assert!(listed.contains(whoami), "the home is the user's: {stdout}");
+}
+
+/// A declared user is there by name beside the image's own, on every daemon class,
+/// and its group is written early enough for `groups` to name it (#107).
+#[test]
+#[ignore]
+fn identity_adds_additional_users_on_every_daemon() {
+    let _guard = shared_docker();
+    let stdout = run_identity_task(&identity_fixture_path(), "show-additional-users");
+    let lines: Vec<&str> = stdout.lines().collect();
+    let [passwd, group, root, groups] = &lines[..] else {
+        panic!("{stdout}");
+    };
+    assert_eq!(*passwd, "svc:*:1500:1600::/nonexistent:/bin/sh", "{stdout}");
+    assert!(group.starts_with("svc:x:1600"), "{stdout}");
+    assert!(root.starts_with("root:x:0:0:"), "{stdout}");
+    assert!(
+        groups.split_whitespace().any(|group| group == "1600"),
+        "`svc` in {groups}"
+    );
 }
 
 /// Adding to the image's files leaves its users there.

@@ -2,8 +2,10 @@
 # decisions/0011), and the project the reference page points at. On a rootful
 # Linux daemon, which is what CI has, `identity_on_a_rootful_daemon_*` in
 # `ratect/tests/cli.rs` run its tasks, and bind mounts and an image holding the
-# host's own uid are in a project those tests write themselves. Elsewhere the
-# home guarantee alone applies, and was checked by hand on macOS. To repeat that:
+# host's own uid are in a project those tests write themselves.
+# `identity_adds_additional_users_on_every_daemon` runs on any daemon. Elsewhere
+# only the home guarantee and additional users apply, and the home guarantee was
+# checked by hand on macOS. To repeat that:
 #
 #     ratect run -f ratect/tests/fixtures/identity.toml show-home
 #
@@ -51,6 +53,13 @@ volumes = [
     { type = "cache", name = "ratect-identity-test-deep", container = "/home/me/.tool/registry", scope = "shared" },
 ]
 
+# A service account alpine lacks, and its group as a supplementary group, which the
+# runtime resolves from the file written before the container starts.
+[containers.additional-users]
+image = "alpine:3.18.2"
+identity = { home = "/home/me", additional_users = [{ name = "svc", uid = 1500, gid = 1600 }] }
+groups = ["svc"]
+
 [tasks.show-home]
 run = { container = "build-env", command = """sh -c 'whoami; id -G; echo $HOME; getent passwd $(id -u); ls -ld ~'""" }
 
@@ -68,3 +77,6 @@ run = { container = "cache-user", command = """sh -c 'cat /cache/marker 2>/dev/n
 
 [tasks.write-beside-deep-cache]
 run = { container = "deep-cache-user", command = "touch /home/me/marker /home/me/.tool/marker /home/me/.tool/registry/marker" }
+
+[tasks.show-additional-users]
+run = { container = "additional-users", command = """sh -c 'getent passwd svc; getent group svc; getent passwd root; id -G'""" }
