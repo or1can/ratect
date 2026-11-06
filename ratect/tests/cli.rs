@@ -5056,7 +5056,8 @@ run = {{ container = "app", command = "touch /code/target/marker" }}
 /// mount goes on top of the `tmpfs` at start, so it is there and writable once the
 /// container runs. Asserted through what outlives the container, the host directory
 /// and a second run reading the volume, since the `tmpfs` doesn't. A `tmpfs` at the
-/// home is the home, whatever is above it.
+/// home is the home, whatever is above it. A bind at the path a `tmpfs` resolves to
+/// goes on top of it too.
 #[test]
 #[ignore]
 #[cfg(unix)]
@@ -5074,6 +5075,7 @@ fn identity_home_in_a_mount_below_a_tmpfs_is_visible_and_writable() {
     }
     let _cleanup = RemoveOnDrop(project.clone());
     std::fs::create_dir(project.join("up")).unwrap();
+    std::fs::create_dir(project.join("same")).unwrap();
     let config = project.join("ratect.toml");
     std::fs::write(
         &config,
@@ -5105,8 +5107,19 @@ volumes = [
     {{ type = "tmpfs", container = "/mnt/me" }},
 ]
 
+[containers.bind-at-resolved-tmpfs]
+image = "alpine:3.18.2"
+identity = {{ home = "/mnt/me" }}
+volumes = [
+    {{ type = "tmpfs", container = "/mnt/x/.." }},
+    {{ local = "./same", container = "/mnt" }},
+]
+
 [tasks.write-tmpfs-at-home]
 run = {{ container = "tmpfs-at-home", command = "touch /mnt/me/marker" }}
+
+[tasks.write-bind-at-resolved-tmpfs]
+run = {{ container = "bind-at-resolved-tmpfs", command = "touch /mnt/me/marker" }}
 
 [tasks.write-bind]
 run = {{ container = "bind", command = "touch /mnt/up/me/marker" }}
@@ -5128,6 +5141,71 @@ run = {{ container = "cache", command = "ls /mnt/up/me/marker" }}
     assert!(volume_is_listed(VOLUME));
     run_identity_task(&config, "read-cache");
     run_identity_task(&config, "write-tmpfs-at-home");
+    run_identity_task(&config, "write-bind-at-resolved-tmpfs");
+    assert!(project.join("same/me/marker").exists());
+}
+
+/// Docker resolves a `..` in a `tmpfs` path when it mounts, so a run refuses this
+/// home rather than succeed with it hidden, and `config validate` says the same.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn identity_home_under_a_tmpfs_written_with_a_parent_component_is_refused() {
+    let _guard = shared_docker();
+    let project = unique_project_dir();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveOnDrop(project.clone());
+    let config = project.join("ratect.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"ratect_version = "{version}"
+project_name = "ratect-identity-tmpfs-parent-test"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = {{ home = "/mnt/me" }}
+volumes = [{{ type = "tmpfs", container = "/mnt/x/.." }}]
+
+[tasks.run]
+run = {{ container = "app", command = "ls -d /mnt/me" }}
+"#,
+            version = written_for_version()
+        ),
+    )
+    .unwrap();
+
+    let run = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["run", "run"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("tmpfs at '/mnt/x/..' would hide it"),
+        "{stderr}"
+    );
+
+    let validate = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["config", "validate"])
+        .output()
+        .expect("failed to run ratect");
+    let output = String::from_utf8_lossy(&validate.stdout).into_owned()
+        + &String::from_utf8_lossy(&validate.stderr);
+    assert!(!validate.status.success(), "{output}");
+    assert!(
+        output.contains("under the tmpfs at '/mnt/x/..'"),
+        "{output}"
+    );
 }
 
 /// Taking a volume keeps its mode, on the first run and on the one that finds it

@@ -277,7 +277,7 @@ async fn read_identity_file(
         .iter()
         .chain(&facts.tmpfs_destinations)
         .find(|destination| {
-            let destination = Path::new(destination);
+            let destination = path_clean::clean(destination);
             destination == Path::new(path) || destination == Path::new("/etc")
         })
     {
@@ -358,26 +358,27 @@ async fn prepare_home(
         }
         into = path;
     }
-    // A `tmpfs` above the home hides what is created, unless a deeper mount, which
-    // goes on top of it at start, is where that lands, or one at the home is the home.
+    // A `tmpfs` above the home hides what is created, unless a deeper mount, or one
+    // at the path it resolves to, which goes on top of it at start, is where that
+    // lands, or one at the home is the home.
     let deepest_tmpfs = facts
         .tmpfs_destinations
         .iter()
-        .map(Path::new)
-        .filter(|tmpfs| home_path.starts_with(tmpfs))
-        .max_by_key(|tmpfs| tmpfs.components().count());
-    if let Some(tmpfs) = deepest_tmpfs {
-        let hides_nothing = tmpfs == home_path
+        .map(|tmpfs| (tmpfs, path_clean::clean(tmpfs)))
+        .filter(|(_, cleaned)| home_path.starts_with(cleaned))
+        .max_by_key(|(_, cleaned)| cleaned.components().count());
+    if let Some((tmpfs, cleaned)) = deepest_tmpfs {
+        let hides_nothing = cleaned == home_path
             || facts
                 .mount_destinations
                 .iter()
                 .map(Path::new)
-                .any(|mount| home_path.starts_with(mount) && mount.starts_with(tmpfs));
+                .any(|mount| home_path.starts_with(mount) && mount.starts_with(&cleaned));
         anyhow::ensure!(
             hides_nothing,
             "'{}' can't be created: the tmpfs at '{}' would hide it",
             printable(home),
-            printable(&tmpfs.to_string_lossy())
+            printable(tmpfs)
         );
     }
     let relative = home_path
@@ -425,7 +426,7 @@ async fn hand_over_directories_made_for_mounts(
             .mount_destinations
             .iter()
             .chain(&facts.tmpfs_destinations)
-            .any(|mount| directory.starts_with(mount));
+            .any(|mount| directory.starts_with(path_clean::clean(mount)));
         if in_a_mount {
             continue;
         }

@@ -18998,7 +18998,7 @@ async fn directories_between_the_home_and_a_deeper_mount_go_to_a_non_root_user()
 async fn a_directory_on_the_way_to_a_mount_is_left_alone_otherwise() {
     let middle = "/home/me/a";
     let deep = "/home/me/a/b/cache";
-    let cases: [(&str, FakeContainerRuntime); 4] = [
+    let cases: [(&str, FakeContainerRuntime); 5] = [
         (
             "owned by someone already",
             identity_runtime(DaemonClass::Desktop)
@@ -19022,6 +19022,12 @@ async fn a_directory_on_the_way_to_a_mount_is_left_alone_otherwise() {
             identity_runtime(DaemonClass::Desktop)
                 .with_mount("app", deep)
                 .with_tmpfs("app", middle),
+        ),
+        (
+            "at a tmpfs written with a '..' that resolves to it",
+            identity_runtime(DaemonClass::Desktop)
+                .with_mount("app", deep)
+                .with_tmpfs("app", "/home/me/a/x/.."),
         ),
     ];
     for (case, docker) in cases {
@@ -19202,7 +19208,7 @@ async fn a_tmpfs_that_is_the_deepest_mount_above_a_missing_home_is_refused() {
 /// the paths, not from how they are spelled.
 #[tokio::test]
 async fn a_tmpfs_above_a_missing_home_is_judged_however_its_path_is_written() {
-    for destination in ["/mnt/", "//mnt", "/mnt/."] {
+    for destination in ["/mnt/", "//mnt", "/mnt/.", "/mnt/x/.."] {
         let config = || {
             config_with_identity(|app| {
                 app.identity.as_mut().unwrap().home = "/mnt/up/me".to_string();
@@ -19224,11 +19230,69 @@ async fn a_tmpfs_above_a_missing_home_is_judged_however_its_path_is_written() {
     }
 }
 
+/// Docker resolves a `..` in a `tmpfs` key when it mounts, so the refusal names the
+/// key as written and nothing is created beneath what it will hide, and one that
+/// resolves to the home is at the home.
+#[tokio::test]
+async fn a_tmpfs_written_with_a_parent_component_is_judged_by_where_it_resolves() {
+    let config = || {
+        config_with_identity(|app| {
+            app.identity.as_mut().unwrap().home = "/mnt/me".to_string();
+        })
+    };
+    let hiding = identity_runtime(DaemonClass::Desktop).with_tmpfs("app", "/mnt/x/..");
+    let error = engine(config(), hiding.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap_err();
+    let error = format!("{error:#}");
+    assert!(error.contains("container 'app'"), "{error}");
+    assert!(error.contains("tmpfs at '/mnt/x/..'"), "{error}");
+    assert!(
+        hiding
+            .created_directories()
+            .iter()
+            .all(|(name, ..)| name != "app"),
+        "{error}"
+    );
+
+    let at_home = identity_runtime(DaemonClass::Desktop).with_tmpfs("app", "/mnt/me/x/..");
+    engine(config(), at_home.clone())
+        .run_task("run", &[])
+        .await
+        .unwrap();
+    assert!(
+        at_home
+            .created_directories()
+            .iter()
+            .any(|(name, into, relative, _)| name == "app"
+                && std::path::Path::new(into).join(relative) == std::path::Path::new("/mnt/me")),
+        "{:?}",
+        at_home.created_directories()
+    );
+
+    // Docker refuses a bind at a `tmpfs`'s own path only as spelled the same, and
+    // mounts the bind on top of one that merely resolves there.
+    let same_path = identity_runtime(DaemonClass::Desktop)
+        .with_tmpfs("app", "/mnt/x/..")
+        .with_mount("app", "/mnt");
+    engine(config(), same_path)
+        .run_task("run", &[])
+        .await
+        .unwrap();
+}
+
 /// The mount refusals compare paths, since Docker forwards a `tmpfs` key as
 /// written.
 #[tokio::test]
 async fn a_passwd_mount_is_refused_however_its_path_is_written() {
-    for destination in ["/etc/", "/etc/passwd/", "/etc//passwd"] {
+    for destination in [
+        "/etc/",
+        "/etc/passwd/",
+        "/etc//passwd",
+        "/etc/x/..",
+        "/etc/passwd/x/..",
+    ] {
         let docker = identity_runtime(DaemonClass::Desktop).with_tmpfs("app", destination);
         let error = identity_failure(&docker).await;
         assert!(error.contains("container 'app'"), "{destination}: {error}");

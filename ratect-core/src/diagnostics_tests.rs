@@ -1282,6 +1282,44 @@ async fn a_mount_at_the_identity_home_settles_it_whatever_is_above() {
     assert_eq!(findings, []);
 }
 
+/// Docker resolves a `..` in a `tmpfs` key when it mounts, as a run does when judging
+/// it (`identity::prepare_home`), and the finding names the key as written.
+#[tokio::test]
+async fn a_tmpfs_written_with_a_parent_component_is_judged_by_where_it_resolves() {
+    let findings = home_mount_findings_for(
+        "/mnt/me",
+        r#"[{ type = "tmpfs", container = "/mnt/x/.." }]"#,
+    )
+    .await;
+    assert!(
+        matches!(&findings[..], [Finding::Problem(message)] if message.contains("tmpfs at '/mnt/x/..'")),
+        "{findings:?}"
+    );
+    assert_eq!(
+        home_mount_findings_for(
+            "/mnt/me",
+            r#"[{ type = "tmpfs", container = "/mnt/me/x/.." }]"#,
+        )
+        .await,
+        []
+    );
+}
+
+/// Docker refuses a bind at a `tmpfs`'s own path only as spelled the same, and mounts
+/// the bind on top of one that merely resolves there, whichever is listed first.
+#[tokio::test]
+async fn a_mount_at_the_path_a_tmpfs_resolves_to_decides_over_it() {
+    let tmpfs = r#"{ type = "tmpfs", container = "/mnt/x/.." }"#;
+    let bind = r#"{ local = "up", container = "/mnt" }"#;
+    for volumes in [format!("[{tmpfs}, {bind}]"), format!("[{bind}, {tmpfs}]")] {
+        let findings = home_mount_findings_for("/mnt/me", &volumes).await;
+        assert!(
+            matches!(&findings[..], [Finding::Warning(message)] if message.contains("created on the host")),
+            "{volumes}: {findings:?}"
+        );
+    }
+}
+
 /// A run creates the home in the deeper mount, which goes on top of the `tmpfs` at
 /// start, so each finding here is what a run does (`identity::prepare_home`).
 #[tokio::test]

@@ -1470,11 +1470,14 @@ pub struct CreatedContainerFacts {
     /// `Config.User` as the image or the create request set it; empty means
     /// root. See [`crate::user::edit_passwd_home`] for its forms.
     pub user: String,
-    /// The container path of each bind mount and volume. The daemon makes
-    /// these, and any parents they lack, on the first archive call, as root.
+    /// The container path of each bind mount and volume, cleaned by the daemon.
+    /// The daemon makes these, and any parents they lack, on the first archive
+    /// call, as root.
     pub mount_destinations: Vec<String>,
-    /// The container path of each `tmpfs`, as written. Unlike those, these
-    /// don't exist until the container runs, so a stat can't see them.
+    /// The container path of each `tmpfs`, as written. Docker cleans one only
+    /// when it mounts, so compare a cleaned copy: a `..` is still in this.
+    /// Unlike those, these don't exist until the container runs, so a stat
+    /// can't see them.
     pub tmpfs_destinations: Vec<String>,
 }
 

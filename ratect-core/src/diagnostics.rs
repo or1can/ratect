@@ -517,7 +517,8 @@ fn mount_owner_findings_with(
 /// past that refusal, and is then hidden, so the `tmpfs` is a problem either way.
 ///
 /// Only the deepest mount is read, since it goes on top of any `tmpfs` above it at
-/// start, and a run comes to the same answer. A `cache` counts as a volume
+/// start, and so does one at the path a `tmpfs` written differently resolves to,
+/// and a run comes to the same answer. A `cache` counts as a volume
 /// whatever a run's `--cache-type` says, since neither caller has that flag's value.
 fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -533,9 +534,10 @@ fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Find
         let Some(above) = mounts()
             .filter(|mount| home.starts_with(path_clean::clean(mount.container_path())))
             .max_by_key(|mount| {
-                path_clean::clean(mount.container_path())
+                let depth = path_clean::clean(mount.container_path())
                     .components()
-                    .count()
+                    .count();
+                (depth, !matches!(mount, VolumeMount::Tmpfs(_)))
             })
         else {
             continue;

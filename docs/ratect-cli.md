@@ -519,8 +519,9 @@ beside a task it matches is not.
 A mount above a container's
 [`identity` home](ratect-config-reference.md#identity-your-files-and-the-same-home-everywhere)
 is reported for what it does to that home, which is created through the mount before
-the container starts. The deepest mount strictly above the home decides, and a mount
-at the home itself supplies it, so that gets no finding whatever is above it:
+the container starts. The deepest mount strictly above the home decides, with a bind
+mount or `cache` going over a `tmpfs` at the same path, and a mount at the home itself
+supplies it, so that gets no finding whatever is above it:
 
 | Deepest mount above the home | Finding |
 | --- | --- |
