@@ -393,7 +393,7 @@ the later version counts:
   type = "git"
   repo = "https://github.com/my-org/infra-bundle.git"
   ref = "1.2.3"
-  reviewed_ratect_version = "0.12.0"
+  reviewed_ratect_version = "0.13.0"
   ```
 
 A bundle that sets neither counts as written for 0.3.0, the first release

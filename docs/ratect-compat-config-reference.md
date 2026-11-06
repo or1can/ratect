@@ -573,6 +573,9 @@ parsing or validation of its contents, matching Batect.
 
 ### User mapping
 
+> **`ratect.toml` differs here.** A `.toml` file refuses this field: see [Coming from
+> `run_as_current_user`](ratect-config-reference.md#coming-from-run_as_current_user).
+
 ```yaml
 containers:
   build-env:
@@ -1006,8 +1009,7 @@ themselves get built, not automatically.
 > `batect.yml` rather than ignored, because Batect resolves nothing there and a
 > file using one would stop working under `batect` itself. In this format,
 > `--override-image` is the way to choose an image per run. It also resolves them
-> in [`run_as_current_user`](#user-mapping)'s `home_directory` and in a string-form
-> volume's host path, both of which a `batect.yml` uses as written.
+> in a string-form volume's host path, which a `batect.yml` uses as written.
 
 Literal
 text around an expression is kept (`"prefix-$VAR-suffix"` interpolates just

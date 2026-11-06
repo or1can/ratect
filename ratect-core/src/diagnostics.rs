@@ -500,8 +500,11 @@ pub enum ConversionCheckKind {
     /// A task's own container has a `health_check` or `setup_commands`,
     /// which `ratect` doesn't gate it on.
     UngatedTaskContainer,
+    /// An enabled `run_as_current_user` converted to `identity`, which doesn't
+    /// do the same thing to the container.
+    RunAsCurrentUserBecomesIdentity,
     /// A `run_as_current_user.home_directory` that would become an
-    /// expression.
+    /// expression in `identity.home`.
     HomeDirectoryExpression,
     /// A compact `volumes` entry's host path that would become an
     /// expression.
@@ -522,6 +525,7 @@ impl ConversionCheck {
 /// [`crate::convert`]'s own, since only the per-file load knows them.
 pub fn conversion_checks(config: &Config) -> Vec<ConversionCheck> {
     let mut checks = ungated_task_container_checks(config);
+    checks.extend(run_as_current_user_checks(config));
     checks.extend(home_directory_expression_checks(config));
     checks.extend(compact_volume_expression_checks(config));
     // Stable, so a container's volumes keep their list order.
@@ -529,27 +533,83 @@ pub fn conversion_checks(config: &Config) -> Vec<ConversionCheck> {
     checks
 }
 
-/// `config convert`'s check for each container whose
-/// `run_as_current_user.home_directory` holds what `ratect.toml` would read as
-/// an expression (#462). A Batect-format file uses the value as written; the
-/// converted file evaluates the same text. Escaping it would keep it literal,
-/// but a reference there was most likely meant to be one, so it is carried
-/// across unchanged and the reader decides what they meant. Sorted by
+/// Each container's enabled `run_as_current_user`, with its home, if it has one.
+fn enabled_run_as_current_user(config: &Config) -> impl Iterator<Item = (&String, Option<&str>)> {
+    config.containers.iter().filter_map(|(name, container)| {
+        let user = container.run_as_current_user.as_ref()?;
+        user.enabled
+            .then_some((name, user.home_directory.as_deref()))
+    })
+}
+
+/// `config convert`'s check for each container whose `run_as_current_user`
+/// it converts to `identity` (#238): the same goal, with a mechanism that
+/// depends on the daemon
+/// ([decisions/0011](../../decisions/0011-container-identity.md)). Sorted by
 /// container name.
+///
+/// A writable `cache` mount is named when it has one, since a fresh volume
+/// changes owner only on a rootful Linux daemon, so a non-root image `USER`
+/// loses write access to it elsewhere. A home holding a `..` is said here too, since it is valid in the source
+/// and `identity` refuses it, at load or, in an expression, when evaluated.
+fn run_as_current_user_checks(config: &Config) -> Vec<ConversionCheck> {
+    let mut containers: Vec<(&String, Option<&str>)> =
+        enabled_run_as_current_user(config).collect();
+    containers.sort_unstable();
+    containers
+        .into_iter()
+        .map(|(name, home)| {
+            let dotted = home.is_some_and(crate::config::identity_home_has_a_parent_component);
+            let writable_cache = config.containers[name]
+                .volumes
+                .iter()
+                .flatten()
+                .any(|volume| {
+                    matches!(volume, VolumeMount::Cache(cache)
+                        if !crate::container_spec::is_read_only(&cache.options))
+                });
+            ConversionCheck {
+                container: Some(name.clone()),
+                kind: ConversionCheckKind::RunAsCurrentUserBecomesIdentity,
+                message: format!(
+                    "Container '{name}' had run_as_current_user enabled and now has identity, so \
+                     the image's /etc/passwd, /etc/shadow and /etc/group are no longer replaced, \
+                     and --user no longer applies on Desktop and remapped daemons, where it runs \
+                     as the image's own user{} (see {}).{}",
+                    if writable_cache {
+                        " and a fresh cache volume stays root-owned, which a non-root USER can't \
+                         write to"
+                    } else {
+                        ""
+                    },
+                    crate::config::RUN_AS_CURRENT_USER_TO_IDENTITY,
+                    if dotted {
+                        " Its home holds a '..', which identity.home refuses, so it won't run until \
+                         that is changed."
+                    } else {
+                        ""
+                    }
+                ),
+            }
+        })
+        .collect()
+}
+
+/// `config convert`'s check for each container whose enabled
+/// `run_as_current_user.home_directory` holds what `ratect.toml` would read as
+/// an expression in `identity.home` (#462). A Batect-format file uses the value
+/// as written; the converted file evaluates the same text. Escaping it would
+/// keep it literal, but a reference there was most likely meant to be one, so
+/// it is carried across unchanged and the reader decides what they meant.
+/// Sorted by container name.
 ///
 /// Not one of [`config_findings`] for the same reason as
 /// [`ungated_task_container_checks`]: it's only news to someone moving a
 /// file from one format to the other.
 fn home_directory_expression_checks(config: &Config) -> Vec<ConversionCheck> {
-    let mut containers: Vec<(&String, &str)> = config
-        .containers
-        .iter()
-        .filter_map(|(name, container)| {
-            let home = container
-                .run_as_current_user
-                .as_ref()?
-                .home_directory
-                .as_deref()?;
+    let mut containers: Vec<(&String, &str)> = enabled_run_as_current_user(config)
+        .filter_map(|(name, home)| {
+            let home = home?;
             // Judged as convert writes it — see `literal_as_expression`.
             let converted = crate::expressions::literal_as_expression(home);
             crate::expressions::contains_expression(&converted).then_some((name, home))
@@ -562,9 +622,9 @@ fn home_directory_expression_checks(config: &Config) -> Vec<ConversionCheck> {
             container: Some(name.clone()),
             kind: ConversionCheckKind::HomeDirectoryExpression,
             message: format!(
-                "Container '{name}' has run_as_current_user.home_directory '{home}', which \
-                 batect.yml uses as written but ratect evaluates as an expression — check \
-                 what it resolves to under ratect."
+                "Container '{name}' has identity.home '{home}', from a \
+                 run_as_current_user.home_directory that batect.yml uses as written but ratect \
+                 evaluates as an expression — check what it resolves to under ratect."
             ),
         })
         .collect()
@@ -615,9 +675,9 @@ fn compact_volume_expression_checks(config: &Config) -> Vec<ConversionCheck> {
 }
 
 /// `config convert`'s check for each container some task runs as its own
-/// whose readiness fields stop applying: one of the three ways a converted
+/// whose readiness fields stop applying: one of the four ways a converted
 /// project behaves differently from its source (ratect#267; the others are
-/// [`home_directory_expression_checks`] and
+/// [`run_as_current_user_checks`], [`home_directory_expression_checks`] and
 /// [`compact_volume_expression_checks`]). `ratect` runs a
 /// task's own container with no readiness gate (decisions/0012), so a
 /// `health_check` on a container some task runs as its own `run.container`

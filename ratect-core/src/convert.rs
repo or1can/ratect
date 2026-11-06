@@ -27,6 +27,12 @@
 //! rewritten to its `.toml`. Nothing is re-based; every value is copied as
 //! written, which is what keeps each path resolving where it did.
 //!
+//! One field isn't copied, because `ratect.toml` doesn't have it: an enabled
+//! `run_as_current_user` becomes `identity`, its `home_directory` the `home`,
+//! and a disabled one is dropped. That changes what running it does, not only
+//! how it is written, so each is a [`ConversionCheck`]. It can't lose an
+//! override, since a Batect-format file refuses `extends`.
+//!
 //! A `type: git` include stays an include entry (`repo`, `ref`, `path` and
 //! `allow_host_paths` carried across): a bundle's files are its own, known
 //! only by their clone-cache path, so nothing in one is copied out and no
@@ -54,8 +60,8 @@
 //! still a starting point to review.
 
 use crate::config::{
-    absolute_path, local_include_target, ConfigFile, ConfigVariable, Container, IncludeEntry,
-    LoadedConfig, LoadedFile, RunAsCurrentUser, Task, VolumeMount,
+    absolute_path, local_include_target, ConfigFile, ConfigVariable, Container, Identity,
+    IncludeEntry, LoadedConfig, LoadedFile, Task, VolumeMount,
 };
 use crate::diagnostics::{conversion_checks, ConversionCheck, ConversionCheckKind};
 use crate::git_include::describe_include;
@@ -182,15 +188,16 @@ pub fn convert_project(
                 .map(|entry| convert_include(entry, &file.path, loaded, &target_of, &mut checks))
                 .collect::<Result<Vec<IncludeEntry>>>()?;
             checks.extend(container_checks.remove(&file.path).unwrap_or_default());
+            let containers = containers
+                .iter()
+                .map(|(name, container)| Ok((name.clone(), converted_container(name, container)?)))
+                .collect::<Result<IndexMap<String, Container>>>()?;
             let document = Document {
                 // The root's own, or the one `ratect-compat` infers for it,
                 // since `ratect.toml` requires the field; an include's is
                 // refused at load.
                 project_name: (index == 0).then(|| loaded.config.project_name.clone()),
-                containers: containers
-                    .iter()
-                    .map(|(name, container)| (name.clone(), literal_fields_escaped(container)))
-                    .collect(),
+                containers,
                 tasks: tasks.clone(),
                 config_variables: config_variables.clone(),
                 include,
@@ -214,17 +221,21 @@ pub fn convert_project(
     Ok(ConvertedProject { files })
 }
 
-/// `container` with each value `ratect.toml` reads as an expression and a
-/// Batect-format file doesn't rewritten to mean what the source did. A
-/// compact volume's host path and `run_as_current_user.home_directory` are
-/// rewritten as
+/// `container` as `ratect.toml` holds it: its `run_as_current_user` as
+/// `identity` (see the module header), and each value `ratect.toml` reads as an
+/// expression and a Batect-format file doesn't rewritten to mean what the source
+/// did. A compact volume's host path and `identity.home` are rewritten as
 /// [`literal_as_expression`](crate::expressions::literal_as_expression)
 /// says, the one rule [`conversion_checks`] also judges them by: so a
 /// reference the converted file holds is exactly one a check lists. An
 /// `image` is kept wholly literal instead: a Batect-format file refuses a
 /// reference there at load, so a `$` or `<` that loaded (`alpine\$HOME`)
 /// was never meant as one, and no check would list it.
-fn literal_fields_escaped(container: &Container) -> Container {
+///
+/// Fails on an enabled `run_as_current_user` with no home, or beside an
+/// `identity` it would overwrite. This reads the source without judging it, so
+/// either can get here; `ratect-compat` refuses the same file when it loads.
+fn converted_container(name: &str, container: &Container) -> Result<Container> {
     let escaped = |value: &mut String| {
         *value = crate::expressions::literal_as_expression(value);
     };
@@ -242,23 +253,35 @@ fn literal_fields_escaped(container: &Container) -> Container {
             }
         }
     }
-    if !RunAsCurrentUser::home_directory_is_expression(true) {
-        let home = container
-            .run_as_current_user
-            .iter_mut()
-            .flat_map(|user| user.home_directory.as_mut());
-        home.for_each(escaped);
+    if let Some(user) = container.run_as_current_user.take() {
+        if user.enabled {
+            anyhow::ensure!(
+                container.identity.is_none(),
+                "The container '{name}' has both 'identity' and an enabled \
+                 'run_as_current_user', and a Batect-format file can't set 'identity'."
+            );
+            let home = user.home_directory.with_context(|| {
+                format!(
+                    "The container '{name}' has 'run_as_current_user.enabled' set to true, but \
+                     no 'home_directory' was provided, and 'identity' needs one."
+                )
+            })?;
+            container.identity = Some(Identity {
+                home: crate::expressions::literal_as_expression(&home),
+                additional_users: Vec::new(),
+            });
+        }
     }
-    container
+    Ok(container)
 }
 
 /// [`conversion_checks`]' items, each under the file whose header it belongs
 /// in: the file declaring its container, or — for a container declared in a
 /// bundle, whose files aren't converted — the owned file whose Git include
-/// reached that bundle. A bundle's file stays YAML, so a Batect-format
-/// literal (ratect#462, ratect#379) stays literal there and those two kinds
-/// don't apply; the readiness gate follows the binary, not the file
-/// (decisions/0012), so that one still does.
+/// reached that bundle. A bundle's file stays YAML, so it keeps its
+/// `run_as_current_user` and a Batect-format literal (ratect#462, ratect#379)
+/// stays literal there, and those three kinds don't apply; the readiness gate
+/// follows the binary, not the file (decisions/0012), so that one still does.
 fn checks_by_file(loaded: &LoadedConfig) -> Result<HashMap<PathBuf, Vec<ConversionCheck>>> {
     let mut by_file: HashMap<PathBuf, Vec<ConversionCheck>> = HashMap::new();
     for check in conversion_checks(&loaded.config) {

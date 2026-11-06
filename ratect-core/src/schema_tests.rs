@@ -180,10 +180,10 @@ fn a_misspelled_field_is_rejected_by_the_schema() {
     );
 }
 
-/// The native `ratect.toml` schema differs from the `batect.yml` one in
-/// exactly two ways, and this pins both: it adds `extends` (which the
-/// compat schema must *not* have, since `ratect-compat` rejects it), and
-/// it drops the compact string shorthands (native is object-only).
+/// Two ways the native `ratect.toml` schema differs from the `batect.yml`
+/// one: it adds `extends` (which the compat schema must *not* have, since
+/// `ratect-compat` rejects it), and it drops the compact string shorthands
+/// (native is object-only).
 #[test]
 fn the_native_schema_adds_extends_and_drops_the_string_shorthands() {
     let native = native_config_file_schema();
@@ -420,16 +420,18 @@ fn committed_native_schema_is_up_to_date() {
     );
 }
 
-/// `run_as_current_user.enabled` defaults to false in a `batect.yml` and is
-/// required in a `ratect.toml` (#374); each schema says what its own
-/// format accepts.
+/// `run_as_current_user` is a `batect.yml` field a `ratect.toml` refuses
+/// (#238); each schema says what its own format accepts.
 #[test]
-fn only_the_native_schema_requires_run_as_current_user_enabled() {
+fn only_the_compat_schema_has_run_as_current_user() {
     let document = serde_json::json!({
         "project_name": "demo",
         "containers": {"app": {"image": "alpine", "run_as_current_user": {}}},
         "tasks": {"t": {"run": {"container": "app"}}},
     });
+    assert!(!native_config_file_schema()
+        .to_string()
+        .contains("RunAsCurrentUser"));
     let compat = jsonschema::draft7::new(&config_file_schema())
         .expect("the generated schema should itself be a valid draft-07 schema");
     let native = jsonschema::draft7::new(&native_config_file_schema())

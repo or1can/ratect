@@ -8,5 +8,6 @@
   - ratect 0.12.0: a local include's 'path' whose first component is '~' is looked for in the home directory, not in a '~' directory beside the file declaring it — none found
   - ratect 0.12.0: a 'command', 'entrypoint', 'run.command', 'run.entrypoint' or setup command that can't be split into arguments (an unbalanced quote, a trailing '\') fails the load, even where no task runs it — doesn't apply: it loads under these rules
   - ratect 0.12.0: a Git bundle is refused until the 'ratect_version' of the file its include names, or the include's 'reviewed_ratect_version', covers every change since; the root's 'ratect_version' doesn't cover a bundle — none found
-With this check set aside, the project loads under ratect 0.12.0's rules.
-Review them (see CHANGELOG.md), then set 'ratect_version' to 0.12.0 to run it with this version.
+  - ratect 0.13.0: 'run_as_current_user' in a TOML file, or inherited through 'extends' from a YAML file and enabled, fails the load; use 'identity' instead — doesn't apply: it loads under these rules
+With this check set aside, the project loads under ratect 0.13.0's rules.
+Review them (see CHANGELOG.md), then set 'ratect_version' to 0.13.0 to run it with this version.

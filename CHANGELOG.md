@@ -24,6 +24,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Breaking
+
+- **ratect.toml:** `run_as_current_user` fails the load in a `.toml` file, enabled or not, and on a TOML container inheriting an enabled one from a `.yml` through `extends`. Use `identity` instead: [what changes](docs/ratect-config-reference.md#coming-from-run_as_current_user). A `.yml` keeps the field, and `ratect-compat` is unchanged.
+
 ### Added
 
 - **ratect only:** `ratect doctor` reports the Docker daemon's class: `rootless`, `userns-remap`, `desktop` or `rootful Linux`.
@@ -34,6 +38,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- **ratect only:** `ratect config convert` turns an enabled `run_as_current_user` into `identity`, listing each container it converted, and drops a disabled one. An enabled one with no `home_directory` fails the conversion.
 - Each binary's GitHub Release notes list only the changelog entries that apply to it.
 - **ratect only:** The error for a native-only field on a container in a `.yml` says how to use it: convert the project, move the container into a TOML file, or, in a bundle, have its author do so.
 - **ratect only:** The error for a native-only field on a Git include entry in a `.yml` a YAML root reaches no longer suggests a TOML file that root would refuse.

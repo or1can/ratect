@@ -71,10 +71,9 @@
 //! while `batect.project_directory` still always resolves to the root's. Merging
 //! `--config-vars-file` with individually-supplied variables stays the caller's
 //! job — only the caller knows what its own flags are called.
-//! `run_as_current_user.home_directory` is
-//! evaluated — except in a Batect-format file, where Batect reads it as a plain
-//! string (#462) — but never resolved against a base path: it's a container-side
-//! path, validated to start with `/` instead. `PortRange`/`PortMapping`,
+//! `run_as_current_user.home_directory` is used as written, as Batect reads it
+//! (#462), and never resolved against a base path: it's a container-side path,
+//! validated to start with `/` instead. `PortRange`/`PortMapping`,
 //! `DeviceMapping` (`devices`), and `VolumeMount` (`volumes` — `Local`/`Cache`
 //! variants, 0.18.0, plus `Tmpfs`, 0.21.0) all have hand-written `Deserialize`
 //! impls so an entry can be either Batect's string form (`"local:container[/protocol]"` /
@@ -285,6 +284,9 @@ pub struct Container {
     pub environment: Option<HashMap<String, String>>,
     /// Runs the container as the host's own user rather than the image's
     /// default, so files it writes to a mounted volume aren't root-owned.
+    // Batect-format files only: a TOML file uses `identity` instead, and
+    // `ConfigFormat::reject_run_as_current_user_in_toml` refuses this there.
+    #[serde(default, deserialize_with = "deserialize_run_as_current_user")]
     pub run_as_current_user: Option<RunAsCurrentUser>,
     /// Extra network aliases this container is reachable by, beyond its own
     /// name. Plain strings, no [expression](#expressions) support — matching
@@ -573,8 +575,7 @@ impl Container {
 
 /// A container's [`Container::identity`]. Only `ratect.toml` can write one, so
 /// `home` is always an expression, evaluated like any other, and its shape is
-/// judged as `run_as_current_user.home_directory`'s is: a literal at load, an
-/// expression when evaluated
+/// judged as a literal at load and as an expression when evaluated
 /// ([decisions/0014](../../decisions/0014-config-checked-at-load-evaluated-per-task.md)).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Identity {
@@ -1574,7 +1575,7 @@ fn checked_expression<E: serde::de::Error>(value: String) -> std::result::Result
 /// expression depends on the format asks this while it is read, and that
 /// function after load, and both feed the field's own rule.
 fn reading_batect_format() -> bool {
-    crate::yaml::batect_defaults_apply()
+    crate::yaml::reading_batect_format()
 }
 
 /// One expression field's value, checked as it is read — for a map's values
@@ -2411,75 +2412,37 @@ mod duration_string {
 /// when `enabled` is `true` (and rejected otherwise) — Ratect never guesses
 /// one, matching Batect.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Serialize)]
-// For the schema: the hand-written `Deserialize` below enforces it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunAsCurrentUser {
     /// Whether to run as the host's own user. Defaults to false, as in
     /// Batect.
-    ///
-    /// Only in a Batect-format (YAML) file: `ratect.toml` requires it, since
-    /// its `run_as_current_user` is being redesigned (decisions/0011). The
-    /// `default` here is the Batect-format schema's; the native schema adds
-    /// `enabled` back to `required`, and the `Deserialize` impl decides by file
-    /// (#374).
     #[serde(default)]
     pub enabled: bool,
     /// The home directory to create inside the container for that user.
     /// Must be an absolute path; it's a path inside the container, so it's
-    /// never resolved against anything on the host.
+    /// never resolved against anything on the host. Used as written, never an
+    /// expression, as in Batect.
     pub home_directory: Option<String>,
 }
 
-impl RunAsCurrentUser {
-    /// Whether `home_directory` is an expression, given whether the file
-    /// that declared it is Batect-format (see
-    /// `ConfigFormat::batect_shaped_containers`): Batect reads it as a plain
-    /// string (#462), and `ratect.toml` evaluates it.
-    pub fn home_directory_is_expression(batect_shaped: bool) -> bool {
-        !batect_shaped
+/// `serde` `deserialize_with` for [`Container::run_as_current_user`]. A TOML
+/// file may not set the field whatever it wrote there, and this is where it
+/// finds out: anything is taken as present, and
+/// `ConfigFormat::reject_run_as_current_user_in_toml` refuses it once the
+/// container's name is known, so a mistyped key can't turn that refusal into
+/// a complaint about a field that no longer exists.
+fn deserialize_run_as_current_user<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<RunAsCurrentUser>, D::Error> {
+    if reading_batect_format() {
+        return Option::<RunAsCurrentUser>::deserialize(deserializer);
     }
-}
-
-impl<'de> Deserialize<'de> for RunAsCurrentUser {
-    /// `enabled` defaults to false in a YAML file and is required in a TOML
-    /// one — see `crate::yaml::batect_defaults_apply`.
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename = "RunAsCurrentUser", deny_unknown_fields)]
-        struct AsWritten {
-            // Read as a `bool` when present, so a null is still refused.
-            #[serde(default, deserialize_with = "some_bool")]
-            enabled: Option<bool>,
-            home_directory: Option<String>,
-        }
-        fn some_bool<'de, D: serde::Deserializer<'de>>(
-            deserializer: D,
-        ) -> std::result::Result<Option<bool>, D::Error> {
-            bool::deserialize(deserializer).map(Some)
-        }
-
-        let written = AsWritten::deserialize(deserializer)?;
-        let enabled = match written.enabled {
-            Some(enabled) => enabled,
-            None if crate::yaml::batect_defaults_apply() => false,
-            None => return Err(serde::de::Error::missing_field("enabled")),
-        };
-        let home_directory = match written.home_directory {
-            Some(home)
-                if RunAsCurrentUser::home_directory_is_expression(reading_batect_format()) =>
-            {
-                Some(checked_expression(home)?)
-            }
-            home => home,
-        };
-        Ok(RunAsCurrentUser {
-            enabled,
-            home_directory,
-        })
-    }
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(Some(RunAsCurrentUser {
+        enabled: false,
+        home_directory: None,
+    }))
 }
 
 /// A single port or a range of consecutive ports (`from..=to`; `from == to`
@@ -3686,9 +3649,46 @@ impl ConfigFormat {
         reject_identity_in_compat(&shaped)?;
         validate_image_sources_in_compat(&shaped)?;
         reject_image_expressions_in_compat(&shaped)?;
+        self.reject_run_as_current_user_in_toml(config, origins, boundaries)
+    }
+
+    /// The other side of [`batect_shaped_containers`](Self::batect_shaped_containers):
+    /// `run_as_current_user` is Batect's, so a container that doesn't follow
+    /// Batect's rules may not set it, enabled or not. Keyed on the declaring
+    /// file, since `ConfigFormat::Native` is the project's format, and a YAML
+    /// file it includes keeps the field. [`reject_inherited_run_as_current_user`]
+    /// covers one reaching such a container through `extends`.
+    fn reject_run_as_current_user_in_toml(
+        &self,
+        config: &Config,
+        origins: &HashMap<String, PathBuf>,
+        boundaries: &HashMap<String, Boundary>,
+    ) -> Result<()> {
+        for (name, container) in &config.containers {
+            let origin = origins.get(name).map(PathBuf::as_path);
+            if container.run_as_current_user.is_none() || self.is_batect_shaped(origin) {
+                continue;
+            }
+            let declared_in = origin.map_or(String::new(), |origin| {
+                format!(
+                    " It is declared in {}.",
+                    describe_origin(origin, boundaries.get(name))
+                )
+            });
+            anyhow::bail!(
+                "The container '{name}' uses 'run_as_current_user', which only a Batect-format \
+                 (YAML) file can set.{declared_in} Use 'identity' instead: see \
+                 {RUN_AS_CURRENT_USER_TO_IDENTITY}."
+            );
+        }
         Ok(())
     }
 }
+
+/// Where the reference explains what `run_as_current_user` became, for an
+/// error or a `config convert` check to point at.
+pub(crate) const RUN_AS_CURRENT_USER_TO_IDENTITY: &str =
+    "https://github.com/or1can/ratect/blob/main/docs/ratect-config-reference.md#coming-from-run_as_current_user";
 
 /// One container that must be judged by Batect's own rules, with the file
 /// that declared it — see [`ConfigFormat::batect_shaped_containers`].
@@ -4809,9 +4809,8 @@ impl Config {
 /// run for every command that loads the project. Evaluates nothing: a field
 /// that may hold an expression is judged here only when it is a literal,
 /// and left for [`LoadedProject::evaluate`] otherwise. That covers a
-/// `run_as_current_user.home_directory`'s shape (always literal in a
-/// Batect-format file, #462) and a Git-included container's host paths
-/// staying inside its [`Boundary`].
+/// `run_as_current_user.home_directory`'s shape (always literal, #462) and a
+/// Git-included container's host paths staying inside its [`Boundary`].
 ///
 /// An expression's syntax, which no machine could read either, is judged
 /// earlier still, while the file is read ([`checked_expression`], #385), so
@@ -4931,13 +4930,9 @@ fn check_values(config: &Config, provenance: &Provenance, project_directory: &Pa
                                  but no 'home_directory' was provided",
                             )
                         })?;
-                    // Not an expression at all in a Batect-format file:
-                    // Batect reads it as a plain string (#462).
-                    if !RunAsCurrentUser::home_directory_is_expression(anchor.batect_shaped)
-                        || !crate::expressions::contains_expression(home_directory)
-                    {
-                        check_home_directory("run_as_current_user.home_directory", home_directory)?;
-                    }
+                    // Not an expression at all: Batect reads it as a plain
+                    // string (#462).
+                    check_home_directory("run_as_current_user.home_directory", home_directory)?;
                 } else if run_as_current_user.home_directory.is_some() {
                     anyhow::bail!(
                         "has 'run_as_current_user.home_directory' set, but \
@@ -5067,16 +5062,21 @@ fn check_home_directory(field: &str, home_directory: &str) -> Result<()> {
 /// Batect's, so it keeps its own rules.
 fn check_identity_home(home: &str) -> Result<()> {
     check_home_directory("identity.home", home)?;
-    if Path::new(home)
-        .components()
-        .any(|component| component == std::path::Component::ParentDir)
-    {
+    if identity_home_has_a_parent_component(home) {
         anyhow::bail!(
             "has an invalid 'identity.home': '{}' contains a '..'",
             printable(home)
         );
     }
     Ok(())
+}
+
+/// The `..` [`check_identity_home`] refuses, which a Batect-format
+/// `home_directory` may hold: `config convert` has to say so.
+pub(crate) fn identity_home_has_a_parent_component(home: &str) -> bool {
+    Path::new(home)
+        .components()
+        .any(|component| component == std::path::Component::ParentDir)
 }
 
 /// Every declared config variable's value — an override from
@@ -5144,8 +5144,7 @@ fn evaluate_value(
 /// (except in a Batect-format file, which refuses an expression there at
 /// load and uses anything else as written), `environment`, local `volumes`
 /// host paths, `build_directory`, `build_args`, `build_secrets` paths,
-/// `build_ssh` paths and (outside a Batect-format file, #462)
-/// `run_as_current_user.home_directory` and `identity.home` — then resolves each host path
+/// `build_ssh` paths and `identity.home` — then resolves each host path
 /// against the file that declared it and judges what [`check_values`] could
 /// only judge on a literal. Each of these fields' readers checks its syntax
 /// as the file is read ([`checked_expression`]), so a field added here needs
@@ -5268,24 +5267,6 @@ fn evaluate_container(
             store_or_record(path, resolved, &mut failures);
         }
     }
-    if let Some(run_as_current_user) = &mut container.run_as_current_user {
-        // Presence was judged at load; a Batect-format file's value is a
-        // literal, judged there too (#462).
-        if let Some(home_directory) = &mut run_as_current_user.home_directory {
-            if RunAsCurrentUser::home_directory_is_expression(
-                anchor(&suppliers.run_as_current_user).batect_shaped,
-            ) {
-                let field = "'run_as_current_user.home_directory'";
-                let checked = evaluate_value(field, home_directory, host_env, config_vars)
-                    .and_then(|value| {
-                        check_home_directory("run_as_current_user.home_directory", &value)
-                            .with_context(|| deferred_check_context(field, home_directory))?;
-                        Ok(value)
-                    });
-                store_or_record(home_directory, checked, &mut failures);
-            }
-        }
-    }
     if let Some(identity) = &mut container.identity {
         let field = "'identity.home'";
         let checked =
@@ -5380,9 +5361,9 @@ struct Provenance {
     /// had.
     boundaries: HashMap<String, Boundary>,
     /// The containers declared in a Batect-format file — see
-    /// [`ConfigFormat::batect_shaped_containers`] — whose
-    /// `run_as_current_user.home_directory` is used as written rather than
-    /// evaluated, as Batect does (#462).
+    /// [`ConfigFormat::batect_shaped_containers`] — whose `image` and compact
+    /// `volumes` host paths are used as written rather than evaluated, as
+    /// Batect does (#382, #379).
     batect_shaped: HashSet<String>,
     /// Which container in an `extends` chain supplied each path-bearing
     /// field, recorded by [`resolve_extends`]. A container absent here
@@ -5393,10 +5374,10 @@ struct Provenance {
 /// For one container, which container's declaration each field that is
 /// anchored on its declaring file came from — itself, or an `extends`
 /// ancestor. `extends` takes a field whole from one container in the chain,
-/// so one name per field is enough. `image` and `run_as_current_user` are
-/// here for [`Provenance::batect_shaped`], not for a path: a YAML-declared
-/// parent's `image` and `home_directory` stay literal in a native child that
-/// inherits them.
+/// so one name per field is enough. Two aren't here for a path: `image` is for
+/// [`Provenance::batect_shaped`], since a YAML-declared parent's stays literal
+/// in a native child that inherits it, and `run_as_current_user` is for naming
+/// the parent in [`reject_inherited_run_as_current_user`]'s refusal.
 #[derive(Debug, Clone)]
 struct Suppliers {
     image: String,
@@ -6254,6 +6235,9 @@ fn load_project_impl(
     validate_identity(&config)?;
     // Same reasoning: `group` is judged against the effective `user`.
     validate_passthrough_identity(&config)?;
+    // After both of those, which say what else the container has set: this
+    // covers one with no other identity source.
+    reject_inherited_run_as_current_user(&config, &provenance)?;
     // Last, and native-only: it *writes* to the config (the generated
     // companion containers and the dependency edges onto them), so
     // everything above judges what the user actually wrote. After `extends`
@@ -6624,10 +6608,9 @@ fn reject_identity_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
 /// **After `resolve_extends`**, since `group` and `run_as_current_user` are
 /// judged against the `user` the container effectively has. Every container
 /// is judged, one only used as an `extends` base included, so these rules
-/// apply at load whichever containers a task runs. A `user` beside
-/// an enabled `run_as_current_user` is refused for as long as the native
-/// format keeps that field (#233): it would be two identity sources and a
-/// silent precedence, which
+/// apply at load whichever containers a task runs. A `user` beside an enabled
+/// `run_as_current_user`, which only a YAML parent can supply, is refused: it
+/// would be two identity sources and a silent precedence, which
 /// [decisions/0011](../../decisions/0011-container-identity.md) rules out.
 ///
 /// An empty value or one holding a `:` is refused too. No name holds a `:`,
@@ -6650,8 +6633,8 @@ fn validate_passthrough_identity(config: &Config) -> Result<()> {
         anyhow::ensure!(
             container.user.is_none() || !runs_as_current_user,
             "The container '{name}' has both 'user' and an enabled 'run_as_current_user', \
-             set on it or inherited through 'extends', and each says who it runs as. It can \
-             only have one, and an inherited field can't be removed, only overridden."
+             inherited through 'extends', and each says who it runs as. It can only have one, \
+             and a TOML file can't override or remove that inherited field."
         );
         let values = [("user", &container.user), ("group", &container.group)]
             .into_iter()
@@ -6676,6 +6659,33 @@ fn validate_passthrough_identity(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// A TOML container inheriting an enabled `run_as_current_user` from a
+/// YAML-declared parent, the only way one can reach it now that
+/// [`ConfigFormat::reject_run_as_current_user_in_toml`] refuses it written
+/// there: it would run Batect's replace path inside a native container, and
+/// the child can neither override nor remove the field.
+///
+/// **After `resolve_extends`**, which is what supplies the field. A
+/// Batect-format container can't use `extends`, so one with the field of its
+/// own is its own supplier, and is left alone.
+fn reject_inherited_run_as_current_user(config: &Config, provenance: &Provenance) -> Result<()> {
+    for (name, container) in &config.containers {
+        let enabled = container
+            .run_as_current_user
+            .as_ref()
+            .is_some_and(|run_as_current_user| run_as_current_user.enabled);
+        let supplier = provenance.suppliers_of(name).run_as_current_user;
+        anyhow::ensure!(
+            !enabled || supplier == *name,
+            "The container '{name}' inherits an enabled 'run_as_current_user' from '{supplier}' \
+             through 'extends', and a TOML file can't override or remove it. Use 'identity' \
+             instead, on a parent that doesn't have the field: see \
+             {RUN_AS_CURRENT_USER_TO_IDENTITY}."
+        );
+    }
+    Ok(())
+}
+
 /// What a container with an [`identity`](Container::identity) can't also have,
 /// [`Identity::home`]'s own shape being [`check_values`]'s, and whether its
 /// additional users are well formed.
@@ -6683,8 +6693,8 @@ fn validate_passthrough_identity(config: &Config) -> Result<()> {
 /// **After `resolve_extends`**, since `extends` can supply either side, and
 /// before [`validate_passthrough_identity`], so a `group` beside `identity` is
 /// told about `identity` rather than to add a `user` it would then be refused.
-/// `user`, `group` and an enabled `run_as_current_user` each say who the
-/// container runs as, the silent precedence
+/// `user`, `group` and an enabled `run_as_current_user` (which only a YAML
+/// parent can supply) each say who the container runs as, the silent precedence
 /// [decisions/0011](../../decisions/0011-container-identity.md) rules out. A
 /// relative `cache` destination is refused on every daemon class, even though
 /// only rootful Linux would upload to one, so that whether a project loads never
@@ -6703,8 +6713,6 @@ fn validate_identity(config: &Config) -> Result<()> {
             Some("'user'")
         } else if container.group.is_some() {
             Some("'group'")
-        } else if runs_as_current_user {
-            Some("an enabled 'run_as_current_user'")
         } else {
             None
         };
@@ -6715,6 +6723,12 @@ fn validate_identity(config: &Config) -> Result<()> {
                  have one, and an inherited field can't be removed, only overridden."
             );
         }
+        anyhow::ensure!(
+            !runs_as_current_user,
+            "The container '{name}' has both 'identity' and an enabled 'run_as_current_user', \
+             inherited through 'extends', and each says who it runs as. It can only have one, \
+             and a TOML file can't override or remove that inherited field."
+        );
         for volume in container.volumes.iter().flatten() {
             if let VolumeMount::Cache(cache) = volume {
                 anyhow::ensure!(
@@ -7348,10 +7362,10 @@ fn reject_customisations_outside_the_task_graph(config: &Config) -> Result<()> {
 /// mounting `C:\code` would stop loading here while still working there.
 ///
 /// **After `resolve_extends`**, because it spans two fields and `extends`
-/// can supply either alone — a base carrying the `volumes` and a child
-/// adding `run_as_current_user`, or the reverse. Both loaded cleanly while
-/// this lived in the pass before `extends`, now [`check_values`]; see that
-/// function's doc comment for the general rule.
+/// can supply one alone — a YAML parent carrying `run_as_current_user` and a
+/// TOML child adding the `volumes`. That loaded cleanly while this lived in
+/// the pass before `extends`, now [`check_values`]; see that function's doc
+/// comment for the general rule.
 fn reject_relative_cache_mounts_under_user_mapping(config: &Config) -> Result<()> {
     for (name, container) in &config.containers {
         if !container

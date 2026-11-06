@@ -169,7 +169,7 @@ fn ratect_local_toml_is_auto_discovered_for_config_variables() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.app]
@@ -226,7 +226,7 @@ fn tasks_list_succeeds_when_an_unused_container_cannot_be_evaluated() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [config_variables.region]
@@ -272,7 +272,7 @@ fn tasks_list_reads_a_backslash_in_an_expression_as_an_escape() {
         std::fs::write(
             dir.join("ratect.toml"),
             format!(
-                "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
+                "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
                  environment = {{ X = '{value}' }}\n\n[tasks.build]\nrun = {{ container = \"app\" }}\n"
             ),
         )
@@ -313,7 +313,7 @@ fn tasks_list_refuses_a_malformed_expression_located_in_the_file() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
+        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
          image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
          [tasks.build]\nrun = { container = \"app\" }\n",
     )
@@ -345,7 +345,7 @@ fn a_git_include_remotes_credentials_are_never_printed() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\
+        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\
          include = [{ type = \"git\", repo = \"https://ci:s3cret@127.0.0.1:9/b.git\", \
          ref = \"native-751\" }]\n",
     )
@@ -386,7 +386,7 @@ fn a_git_include_remotes_control_characters_print_escaped() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\
+        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\
          include = [{ type = \"git\", repo = \"https://127.0.0.1:9/\\u001b]0;pwned\\u0007b.git\", \
          ref = \"native-752\" }]\n",
     )
@@ -425,7 +425,7 @@ fn a_run_failing_before_its_task_starts_prints_its_error_once() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
+        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
          image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
          [tasks.build]\nrun = { container = \"app\" }\n",
     )
@@ -456,7 +456,7 @@ fn tasks_list_warns_that_its_config_variable_options_are_deprecated() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
+        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
          [tasks.build]\nrun = { container = \"app\" }\n",
     )
     .unwrap();
@@ -541,7 +541,7 @@ fn a_command_line_config_var_overrides_the_config_vars_file() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.app]
@@ -615,7 +615,7 @@ fn config_validate_passes_a_good_config_and_fails_a_broken_one() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.app]
@@ -652,7 +652,7 @@ fn config_validate_reports_a_reference_to_an_undeclared_container() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.app]
@@ -692,7 +692,7 @@ fn config_validate_warns_about_each_value_this_machine_cannot_evaluate() {
         dir.join("ratect.toml"),
         format!(
             r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.build-env]
@@ -887,7 +887,7 @@ fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
     let (doctor, _) = run(&["doctor"]);
 
     let rows = breaking_change_lines(&refusal);
-    assert_eq!(rows.len(), 9, "{refusal}");
+    assert_eq!(rows.len(), 10, "{refusal}");
     for row in &rows {
         let expected = if [
             "a Git bundle is refused",
@@ -1306,16 +1306,71 @@ fn config_convert_reports_a_task_containers_readiness_fields() {
 
 /// #462: `ratect.toml` evaluates a `home_directory` that `batect.yml` uses as
 /// written, so a converted `$`/`<` changes meaning — reported either way the
-/// conversion is written.
+/// conversion is written, after what becoming `identity` changes (#238), and
+/// also in the header of the converted file, which `ratect` then loads.
 #[test]
 fn config_convert_reports_a_home_directory_that_becomes_an_expression() {
-    let checks = reported_checks(&convert_both_ways(
+    let conversion = convert_both_ways(
         "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n",
-    ));
-    assert_eq!(checks.len(), 1, "{checks:?}");
+    );
+    let checks = reported_checks(&conversion);
+    assert_eq!(checks.len(), 2, "{checks:?}");
     assert!(
-        checks[0].contains("'app'") && checks[0].contains("'/home/$USER'"),
-        "expected an item naming 'app' and its home_directory: {checks:?}"
+        checks[0].contains("'app'") && checks[0].contains("now has identity"),
+        "expected an item naming 'app' and identity: {checks:?}"
+    );
+    assert!(
+        checks[1].contains("'app'")
+            && checks[1].contains("identity.home")
+            && checks[1].contains("'/home/$USER'"),
+        "expected an item naming 'app' and its home: {checks:?}"
+    );
+    assert!(
+        conversion
+            .printed_stdout
+            .contains(&format!("# {}\n", checks[0])),
+        "{}",
+        conversion.printed_stdout
+    );
+}
+
+/// #238: what a user of the removed field sees, end to end. A project using
+/// it is refused naming `identity`, by the written-for check first when
+/// written for a version before the change, and by the load otherwise.
+#[test]
+fn a_toml_run_as_current_user_is_refused_naming_identity() {
+    let dir = unique_project_dir();
+    let run = |written_for: &str| {
+        std::fs::write(
+            dir.join("ratect.toml"),
+            format!(
+                "ratect_version = \"{written_for}\"\nproject_name = \"demo\"\n\n\
+                 [containers.app]\nimage = \"alpine:3.18\"\n\
+                 run_as_current_user = {{ enabled = false }}\n"
+            ),
+        )
+        .unwrap();
+        let output = ratect_command()
+            .arg("-f")
+            .arg(dir.join("ratect.toml"))
+            .args(["tasks", "list"])
+            .output()
+            .expect("failed to run ratect");
+        assert!(!output.status.success());
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    let older = run("0.12.0");
+    assert!(older.contains("written for ratect 0.12.0"), "{older}");
+    assert!(older.contains("use 'identity' instead"), "{older}");
+
+    let current = run(written_for_version());
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(current.contains("'app'"), "{current}");
+    assert!(current.contains("Use 'identity' instead"), "{current}");
+    assert!(
+        current.contains("#coming-from-run_as_current_user"),
+        "{current}"
     );
 }
 
@@ -1341,10 +1396,11 @@ fn config_convert_reports_its_items_in_container_order() {
     let checks = reported_checks(&convert_both_ways(
         "project_name: demo\ncontainers:\n  b:\n    image: alpine:3.18\n    volumes:\n      - $HOME/b:/b\n  a:\n    image: alpine:3.18\n    run_as_current_user:\n      enabled: true\n      home_directory: /home/$USER\n    volumes:\n      - $HOME/a:/a\n",
     ));
-    assert_eq!(checks.len(), 3, "{checks:?}");
-    assert!(checks[0].contains("'/home/$USER'"), "{checks:?}");
-    assert!(checks[1].contains("'$HOME/a'"), "{checks:?}");
-    assert!(checks[2].contains("'$HOME/b'"), "{checks:?}");
+    assert_eq!(checks.len(), 4, "{checks:?}");
+    assert!(checks[0].contains("now has identity"), "{checks:?}");
+    assert!(checks[1].contains("'/home/$USER'"), "{checks:?}");
+    assert!(checks[2].contains("'$HOME/a'"), "{checks:?}");
+    assert!(checks[3].contains("'$HOME/b'"), "{checks:?}");
 }
 
 /// The same fields on a *dependency* still run under `ratect`, so there is
@@ -1730,7 +1786,7 @@ fn a_native_container_may_override_an_inherited_build_directory_with_an_image() 
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.base]
@@ -1778,7 +1834,7 @@ fn a_base_only_container_needs_no_image_and_validates() {
     std::fs::write(
         dir.join("ratect.toml"),
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 # No image and no build_directory: this exists only to be extended.
@@ -1912,7 +1968,7 @@ fn tasks_list_in_quiet_output_prints_nothing_when_there_are_no_tasks() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.12.0\"\nproject_name = \"demo\"\n",
+        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n",
     )
     .unwrap();
 
@@ -4344,7 +4400,7 @@ fn run_refuses_tagging_and_overriding_one_container_before_anything_runs() {
     let project = unique_project_dir();
     std::fs::write(
         project.join("ratect.toml"),
-        "ratect_version = \"0.12.0\"\n\
+        "ratect_version = \"0.13.0\"\n\
          project_name = \"conflict\"\n\
          [containers.build-env]\nimage = \"alpine:3.18.2\"\n\
          [containers.other]\nimage = \"alpine:3.18.2\"\n\
@@ -5011,7 +5067,7 @@ fn remapped_hazards_project() -> PathBuf {
     std::fs::write(
         &path,
         r#"
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.with-user]

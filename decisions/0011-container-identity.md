@@ -46,7 +46,11 @@ inferences. Extended before release ([#107](https://github.com/or1can/ratect/iss
 [Additional users](#additional-users). Probed before release
 ([#817](https://github.com/or1can/ratect/issues/817)): Docker Desktop on Linux stays
 rootful Linux, under [Daemon classification](#daemon-classification), at a cost stated
-under Consequences.
+under Consequences. Refined while removing the field from the native format
+([#238](https://github.com/or1can/ratect/issues/238)): a TOML container inheriting an
+enabled one from a YAML parent is refused too, since it could neither override nor
+remove it, and `config convert` maps an enabled one to `identity` and lists each
+container, a fresh cache volume's lost write access included.
 
 
 ## Context

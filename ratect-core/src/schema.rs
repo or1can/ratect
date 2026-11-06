@@ -331,27 +331,15 @@ fn make_native(json: &mut serde_json::Value) {
         );
     }
 
-    // `run_as_current_user.enabled` defaults to false only in a Batect-format
-    // file; `ratect.toml` requires it (`RunAsCurrentUser`'s `Deserialize`,
-    // #374). Its description is corrected for the same reason.
-    if let Some(run_as_current_user) = definitions
-        .get_mut("RunAsCurrentUser")
+    // A Batect-format field: a TOML file refuses `run_as_current_user`, in
+    // favour of `identity` (#238).
+    definitions.remove("RunAsCurrentUser");
+    if let Some(properties) = definitions
+        .get_mut("Container")
+        .and_then(|container| container.get_mut("properties"))
         .and_then(serde_json::Value::as_object_mut)
     {
-        run_as_current_user.insert("required".to_string(), serde_json::json!(["enabled"]));
-        if let Some(properties) = run_as_current_user
-            .get_mut("properties")
-            .and_then(serde_json::Value::as_object_mut)
-        {
-            properties.insert(
-                "enabled".to_string(),
-                serde_json::json!({
-                    "type": "boolean",
-                    "description": "Whether to run as the host's own user. Required — \
-                                    there's no default.",
-                }),
-            );
-        }
+        properties.remove("run_as_current_user");
     }
 
     // Add the native-only `extends` field to a container — skipped from the
@@ -714,9 +702,8 @@ fn make_native(json: &mut serde_json::Value) {
                 "additionalProperties": false,
                 "description": "Gives this container a guaranteed home: `$HOME` and its \
                                 running user's passwd entry both say `home`, which is created \
-                                if nothing is there. Refused beside `user`, `group` or an \
-                                enabled `run_as_current_user`. On a rootful Linux daemon it also \
-                                runs as the host user.",
+                                if nothing is there. Refused beside `user` or `group`. On a \
+                                rootful Linux daemon it also runs as the host user.",
                 "examples": [{ "home": "/home/me" }],
             }),
         );

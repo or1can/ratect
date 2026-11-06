@@ -6,8 +6,9 @@ schema the [Configuration Reference](ratect-compat-config-reference.md) document
 containers, tasks, and fields, with the same meanings — re-spelled in TOML, with
 native additions (`extends`, `ratect_version`, and the other fields marked
 *(native only)* under [Field reference](#field-reference)), its auto-discovered local
-overrides file named `ratect.local.toml` rather than `batect.local.yml`, and a
-few YAML-isms removed (anchors, the compact string shorthands).
+overrides file named `ratect.local.toml` rather than `batect.local.yml`, a few
+YAML-isms removed (anchors, the compact string shorthands), and
+[`identity`](#coming-from-run_as_current_user) in place of `run_as_current_user`.
 
 Because the *field semantics* are identical across both formats, this reference
 does not repeat them: for what a given field actually does, follow the links into
@@ -69,7 +70,7 @@ A top-level `ratect_version` records the Ratect version the project was
 written for:
 
 ```toml
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "my-app"
 ```
 
@@ -90,7 +91,7 @@ A refusal of the second kind also says, for each change, whether it touches
 the project, to help with the review — it never replaces it, and the project
 is refused either way. `ratect run hello`, captured in
 [`ratect/tests/fixtures/written-for`](https://github.com/or1can/ratect/tree/main/ratect/tests/fixtures/written-for)
-— a project written for 0.11.0, run by 0.12.0:
+— a project written for 0.11.0, run by 0.13.0:
 
 ```ansi
 {{#include captures/written-for-refusal.ansi}}
@@ -118,7 +119,7 @@ Each change's outcome depends on how it can be checked:
 So for the project above, every change is ruled out: it loads, and declares
 no Git include, no local include starting with `~`, and no expression a
 change reads differently. Once you've read the changes and agree, set
-`ratect_version` to 0.12.0 and it loads.
+`ratect_version` to 0.13.0 and it loads.
 
 `ratect doctor` and `ratect config validate` report a refusal the same way:
 the refusal is a `problem`, each change a finding of its own — `ok` once it's
@@ -886,9 +887,11 @@ The nearest real project is
   none `whoami` fails and `$HOME` is `/`.
 - **Ratect doesn't prepare mounts for this user.** A fresh `cache` volume stays
   root-owned, so a non-root `user` can't write to it; on rootful Linux the same
-  goes for a missing host directory, which the daemon creates as root. Use
-  `run_as_current_user` if you need them prepared, or create them owned by that
-  user yourself.
+  goes for a missing host directory, which the daemon creates as root. Create them
+  owned by that user yourself: a fresh volume takes its owner from an image
+  directory at the same path. If what you want is mounts prepared for *you*, use
+  [`identity`](#identity-your-files-and-the-same-home-everywhere) instead of `user`,
+  which on a rootful Linux daemon [does both](#on-a-rootful-linux-daemon).
 - **Setup commands run as the same user.** A setup command with
   [`run_in`](#run_in-setup-commands-in-another-container) runs as its target's
   user instead.
@@ -897,19 +900,21 @@ The nearest real project is
   access to a bind mount the host user owns, so it usually can't write there or read
   anything private. The run carries on, and
   [`ratect doctor`](ratect-cli.md#doctor) reports the same.
-- **`user` and an enabled `run_as_current_user` can't be combined.** Each says
-  who the container runs as, so setting both is rejected when the file loads.
-  `groups` works with either.
 - **Fixed on the container's own definition**, like
   [`dns`](#dnsdns_searchdns_options-name-resolution): neither a task's `run`
   block nor a `customise` overlay accepts them.
 
-## `identity`: a guaranteed home
+## `identity`: your files, and the same `$HOME` everywhere
 
-A container can state its home, so `$HOME` doesn't depend on the image or the
-machine, and cache mounts and mounted ssh or Git configuration can be declared
-once. On a rootful Linux daemon it also runs as you, so what it writes into a bind
-mount is yours.
+This field does two jobs. What a container writes through a bind mount is yours,
+rather than root's, except on a userns-remap daemon, or a rootless one under a
+non-root image `USER`. And `$HOME` is what you said it is, whatever the image or the
+machine, so cache mounts and mounted ssh or Git configuration can be declared once.
+How it gets you the first depends on the daemon: on a rootful Linux daemon the
+container runs as you, while Docker Desktop's file sharing and a rootless daemon's own
+mapping of root to you deliver it without that.
+Batect users will know this as
+[`run_as_current_user`](#coming-from-run_as_current_user).
 
 ```toml
 [containers.build-env]
@@ -952,8 +957,8 @@ These apply on every daemon:
   A literal is judged when the file loads. An expression is judged when it is
   evaluated, before Docker touches the container, and `ratect config validate`
   and `ratect doctor` report a bad one as a warning.
-- **It can't be combined with `user`, `group` or an enabled
-  `run_as_current_user`**, or with a relative `cache` destination, once
+- **It can't be combined with `user` or `group`**, or with a relative `cache`
+  destination, once
   [`extends`](#extends-inheritance-instead-of-yaml-anchors) has resolved the
   container. These are rejected when the file loads. `groups` works with it, and
   adds to the running user.
@@ -1009,6 +1014,37 @@ What this leaves as it is:
 - **A cache shared between uids or groups is yours to arrange.** `chmod` alone
   isn't enough: under `1777` a second user can create files in it but not change
   the first user's.
+
+### Coming from `run_as_current_user`
+
+`run_as_current_user` and `identity` have the same goal: files you can edit and
+delete, and a home that works. They differ in how they get there. Batect's field does
+one thing everywhere, while `identity` does what the daemon in front of it needs, so a
+converted project may stop running as `--user` and still get the outcome.
+
+A `.yml` keeps `run_as_current_user`, with Batect's behaviour, including one a native
+project includes, and `ratect-compat` always has it. A `.toml` file refuses it, enabled
+or not, and so does a TOML container inheriting an enabled one from a `.yml` through
+[`extends`](#extends-inheritance-instead-of-yaml-anchors), which it can neither
+override nor remove. [`ratect config convert`](ratect-cli.md#config) turns an enabled
+one into `identity`, its `home_directory` becoming `home`, drops a disabled one, and
+lists each container it converted. What changes for such a container:
+
+- **`--user` depends on the daemon.** On a rootful Linux daemon the container still
+  runs as your uid and gid. On a local Docker Desktop, OrbStack or similar on macOS or
+  Windows, and on rootless and userns-remap daemons, it runs as the image's own `USER`.
+  Desktop file sharing hands you what it writes anyway, and so does a rootless daemon
+  when that `USER` is root. Otherwise nothing Ratect could apply would, so a run warns.
+- **The image's identity files aren't replaced.** `run_as_current_user` swaps
+  `/etc/passwd`, `/etc/shadow` and `/etc/group` for generated ones, which removes the
+  users the image shipped, such as `node` or `postgres`. `identity` changes only the
+  running user's entry, and on rootful Linux [adds what is missing](#on-a-rootful-linux-daemon).
+- **`cache` volumes change owner only on rootful Linux.** Elsewhere a fresh volume stays
+  root-owned, so a non-root image `USER` can't write to it.
+- **`home` is an [expression](#config-variables-and-expressions), and holds no `..`.**
+  `home_directory` is used as written in a `.yml`. `config convert` carries a `$` or
+  `<` across as a reference, and lists it, and also lists a `..`, since the converted
+  file is refused until that is changed.
 
 ### Additional users
 
@@ -1112,9 +1148,7 @@ The container fields, by area:
 | Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). Both are inert on a task's own container — see [Where the semantics differ](#where-the-semantics-differ). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | External checks | `external_health_check` | [above](#external_health_check-checking-a-container-from-outside-it) *(native only)* |
-| User | `run_as_current_user` | [User mapping](ratect-compat-config-reference.md#user-mapping) |
-| User passthrough | `user`, `group`, `groups` | [above](#usergroupgroups-running-as-a-specific-user) *(native only)* |
-| Home | `identity` | [above](#identity-a-guaranteed-home) *(native only)* |
+| User | `identity`, `user`, `group`, `groups` | [`identity`](#identity-your-files-and-the-same-home-everywhere) and [`user`/`group`/`groups`](#usergroupgroups-running-as-a-specific-user) *(native only)* |
 | Inheritance | `extends` | [above](#extends-inheritance-instead-of-yaml-anchors) *(native only)* |
 
 ### Where the semantics differ
@@ -1124,11 +1158,10 @@ what [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md) sa
 exceptions fall into four groups: places where `extends` gives a combination
 a meaning it cannot have in a `batect.yml`, which has no inheritance; places
 where this format is deliberately **stricter**, having no Batect
-compatibility to preserve; three places where it does **more** than Batect,
-resolving expressions in `image`, `run_as_current_user.home_directory` and a
-string-form `volumes` entry's host path — the first of which `batect.yml` has
-to refuse rather than quietly accept, the other two of which it uses as
-written, as Batect does; and one where it
+compatibility to preserve; two places where it does **more** than Batect,
+resolving expressions in `image` and a string-form `volumes` entry's host path —
+the first of which `batect.yml` has to refuse rather than quietly accept, the
+second of which it uses as written, as Batect does; and one where it
 deliberately does **less** — a task's own container has no
 readiness gate.
 
@@ -1147,8 +1180,7 @@ follow the file: only a `.toml` file can set them.
 | A **nested** Git include failing to clone | Reports `git`'s own error | Reports that it failed, with the transport detail behind `RUST_LOG=debug` — see [Nested Git includes](#nested-git-includes) |
 | A **task's own container**'s `health_check`/`setup_commands` | Run alongside the main command, matching Batect; a failure while the main command is still running fails the task unless the command exits 0 within the next two seconds, and cancels it if it hasn't exited by then; once it has exited 0, a failure is forgiven — the cost and the race that leaves are in [known limitations](task-lifecycle.md#known-limitations) | Inert: no health wait, no setup commands, and the task's result is the main command's alone — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | An **expression in `image`** | Rejected when the file loads — Batect resolves nothing there; anything else, a `\` included, is used as written | Resolved like any other expression, a `\` escaping the character after it — see [Expressions in `image`](#expressions-in-image) |
-| Leaving out **`run_as_current_user.enabled`** | Means `false`, matching Batect | Rejected when the file loads — `enabled` is required |
-| An **expression in `run_as_current_user.home_directory`** | Used as written, matching Batect — a `$` or `<` is part of the path | Resolved like any other expression |
+| Setting **`run_as_current_user`** on a container | Runs it as the host's own user, replacing the image's identity files, matching Batect; `enabled` defaults to `false`, and a `$` or `<` in `home_directory` is part of the path — see [User mapping](ratect-compat-config-reference.md#user-mapping) | Rejected when the file loads — [use `identity`](#coming-from-run_as_current_user) |
 | An **expression in a string-form `volumes` entry's host path** (`"$HOME/.m2:/root/.m2"`) | Used as written, matching Batect — a `$` or `<` is part of a relative path; the object form's `local` is still resolved | Resolved in either form |
 | A container with **both** `image` and `build_directory` | Rejected when the file loads, matching Batect | Allowed — `image` wins, and this is the only way to override a `build_directory` inherited from an `extends` parent, since inheritance is per-field with no way to unset one |
 | A container with **neither** `image` nor `build_directory` | Rejected when the file loads | Allowed — a container used only as an `extends` base needs neither; the requirement is enforced when a task actually runs a container, so no `abstract` marker is needed |
@@ -1157,7 +1189,7 @@ follow the file: only a `.toml` file can set them.
 | Setting **`dns`/`dns_search`/`dns_options`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets that container's own name resolution — see [above](#dnsdns_searchdns_options-name-resolution) |
 | Setting **`network_mode`** on a container | Rejected when the file loads — Batect has no equivalent field | Takes that container off the task's network — see [above](#network_mode-leaving-the-tasks-network) |
 | Setting **`user`/`group`/`groups`** on a container | Rejected when the file loads — Batect has no equivalent field | Sets the user and groups that container runs as — see [above](#usergroupgroups-running-as-a-specific-user) |
-| Setting **`identity`** on a container | Rejected when the file loads — Batect has no equivalent field | Gives that container a guaranteed home — see [above](#identity-a-guaranteed-home) |
+| Setting **`identity`** on a container | Rejected when the file loads — Batect has no equivalent field | Gives that container a guaranteed home — see [above](#identity-your-files-and-the-same-home-everywhere) |
 | `image` alongside a build-only field (`build_args`, `build_target`, `dockerfile`, `build_secrets`, `build_ssh`) | Rejected when the file loads | Allowed and **ignored**, for the same inheritance reason — a child overriding a build with an `image` still carries the parent's build fields |
 
 The last row is the one to watch: setting `build_secrets` or `build_ssh` on a
@@ -1193,8 +1225,8 @@ for VS Code, or JetBrains' TOML support — gives field-name autocompletion, hov
 documentation, and a red squiggle under a misspelled or unsupported field. It's
 the native counterpart of the [`batect.yml`
 schema](ratect-compat-config-reference.md#editor-autocompletion-and-validation): the same
-schema, adjusted to the native shape (object-only list entries) and adding the
-native-only fields this page documents.
+schema, adjusted to the native shape (object-only list entries, no
+`run_as_current_user`) and adding the native-only fields this page documents.
 
 The simplest way to use it is a schema directive on the first line of your
 config, which taplo honors:
@@ -1225,7 +1257,7 @@ nor `build_directory` is still only reported when a task runs it.
 | Name resolution | — | [`dns`/`dns_search`/`dns_options`](#dnsdns_searchdns_options-name-resolution) on a container |
 | Network mode | always the task's network | [`network_mode`](#network_mode-leaving-the-tasks-network) on a container |
 | Named user and groups | — | [`user`/`group`/`groups`](#usergroupgroups-running-as-a-specific-user) on a container |
-| Guaranteed home | — | [`identity`](#identity-a-guaranteed-home) on a container |
+| Guaranteed home | — | [`identity`](#identity-your-files-and-the-same-home-everywhere) on a container |
 | Setup command target | always the declaring container | [`run_in`](#run_in-setup-commands-in-another-container) on a setup command |
 | Task's own container's readiness gate | health check, then setup commands | none — see [Dependency Readiness](dependency-readiness.md#the-tasks-own-container) |
 | List entries | string shorthand *or* object | object (inline table or `[[...]]`) |

@@ -30,7 +30,7 @@ shm_size = "2G"
 labels = { team = "twins" }
 log_driver = "json-file"
 log_options = { max-size = "10m" }
-run_as_current_user = { enabled = true, home_directory = "/home/twin" }
+identity = { home = "/home/twin" }
 
 [containers.db]
 image = "postgres:16"

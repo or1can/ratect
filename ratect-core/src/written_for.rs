@@ -259,13 +259,6 @@ fn expressions(document: &toml::Table) -> Vec<(String, &str)> {
         }
         push(
             &mut found,
-            field("run_as_current_user.home_directory"),
-            container
-                .get("run_as_current_user")
-                .and_then(|user| user.get("home_directory")),
-        );
-        push(
-            &mut found,
             field("identity.home"),
             container
                 .get("identity")
@@ -458,6 +451,12 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
                   names, or the include's 'reviewed_ratect_version', covers every change since; \
                   the root's 'ratect_version' doesn't cover a bundle",
         check: Check::Detected(declares_git_include),
+    },
+    BreakingChange {
+        version: "0.13.0",
+        summary: "'run_as_current_user' in a TOML file, or inherited through 'extends' from a \
+                  YAML file and enabled, fails the load; use 'identity' instead",
+        check: Check::FailsTheLoad,
     },
 ];
 

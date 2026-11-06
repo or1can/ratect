@@ -632,7 +632,7 @@ environment = { E = 'VALUE' }
 build_args = { A = 'VALUE' }
 build_secrets = { s = { path = 'VALUE' } }
 build_ssh = [{ id = 'default', paths = ['VALUE'] }]
-run_as_current_user = { enabled = true, home_directory = 'VALUE' }
+identity = { home = 'VALUE' }
 
 [tasks.t.run]
 container = 'app'
@@ -650,7 +650,7 @@ const EVERY_EXPRESSION_FIELD_NAMED: [&str; 10] = [
     "containers.app.build_args.A",
     "containers.app.build_secrets.s.path",
     "containers.app.build_ssh.paths",
-    "containers.app.run_as_current_user.home_directory",
+    "containers.app.identity.home",
     "tasks.t.run.environment.R",
     "tasks.t.customise.db.environment.C",
 ];

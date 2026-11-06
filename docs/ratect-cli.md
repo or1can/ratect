@@ -14,7 +14,8 @@ project per language.
 > [decisions/0003](../decisions/0003-ratect-native-config-format.md) for why. Its
 > full schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
 > same schema [Configuration Reference](ratect-compat-config-reference.md) documents for
-> `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors. A
+> `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors and
+> `identity` in place of `run_as_current_user`. A
 > `batect.yml` is still readable by naming it with `-f`, so a project can migrate
 > incrementally — [`ratect config convert`](#config) translates one automatically.
 
@@ -375,10 +376,15 @@ A task's own container has no readiness gate, so its health check — from
 `health_check` or from its image's own `HEALTHCHECK` — isn't waited on, and its
 `setup_commands` don't run (see [Dependency
 Readiness](dependency-readiness.md#the-tasks-own-container)). An image's `HEALTHCHECK`
-can't be seen without the image, so check those yourself. `run_as_current_user.home_directory`
-is used as written in a `batect.yml` but
-[evaluated](ratect-config-reference.md#where-the-semantics-differ) in a `ratect.toml`,
-so one containing a `$` or `<` expression changes value. Likewise, a string-form
+can't be seen without the image, so check those yourself. An enabled
+`run_as_current_user` becomes `identity`, which doesn't replace the image's identity
+files, and applies `--user` and changes a `cache` volume's owner only on a rootful Linux
+daemon, and a disabled one is dropped
+([what changes](ratect-config-reference.md#coming-from-run_as_current_user)). Its
+`home_directory` is used as written in a `batect.yml` but
+[evaluated](ratect-config-reference.md#where-the-semantics-differ) as `identity.home` in
+a `ratect.toml`, so one containing a `$` or `<` expression changes value, and one holding
+a `..` is refused until that is changed. Likewise, a string-form
 `volumes` entry's host path is used as written in a `batect.yml` but evaluated in a
 `ratect.toml`. A `\` in either stays a backslash (`foo\bar` becomes
 `foo\\bar`), since a `batect.yml` never reads one as an escape, so a `$` or `<`
@@ -448,7 +454,7 @@ nothing can run:
   host uid, root included, so the container has only other users' access to a bind
   mount the host user owns, and what it does write has a subordinate owner. That
   ownership has to be arranged on the host. Its
-  [home](ratect-config-reference.md#identity-a-guaranteed-home) is still guaranteed.
+  [home](ratect-config-reference.md#identity-your-files-and-the-same-home-everywhere) is still guaranteed.
 - **A non-root `user` on a rootless or userns-remap daemon.** The container has only
   other users' access to a bind mount the host user owns, so it usually can't write
   there or read anything private. A `user` of `0` or `root` isn't reported.
@@ -474,7 +480,7 @@ rather than a problem because a variable only CI sets is expected to be missing 
 a laptop, and it fails only a run that [reaches it](ratect-config-reference.md#config-variables-and-expressions):
 `ratect run build` there never evaluates `deploy`. The same goes for a value that
 evaluates but can't be used — an expression-valued
-`run_as_current_user.home_directory` or `identity.home` that isn't an absolute path, or a
+`identity.home` that isn't an absolute path, or a
 Git-included container's host path that evaluates to somewhere outside its
 boundary. A container with such a value is left out of the checks that read its
 values, so its image tag and `build_directory` aren't judged until it evaluates.

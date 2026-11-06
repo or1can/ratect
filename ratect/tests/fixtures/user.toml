@@ -9,7 +9,7 @@
 # command, so one that never reached Docker, or the exec, fails the run.
 # `wheel` (gid 10) and `guest` (uid 405), in group `users` (gid 100), are
 # alpine's own.
-ratect_version = "0.12.0"
+ratect_version = "0.13.0"
 project_name = "ratect-user-test"
 
 [containers.numeric]

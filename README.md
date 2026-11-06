@@ -28,7 +28,8 @@ Ratect implements a substantial subset of Batect's features, including:
 - Includes: splitting configuration across local files, and Git-hosted bundles
   shared between projects.
 - Batect's expression syntax and config variables, environment variables, volumes,
-  port publishing, proxy propagation, user mapping (`run_as_current_user`), and
+  port publishing, proxy propagation, user mapping (`run_as_current_user` in a
+  `batect.yml`, `identity` in a `ratect.toml`), and
   automatic interactive TTY attachment.
 
 The itemized, per-field and per-flag status — including known divergences — lives in
