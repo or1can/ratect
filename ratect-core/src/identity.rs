@@ -22,8 +22,8 @@
 //!
 //! On a rootful Linux daemon the process runs as the host user, and the image's
 //! identity files are made to agree. On a Desktop or remapped daemon, Ratect sets
-//! no process user, and only the running user's home moves. Three things shape
-//! the rest. An upload rewrites the owner and mode of whatever it lands on,
+//! no process user, and only the running user's home moves. Additional users are
+//! added on both. Three things shape the rest. An upload rewrites the owner and mode of whatever it lands on,
 //! through a bind mount and onto the host as well, so nothing existing goes into
 //! one, except for the two cases that ask for exactly that
 //! (`hand_over_directories_made_for_mounts`, `claim_caches`). The identity files are
@@ -42,8 +42,8 @@ use crate::diagnostics::REMAPPED_MOUNT_ACCESS;
 use crate::docker::{ContainerFile, ContainerPathKind, ContainerRuntime, CreatedContainerFacts};
 use crate::ui::printable;
 use crate::user::{
-    edit_group_for_host_user, edit_passwd_for_host_user, edit_passwd_home, CurrentUser,
-    DirectoryOwner,
+    edit_group_for_host_user, edit_passwd_for_host_user, edit_passwd_home, with_additional_groups,
+    with_additional_users, CurrentUser, DirectoryOwner,
 };
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
@@ -52,7 +52,7 @@ use std::path::Path;
 /// The identity file [`apply`] always edits.
 const PASSWD_PATH: &str = "/etc/passwd";
 
-/// The identity file [`apply`] edits only for a host user.
+/// The identity file [`apply`] edits only for a host user or additional users.
 const GROUP_PATH: &str = "/etc/group";
 
 /// The largest identity file that is read: the file is the image's, so untrusted,
@@ -101,8 +101,9 @@ pub async fn host_user(docker: &impl ContainerRuntime, name: &str) -> Result<Opt
 /// Applies `spec`'s identity, if it has one, to `container_id`, just created: the
 /// running user's passwd entry gets the home, and that home is created if nothing
 /// is there. A host user also gets a group entry if there is room for one, and
-/// each writable named cache it can't otherwise use. Part of what makes the
-/// container startable, so the caller treats a failure as a failed create.
+/// each writable named cache it can't otherwise use. Additional users get their
+/// entries on every class, except where a named running user has none and the
+/// container won't start anyway. Part of what makes the container startable, so the caller treats a failure as a failed create.
 ///
 /// `warn` is told what `image_user_warning` finds as soon as the image's user
 /// is known, so the warning doesn't depend on anything here going on to succeed.
@@ -144,16 +145,25 @@ async fn apply_plan(
     let Some(owner) = edit.home_owner else {
         return Ok(());
     };
+    let contents = with_additional_users(&edit.contents, &identity.additional_users)?;
+    // Only additional users have a reason to touch this file here, and an image's
+    // odd one shouldn't fail a container that has none.
+    let group = if identity.additional_users.is_empty() {
+        None
+    } else {
+        Some(read_identity_file(docker, container_id, &facts, GROUP_PATH).await?)
+    };
     docker
         .write_container_file(
             container_id,
             PASSWD_PATH,
-            &ContainerFile {
-                contents: edit.contents,
-                ..passwd
-            },
+            &ContainerFile { contents, ..passwd },
         )
         .await?;
+    if let Some(group) = group {
+        let contents = with_additional_groups(&group.contents, &identity.additional_users);
+        write_group_if_changed(docker, container_id, group, contents).await?;
+    }
     prepare_home(docker, container_id, &identity.home, owner, &facts).await
 }
 
@@ -170,31 +180,48 @@ async fn adopt_host_user(
     passwd: ContainerFile,
 ) -> Result<()> {
     let group = read_identity_file(docker, container_id, facts, GROUP_PATH).await?;
+    let contents = with_additional_users(
+        &edit_passwd_for_host_user(&passwd.contents, user, &identity.home),
+        &identity.additional_users,
+    )?;
     docker
         .write_container_file(
             container_id,
             PASSWD_PATH,
-            &ContainerFile {
-                contents: edit_passwd_for_host_user(&passwd.contents, user, &identity.home),
-                ..passwd
-            },
+            &ContainerFile { contents, ..passwd },
         )
         .await?;
-    if let Some(contents) = edit_group_for_host_user(&group.contents, user) {
-        docker
-            .write_container_file(
-                container_id,
-                GROUP_PATH,
-                &ContainerFile { contents, ..group },
-            )
-            .await?;
-    }
+    let contents = with_additional_groups(
+        &edit_group_for_host_user(&group.contents, user).unwrap_or_else(|| group.contents.clone()),
+        &identity.additional_users,
+    );
+    write_group_if_changed(docker, container_id, group, contents).await?;
     let owner = DirectoryOwner {
         uid: user.uid,
         gid: user.gid,
     };
     prepare_home(docker, container_id, &identity.home, owner, facts).await?;
     claim_caches(docker, spec, container_id, owner).await
+}
+
+/// Writes `contents` over `group`, the file they were made from, unless they are
+/// what it already holds.
+async fn write_group_if_changed(
+    docker: &impl ContainerRuntime,
+    container_id: &str,
+    group: ContainerFile,
+    contents: Vec<u8>,
+) -> Result<()> {
+    if contents == group.contents {
+        return Ok(());
+    }
+    docker
+        .write_container_file(
+            container_id,
+            GROUP_PATH,
+            &ContainerFile { contents, ..group },
+        )
+        .await
 }
 
 /// Takes ownership of each writable named volume whose root is root's, keeping

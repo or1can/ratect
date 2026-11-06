@@ -956,7 +956,8 @@ These apply on every daemon:
   [`extends`](#extends-inheritance-instead-of-yaml-anchors) has resolved the
   container. These are rejected when the file loads. `groups` works with it, and
   adds to the running user.
-- **Only the running user's entry changes.** Every other line of the image's
+- **Only the running user's entry changes**, beside any lines added for
+  [additional users](#additional-users). Every other line of the image's
   `/etc/passwd` stays as it was, and the file keeps its mode and owner. A name
   selects the entry with that name, and a uid the first entry with that uid. Only
   its home field changes, added to a line too short to have one.
@@ -1007,6 +1008,45 @@ What this leaves as it is:
 - **A cache shared between uids or groups is yours to arrange.** `chmod` alone
   isn't enough: under `1777` a second user can create files in it but not change
   the first user's.
+
+### Additional users
+
+Some tools look up a user or group by name, and fail if the image lacks it. `identity`
+can add those on every daemon, beside the image's own users, which are all still there:
+
+```toml
+[containers.build-env]
+image = "alpine:3.18.2"
+identity = { home = "/home/me", additional_users = [{ name = "svc", uid = 1500, gid = 1600 }] }
+groups = ["svc"]
+```
+
+The nearest real project is the same fixture as above, whose `additional-users`
+container is this one.
+
+- **`name`, `uid` and `gid` are all required.** Ratect picks no ids. A name starts
+  with a letter or `_`, and holds only letters, digits, `_`, `.` and `-`. Neither id
+  can be 0, and no two additional users can share a name, a uid or a gid. These are
+  rejected when the file loads.
+- **`/etc/passwd`** gets one line each: `svc:*:1500:1600::/nonexistent:/bin/sh`. Nothing
+  creates that home, and `/etc/shadow` isn't touched.
+- **A name or uid already in `/etc/passwd` fails the run**, naming the container and
+  the values, with neither file written. That covers the image's users and the running
+  user, so on a rootful Linux daemon a declaration can clash on one machine and not
+  on another, whose host user differs. Pick ids away from the ones your users have.
+- **`/etc/group`** gets an entry named after the user only if both that name and the
+  gid are free, so sharing a gid with one of the image's groups is fine, and that
+  group is reused untouched. It is written before the container starts, so `groups`
+  can name it. Where the gid was taken there is no entry of that name, so the runtime
+  refuses to start a container whose `groups` names it. Where only the name was taken,
+  `groups` finds the existing group, at its own gid. On a rootful Linux daemon your own
+  group counts as taken.
+- **Ratect starts nothing as an additional user.** `user` can't be combined with
+  `identity`, so something in the container has to switch to it, as an entrypoint
+  dropping privileges would. On the daemons where the image's `USER` runs, a *named*
+  `USER` the image lacks gets nothing even if listed here, and the runtime refuses to
+  start the container. On a rootful Linux daemon the host user runs instead, so that
+  image starts.
 
 ### On a rootful Linux daemon
 
@@ -1137,8 +1177,8 @@ DATABASE_URL = "postgres://db/test"
 
 Ratect ships a JSON schema for the native format,
 [`schema/ratect-config.schema.json`](../schema/ratect-config.schema.json)
-(its fields generated from the config types, its value patterns checked against
-the parser by tests). Pointing a TOML-aware
+(most of its fields generated from the config types, the native-only ones written
+alongside them, and its value patterns checked against the parser by tests). Pointing a TOML-aware
 editor extension at it — [taplo](https://taplo.tamasfe.dev) / "Even Better TOML"
 for VS Code, or JetBrains' TOML support — gives field-name autocompletion, hover
 documentation, and a red squiggle under a misspelled or unsupported field. It's

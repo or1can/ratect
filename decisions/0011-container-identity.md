@@ -41,7 +41,9 @@ leaves one inside another mount alone. Probed while implementing the hazard warn
 ([#237](https://github.com/or1can/ratect/issues/237)), on Docker 29.9.3 rootless and
 userns-remap: the mapping below holds, the access it leaves is stated, and an image's
 non-root `USER` under `identity` meets it as `user` does, so those are no longer
-inferences.
+inferences. Extended before release ([#107](https://github.com/or1can/ratect/issues/107)):
+`identity` can declare users the image lacks, under
+[Additional users](#additional-users).
 
 
 ## Context
@@ -257,6 +259,27 @@ A relative `cache` destination is refused at load beside `identity`, on every
 daemon class, so whether a project loads never depends on the daemon that later
 runs it.
 
+### Additional users
+
+`identity = { home, additional_users = [{ name, uid, gid }] }` declares users the image
+lacks, for tools that look one up. They sit under `identity` rather than beside the
+passthroughs, which never edit identity files. On every daemon class, once the running
+user's entry is settled:
+
+- Each gets one appended passwd entry: password `*`, home `/nonexistent`, which nothing
+  creates ([#225](https://github.com/or1can/ratect/issues/225)), shell `/bin/sh`, and
+  `/etc/shadow` stays untouched, as for the running user. A group entry follows the
+  keep-id rule above, named after the user.
+- All three fields are required, since an allocated id would differ per image.
+- **At load:** the name's shape, uid or gid 0, and additional users sharing a name, uid
+  or gid.
+- **When the files are read:** a name or uid already in `/etc/passwd`, the image's or the
+  running user's, fails the run with nothing written. A gid already in `/etc/group` is
+  reused: sharing one is ordinary.
+- A named running user with no entry on a desktop or remapped daemon gets nothing, as
+  above, even if listed here, and the runtime reports it. The running user's entry is
+  settled first, so an additional user can't be taken for it.
+
 ### Passthrough hazards
 
 A non-root `user` on a remapped daemon does not write as the host user: it has only
@@ -272,6 +295,16 @@ report it: the image's user isn't in the configuration, and the image may not be
 
 ## Alternatives considered
 
+- **Checking additional users against the host user at load**, as #107's first brief
+  asked. Rejected: on most daemons the host user isn't the running user, and that
+  depends on a daemon loading doesn't reach, so whether a project loaded would depend
+  on it. The check runs against the files, where the real running user is.
+- **Skipping any clash, or accepting an additional user the image already has.**
+  Rejected: skipping leaves a lookup finding a different uid from the one declared, in
+  silence. Accepting an exact match is one more branch, to spare deleting a declaration
+  once an image starts shipping the user.
+- **Additional users as a container field apart from `identity`.** Rejected for now: it
+  would bring identity-file edits to containers that have no other reason for any.
 - **Keep replacing the identity files** (Batect's mechanism, today's code).
   Rejected: #107 was users re-declaring what replacement deleted; `node`,
   `postgres`, `nginx` vanish from every image that ships them; and replacement
@@ -381,13 +414,15 @@ report it: the image's user isn't in the configuration, and the image may not be
   it would leave stray directories or fail a run over a path only the daemon has. The
   daemon creates a missing source as root. A Windows client there has no host identity to adopt, so
   the run fails naming `identity` and the container.
-- **On userns-remap, `identity` delivers only the home guarantee.** Host
+- **On userns-remap, `identity` delivers only the home guarantee**, and any additional
+  users' entries. Host
   ownership of bind-mount writes is impossible there by design of the
   daemon, not something Ratect could fix; the warning and `doctor` finding
   say so rather than letting the declared intent go quietly unmet.
 - Effects on open work: [#107](https://github.com/or1can/ratect/issues/107)
-  shrinks to "declare users the image lacks" or closes, since the image's
-  users now survive; [#225](https://github.com/or1can/ratect/issues/225)'s
+  shrinks to "declare users the image lacks", since the image's users now
+  survive, which is [Additional users](#additional-users);
+  [#225](https://github.com/or1can/ratect/issues/225)'s
   collision surface dissolves with the chown step it catalogued (ownership is
   taken only of root-owned named cache volumes on rootful Linux, and of a home
   directory by creating it, or when a mount below it left it root-owned);

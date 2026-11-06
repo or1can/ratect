@@ -19021,6 +19021,113 @@ async fn identity_needs_a_home_and_nothing_else() {
     }
 }
 
+/// Each additional user is read with its own name, uid and gid (#107), and
+/// `identity` without any has none.
+#[tokio::test]
+async fn identity_additional_users_parse_in_a_toml_file() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n\
+         identity = { home = \"/home/me\", additional_users = [\
+         { name = \"svc\", uid = 1500, gid = 1600 }, { name = \"_tool.a-1\", uid = 1501, gid = 1601 }\
+         ] }\n[containers.plain]\nimage = \"alpine\"\nidentity = { home = \"/home/me\" }\n",
+    )
+    .await
+    .unwrap();
+
+    let identity = project.config.containers["app"].identity.as_ref().unwrap();
+    let users: Vec<(&str, u32, u32)> = identity
+        .additional_users
+        .iter()
+        .map(|user| (user.name.as_str(), user.uid, user.gid))
+        .collect();
+    assert_eq!(users, [("svc", 1500, 1600), ("_tool.a-1", 1501, 1601)]);
+    let plain = project.config.containers["plain"].identity.as_ref();
+    assert!(plain.unwrap().additional_users.is_empty());
+}
+
+/// `identity` is one field to `extends`: a child gets the parent's additional users
+/// with it, and its own `identity` replaces the list rather than adding to it.
+#[tokio::test]
+async fn additional_users_follow_identity_through_extends() {
+    let project = load_native_toml(
+        "project_name = \"demo\"\n[containers.base]\nimage = \"alpine\"\n\
+         identity = { home = \"/h\", additional_users = [{ name = \"svc\", uid = 1, gid = 1 }] }\n\
+         [containers.inherits]\nextends = \"base\"\n\
+         [containers.replaces]\nextends = \"base\"\nidentity = { home = \"/h\" }\n",
+    )
+    .await
+    .unwrap();
+
+    let identity = |name: &str| project.config.containers[name].identity.as_ref().unwrap();
+    assert_eq!(identity("inherits").additional_users[0].name, "svc");
+    assert!(identity("replaces").additional_users.is_empty());
+}
+
+/// Name, uid and gid are all required: nothing here allocates an id, and an
+/// unknown field is as wrong as anywhere else.
+#[tokio::test]
+async fn an_additional_user_needs_a_name_a_uid_and_a_gid_and_nothing_else() {
+    for (user, expected) in [
+        ("{ uid = 1, gid = 1 }", "name"),
+        ("{ name = \"a\", gid = 1 }", "uid"),
+        ("{ name = \"a\", uid = 1 }", "gid"),
+        ("{ name = \"a\", uid = 1, gid = 1, home = \"/h\" }", "home"),
+        ("{ name = \"a\", uid = -1, gid = 1 }", "uid"),
+    ] {
+        let error = load_native_toml(&format!(
+            "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n\
+             identity = {{ home = \"/h\", additional_users = [{user}] }}\n"
+        ))
+        .await
+        .expect_err(user);
+        assert!(format!("{error:#}").contains(expected), "got: {error:#}");
+    }
+}
+
+/// What can be judged from the file alone is refused at load, naming the
+/// container and the values. The name goes into a `:`-separated file line, so
+/// it is held to the characters a user name is made of, and all-digit text is
+/// always a uid to the runtime.
+#[tokio::test]
+async fn a_bad_additional_user_fails_at_load_naming_the_container_and_the_values() {
+    let user = |name: &str, uid: u32, gid: u32| {
+        format!("{{ name = \"{name}\", uid = {uid}, gid = {gid} }}")
+    };
+    for (users, expected) in [
+        (vec![user("svc", 0, 1)], "'svc' has uid 0"),
+        (vec![user("svc", 1, 0)], "'svc' has gid 0"),
+        (
+            vec![user("a", 1500, 1), user("b", 1500, 2)],
+            "'a' and 'b' both have uid 1500",
+        ),
+        (
+            vec![user("a", 1, 1600), user("b", 2, 1600)],
+            "'a' and 'b' both have gid 1600",
+        ),
+        (
+            vec![user("svc", 1, 1), user("svc", 2, 2)],
+            "more than one additional user named 'svc'",
+        ),
+        (vec![user("", 1, 1)], "''"),
+        (vec![user("a:b", 1, 1)], "'a:b'"),
+        (vec![user("a b", 1, 1)], "'a b'"),
+        (vec![user("a\\nroot", 1, 1)], "'a\\nroot'"),
+        (vec![user("1500", 1, 1)], "'1500'"),
+        (vec![user("-a", 1, 1)], "'-a'"),
+    ] {
+        let error = load_native_toml(&format!(
+            "project_name = \"demo\"\n[containers.app]\nimage = \"alpine\"\n\
+             identity = {{ home = \"/h\", additional_users = [{}] }}\n",
+            users.join(", ")
+        ))
+        .await
+        .expect_err(&users.join(", "));
+        let message = format!("{error:#}");
+        assert!(message.contains("'app'"), "got: {message}");
+        assert!(message.contains(expected), "{expected} in: {message}");
+    }
+}
+
 /// `run_as_current_user.home_directory`'s shape, named as `identity.home`, at
 /// load for a literal.
 #[tokio::test]

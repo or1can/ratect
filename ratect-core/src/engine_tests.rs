@@ -18640,11 +18640,13 @@ fn config_with_identity(configure: impl FnOnce(&mut Container)) -> Config {
     let mut app = container("alpine:3.18", Some(vec!["db".to_string()]));
     app.identity = Some(crate::config::Identity {
         home: "/home/me".to_string(),
+        additional_users: vec![],
     });
     configure(&mut app);
     let mut db = container("postgres:16", None);
     db.identity = Some(crate::config::Identity {
         home: "/var/home/db".to_string(),
+        additional_users: vec![],
     });
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), app);
@@ -19648,6 +19650,274 @@ async fn identity_on_rootful_linux_writes_the_edited_files() {
     );
 }
 
+fn additional_users() -> Vec<crate::user::AdditionalUser> {
+    vec![
+        crate::user::AdditionalUser {
+            name: "svc".to_string(),
+            uid: 1500,
+            gid: 1600,
+        },
+        crate::user::AdditionalUser {
+            name: "tool".to_string(),
+            uid: 1501,
+            gid: 20,
+        },
+    ]
+}
+
+fn config_with_additional_users(users: Vec<crate::user::AdditionalUser>) -> Config {
+    config_with_identity(|app| {
+        app.identity.as_mut().unwrap().additional_users = users;
+    })
+}
+
+fn image_group() -> FakeContainerPath {
+    FakeContainerPath::File(crate::docker::ContainerFile {
+        contents: b"staff:x:20:\n".to_vec(),
+        mode: 0o640,
+        uid: 0,
+        gid: 42,
+    })
+}
+
+/// `app`'s spec adopting `user`, with [`additional_users`].
+async fn adopting_spec_with_additional_users(
+    user: crate::user::CurrentUser,
+) -> crate::container_spec::ContainerSpec {
+    let mut spec = adopting_spec(user, vec![]).await;
+    spec.shared.identity.as_mut().unwrap().additional_users = additional_users();
+    spec
+}
+
+/// They join the running user's edit on every daemon class, in both files, and
+/// the files keep their mode and owner. A dependency without any isn't touched.
+#[tokio::test]
+async fn additional_users_are_added_to_both_identity_files_on_every_other_daemon_class() {
+    for class in NON_ROOTFUL_DAEMONS {
+        let docker = identity_runtime(class).with_path("app", "/etc/group", image_group());
+        engine(
+            config_with_additional_users(additional_users()),
+            docker.clone(),
+        )
+        .run_task("run", &[])
+        .await
+        .unwrap();
+
+        let written = docker.written_files();
+        let file = |name: &str, path: &str| {
+            written
+                .iter()
+                .find(|(container, written, _)| container == name && written == path)
+                .map(|(_, _, file)| file.clone())
+        };
+        let passwd = file("app", "/etc/passwd").unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&passwd.contents),
+            "root:x:0:0:root:/home/me:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n\
+             svc:*:1500:1600::/nonexistent:/bin/sh\ntool:*:1501:20::/nonexistent:/bin/sh\n",
+            "{class:?}"
+        );
+        let group = file("app", "/etc/group").unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&group.contents),
+            "staff:x:20:\nsvc:x:1600:\n",
+            "{class:?}: gid 20 is there, so 'tool' reuses it"
+        );
+        assert_eq!((group.mode, group.uid, group.gid), (0o640, 0, 42));
+        assert_eq!(file("db", "/etc/group"), None, "{class:?}");
+    }
+}
+
+#[tokio::test]
+async fn additional_users_are_added_beside_the_adopted_host_user_on_rootful_linux() {
+    let docker =
+        identity_runtime(DaemonClass::RootfulLinux).with_path("app", "/etc/group", image_group());
+    let spec = adopting_spec_with_additional_users(crate::user::CurrentUser {
+        uid: 4000,
+        gid: 4000,
+        username: "me".to_string(),
+        groupname: "mine".to_string(),
+    })
+    .await;
+    crate::identity::apply(&docker, &spec, "sidecar-id-app", |_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&written_to(&docker, "/etc/passwd").unwrap().contents),
+        "root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n\
+         me:*:4000:4000::/home/me:/bin/sh\n\
+         svc:*:1500:1600::/nonexistent:/bin/sh\ntool:*:1501:20::/nonexistent:/bin/sh\n",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&written_to(&docker, "/etc/group").unwrap().contents),
+        "staff:x:20:\nmine:x:4000:\nsvc:x:1600:\n",
+    );
+}
+
+/// Every additional user's group is already there, so the file stays as it was.
+#[tokio::test]
+async fn a_group_file_with_nothing_to_add_is_not_written_beside_additional_users() {
+    let docker = identity_runtime(DaemonClass::Desktop).with_path(
+        "app",
+        "/etc/group",
+        FakeContainerPath::File(crate::docker::ContainerFile {
+            contents: b"staff:x:20:\nsvc:x:1600:\n".to_vec(),
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+        }),
+    );
+    engine(
+        config_with_additional_users(additional_users()),
+        docker.clone(),
+    )
+    .run_task("run", &[])
+    .await
+    .unwrap();
+    assert_eq!(written_to(&docker, "/etc/group"), None);
+}
+
+/// The running user comes first: a named one with no entry can't start whatever is
+/// declared, even under its own name, and the runtime still says so.
+#[tokio::test]
+async fn a_named_running_user_with_no_entry_gets_nothing_from_additional_users() {
+    let docker = identity_runtime(DaemonClass::Desktop).with_image_user("app", "svc");
+    engine(
+        config_with_additional_users(additional_users()),
+        docker.clone(),
+    )
+    .run_task("run", &[])
+    .await
+    .unwrap();
+    assert!(docker
+        .written_files()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+}
+
+/// `scratch` has neither file, and an absent one is an empty one.
+#[tokio::test]
+async fn additional_users_are_added_to_an_image_with_no_group_file() {
+    let docker = identity_runtime(DaemonClass::Desktop);
+    engine(
+        config_with_additional_users(additional_users()),
+        docker.clone(),
+    )
+    .run_task("run", &[])
+    .await
+    .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&written_to(&docker, "/etc/group").unwrap().contents),
+        "svc:x:1600:\ntool:x:20:\n",
+    );
+}
+
+/// A clash is only known once the created container's file is read, so it fails
+/// the run, naming the container and the values, with nothing yet written. The
+/// entry may be the image's, or the running user's.
+#[tokio::test]
+async fn an_additional_user_clashing_with_the_image_fails_the_run_writing_nothing() {
+    for (name, uid, expected) in [
+        (
+            "svc",
+            1000,
+            "'svc' has uid 1000, which '/etc/passwd' already gives to 'node'",
+        ),
+        ("node", 1500, "'node' has a name '/etc/passwd' already has"),
+    ] {
+        let docker = identity_runtime(DaemonClass::Desktop);
+        let error = engine(
+            config_with_additional_users(vec![crate::user::AdditionalUser {
+                name: name.to_string(),
+                uid,
+                gid: 1600,
+            }]),
+            docker.clone(),
+        )
+        .run_task("run", &[])
+        .await
+        .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("Failed to apply 'identity' to container 'app'"),
+            "{error}"
+        );
+        assert!(error.contains(expected), "{error}");
+        assert!(
+            docker
+                .written_files()
+                .iter()
+                .all(|(name, ..)| name != "app"),
+            "{:?}",
+            docker.written_files()
+        );
+    }
+}
+
+/// On a rootful daemon the host user is the running user, whichever machine this
+/// is, so the same declaration clashes only on some.
+#[tokio::test]
+async fn an_additional_user_clashing_with_the_host_user_fails_the_run_writing_nothing() {
+    for (user, expected) in [
+        (
+            crate::user::CurrentUser {
+                uid: 1500,
+                gid: 4000,
+                username: "me".to_string(),
+                groupname: "mine".to_string(),
+            },
+            "'svc' has uid 1500, which '/etc/passwd' already gives to 'me'",
+        ),
+        (
+            crate::user::CurrentUser {
+                uid: 4000,
+                gid: 4000,
+                username: "svc".to_string(),
+                groupname: "mine".to_string(),
+            },
+            "'svc' has a name '/etc/passwd' already has",
+        ),
+    ] {
+        let docker = identity_runtime(DaemonClass::RootfulLinux).with_path(
+            "app",
+            "/etc/group",
+            image_group(),
+        );
+        let spec = adopting_spec_with_additional_users(user).await;
+        let error = crate::identity::apply(&docker, &spec, "sidecar-id-app", |_| {})
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains(expected), "{error:#}");
+        assert_eq!(docker.written_files(), vec![]);
+    }
+}
+
+/// A group file that can't be edited is refused before the passwd file is
+/// written, on the classes that otherwise never read it.
+#[tokio::test]
+async fn a_group_file_it_cannot_edit_fails_additional_users_writing_nothing() {
+    let docker = identity_runtime(DaemonClass::Desktop).with_path(
+        "app",
+        "/etc/group",
+        FakeContainerPath::SymbolicLink,
+    );
+    let error = engine(
+        config_with_additional_users(additional_users()),
+        docker.clone(),
+    )
+    .run_task("run", &[])
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("it is a symbolic link"),
+        "{error:#}"
+    );
+    assert!(docker
+        .written_files()
+        .iter()
+        .all(|(name, ..)| name != "app"));
+}
+
 /// A host root runs the same pipeline, and has no cache to claim.
 #[tokio::test]
 async fn identity_on_rootful_linux_as_host_root_claims_nothing() {
@@ -19855,6 +20125,7 @@ fn config_with_app(configure: impl FnOnce(&mut Container)) -> Config {
     let mut identity_unrelated = container("alpine:3.18", None);
     identity_unrelated.identity = Some(crate::config::Identity {
         home: "/home/unrelated".to_string(),
+        additional_users: vec![],
     });
     let mut containers = IndexMap::new();
     containers.insert("app".to_string(), app);

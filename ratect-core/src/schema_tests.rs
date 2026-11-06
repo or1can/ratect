@@ -649,3 +649,48 @@ fn both_schemas_accept_the_durations_and_sizes_the_loader_does() {
         }
     }
 }
+
+/// `make_native`'s `pattern` for an additional user's name is written by hand, so
+/// this holds it to the check the loader makes, on cases of its own.
+#[test]
+fn the_native_schema_accepts_the_additional_user_names_the_loader_does() {
+    let validator = jsonschema::draft7::new(&native_config_file_schema()).unwrap();
+    for (name, valid) in [
+        ("svc", true),
+        ("_svc", true),
+        ("Svc.a-1_b", true),
+        ("", false),
+        ("1500", false),
+        ("1svc", false),
+        ("-svc", false),
+        (".svc", false),
+        ("a:b", false),
+        ("a b", false),
+        ("a\n", false),
+        ("a\nroot", false),
+        ("\u{e9}a", false),
+        ("a\u{e9}", false),
+        ("$USER", false),
+    ] {
+        assert_eq!(
+            crate::config::is_user_name(name),
+            valid,
+            "the loader on {name:?}"
+        );
+        let instance = serde_json::json!({
+            "project_name": "demo",
+            "containers": { "app": {
+                "image": "alpine",
+                "identity": {
+                    "home": "/h",
+                    "additional_users": [{ "name": name, "uid": 1, "gid": 1 }],
+                },
+            } },
+        });
+        assert_eq!(
+            validator.is_valid(&instance),
+            valid,
+            "the schema on {name:?}"
+        );
+    }
+}
