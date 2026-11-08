@@ -915,16 +915,16 @@ container runs as you, while Docker Desktop's file sharing and a rootless daemon
 mapping of root to you deliver it without that.
 Batect users will know this as
 [`run_as_current_user`](#coming-from-run_as_current_user).
+[File Ownership and the Home Directory](file-ownership.md) shows the outcome on
+each daemon; this section is the rules behind it.
 
 ```toml
-[containers.build-env]
-image = "rust:1.90"
-identity = { home = "/home/me" }
-groups = ["docker"]
+{{#include ../examples/identity/ratect.toml:as-you}}
 ```
 
-The nearest real project is
-[`ratect/tests/fixtures/identity.toml`](https://github.com/or1can/ratect/blob/main/ratect/tests/fixtures/identity.toml).
+That container is from
+[`examples/identity`](https://github.com/or1can/ratect/tree/main/examples/identity),
+which that page walks through.
 
 Both places programs look then agree: `$HOME`, which Git reads, and the running
 user's `/etc/passwd` entry, which ssh's `~` reads. Who the running user is depends
@@ -1018,7 +1018,10 @@ What this leaves as it is:
 - **No `cache` mount changes owner except on a rootful Linux daemon.** A fresh named
   volume is root-owned, so a non-root image `USER` can't write to one on the other
   daemons, even when the home above it is theirs. Fix that in the image:
-  a fresh volume takes its owner from an image directory at the same path.
+  a fresh volume takes its owner and mode from an image directory at the same
+  path. One owned by the image's `USER` is still another uid's on a rootful Linux
+  daemon, where you run instead, so a mode that lets anyone write works on
+  [every daemon](file-ownership.md#cache-volumes-below-the-home).
 - **A cache shared between uids or groups is yours to arrange.** `chmod` alone
   isn't enough: under `1777` a second user can create files in it but not change
   the first user's.
@@ -1066,8 +1069,9 @@ identity = { home = "/home/me", additional_users = [{ name = "svc", uid = 1500, 
 groups = ["svc"]
 ```
 
-The nearest real project is the same fixture as above, whose `additional-users`
-container is this one.
+The nearest real project is
+[`ratect/tests/fixtures/identity.toml`](https://github.com/or1can/ratect/blob/main/ratect/tests/fixtures/identity.toml),
+whose `additional-users` container is this one.
 
 - **`name`, `uid` and `gid` are all required.** Ratect picks no ids. A name starts
   with a letter or `_`, and holds only letters, digits, `_`, `.` and `-`. Neither id

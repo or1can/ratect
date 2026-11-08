@@ -1,0 +1,2 @@
+rm: cannot remove 'out/as-image/uid': Permission denied
+.gitignore

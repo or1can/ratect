@@ -1,0 +1,5 @@
+user:   runner (1001), groups: runner users
+HOME:   /home/me
+passwd: /home/me
+drwxr-xr-x    1 runner   runner           8 Jan  1  1970 [1;34m/home/me[m
+drwxr-xr-x    1 runner   runner          12 Nov  8 22:35 [1;34m/home/me/.ssh[m

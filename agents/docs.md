@@ -99,7 +99,9 @@ description of every style followed by a gallery of them), Getting Started's fir
 `docs/ratect-cli.md`'s `config convert --stdout` with something to check
 (#578, from `ratect/tests/fixtures/convert`), and
 `docs/ratect-config-reference.md`'s `ratect_version` refusal (#623, from
-`ratect/tests/fixtures/written-for`). Task listings are the
+`ratect/tests/fixtures/written-for`), and `docs/file-ownership.md`'s runs of
+`examples/identity` on a `desktop` and a `rootful Linux` daemon (#816), whose
+captures also show a host `ls` of what the tasks wrote. Task listings are the
 plain `<!-- verify: -->` form instead — the binary prints them uncoloured, so
 a capture would add nothing the marker's re-run doesn't already prove.
 
