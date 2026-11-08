@@ -13076,15 +13076,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/ratect-cli.md" = "91b2508b03407238" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "4ca303a3bf7ddf7b"
-copies = 1
-note = "Read the identity.rs and diagnostics.rs rows against the modules: identity still creates the home where nothing exists and hands over what a mount made; diagnostics still holds the daemon-free checks."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "b98c1d9034f78800", "decisions/0003-ratect-native-config-format.md" = "dd654c0bc88ae7a8", "decisions/0005-build-ssh-keyring-placement.md" = "db18653c7eeef69a", "decisions/0011-container-identity.md" = "dd076e7be2ce8f0f", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "73ff6134c7aed8f2", "docs/ratect-cli.md" = "91b2508b03407238", "docs/ratect-compat-cli.md" = "8ec2c7a1c4480c97", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "3c31ef3599e9d609", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/container_spec.rs" = "7b6df39b5e4a74bf", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "578410e5309076c4", "ratect-core/src/docker.rs" = "c3ae6047e0978014", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "36607bd1a81b88b6", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/exit_code.rs" = "780d6e93214b0a5c", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "fca6451a074735b7", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "50c387baa4d2e94e", "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "7768cd69b4a95322", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/written_for.rs" = "07bc816e0cc7d680", "ratect-core/src/yaml.rs" = "5ae3c40b21a564c8", "ratect/src/main.rs" = "3610e26f3b7e2165" }
-
-[[mark]]
 file = "decisions/0016-exit-codes.md"
 mode = "stale-claims"
 unit = "ea7792a26f405e2a"
@@ -13137,3 +13128,21 @@ copies = 1
 note = "Read the Tests paragraph: ratect/tests/cli.rs still carries its own ignored Docker tests, now one more, and the claims about config.rs and ROADMAP.md are unchanged."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".cargo/audit.toml" = "38865a10b6f80f7f", ".claude/settings.json" = "082465644ff79ed5", ".github/workflows/ci.yml" = "c4278bfd7532e0c5", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "decisions/0009-adopt-claims-plugin.md" = "5ec619eaa95ba122", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ab59178e15a2786f", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "dba3cf62ecb47a33", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+
+[[mark]]
+file = "decisions/0011-container-identity.md"
+mode = "restatement-ngram"
+unit = "eb56122059f60b6b-f82b73d77ab92f0a"
+copies = 1
+note = "Read the #825/#829 refinement against identity::tmpfs_hiding_home: the rule it states, a tmpfs above the home refused when it is the deepest mount there and nothing is mounted at the home, is the shared function's, unchanged by #831."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "4ca303a3bf7ddf7b"
+copies = 1
+note = "Read the Architecture module table: the identity.rs, diagnostics.rs and daemon_class.rs rows still describe those modules; #831 moved the tmpfs decision into identity.rs, which its row's home-checking already covers."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "b98c1d9034f78800", "decisions/0003-ratect-native-config-format.md" = "dd654c0bc88ae7a8", "decisions/0005-build-ssh-keyring-placement.md" = "db18653c7eeef69a", "decisions/0011-container-identity.md" = "dd076e7be2ce8f0f", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "73ff6134c7aed8f2", "docs/ratect-cli.md" = "91b2508b03407238", "docs/ratect-compat-cli.md" = "8ec2c7a1c4480c97", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/ratect-config-reference.md" = "3c31ef3599e9d609", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/container_spec.rs" = "7b6df39b5e4a74bf", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "a96c947250c390c2", "ratect-core/src/docker.rs" = "c3ae6047e0978014", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "36607bd1a81b88b6", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/exit_code.rs" = "780d6e93214b0a5c", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "44ff47b1294a9ab7", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "fca6451a074735b7", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "50c387baa4d2e94e", "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "7768cd69b4a95322", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/written_for.rs" = "07bc816e0cc7d680", "ratect-core/src/yaml.rs" = "5ae3c40b21a564c8", "ratect/src/main.rs" = "3610e26f3b7e2165" }
