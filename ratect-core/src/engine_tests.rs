@@ -19204,6 +19204,22 @@ async fn a_tmpfs_that_is_the_deepest_mount_above_a_missing_home_is_refused() {
     }
 }
 
+/// A run decides as `doctor` does (`identity::tmpfs_hiding_home`), so a mount
+/// between the `tmpfs` and the home counts as where its path resolves to. The
+/// daemon reports one cleaned, so only the fake can spell it otherwise.
+#[tokio::test]
+async fn a_mount_written_differently_between_a_tmpfs_and_the_home_keeps_it_visible() {
+    for mount in ["/mnt/up/", "/mnt/x/../up"] {
+        let docker = identity_runtime(DaemonClass::Desktop)
+            .with_tmpfs("app", "/mnt")
+            .with_mount("app", mount);
+        let config = config_with_identity(|app| {
+            app.identity.as_mut().unwrap().home = "/mnt/up/me".to_string();
+        });
+        engine(config, docker).run_task("run", &[]).await.unwrap();
+    }
+}
+
 /// Docker forwards a `tmpfs` key as written, so which mount is deepest is read from
 /// the paths, not from how they are spelled.
 #[tokio::test]

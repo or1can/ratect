@@ -517,9 +517,9 @@ fn mount_owner_findings_with(
 /// that hides a home the image ships, or one the daemon makes for a mount below
 /// it, as much as a missing one, so a run refuses all three.
 ///
-/// Only the deepest mount is read, since it goes on top of any `tmpfs` above it at
-/// start, and so does one at the path a `tmpfs` written differently resolves to,
-/// and a run comes to the same answer. A `cache` counts as a volume
+/// Whether a `tmpfs` hides the home is `identity::tmpfs_hiding_home`'s answer, the
+/// one a run gets too. Otherwise only the deepest bind mount or volume is read,
+/// since it goes on top of any `tmpfs` above it at start. A `cache` counts as a volume
 /// whatever a run's `--cache-type` says, since neither caller has that flag's value.
 fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -527,53 +527,70 @@ fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Find
         let Some(identity) = &container.identity else {
             continue;
         };
-        let home = path_clean::clean(&identity.home);
         let mounts = || container.volumes.iter().flatten();
+        let (tmpfs, others): (Vec<_>, Vec<_>) =
+            mounts().partition(|mount| matches!(mount, VolumeMount::Tmpfs(_)));
+        let under = |mount: &str, at: &str, consequence: &str| {
+            format!(
+                "container '{name}' has identity.home '{}' under the {mount} at '{}' — \
+                 {consequence}",
+                crate::ui::printable(&identity.home),
+                crate::ui::printable(at)
+            )
+        };
+        if let Some(tmpfs) = crate::identity::tmpfs_hiding_home(
+            &identity.home,
+            tmpfs.iter().map(|mount| mount.container_path()),
+            others.iter().map(|mount| mount.container_path()),
+        ) {
+            findings.push(Finding::Problem(under(
+                "tmpfs",
+                tmpfs,
+                "a run fails, since the tmpfs would hide the home whether or not it exists",
+            )));
+            continue;
+        }
+        let home = path_clean::clean(&identity.home);
         if mounts().any(|mount| path_clean::clean(mount.container_path()) == home) {
             continue;
         }
-        let Some(above) = mounts()
+        // Past that check, a `tmpfs` above the home is at it or has one of these
+        // between them, so the deepest of these is all that is left to read.
+        let Some(above) = others
+            .into_iter()
             .filter(|mount| home.starts_with(path_clean::clean(mount.container_path())))
             .max_by_key(|mount| {
-                let depth = path_clean::clean(mount.container_path())
+                path_clean::clean(mount.container_path())
                     .components()
-                    .count();
-                (depth, !matches!(mount, VolumeMount::Tmpfs(_)))
+                    .count()
             })
         else {
             continue;
         };
-        let home = crate::ui::printable(&identity.home);
-        let at = crate::ui::printable(above.container_path());
-        let under = |mount: &str, consequence: &str| {
-            format!(
-                "container '{name}' has identity.home '{home}' under the {mount} at '{at}' — \
-                 {consequence}"
-            )
-        };
+        let at = above.container_path();
         let read_only_consequence = "a run fails unless the home already exists there";
         match above {
-            VolumeMount::Tmpfs(_) => findings.push(Finding::Problem(under(
-                "tmpfs",
-                "a run fails, since the tmpfs would hide the home whether or not it exists",
-            ))),
             VolumeMount::Local(local) if crate::container_spec::is_read_only(&local.options) => {
                 findings.push(Finding::Warning(under(
                     "read-only bind mount",
+                    at,
                     read_only_consequence,
                 )))
             }
             VolumeMount::Local(_) => findings.push(Finding::Warning(under(
                 "writable bind mount",
+                at,
                 "a home that doesn't exist yet is created on the host, in that directory",
             ))),
             VolumeMount::Cache(cache) if crate::container_spec::is_read_only(&cache.options) => {
                 findings.push(Finding::Warning(under(
                     "read-only cache",
+                    at,
                     read_only_consequence,
                 )))
             }
-            VolumeMount::Cache(_) => {}
+            // A `tmpfs` isn't among `others`.
+            VolumeMount::Cache(_) | VolumeMount::Tmpfs(_) => {}
         }
     }
     findings
