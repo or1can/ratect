@@ -1316,6 +1316,22 @@ async fn a_mount_at_the_path_a_tmpfs_resolves_to_decides_over_it() {
     }
 }
 
+/// A mount between a `tmpfs` and the home counts as where its path resolves to,
+/// however it is written, as a run's does (`identity::tmpfs_hiding_home`).
+#[tokio::test]
+async fn a_mount_written_differently_between_a_tmpfs_and_the_identity_home_decides_over_it() {
+    for mount in ["/mnt/up/", "/mnt/x/../up"] {
+        let volumes = format!(
+            r#"[{{ type = "tmpfs", container = "/mnt" }}, {{ type = "cache", name = "up", container = "{mount}" }}]"#
+        );
+        assert_eq!(
+            home_mount_findings_for("/mnt/up/me", &volumes).await,
+            [],
+            "{mount}"
+        );
+    }
+}
+
 /// A run creates the home in the deeper mount, which goes on top of the `tmpfs` at
 /// start, so each finding here is what a run does (`identity::prepare_home`).
 #[tokio::test]

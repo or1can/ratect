@@ -34,7 +34,7 @@
 //!
 //! Failures here name the configured container (#345), since this layer's
 //! runtime calls don't. Only the rootful half has a real daemon behind it in CI:
-//! see the note above these tests in `engine_tests.rs`.
+//! see the note above the identity tests in `engine_tests.rs`.
 
 use crate::container_spec::{BindSource, ContainerSpec, IdentityPlan};
 use crate::daemon_class::DaemonClass;
@@ -310,6 +310,39 @@ async fn read_identity_file(
     docker.read_container_file(container_id, path).await
 }
 
+/// The `tmpfs` among `tmpfs_destinations`, as written, that would hide `home` at
+/// start, if one would. A `tmpfs` is empty at start, so the deepest one above the
+/// home hides it whether it is created by upload, shipped by the image or made by
+/// the daemon for a mount below it, which leaves a root-owned mount point in its
+/// place. That holds unless one of `mount_destinations` (the bind mounts and
+/// volumes) is at the home or between that `tmpfs` and the home, since a deeper
+/// mount, or one at the path a `tmpfs` resolves to, goes on top of it at start; a
+/// `tmpfs` at the home is the home.
+///
+/// The one decision a run (`prepare_home`) and `doctor`
+/// (`diagnostics::identity_home_mount_findings`) both make, from different
+/// mounts: a run's include the image's `VOLUME`s. Every path is compared cleaned,
+/// since Docker forwards a `tmpfs` key as written and cleans it only when it
+/// mounts, and `doctor` reads every destination as the configuration writes it.
+pub(crate) fn tmpfs_hiding_home<'a>(
+    home: &str,
+    tmpfs_destinations: impl IntoIterator<Item = &'a str>,
+    mount_destinations: impl IntoIterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let home = path_clean::clean(home);
+    let (tmpfs, cleaned) = tmpfs_destinations
+        .into_iter()
+        .map(|tmpfs| (tmpfs, path_clean::clean(tmpfs)))
+        .filter(|(_, cleaned)| home.starts_with(cleaned))
+        .max_by_key(|(_, cleaned)| cleaned.components().count())?;
+    let hides_nothing = cleaned == home
+        || mount_destinations
+            .into_iter()
+            .map(path_clean::clean)
+            .any(|mount| home.starts_with(&mount) && mount.starts_with(&cleaned));
+    (!hides_nothing).then_some(tmpfs)
+}
+
 /// Creates `home` only if nothing is there, owned by `owner`, with any missing
 /// ancestors as root. A directory or symbolic link at `home` is the project's
 /// choice and is left alone, even if the running user can't write to it, unless
@@ -328,26 +361,12 @@ async fn prepare_home(
     facts: &CreatedContainerFacts,
 ) -> Result<()> {
     let home_path = Path::new(home);
-    // A `tmpfs` above the home is empty at start, so it hides the home whether it
-    // is created here, shipped by the image or made by the daemon for a mount below
-    // it, which leaves a root-owned mount point in its place. That holds unless a
-    // deeper mount, or one at the path it resolves to, which goes on top of it at
-    // start, is where the home is, or one at the home is the home.
-    let deepest_tmpfs = facts
-        .tmpfs_destinations
-        .iter()
-        .map(|tmpfs| (tmpfs, path_clean::clean(tmpfs)))
-        .filter(|(_, cleaned)| home_path.starts_with(cleaned))
-        .max_by_key(|(_, cleaned)| cleaned.components().count());
-    if let Some((tmpfs, cleaned)) = deepest_tmpfs {
-        let hides_nothing = cleaned == home_path
-            || facts
-                .mount_destinations
-                .iter()
-                .map(Path::new)
-                .any(|mount| home_path.starts_with(mount) && mount.starts_with(&cleaned));
-        anyhow::ensure!(
-            hides_nothing,
+    if let Some(tmpfs) = tmpfs_hiding_home(
+        home,
+        facts.tmpfs_destinations.iter().map(String::as_str),
+        facts.mount_destinations.iter().map(String::as_str),
+    ) {
+        anyhow::bail!(
             "'{}' can't be the home: the tmpfs at '{}' would hide it",
             printable(home),
             printable(tmpfs)
@@ -453,3 +472,7 @@ async fn hand_over_directories_made_for_mounts(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "identity_tests.rs"]
+mod tests;
