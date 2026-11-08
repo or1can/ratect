@@ -513,8 +513,9 @@ fn mount_owner_findings_with(
 /// before the container starts, so through a bind mount or volume, while a `tmpfs`
 /// applied at start would hide it, which a run refuses (`identity::prepare_home`).
 /// A mount at the home itself supplies it. Whether the home already exists can't
-/// always be known from here, so a finding allows for it. One the image ships gets
-/// past that refusal, and is then hidden, so the `tmpfs` is a problem either way.
+/// always be known from here, so a finding allows for it, except under a `tmpfs`:
+/// that hides a home the image ships, or one the daemon makes for a mount below
+/// it, as much as a missing one, so a run refuses all three.
 ///
 /// Only the deepest mount is read, since it goes on top of any `tmpfs` above it at
 /// start, and so does one at the path a `tmpfs` written differently resolves to,
@@ -554,7 +555,7 @@ fn identity_home_mount_findings(evaluation: &WholeProjectEvaluation) -> Vec<Find
         match above {
             VolumeMount::Tmpfs(_) => findings.push(Finding::Problem(under(
                 "tmpfs",
-                "a run fails, or runs with the home hidden if the image already has it",
+                "a run fails, since the tmpfs would hide the home whether or not it exists",
             ))),
             VolumeMount::Local(local) if crate::container_spec::is_read_only(&local.options) => {
                 findings.push(Finding::Warning(under(

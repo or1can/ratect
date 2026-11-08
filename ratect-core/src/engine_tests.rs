@@ -19282,6 +19282,74 @@ async fn a_tmpfs_written_with_a_parent_component_is_judged_by_where_it_resolves(
         .unwrap();
 }
 
+/// A `tmpfs` is empty at start, so a home already there when the container is
+/// created is no better off than a missing one: one the image ships is hidden, and
+/// one the daemon made for a mount below it is replaced by a root-owned mount
+/// point for that mount. Either is refused, and nothing is handed over first.
+#[tokio::test]
+async fn a_tmpfs_above_a_home_that_exists_is_refused() {
+    let config = || {
+        config_with_identity(|app| {
+            app.identity.as_mut().unwrap().home = "/mnt/me".to_string();
+        })
+    };
+    let cases = [
+        (
+            "the image's",
+            identity_runtime(DaemonClass::Desktop)
+                .with_image_user("app", "node")
+                .with_tmpfs("app", "/mnt")
+                .with_path("app", "/mnt", FakeContainerPath::Directory)
+                .with_path("app", "/mnt/me", FakeContainerPath::Directory),
+        ),
+        (
+            "made for a mount",
+            identity_runtime(DaemonClass::Desktop)
+                .with_image_user("app", "node")
+                .with_tmpfs("app", "/mnt")
+                .with_mount("app", "/mnt/me/.ssh")
+                .with_path("app", "/mnt", FakeContainerPath::Directory)
+                .with_path("app", "/mnt/me", FakeContainerPath::DirectoryOwnedBy(0)),
+        ),
+    ];
+    for (case, docker) in cases {
+        let error = engine(config(), docker.clone())
+            .run_task("run", &[])
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("container 'app'"), "{case}: {error}");
+        assert!(error.contains("'/mnt/me'"), "{case}: {error}");
+        assert!(error.contains("tmpfs at '/mnt'"), "{case}: {error}");
+        assert!(
+            docker
+                .claimed_directories()
+                .iter()
+                .all(|(name, ..)| name != "app"),
+            "{case}"
+        );
+    }
+}
+
+/// The exceptions hold for a home that exists too: a mount at the home, or one
+/// between the `tmpfs` and the home, goes on top of the `tmpfs` at start.
+#[tokio::test]
+async fn a_tmpfs_above_a_home_that_exists_hides_nothing_under_a_mount_at_or_above_the_home() {
+    for (mount, home) in [("/mnt/me", "/mnt/me"), ("/mnt/up", "/mnt/up/me")] {
+        let docker = identity_runtime(DaemonClass::Desktop)
+            .with_image_user("app", "node")
+            .with_tmpfs("app", "/mnt")
+            .with_mount("app", mount)
+            .with_path("app", "/mnt", FakeContainerPath::Directory)
+            .with_path("app", mount, FakeContainerPath::Directory)
+            .with_path("app", home, FakeContainerPath::Directory);
+        let config = config_with_identity(|app| {
+            app.identity.as_mut().unwrap().home = home.to_string();
+        });
+        engine(config, docker).run_task("run", &[]).await.unwrap();
+    }
+}
+
 /// The mount refusals compare paths, since Docker forwards a `tmpfs` key as
 /// written.
 #[tokio::test]

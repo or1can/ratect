@@ -55,7 +55,11 @@ container, a fresh cache volume's lost write access included. Probed on OrbStack
 ([#825](https://github.com/or1can/ratect/issues/825)): a home created in a mount
 below a `tmpfs` stays visible, since that mount goes on top of the `tmpfs` at start,
 so a `tmpfs` above the home is refused when it is the deepest mount there and nothing
-is mounted at the home.
+is mounted at the home. Refined after a correctness review found a mount below the
+home getting past that refusal ([#829](https://github.com/or1can/ratect/issues/829)):
+it applies whether or not the home exists, since a `tmpfs` hides one the image ships,
+and one the daemon made for a mount below it leaves a root-owned mount point in its
+place.
 
 
 ## Context
@@ -260,7 +264,8 @@ On every daemon class, however the entry above was reached:
   an upload rewrites the owner and mode of what it lands on, through a bind mount
   and onto the host as well. A file at that path is an error naming the container,
   as is a `tmpfs` as the deepest mount above it with nothing mounted at it, which
-  would hide what is created.
+  would hide the home at start, whether created then, shipped by the image or made
+  by the daemon for a mount below it.
 - **A mount below the home is the exception to "untouched".** The daemon creates
   each bind mount's and volume's destination and its parents as root on the first
   archive call, even a stat, so by the time Ratect can look, a directory made for

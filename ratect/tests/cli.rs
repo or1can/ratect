@@ -5208,6 +5208,59 @@ run = {{ container = "app", command = "ls -d /mnt/me" }}
     );
 }
 
+/// A bind below the home makes Docker create the home before Ratect can look, and
+/// the `tmpfs` above it would then replace it with a root-owned mount point at
+/// start, so a run refuses it before the task starts, as one with no bind is.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn identity_home_under_a_tmpfs_is_refused_with_a_mount_below_it() {
+    let _guard = shared_docker();
+    let project = unique_project_dir();
+    struct RemoveOnDrop(PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = RemoveOnDrop(project.clone());
+    std::fs::create_dir_all(project.join("ssh")).unwrap();
+    let config = project.join("ratect.toml");
+    std::fs::write(
+        &config,
+        format!(
+            r#"ratect_version = "{version}"
+project_name = "ratect-identity-tmpfs-mount-below-test"
+
+[containers.app]
+image = "alpine:3.18.2"
+identity = {{ home = "/mnt/me" }}
+volumes = [
+  {{ type = "tmpfs", container = "/mnt" }},
+  {{ local = "ssh", container = "/mnt/me/.ssh" }},
+]
+
+[tasks.run]
+run = {{ container = "app", command = "echo task-started" }}
+"#,
+            version = written_for_version()
+        ),
+    )
+    .unwrap();
+
+    let run = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["run", "run"])
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    assert!(!stdout.contains("task-started"), "{stdout}");
+    assert!(stderr.contains("tmpfs at '/mnt' would hide it"), "{stderr}");
+}
+
 /// Taking a volume keeps its mode, on the first run and on the one that finds it
 /// taken. It takes its `700` and root owner from the image's directory.
 #[test]

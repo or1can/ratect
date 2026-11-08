@@ -984,9 +984,11 @@ These apply on every daemon:
   directory or symbolic link, a bind mount included, keeps its owner and mode even
   if the running user can't write to it. A symbolic link isn't followed, so one that
   is dangling or leads to a file leaves the home unusable. A file there fails the
-  run, naming the container, and so does a `tmpfs` as the deepest mount above a home
-  that isn't there, which would hide it, unless something is mounted at the home
-  itself.
+  run, naming the container, and so does a `tmpfs` as the deepest mount above the
+  home, unless something is mounted at the home itself. A `tmpfs` is empty when the
+  container starts, so it hides a home the image ships as much as a missing one, and
+  where Docker made the home for a mount below it, that mount leaves a root-owned
+  mount point in the home's place.
 - **A mount above the home is where it gets created**, since that happens before the
   container starts, whatever `tmpfs` is further up. Under a writable bind mount, a
   missing home lands on the host, in that directory. Under a read-only mount, a
