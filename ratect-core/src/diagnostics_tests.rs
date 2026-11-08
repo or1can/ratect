@@ -1200,16 +1200,12 @@ async fn a_tmpfs_above_the_identity_home_is_a_problem() {
     let [Finding::Problem(message)] = &findings[..] else {
         panic!("{findings:?}");
     };
-    for expected in [
-        "'app'",
-        "'/mnt/up/me'",
-        "tmpfs",
-        "'/mnt/up'",
-        "a run fails",
-        "hidden",
-    ] {
+    for expected in ["'app'", "'/mnt/up/me'", "tmpfs", "'/mnt/up'", "a run fails"] {
         assert!(message.contains(expected), "{expected}: {message}");
     }
+    // A run refuses the home whether or not the image already has it.
+    assert!(message.contains("whether or not it exists"), "{message}");
+    assert!(!message.contains("runs with"), "{message}");
 }
 
 #[tokio::test]

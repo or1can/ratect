@@ -315,7 +315,8 @@ async fn read_identity_file(
 /// choice and is left alone, even if the running user can't write to it, unless
 /// it was only made for a mount (`hand_over_directories_made_for_mounts`). A symbolic
 /// link on the way there is a directory to upload into, which Docker follows
-/// inside the container.
+/// inside the container. A home a `tmpfs` would hide at start is refused first,
+/// whatever is there now.
 ///
 /// Looks from the top down, since a daemon answers a stat of a path under a file
 /// with a bare 500.
@@ -327,6 +328,31 @@ async fn prepare_home(
     facts: &CreatedContainerFacts,
 ) -> Result<()> {
     let home_path = Path::new(home);
+    // A `tmpfs` above the home is empty at start, so it hides the home whether it
+    // is created here, shipped by the image or made by the daemon for a mount below
+    // it, which leaves a root-owned mount point in its place. That holds unless a
+    // deeper mount, or one at the path it resolves to, which goes on top of it at
+    // start, is where the home is, or one at the home is the home.
+    let deepest_tmpfs = facts
+        .tmpfs_destinations
+        .iter()
+        .map(|tmpfs| (tmpfs, path_clean::clean(tmpfs)))
+        .filter(|(_, cleaned)| home_path.starts_with(cleaned))
+        .max_by_key(|(_, cleaned)| cleaned.components().count());
+    if let Some((tmpfs, cleaned)) = deepest_tmpfs {
+        let hides_nothing = cleaned == home_path
+            || facts
+                .mount_destinations
+                .iter()
+                .map(Path::new)
+                .any(|mount| home_path.starts_with(mount) && mount.starts_with(&cleaned));
+        anyhow::ensure!(
+            hides_nothing,
+            "'{}' can't be the home: the tmpfs at '{}' would hide it",
+            printable(home),
+            printable(tmpfs)
+        );
+    }
     let mut ancestors: Vec<&Path> = home_path.ancestors().collect();
     ancestors.reverse();
     // The deepest ancestor found so far; `/` always exists.
@@ -357,29 +383,6 @@ async fn prepare_home(
             };
         }
         into = path;
-    }
-    // A `tmpfs` above the home hides what is created, unless a deeper mount, or one
-    // at the path it resolves to, which goes on top of it at start, is where that
-    // lands, or one at the home is the home.
-    let deepest_tmpfs = facts
-        .tmpfs_destinations
-        .iter()
-        .map(|tmpfs| (tmpfs, path_clean::clean(tmpfs)))
-        .filter(|(_, cleaned)| home_path.starts_with(cleaned))
-        .max_by_key(|(_, cleaned)| cleaned.components().count());
-    if let Some((tmpfs, cleaned)) = deepest_tmpfs {
-        let hides_nothing = cleaned == home_path
-            || facts
-                .mount_destinations
-                .iter()
-                .map(Path::new)
-                .any(|mount| home_path.starts_with(mount) && mount.starts_with(&cleaned));
-        anyhow::ensure!(
-            hides_nothing,
-            "'{}' can't be created: the tmpfs at '{}' would hide it",
-            printable(home),
-            printable(tmpfs)
-        );
     }
     let relative = home_path
         .strip_prefix(into)

@@ -525,7 +525,7 @@ supplies it, so that gets no finding whatever is above it:
 
 | Deepest mount above the home | Finding |
 | --- | --- |
-| `tmpfs` | Problem: the run fails, or, if the image already has the home, runs with it hidden |
+| `tmpfs` | Problem: the run fails, whether or not the home already exists |
 | Read-only bind mount or `cache` | Warning: the run fails unless the home already exists there |
 | Writable bind mount | Warning: a missing home is created on the host, in that directory |
 | Writable `cache` | None |
