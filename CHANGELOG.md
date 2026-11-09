@@ -42,6 +42,7 @@ history, from when it was the only binary.
 - [File Ownership and the Home Directory](docs/file-ownership.md): who owns what a container writes through a bind mount, and what `$HOME` is, on each kind of Docker daemon, with `identity` and without, built around a new `examples/identity` project. Troubleshooting links to it for root-owned files.
 - `pre-commit install` also installs a `pre-push` hook that runs CI's `claims` checks over the branch and refuses a push with an unmarked finding; run it again in an existing clone to add it. No effect on the released binaries; contributor-tooling only.
 - Claude Code sessions in this repo ask before an amend, force-push, rebase or hard reset, refuse a commit or push given `--no-verify` or a `SKIP=` of its hooks, and refuse a check whose output is piped straight into a filter such as `tail`. Each matches the command as typed, so a script or alias gets past it. No effect on the released binaries; contributor-tooling only.
+- A `/ready` Claude Code skill runs whichever of the bug review and the two-axis review hasn't yet covered a change. No effect on the released binaries; contributor-tooling only.
 
 ### Changed
 
