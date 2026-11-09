@@ -656,6 +656,12 @@ Default canonical label strings, unchanged. See `agents/triage-labels.md`.
 Single-context: `CONTEXT.md` at the repo root; ADRs in `decisions/` (this
 repo's own established location, not `docs/adr/`). See `agents/domain.md`.
 
+### Probing daemon classes
+
+Before saying a daemon class (rootful Linux, rootless, userns-remap) can't
+be probed or tested on this machine, read `agents/probing.md`: each one
+runs on a Mac.
+
 ### User docs
 
 The `docs/` directory is the user-facing documentation tree, as distinct
