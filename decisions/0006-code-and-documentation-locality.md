@@ -15,6 +15,12 @@ Corrected: *Decision* says `cache.rs` was extracted from `config`/`engine`. It
 wasn't: it was written as its own module when cache mounts were added
 (`378c8ce7`), like `ssh_agent.rs`.
 
+Corrected since (ratect#844): the line counts in Context and Alternatives, and
+the observation that every module with a `//!` comment is under 800 lines,
+were measured at 0.25.0-dev; `config.rs`, `docker.rs` and `engine.rs` have
+since gained `//!` comments and grown to about 4,400–7,900 lines, and
+`git_include.rs` to about 1,200.
+
 ## Context
 
 Ratect's information architecture is **layer-oriented**, and its code is

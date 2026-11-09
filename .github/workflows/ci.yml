@@ -457,9 +457,8 @@ jobs:
   # this duplicate exists so the *same* signal is reported from ci.yml,
   # where a future ruleset change could make it required the way every
   # other job in this file already is (see AGENTS.md's guideline 12); it
-  # is NOT yet in that ruleset itself (tracked in TODO.md), so today this
-  # job reports on every PR without blocking a merge, same as release.yml's
-  # own copy. Deliberately not paths-filtered despite ratect#34's wording:
+  # is in that ruleset itself as Release Pipeline Config, so it blocks a
+  # merge, while release.yml's own copy only reports. Deliberately not paths-filtered despite ratect#34's wording:
   # a required check that's skipped on some PRs (via workflow-level
   # `paths:`, the only first-party mechanism) never reports on those PRs
   # and leaves them pending forever — msrv-floor.yml uses paths-filtering

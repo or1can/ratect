@@ -14,6 +14,10 @@ The classification lives in `docker.rs` (`classify_ssh_agent_paths`), leaving
 the keyring itself with no notion of `build_ssh` at all, which is what keeps
 property 2 below honest.
 
+Corrected since (ratect#844): the fork now carries further unlanded work,
+build cancellation (fussybeaver/bollard#849, pinned in the root `Cargo.toml`),
+so a bollard 0.22 release alone no longer retires the patch.
+
 ## Context
 
 Batect's `build_ssh` supports **multiple named agents** and — the practically
