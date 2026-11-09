@@ -318,6 +318,27 @@ fn a_restricted_clone_failure_withholds_gits_error() {
     assert!(message.contains("RUST_LOG=debug"));
 }
 
+/// A missing home says nothing about the clone, so a bundle's include is refused
+/// naming it rather than as a withheld failure (#846).
+#[test]
+fn a_restricted_include_refused_for_no_home_says_so() {
+    let declaring = Bundle::granted(None, id("outer"), asks(false, Some(true)));
+    let error = hide_clone_detail(
+        crate::user::no_home("Git include 'internal.example' at 'v1'"),
+        &Remote::from("internal.example"),
+        "v1",
+        &["1.yml".to_string()],
+        Some(&declaring),
+    );
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("In the bundle 'outer' at 'main'")
+            && message.contains("Git include 'internal.example' at 'v1' needs a home directory")
+            && !message.contains("RUST_LOG=debug"),
+        "{message}"
+    );
+}
+
 #[test]
 fn a_grant_the_winning_route_did_not_carry_is_refused() {
     let file = PathBuf::from("/clone/bundle.toml");

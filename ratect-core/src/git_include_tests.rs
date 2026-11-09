@@ -2330,3 +2330,29 @@ async fn a_failed_clone_escapes_the_remote_and_keeps_gits_stderr_as_written() {
     );
     assert!(stderr.contains("/nonexistent\nError: forged"), "{err}");
 }
+
+/// With no home there is no cache: a clone is refused naming the include, and
+/// the verbs and the background sweep find nothing (#846).
+#[tokio::test]
+async fn with_no_home_a_clone_is_refused_and_the_cache_is_empty() {
+    let _no_home = crate::user::without_home();
+    let cache = GitIncludeCache::new();
+    let error = cache
+        .ensure_cached(&Remote::from("https://example.com/repo.git"), "v1")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with(
+            "Git include 'https://example.com/repo.git' at 'v1' needs a home directory, and \
+             neither HOME nor a passwd entry for uid"
+        ),
+        "{error}"
+    );
+    assert_eq!(cache.list().await.unwrap(), []);
+    let cleaned = cache.clean(None).await.unwrap();
+    assert!(cleaned.succeeded.is_empty() && cleaned.failed.is_empty());
+    let refreshed = cache.refresh().await.unwrap();
+    assert!(refreshed.succeeded.is_empty() && refreshed.failed.is_empty());
+    cache.cleanup_stale().await.unwrap();
+}

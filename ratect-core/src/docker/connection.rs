@@ -403,17 +403,19 @@ fn variable_path(value: &str) -> Result<PathBuf> {
 /// returned as given: a relative path stays relative, and nothing checks
 /// that it exists. [`connect`] resolves it once and hands it on in its
 /// [`Connection`], so `DockerClient::new`'s credential resolver reads the
-/// same directory the context lookup did.
+/// same directory the context lookup did. `None` for a host user with no home
+/// and no directory chosen (decisions/0024): no context store, no stored
+/// credentials, as a `~/.docker` that doesn't exist would be.
 ///
 /// Pure but for the home directory lookup — the environment value is
 /// injected, as for `resolve_host`.
 fn docker_config_directory(
     options: &DockerConnectionOptions,
     docker_config_env: Option<&str>,
-) -> Result<PathBuf> {
+) -> Result<Option<PathBuf>> {
     match chosen_config_directory(options, docker_config_env)? {
-        Some((dir, _)) => Ok(dir),
-        None => Ok(crate::user::home_directory()?.join(".docker")),
+        Some((dir, _)) => Ok(Some(dir)),
+        None => Ok(crate::user::home()?.map(|home| home.join(".docker"))),
     }
 }
 
@@ -436,26 +438,35 @@ fn docker_config_directory(
 /// default exists is [`flag_tls_settings`]'s question, asked only if it's
 /// consulted.
 ///
+/// The directory is `None` for a host user with no home, who has no
+/// `~/.docker` ([`flag_tls_settings`] refuses that only where it would be read).
+///
 /// Pure but for the home directory lookup — the environment values are
 /// injected, as for `resolve_host`.
 fn docker_cert_directory(
     options: &DockerConnectionOptions,
     docker_cert_path_env: Option<&str>,
     docker_config_env: Option<&str>,
-) -> Result<(PathBuf, String)> {
+) -> Result<(Option<PathBuf>, String)> {
     if let Some(dir) = &options.cert_path {
-        return Ok((dir.clone(), "--docker-cert-path".to_string()));
+        return Ok((Some(dir.clone()), "--docker-cert-path".to_string()));
     }
     if let Some(dir) = docker_cert_path_env.filter(|dir| !dir.is_empty()) {
-        return Ok((variable_path(dir)?, "DOCKER_CERT_PATH".to_string()));
+        return Ok((Some(variable_path(dir)?), "DOCKER_CERT_PATH".to_string()));
     }
     if let Some((dir, named_by)) = chosen_config_directory(options, docker_config_env)? {
-        return Ok((dir, named_by.to_string()));
+        return Ok((Some(dir), named_by.to_string()));
     }
     Ok((
-        crate::user::home_directory()?.join(".docker"),
+        crate::user::home()?.map(|home| home.join(".docker")),
         "~/.docker".to_string(),
     ))
+}
+
+/// Whether [`flag_tls_settings`] looks in the certificate directory: unless all
+/// three file flags are given.
+fn consults_cert_directory(options: &DockerConnectionOptions) -> bool {
+    options.tls_ca_cert.is_none() || options.tls_cert.is_none() || options.tls_key.is_none()
 }
 
 /// Refuses a Docker config or certificate directory the user gave —
@@ -559,7 +570,7 @@ fn client_pair_in(directory: &Path, named_by: &str) -> Result<Option<ClientCerti
 /// missing file, which [`Connection::explain_failure`] makes up for.
 fn flag_tls_settings(
     options: &DockerConnectionOptions,
-    cert_directory: &Path,
+    cert_directory: Option<&Path>,
     cert_directory_named_by: &str,
 ) -> Result<TlsSettings> {
     let named = |flag: &str, path: &PathBuf| -> Result<TlsFile> {
@@ -568,31 +579,52 @@ fn flag_tls_settings(
         }
         Ok(TlsFile::new(path.clone(), flag))
     };
+
+    // The one gate for a directory that is read: it must be there, and a host
+    // user with no home has no `~/.docker` to be there (decisions/0024). Past it,
+    // `directory` is `None` only where nothing is looked for in it.
+    let directory = if consults_cert_directory(options) {
+        match cert_directory {
+            Some(directory) if directory.is_dir() => Some(directory),
+            Some(directory) => anyhow::bail!(
+                "{cert_directory_named_by}: {} does not exist or is not a directory",
+                directory.display()
+            ),
+            None => {
+                return Err(crate::user::no_home(&format!(
+                    "The TLS certificate directory '{cert_directory_named_by}', with none of \
+                     '--docker-cert-path', 'DOCKER_CERT_PATH', '--docker-config' or \
+                     'DOCKER_CONFIG' set,"
+                )))
+            }
+        }
+    } else {
+        None
+    };
+    let in_directory =
+        |name: &str| directory.and_then(|dir| file_in(dir, name, cert_directory_named_by));
+    // Reached only with a file flag missing, which the gate saw, so `directory`
+    // is there.
     let required = |name: &str| -> Result<TlsFile> {
-        file_in(cert_directory, name, cert_directory_named_by).with_context(|| {
+        let directory = directory.context("the TLS certificate directory was not read")?;
+        file_in(directory, name, cert_directory_named_by).with_context(|| {
             format!(
                 "{cert_directory_named_by}: {} does not exist or is not a file — a client \
                  certificate needs both a certificate and a key",
-                cert_directory.join(name).display()
+                directory.join(name).display()
             )
         })
     };
 
-    let consults_directory =
-        options.tls_ca_cert.is_none() || options.tls_cert.is_none() || options.tls_key.is_none();
-    if consults_directory && !cert_directory.is_dir() {
-        anyhow::bail!(
-            "{cert_directory_named_by}: {} does not exist or is not a directory",
-            cert_directory.display()
-        );
-    }
-
     let ca = match &options.tls_ca_cert {
         Some(path) => Some(named("--docker-tls-ca-cert", path)?),
-        None => file_in(cert_directory, "ca.pem", cert_directory_named_by),
+        None => in_directory("ca.pem"),
     };
     let client = match (&options.tls_cert, &options.tls_key) {
-        (None, None) => client_pair_in(cert_directory, cert_directory_named_by)?,
+        (None, None) => match directory {
+            Some(directory) => client_pair_in(directory, cert_directory_named_by)?,
+            None => None,
+        },
         (cert, key) => Some(ClientCertificate {
             cert: match cert {
                 Some(path) => named("--docker-tls-cert", path)?,
@@ -1006,7 +1038,7 @@ fn daemon_target(
 #[derive(Debug)]
 pub(super) struct Connection {
     pub(super) docker: Docker,
-    pub(super) config_directory: PathBuf,
+    pub(super) config_directory: Option<PathBuf>,
     pub(super) warnings: Vec<String>,
     pub(super) daemon_host: String,
     daemon_target: String,
@@ -1016,7 +1048,7 @@ pub(super) struct Connection {
 impl Connection {
     fn without_note(
         docker: Docker,
-        config_directory: PathBuf,
+        config_directory: Option<PathBuf>,
         warnings: Vec<String>,
         daemon_host: String,
         daemon_target: String,
@@ -1180,7 +1212,8 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         host.as_deref(),
         docker_context_env.as_deref(),
         || {
-            active_docker_context(&config_directory).unwrap_or_else(|error| {
+            let config_directory = config_directory.as_deref()?;
+            active_docker_context(config_directory).unwrap_or_else(|error| {
                 warnings.push(format!(
                     "{error:#}, so the Docker CLI's active context can't be read from it; \
                      using the default context."
@@ -1191,8 +1224,15 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
     );
 
     if let Some(context_name) = context_name {
-        let ContextEndpoint { host, tls } =
-            docker_context_endpoint(&config_directory, &context_name)?;
+        let ContextEndpoint { host, tls } = docker_context_endpoint(
+            config_directory.as_deref().ok_or_else(|| {
+                crate::user::no_home(&format!(
+                    "Docker context '{}', with neither '--docker-config' nor 'DOCKER_CONFIG' set,",
+                    crate::ui::printable(&context_name)
+                ))
+            })?,
+            &context_name,
+        )?;
         let daemon_target = daemon_target(options, None, Some((&context_name, &host)));
         let tls = tls.or_else(|| {
             is_https(&host).then_some(TlsSettings {
@@ -1264,7 +1304,8 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         docker_cert_path_env.as_deref(),
         docker_config_env.as_deref(),
     )?;
-    let tls = flag_tls_settings(options, &cert_directory, &named_by)
+    let cert_directory = cert_directory.as_deref();
+    let tls = flag_tls_settings(options, cert_directory, &named_by)
         .with_context(|| format!("Failed to connect to {target} over TLS"))?;
     let docker = connect_over_tls(&target, address, &tls)?;
     Ok(Connection {
@@ -1273,11 +1314,11 @@ pub(super) fn connect(options: &DockerConnectionOptions) -> Result<Connection> {
         warnings,
         daemon_host: host,
         daemon_target,
-        verification_note: tls
-            .ca
-            .is_none()
-            .then(|| VerificationNote::SystemTrustStore {
-                looked_for: cert_directory.join("ca.pem"),
+        // With no CA, the directory was looked in for one.
+        verification_note: cert_directory
+            .filter(|_| tls.ca.is_none())
+            .map(|directory| VerificationNote::SystemTrustStore {
+                looked_for: directory.join("ca.pem"),
             }),
     })
 }

@@ -1654,7 +1654,7 @@ async fn docker_client_new_reads_config_json_from_the_chosen_config_directory() 
 
     assert_eq!(
         client.docker_config_path,
-        config_directory.join("config.json")
+        Some(config_directory.join("config.json"))
     );
     std::fs::remove_dir_all(&config_directory).unwrap();
 }

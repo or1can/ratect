@@ -29,7 +29,8 @@ own location. A path whose first component is `~` means your home directory
 instead, by the same rule as a [volume's host
 path](ratect-compat-config-reference.md#volume-path-resolution). A **Git
 include** names a repository and a ref, and Ratect clones it into
-`~/.ratect/incl` and includes one file from the clone — the bundle's
+`~/.ratect/incl` (so it is refused with no home directory) and includes one file
+from the clone — the bundle's
 `batect-bundle.yml` unless the entry's `path` says otherwise, with a
 `ratect.toml` project looking for `ratect-bundle.toml` first (the [`ratect.toml`
 reference](ratect-config-reference.md#includes) has the lookup). A Git

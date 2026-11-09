@@ -163,7 +163,8 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 for both `list` and `clean` — a cache in one is invisible to the other, so this has to
 match how the project runs its tasks. Under `directory`, this project's caches are
 host directories under `<project>/.batect/caches/<name>` and shared ones live at
-`~/.ratect/caches/<name>`. A `.batect/caches` or `.batect` that is a symbolic link
+`~/.ratect/caches/<name>`; with no home directory there are no shared ones. A
+`.batect/caches` or `.batect` that is a symbolic link
 is followed, as in Batect, so `caches clean` removes the cache directories wherever
 it points — see [Cache volumes](ratect-compat-config-reference.md#cache-volumes).
 
@@ -219,7 +220,8 @@ named after it.
 ## `includes` options
 
 The Git include cache under `~/.ratect/incl` — where a `type: git`
-[include](ratect-compat-config-reference.md#git-includes) is cloned and kept.
+[include](ratect-compat-config-reference.md#git-includes) is cloned and kept. With
+no home directory there is no cache, and these find nothing.
 `ratect includes list`, captured after
 [the one checked-in project with a Git include](https://github.com/or1can/ratect/blob/main/ratect-compat/tests/conformance/batect-journey/git-include/batect.yml)
 had been loaded once into an otherwise empty cache:

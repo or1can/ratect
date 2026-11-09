@@ -105,18 +105,97 @@ fn only_on_unix(asked_by: &str) -> anyhow::Error {
 /// The current host user's home directory: an absolute `$HOME`, else the passwd
 /// entry's (decisions/0024). The Docker CLI's rule, so Ratect's `~/.docker` is the
 /// one `docker login` wrote, and the home can be overridden. Anchors `~/.docker`,
-/// `~/.ratect` and `~` in a path. Unix-only, same rationale as `current_user`.
+/// `~/.ratect` and `~` in a path. `None` is a host user with no home, which is
+/// ordinary under a numeric `-u`: each caller says what that means for it, or
+/// asks [`home_directory`] to refuse. Only a failed lookup is an error. Unix-only,
+/// same rationale as `current_user`.
 #[cfg(unix)]
-pub fn home_directory() -> Result<PathBuf> {
-    use nix::unistd::{Uid, User};
-
-    let uid = Uid::current();
+pub fn home() -> Result<Option<PathBuf>> {
+    #[cfg(test)]
+    if WITHOUT_HOME.get() > 0 {
+        return Ok(None);
+    }
     chosen_home(std::env::var_os("HOME"), || {
-        Ok(User::from_uid(uid)
+        Ok(nix::unistd::User::from_uid(nix::unistd::Uid::current())
             .context("Failed to look up the current user")?
             .map(|user| user.dir))
-    })?
-    .with_context(|| format!("No home directory: HOME is unset, empty or not absolute, and uid {uid} has no passwd entry with an absolute home"))
+    })
+}
+
+/// See the Unix form.
+#[cfg(not(unix))]
+pub fn home() -> Result<Option<PathBuf>> {
+    Err(only_on_unix("A home directory"))
+}
+
+/// [`home`], for `needed_by`, which can't do without one: a refusal naming it
+/// ([`no_home`]) where there is none.
+pub fn home_directory(needed_by: &str) -> Result<PathBuf> {
+    home()
+        .with_context(|| format!("{needed_by} needs a home directory"))?
+        .ok_or_else(|| no_home(needed_by))
+}
+
+/// The refusal for `needed_by`, which needs a home directory the host user has
+/// none of: it names both places one is looked for. A [`NoHome`], so a layer that
+/// hides an error's detail can tell this one, which has none to hide, apart.
+pub fn no_home(needed_by: &str) -> anyhow::Error {
+    NoHome {
+        needed_by: needed_by.to_string(),
+        uid: current_owner().map(|owner| owner.uid),
+    }
+    .into()
+}
+
+/// See [`no_home`].
+#[derive(Debug)]
+pub struct NoHome {
+    needed_by: String,
+    uid: Option<u32>,
+}
+
+impl std::fmt::Display for NoHome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let uid = self
+            .uid
+            .map_or_else(|| "this user".to_string(), |uid| format!("uid {uid}"));
+        write!(
+            f,
+            "{} needs a home directory, and neither HOME nor a passwd entry for {uid} gives one",
+            self.needed_by
+        )
+    }
+}
+
+impl std::error::Error for NoHome {}
+
+#[cfg(test)]
+thread_local! {
+    static WITHOUT_HOME: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Makes [`home`] find no home, on this thread, until the guard drops: for a test
+/// of what a caller does then, since the real case needs a uid with no passwd
+/// entry and `HOME` unset, which a unit test can't arrange. Thread-local, so it
+/// reaches only code running on the test's own thread: a plain `#[test]`, or a
+/// default (current-thread) `#[tokio::test]` reaching `home` outside
+/// `spawn_blocking`. Guards nest.
+#[cfg(test)]
+pub(crate) fn without_home() -> WithoutHome {
+    WITHOUT_HOME.set(WITHOUT_HOME.get() + 1);
+    WithoutHome(std::marker::PhantomData)
+}
+
+/// See [`without_home`]. Built only by it, and not `Send`, so it drops on the
+/// thread whose count it raised.
+#[cfg(test)]
+pub(crate) struct WithoutHome(std::marker::PhantomData<*const ()>);
+
+#[cfg(test)]
+impl Drop for WithoutHome {
+    fn drop(&mut self) {
+        WITHOUT_HOME.set(WITHOUT_HOME.get() - 1);
+    }
 }
 
 /// The home given `home`, the value of `$HOME`, and `passwd_home`, the passwd
@@ -133,13 +212,6 @@ fn chosen_home(
         Some(home) => Ok(Some(PathBuf::from(home))),
         None => Ok(passwd_home()?.filter(|home| home.is_absolute())),
     }
-}
-
-#[cfg(not(unix))]
-pub fn home_directory() -> Result<PathBuf> {
-    Err(anyhow::anyhow!(
-        "Git includes are only supported on Unix hosts"
-    ))
 }
 
 /// Generates a minimal `/etc/passwd` for `user`, granting `home_directory` as

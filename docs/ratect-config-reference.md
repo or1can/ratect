@@ -343,8 +343,9 @@ control.
 **Where it is stored.** A shared cache is the Docker volume
 `ratect-shared-cache-<name>`, or the directory `~/.ratect/caches/<name>` under
 `--cache-type=directory` — beside `~/.ratect/incl`, where Git includes are
-cloned, because both belong to the machine rather than to any one project. A
-project cache remains `batect-cache-<project key>-<name>`.
+cloned, because both belong to the machine rather than to any one project. With
+no home directory the directory form is refused, naming the cache. A project
+cache remains `batect-cache-<project key>-<name>`.
 
 **A name has one scope per project.** Declaring `cargo-registry` as `project`
 in one container and `shared` in another is rejected when the file loads: one

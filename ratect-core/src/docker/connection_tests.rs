@@ -374,7 +374,9 @@ fn docker_config_directory_returns_the_option_as_given() {
         config_directory: Some(PathBuf::from("relative/dir")),
         ..Default::default()
     };
-    let directory = docker_config_directory(&options, Some("/from/env")).unwrap();
+    let directory = docker_config_directory(&options, Some("/from/env"))
+        .unwrap()
+        .unwrap();
     assert_eq!(directory, PathBuf::from("relative/dir"));
     assert!(directory.is_relative());
 }
@@ -383,12 +385,14 @@ fn docker_config_directory_returns_the_option_as_given() {
 fn docker_config_directory_falls_back_to_docker_config_then_home() {
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        docker_config_directory(&options, Some("/from/env")).unwrap(),
+        docker_config_directory(&options, Some("/from/env"))
+            .unwrap()
+            .unwrap(),
         PathBuf::from("/from/env")
     );
     assert_eq!(
-        docker_config_directory(&options, None).unwrap(),
-        crate::user::home_directory().unwrap().join(".docker")
+        docker_config_directory(&options, None).unwrap().unwrap(),
+        crate::user::home().unwrap().unwrap().join(".docker")
     );
 }
 
@@ -398,18 +402,22 @@ fn docker_config_directory_falls_back_to_docker_config_then_home() {
 /// the check on it alike.
 #[test]
 fn the_directory_variables_are_resolved_as_batect_resolves_them() {
-    let home = crate::user::home_directory().unwrap();
+    let home = crate::user::home().unwrap().unwrap();
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        docker_config_directory(&options, Some("~/alt")).unwrap(),
+        docker_config_directory(&options, Some("~/alt"))
+            .unwrap()
+            .unwrap(),
         home.join("alt")
     );
     assert_eq!(
-        docker_config_directory(&options, Some("a/../alt")).unwrap(),
+        docker_config_directory(&options, Some("a/../alt"))
+            .unwrap()
+            .unwrap(),
         PathBuf::from("alt")
     );
     assert_eq!(
-        docker_cert_directory(&options, Some("~/certs"), None).unwrap(),
+        found_cert_directory(&options, Some("~/certs"), None),
         (home.join("certs"), "DOCKER_CERT_PATH".to_string())
     );
     let missing = "ratect-437-no-such-directory";
@@ -766,21 +774,21 @@ fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_defaul
         ..Default::default()
     };
     assert_eq!(
-        docker_cert_directory(&options, from_env.to_str(), None).unwrap(),
+        found_cert_directory(&options, from_env.to_str(), None),
         (explicit, "--docker-cert-path".to_string())
     );
 
     let options = DockerConnectionOptions::default();
     assert_eq!(
-        docker_cert_directory(&options, from_env.to_str(), None).unwrap(),
+        found_cert_directory(&options, from_env.to_str(), None),
         (from_env, "DOCKER_CERT_PATH".to_string())
     );
     // With no Docker config directory chosen either, `~/.docker` is the
     // default for both.
-    let home = crate::user::home_directory().unwrap().join(".docker");
+    let home = crate::user::home().unwrap().unwrap().join(".docker");
     for unset in [None, Some("")] {
         assert_eq!(
-            docker_cert_directory(&options, unset, None).unwrap(),
+            found_cert_directory(&options, unset, None),
             (home.clone(), "~/.docker".to_string())
         );
     }
@@ -788,11 +796,13 @@ fn docker_cert_directory_prefers_the_explicit_option_over_the_env_var_and_defaul
     // from too — the working directory, `.` once resolved — so the
     // certificates follow it.
     assert_eq!(
-        docker_config_directory(&options, Some("")).unwrap(),
+        docker_config_directory(&options, Some(""))
+            .unwrap()
+            .unwrap(),
         PathBuf::from(".")
     );
     assert_eq!(
-        docker_cert_directory(&options, None, Some("")).unwrap(),
+        found_cert_directory(&options, None, Some("")),
         (PathBuf::from("."), "DOCKER_CONFIG".to_string())
     );
 }
@@ -944,14 +954,16 @@ fn docker_cert_directory_falls_back_to_a_chosen_docker_config_directory() {
         let case =
             format!("{cert_path:?} {cert_path_env:?} {config_directory:?} {config_env_value:?}");
         assert_eq!(
-            docker_cert_directory(&options, cert_path_env, config_env_value).unwrap(),
+            found_cert_directory(&options, cert_path_env, config_env_value),
             (PathBuf::from(directory), named_by.to_string()),
             "{case}"
         );
         // The config directory itself is unaffected by the cert sources.
         if config_directory.is_some() || config_env_value.is_some() {
             assert_eq!(
-                docker_config_directory(&options, config_env_value).unwrap(),
+                docker_config_directory(&options, config_env_value)
+                    .unwrap()
+                    .unwrap(),
                 PathBuf::from(config_directory.or(config_env_value).unwrap()),
                 "{case}"
             );
@@ -963,8 +975,12 @@ fn docker_cert_directory_falls_back_to_a_chosen_docker_config_directory() {
 fn flag_tls_settings_errors_naming_what_named_a_cert_directory_that_is_not_there() {
     let missing = unique_temp_dir().join("typo");
     for named_by in ["--docker-cert-path", "DOCKER_CERT_PATH", "~/.docker"] {
-        let err =
-            flag_tls_settings(&DockerConnectionOptions::default(), &missing, named_by).unwrap_err();
+        let err = flag_tls_settings(
+            &DockerConnectionOptions::default(),
+            Some(&missing),
+            named_by,
+        )
+        .unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains(named_by), "{message}");
         assert!(message.contains("typo"), "{message}");
@@ -987,7 +1003,7 @@ fn flag_tls_settings_ignores_a_cert_directory_that_is_not_there_when_every_file_
     };
 
     let settings =
-        flag_tls_settings(&options, &unique_temp_dir().join("gone"), "~/.docker").unwrap();
+        flag_tls_settings(&options, Some(&unique_temp_dir().join("gone")), "~/.docker").unwrap();
     assert_eq!(
         settings.client,
         Some(ClientCertificate {
@@ -1008,7 +1024,8 @@ fn flag_tls_settings_uses_an_explicit_ca_path_as_named_by_its_flag() {
         ..Default::default()
     };
 
-    let settings = flag_tls_settings(&options, &cert_directory, "--docker-cert-path").unwrap();
+    let settings =
+        flag_tls_settings(&options, Some(&cert_directory), "--docker-cert-path").unwrap();
     assert_eq!(
         settings,
         TlsSettings {
@@ -1026,7 +1043,7 @@ fn flag_tls_settings_uses_the_cert_directory_ca_when_it_is_there() {
 
     let settings = flag_tls_settings(
         &DockerConnectionOptions::default(),
-        &cert_directory,
+        Some(&cert_directory),
         "DOCKER_CERT_PATH",
     )
     .unwrap();
@@ -1042,7 +1059,7 @@ fn flag_tls_settings_with_no_files_at_all_has_no_ca_and_no_client_certificate() 
 
     let settings = flag_tls_settings(
         &DockerConnectionOptions::default(),
-        &cert_directory,
+        Some(&cert_directory),
         "~/.docker",
     )
     .unwrap();
@@ -1064,7 +1081,7 @@ fn flag_tls_settings_presents_the_cert_directory_client_pair_when_both_files_are
 
     let settings = flag_tls_settings(
         &DockerConnectionOptions::default(),
-        &cert_directory,
+        Some(&cert_directory),
         "--docker-cert-path",
     )
     .unwrap();
@@ -1086,7 +1103,7 @@ fn flag_tls_settings_errors_when_only_half_a_client_pair_is_in_the_cert_director
 
         let err = flag_tls_settings(
             &DockerConnectionOptions::default(),
-            &cert_directory,
+            Some(&cert_directory),
             "--docker-cert-path",
         )
         .unwrap_err();
@@ -1127,7 +1144,7 @@ fn flag_tls_settings_errors_naming_the_flag_when_its_file_does_not_exist() {
             },
         ),
     ] {
-        let err = flag_tls_settings(&options, &cert_directory, "~/.docker").unwrap_err();
+        let err = flag_tls_settings(&options, Some(&cert_directory), "~/.docker").unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains(flag), "{message}");
         assert!(message.contains("not-there.pem"), "{message}");
@@ -1145,7 +1162,7 @@ fn flag_tls_settings_with_one_client_flag_takes_the_other_file_from_the_cert_dir
         ..Default::default()
     };
 
-    let settings = flag_tls_settings(&options, &cert_directory, "DOCKER_CERT_PATH").unwrap();
+    let settings = flag_tls_settings(&options, Some(&cert_directory), "DOCKER_CERT_PATH").unwrap();
     assert_eq!(
         settings.client,
         Some(ClientCertificate {
@@ -1166,7 +1183,7 @@ fn flag_tls_settings_with_one_client_flag_errors_when_the_other_file_is_not_in_t
         ..Default::default()
     };
 
-    let err = flag_tls_settings(&options, &cert_directory, "DOCKER_CERT_PATH").unwrap_err();
+    let err = flag_tls_settings(&options, Some(&cert_directory), "DOCKER_CERT_PATH").unwrap_err();
     let message = format!("{err:#}");
     assert!(message.contains("DOCKER_CERT_PATH"), "{message}");
     assert!(message.contains("key.pem"), "{message}");
@@ -2264,4 +2281,80 @@ fn connect_refuses_a_missing_cert_path_even_when_nothing_would_read_it() {
             "{message}"
         );
     }
+}
+
+/// With no home and no directory chosen there is no Docker config directory, and
+/// the TLS certificate directory is refused only where it would be read (#846).
+#[test]
+fn with_no_home_there_is_no_docker_config_directory() {
+    let _no_home = crate::user::without_home();
+    let options = DockerConnectionOptions::default();
+    assert_eq!(docker_config_directory(&options, None).unwrap(), None);
+    assert_eq!(
+        docker_config_directory(&options, Some("/from/env")).unwrap(),
+        Some(PathBuf::from("/from/env"))
+    );
+
+    assert_eq!(docker_cert_directory(&options, None, None).unwrap().0, None);
+    let error = flag_tls_settings(&options, None, "~/.docker")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with(
+            "The TLS certificate directory '~/.docker', with none of '--docker-cert-path', \
+             'DOCKER_CERT_PATH', '--docker-config' or 'DOCKER_CONFIG' set, needs a home directory"
+        ),
+        "{error}"
+    );
+    let every_file_named = DockerConnectionOptions {
+        tls_ca_cert: Some(PathBuf::from("/ca.pem")),
+        tls_cert: Some(PathBuf::from("/cert.pem")),
+        tls_key: Some(PathBuf::from("/key.pem")),
+        ..DockerConnectionOptions::default()
+    };
+    let error = flag_tls_settings(&every_file_named, None, "~/.docker")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("--docker-tls-ca-cert: /ca.pem does not exist"),
+        "the directory isn't asked for: {error}"
+    );
+}
+
+/// A named context needs the context store, so with no home and no directory
+/// chosen it is refused naming the context, before anything connects (#846).
+#[test]
+fn with_no_home_a_named_context_is_refused_naming_it() {
+    // `connect` reads these from the environment, and either would choose a
+    // directory of its own or be checked first.
+    if ["DOCKER_CONFIG", "DOCKER_CERT_PATH"]
+        .iter()
+        .any(|variable| std::env::var_os(variable).is_some())
+    {
+        return;
+    }
+    let _no_home = crate::user::without_home();
+    let options = DockerConnectionOptions {
+        context: Some("remote".to_string()),
+        ..DockerConnectionOptions::default()
+    };
+    let error = format!("{:#}", connect(&options).unwrap_err());
+    assert!(
+        error.starts_with(
+            "Docker context 'remote', with neither '--docker-config' nor 'DOCKER_CONFIG' set, \
+             needs a home directory"
+        ),
+        "{error}"
+    );
+}
+
+/// [`docker_cert_directory`]'s answer where it finds a directory.
+fn found_cert_directory(
+    options: &DockerConnectionOptions,
+    docker_cert_path_env: Option<&str>,
+    docker_config_env: Option<&str>,
+) -> (PathBuf, String) {
+    let (directory, named_by) =
+        docker_cert_directory(options, docker_cert_path_env, docker_config_env).unwrap();
+    (directory.unwrap(), named_by)
 }

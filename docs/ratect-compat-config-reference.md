@@ -448,7 +448,8 @@ For a `local` mount, `local` (the host path) is resolved:
   an expression is written as an object. (`ratect.toml` interpolates both forms.)
 - A leading `~` is then expanded to the host user's home directory — `$HOME` when
   it is set and absolute, else the passwd entry's, as for the Docker CLI — so
-  `~/.cache/tool` mounts the real cache directory. Only a whole leading `~`
+  `~/.cache/tool` mounts the real cache directory. With no home from either, the
+  path is refused. Only a whole leading `~`
   *component* expands: `~user/…` (another user's home) isn't supported, and a `~`
   anywhere but the front is a literal character. Note that a bare `~` must be
   quoted (`local: "~"`) — unquoted, YAML reads it as null.

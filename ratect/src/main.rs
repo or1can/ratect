@@ -1279,7 +1279,14 @@ async fn manage_caches(
         cache_type,
         docker.as_ref(),
         project_directory,
-        ratect_core::cache::shared_cache_root().ok(),
+        // Read only by the directory store, for shared caches.
+        match (cache_type, wanted) {
+            (
+                ratect_core::cache::CacheType::Directory,
+                None | Some(ratect_core::config::CacheScope::Shared),
+            ) => ratect_core::cache::shared_cache_root()?,
+            _ => None,
+        },
     )?;
     let found = store.list(wanted).await?;
 

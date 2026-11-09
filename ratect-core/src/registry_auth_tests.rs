@@ -206,7 +206,7 @@ fn unique_temp_dir() -> std::path::PathBuf {
 #[tokio::test]
 async fn a_missing_config_file_resolves_as_nothing_configured() {
     let config_directory = unique_temp_dir();
-    let resolver = DockerCredentialHelperResolver::new(config_directory.clone());
+    let resolver = DockerCredentialHelperResolver::new(Some(config_directory.clone()));
 
     // Cleanup runs before either fallible step below is unwrapped, so a
     // regression that makes `resolve()` return `Err` can't leak the temp
@@ -225,7 +225,7 @@ async fn a_missing_config_file_resolves_as_nothing_configured() {
 async fn an_empty_config_file_resolves_as_nothing_configured() {
     let config_directory = unique_temp_dir();
     std::fs::write(config_directory.join("config.json"), "{}").unwrap();
-    let resolver = DockerCredentialHelperResolver::new(config_directory.clone());
+    let resolver = DockerCredentialHelperResolver::new(Some(config_directory.clone()));
 
     let result = resolver.resolve("myregistry.example.com").await;
     std::fs::remove_dir_all(config_directory).ok();
@@ -318,4 +318,15 @@ async fn listing_a_store_fails_for_a_helper_that_fails_or_answers_nonsense() {
     assert!(failed.contains("the keychain is locked"), "{failed}");
     assert!(unparsed.is_err());
     assert!(missing.is_err());
+}
+
+/// No config directory at all (a host user with no home) is nothing configured.
+#[tokio::test]
+async fn no_config_directory_resolves_as_nothing_configured() {
+    let resolver = DockerCredentialHelperResolver::new(None);
+    assert!(resolver
+        .resolve("myregistry.example.com")
+        .await
+        .unwrap()
+        .is_none());
 }

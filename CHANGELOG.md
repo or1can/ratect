@@ -53,6 +53,10 @@ history, from when it was the only binary.
 - **ratect only:** The error for a native-only field on a Git include entry in a `.yml` a YAML root reaches no longer suggests a TOML file that root would refuse.
 - The home directory is `$HOME` when it is set and absolute, else the passwd entry's. Where the two differ, `~/.docker`, `~/.ratect` (shared caches, Git includes) and `~` in a path follow `$HOME`: caches rebuild and Git includes re-clone there, and the old ones under the passwd entry's home stay until removed by hand. Run as root with another user's `$HOME` (`sudo -E`), Ratect writes root-owned entries under that user's `~/.ratect`, as the Docker CLI does under `~/.docker`.
 
+### Fixed
+
+- A host user with no home — no passwd entry and `HOME` unset or not absolute, as under a numeric `docker run -u` — can run tasks: Ratect connects with no Docker config directory, `ratect includes` (ratect only) finds no Git includes and `ratect caches` (ratect only) no shared directory caches, and only what needs a home (`~` in a path, a shared directory cache, a Git include, a named Docker context or TLS certificates from `~/.docker`) is refused, naming it.
+
 ## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
 
 ### Breaking

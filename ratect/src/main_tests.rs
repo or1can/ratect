@@ -26,7 +26,7 @@ fn the_cli_definition_is_internally_valid() {
 /// the cases; this proves the options go through it.
 #[test]
 fn resolves_the_config_path_options() {
-    let home = ratect_core::user::home_directory().unwrap();
+    let home = ratect_core::user::home().unwrap().unwrap();
     let cli = Cli::try_parse_from([
         "ratect",
         "run",
@@ -50,7 +50,7 @@ fn resolves_the_config_path_options() {
 /// resolves a path (ratect#437).
 #[test]
 fn resolves_the_docker_directory_options() {
-    let home = ratect_core::user::home_directory().unwrap();
+    let home = ratect_core::user::home().unwrap().unwrap();
     let cli = Cli::try_parse_from([
         "ratect",
         "run",

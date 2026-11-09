@@ -42,7 +42,10 @@ is used, as in Batect. The Docker CLI takes the two variables as written. Your h
 directory, here and for `~/.docker`, is `$HOME` when it is set and absolute, else
 your passwd entry's: the Docker CLI's rule, so Ratect reads the `~/.docker` that
 `docker login` writes to. The Docker CLI also takes a relative `$HOME`; Ratect
-doesn't.
+doesn't. With no home from either, as under a numeric `docker run -u` with `HOME`
+unset, there is no `~/.docker`: Ratect connects with no stored credentials, and
+refuses a named context or TLS that would read its certificates from there
+unless `--docker-config` or `DOCKER_CONFIG` names a directory instead.
 
 ## TLS through the options
 

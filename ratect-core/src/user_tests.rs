@@ -701,3 +701,19 @@ fn chosen_home_asks_the_passwd_entry_only_without_home() {
         "lookup failed"
     );
 }
+
+/// A host user with no home has none to give, and a caller that needs one refuses
+/// naming itself and both places a home is looked for (#846).
+#[test]
+fn with_no_home_a_caller_that_needs_one_refuses_naming_itself() {
+    let _no_home = without_home();
+    assert_eq!(home().unwrap(), None);
+    let uid = current_owner().unwrap().uid;
+    assert_eq!(
+        home_directory("'~' in path '~/x'").unwrap_err().to_string(),
+        format!(
+            "'~' in path '~/x' needs a home directory, and neither HOME nor a passwd entry for \
+             uid {uid} gives one"
+        )
+    );
+}

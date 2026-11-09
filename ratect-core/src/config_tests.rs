@@ -3778,7 +3778,7 @@ fn evaluate_path_makes_relative_path_absolute() {
 /// `local: ~/.cache/trivy` obviously intends.
 #[test]
 fn evaluate_path_expands_a_leading_tilde_to_the_home_directory() {
-    let home = crate::user::home_directory().unwrap();
+    let home = crate::user::home().unwrap().unwrap();
     for (path, expected) in [
         ("~/.cache/trivy", home.join(".cache/trivy")),
         ("~", home.clone()),
@@ -3804,7 +3804,7 @@ fn evaluate_path_expands_a_leading_tilde_to_the_home_directory() {
 /// later `~` are left alone.
 #[test]
 fn resolve_option_path_expands_a_leading_tilde_and_normalises_lexically() {
-    let home = crate::user::home_directory().unwrap();
+    let home = crate::user::home().unwrap().unwrap();
     for (given, expected) in [
         ("~/x.yml", home.join("x.yml")),
         ("~", home.clone()),
@@ -10751,7 +10751,7 @@ include:
 /// steered.
 fn absent_from_home(dir: &Path, extension: &str) -> (String, PathBuf) {
     let name = format!("{}.{extension}", dir.file_name().unwrap().to_string_lossy());
-    let in_home = crate::user::home_directory().unwrap().join(&name);
+    let in_home = crate::user::home().unwrap().unwrap().join(&name);
     assert!(!in_home.exists(), "{} must not exist", in_home.display());
     (name, in_home)
 }
@@ -11304,7 +11304,7 @@ async fn a_vouched_for_git_include_may_use_host_paths() {
         .expect("a vouched-for bundle's host path should be allowed");
 
     let volume = expect_local(&loaded.config.containers["trivy"].volumes.as_ref().unwrap()[0]);
-    let home = crate::user::home_directory().unwrap();
+    let home = crate::user::home().unwrap().unwrap();
     assert_eq!(
         volume.local,
         home.join(".cache/trivy").display().to_string()
@@ -15002,7 +15002,7 @@ async fn a_batect_format_object_volume_host_path_is_still_an_expression() {
         expect_local(&volumes[0]).local,
         dir.join("set/x").display().to_string()
     );
-    let home = crate::user::home_directory().unwrap();
+    let home = crate::user::home().unwrap().unwrap();
     assert_eq!(
         expect_local(&volumes[1]).local,
         home.join(".cache/tool").display().to_string()
@@ -19265,4 +19265,17 @@ async fn identity_is_inherited_through_extends() {
     };
     assert_eq!(home("inherits"), "/home/base");
     assert_eq!(home("replaces"), "/home/own");
+}
+
+/// With no home a leading `~` is refused naming the path, and any other path is
+/// untouched (#846).
+#[test]
+fn with_no_home_a_leading_tilde_is_refused_naming_the_path() {
+    let _no_home = crate::user::without_home();
+    let error = expand_home_directory("~/x").unwrap_err().to_string();
+    assert!(
+        error.starts_with("'~' in path '~/x' needs a home directory"),
+        "{error}"
+    );
+    assert_eq!(expand_home_directory("a/~").unwrap(), None);
 }

@@ -10000,7 +10000,7 @@ fn a_tilde_in_docker_cert_path_is_the_home_directory() {
         .output()
         .expect("failed to run ratect");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let home = ratect_core::user::home_directory().unwrap();
+    let home = ratect_core::user::home().unwrap().unwrap();
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(&format!(
