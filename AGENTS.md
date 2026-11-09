@@ -258,7 +258,10 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   so a bump of the hook moves CI with it; runs the checks against the PR's
   base branch, which covers the PR's whole change; and fails on a gate
   finding, or on an advisory finding that is neither fixed nor marked checked
-  (`--fail-on-unmarked`, CI's alone: the hook still lets a commit through).
+  (`--fail-on-unmarked`; the commit hook still lets a commit through). A
+  `pre-push` hook runs the same checks over the branch from its merge-base
+  with `origin/main`, with your own grants, so its unmarked count is the
+  one to quote when sizing a PR's claims work.
   So a PR resolves the findings it brings in, and whoever batches Renovate's
   changes marks what those bring in. It writes its own `claims.local.toml` with the grant list
   above, so **a new `<!-- verify: -->` marker's command goes in that job
@@ -515,9 +518,11 @@ for — note that in `TODO.md` instead.
     --format='%h %(trailers:only)' origin/main..HEAD` — rather than finding
     out from a required status.
 14. **Architecture Decision Records** ([`decisions/`](decisions/)): the home for a decision's rationale is decided by whether it's **cross-cutting or version-scoped**. A decision referenced from more than one place — the two-binary split, the labels namespace, the native config format — becomes an ADR — a new `decisions/NNNN-slug.md`<!-- example --> file (`NNNN` the next number in sequence) with `Status`, `Context`, `Decision`, `Alternatives considered`, and `Consequences` sections; `RELEASES.md`'s own entry for that release then just links to it, same as it links to the release's Milestone. A decision that belongs to one release stays **inline** in that release's own GitHub issue (its "Implementation Decisions" section — see [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md)) — don't extract it. Practical trigger: a decision earns an ADR the moment it's about to be referenced from a *second* place; most never cross that line. ADRs are append-only like the versioned lists once the release implementing them ships — supersede and link forward, never delete; before that, a refinement found while implementing one is folded into the record, its status line saying what changed and naming the rework issue, which goes in the same Milestone. See [`decisions/README.md`](decisions/README.md) for the full convention.
-15. **Review before committing, not after.** Run a review pass over the working
-    diff (`/code-review`) *before* each commit, not over a run of commits
-    afterwards. The checks below have each caught something a review missed:
+15. **Review before committing, not after.** Run `/ready` over the working
+    diff *before* each commit, not over a run of commits afterwards, and
+    before reporting work as done: it runs whichever of the bug review and
+    the two-axis review hasn't covered the change yet. The checks below have
+    each caught something a review missed:
     - **Anchor an inserted item on the preceding item's closing brace, never on
       the new one's attributes.** A Rust item's doc comment sits *above* its
       `#[test]`/`#[derive]` attributes, so anchoring there splices the new item
@@ -626,6 +631,12 @@ for — note that in `TODO.md` instead.
       then write it down here. Standing method — **stage explicit paths, never
       `-A`, whenever more than one commit is planned, and rebuild a mis-split
       pair with `reset --soft` rather than `--amend` or an interactive rebase.**
+      Where a slip is mechanical, the method is a check rather than a rule:
+      `.claude/settings.json` makes an amend, force-push, rebase or hard
+      reset ask first and denies `--no-verify`, and
+      `.claude/hooks/unfiltered-check-output.py` refuses a check piped
+      straight into a filter. Both read the command as typed, so they catch
+      a slip, not a workaround.
     - **Not every finding is a class, and saying so is part of the job.**
 
 ## Agent skills
@@ -646,6 +657,12 @@ Default canonical label strings, unchanged. See `agents/triage-labels.md`.
 
 Single-context: `CONTEXT.md` at the repo root; ADRs in `decisions/` (this
 repo's own established location, not `docs/adr/`). See `agents/domain.md`.
+
+### Probing daemon classes
+
+Before saying a daemon class (rootful Linux, rootless, userns-remap) can't
+be probed or tested on this machine, read `agents/probing.md`: each one
+runs on a Mac.
 
 ### User docs
 

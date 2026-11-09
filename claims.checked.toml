@@ -12554,15 +12554,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "402eaf75ff1b6cd32de1c96af5d68f59bd015ab7", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "decisions/README.md" = "a2b68a7218003c7a" }
 
 [[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read against .claude/settings.json, claims.toml, tools/ and ci.yml; the docs glob and Tools Tests wording taken as true when written, since claims.toml explains the first and the job later gained a script."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/settings.json" = "082465644ff79ed5", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
-
-[[mark]]
 file = "decisions/0005-build-ssh-keyring-placement.md"
 mode = "stale-claims"
 unit = "ea7792a26f405e2a"
@@ -12986,15 +12977,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "book.toml" = "5a546a3c21f8110a", "docs/demo.cast" = "dea031efbde9ac70", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/ratect-cli.md" = "91b2508b03407238", "docs/ratect-config-reference.md" = "3c31ef3599e9d609", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "4079a8c3c3045bdb", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "3628b23e963ecddb" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "acec0e5a5304cd93"
-copies = 1
-note = "Read the Tests paragraph: ratect/tests/cli.rs still carries its own ignored Docker tests, now one more, and the claims about config.rs and ROADMAP.md are unchanged."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".cargo/audit.toml" = "38865a10b6f80f7f", ".claude/settings.json" = "082465644ff79ed5", ".github/workflows/ci.yml" = "c4278bfd7532e0c5", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "decisions/0009-adopt-claims-plugin.md" = "5ec619eaa95ba122", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ab59178e15a2786f", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "dba3cf62ecb47a33", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
-
-[[mark]]
 file = "decisions/0011-container-identity.md"
 mode = "restatement-ngram"
 unit = "eb56122059f60b6b-f82b73d77ab92f0a"
@@ -13355,42 +13337,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "98373719d4e0e1fcd232c7e4356bf41216e3910c", "ROADMAP.md" = "b2bfb89c20e69299", "agents/docs.md" = "2dd3d49fca72d0d0" }
 
 [[mark]]
-file = "decisions/0007-where-agent-process-docs-live.md"
-mode = "stale-claims"
-unit = "163356029bb73ffc"
-copies = 1
-note = "Read the section: it describes alternatives for placing agent-process docs; this diff adds a docs page, an example and a worked-examples CI section, and changes nothing that section states."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "98373719d4e0e1fcd232c7e4356bf41216e3910c", "CLAUDE.md" = "5a9f277effcbe708", "ROADMAP.md" = "b2bfb89c20e69299", "agents/domain.md" = "befc2eb13561a492" }
-
-[[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read the section: it describes the claims plugin adoption's consequences; this diff adds a docs page, an example and a worked-examples CI section, and changes nothing that section states."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "1ad2fb0cde23923f", "TODO.md" = "8be54d0760d3fb97", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
-
-[[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read the section: it describes the cargo-dist release pipeline; this diff adds a docs page, an example and a worked-examples CI section, and changes nothing that section states."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "1ad2fb0cde23923f", ".github/workflows/release.yml" = "0a212b498601f490", "CHANGELOG.md" = "98373719d4e0e1fcd232c7e4356bf41216e3910c", "dist-workspace.toml" = "00b7f7edb35b372b", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
-
-[[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read the section: it describes release-pipeline consequences, not the worked-examples job; this diff adds a docs page, an example and a worked-examples CI section, and changes nothing that section states."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "1ad2fb0cde23923f", ".github/workflows/release.yml" = "0a212b498601f490", "dist-workspace.toml" = "00b7f7edb35b372b", "docs/installation.md" = "c1490b152407630e" }
-
-[[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "4ca303a3bf7ddf7b"
@@ -13436,10 +13382,145 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".github/workflows/ci.yml" = "1ad2fb0cde23923f", ".github/workflows/release.yml" = "0a212b498601f490", "CHANGELOG.md" = "98373719d4e0e1fcd232c7e4356bf41216e3910c", "ROADMAP.md" = "b2bfb89c20e69299", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "c233b89f0025ba63", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "a2b68a7218003c7a", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "82e4d7074d22afe6", "ratect-core/src/docker.rs" = "c3ae6047e0978014", "ratect-core/src/engine.rs" = "e1bdfc3d93699046", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
 
 [[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "2e247e0d74261020"
+copies = 1
+note = "The pre-push entry in .pre-commit-config.yaml runs claims.cli with --diff-range origin/main...HEAD --fail-on-unmarked, the same checks and failure mode as ci.yml's claims job; the differences (local origin/main, own grants) are stated in the sentence. Ran it: 16 findings over this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "2e247e0d74261020"
+copies = 1
+note = "Same reading: one pre-push entry, one unmarked count; checked against .pre-commit-config.yaml and a run of the hook."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "791add7a54ab4ffb"
+copies = 1
+note = "Checked against .claude/settings.json: ask covers commit --amend, push --force/-f, rebase, reset --hard; deny covers --no-verify. Hook file refuses a check piped into a filter (tools/test_unfiltered_check_output.py)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "dfcf0f3261d36400"
+copies = 1
+note = "Each of the three classes has a method in agents/probing.md, each taken from a run recorded on ratect#813 (#236 rootful, #237 rootless and userns-remap)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "agents/probing.md" = "5221be5b17b67381" }
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-counts"
+unit = "a4593fc3e2ebfe3b"
+copies = 1
+note = "From ratect#813's #816 note: rootful captures were run as a runner user, uid 1001, to match the GitHub runner."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-counts"
+unit = "bd1b6452b88bb6d1"
+copies = 1
+note = "The list that follows has exactly two items."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-counts"
+unit = "f75352de9e8f8ab8"
+copies = 1
+note = "About 40 lines is from ratect#813's #237 note; rootless and userns-remap follow from daemon_class::classify, which checks name=rootless and name=userns before host OS or transport."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-about-elsewhere"
+unit = "c08a88589ed8952d"
+copies = 1
+note = "Checked against daemon_class.rs: Transport::of_host makes tcp:// Network, and classify returns Desktop only for macos/windows over LocalSocket, else RootfulLinux when no rootless/userns option is reported."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-totalising"
+unit = "8c3dcd34cfa25021"
+copies = 1
+note = "From ratect#813's #237 (#820) note: every read and write in the first run failed, root's included, because of $$, and those were the failures expected from a remapped daemon."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Decision section read: it records enabling the plugin in .claude/settings.json and the original PreToolUse gate; the Status line already says the mechanism moved and defers the current setup to AGENTS.md. This branch adds permissions and a hook to settings.json and a pre-push stage, which the accepted, append-only record doesn't describe or contradict."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+
+[[mark]]
+file = "decisions/0007-where-agent-process-docs-live.md"
+mode = "stale-claims"
+unit = "163356029bb73ffc"
+copies = 1
+note = "Alternatives section read: \".claude/ (currently settings.json/settings.local.json)\" was true when written; this branch adds .claude/hooks and .claude/skills, both Claude-Code-specific, which is what the section says .claude/ is for. Accepted ADR, left as written."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "6012fa92b60273fc7c25731881bf9c3cc76c0d0d", "CLAUDE.md" = "a81adf19d7d98611", "ROADMAP.md" = "b2bfb89c20e69299", "agents/domain.md" = "befc2eb13561a492" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Consequences section read: it describes the original PreToolUse gate and no CI coverage, both superseded per the Status line; this branch's ci.yml change is a comment in the claims job. No edit to an accepted record."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "07c50de44362f126", "TODO.md" = "8be54d0760d3fb97", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Decision section read: its ci.yml and CHANGELOG.md claims are about dist-plan and release notes; this branch changes only a comment in ci.yml's claims job and adds contributor-tooling entries."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "07c50de44362f126", ".github/workflows/release.yml" = "0a212b498601f490", "CHANGELOG.md" = "6012fa92b60273fc7c25731881bf9c3cc76c0d0d", "dist-workspace.toml" = "00b7f7edb35b372b", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Consequences section read: its ci.yml, release.yml and installation.md claims concern the release pipeline, which this branch doesn't touch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "07c50de44362f126", ".github/workflows/release.yml" = "0a212b498601f490", "dist-workspace.toml" = "00b7f7edb35b372b", "docs/installation.md" = "c1490b152407630e" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "acec0e5a5304cd93"
+copies = 1
+note = "Tooling & CI read for what this branch moved: the plugin is still enabled in .claude/settings.json (enabledPlugins unchanged), the pre-commit hook text still holds, and the new pre-push sentence was read separately."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "38865a10b6f80f7f", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "07c50de44362f126", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "8be54d0760d3fb97", "decisions/0009-adopt-claims-plugin.md" = "5ec619eaa95ba122", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "f340e601b23bf6cb", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ab59178e15a2786f", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "dba3cf62ecb47a33", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+
+[[mark]]
 file = "decisions/0001-two-binaries.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read the section: it describes the two-binary split's consequences; this diff adds a docs page, an example and a worked-examples CI section, and changes nothing that section states."
+note = "Consequences read for CHANGELOG.md: the marker convention it describes holds; this branch's entries carry no marker because they apply to neither binary's behaviour, as other contributor-tooling entries do."
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "98373719d4e0e1fcd232c7e4356bf41216e3910c", "CLAUDE.md" = "5a9f277effcbe708" }
+subjects = { "CHANGELOG.md" = "6012fa92b60273fc7c25731881bf9c3cc76c0d0d", "CLAUDE.md" = "a81adf19d7d98611" }

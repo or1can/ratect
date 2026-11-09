@@ -36,6 +36,11 @@ Documentation is checked on every commit by the
 pre-commit install
 ```
 
+That installs a `pre-push` hook too, which runs CI's claims checks over
+the branch and refuses a push with an unmarked finding, as CI's `claims`
+job would. A clone with only the `pre-commit` hook installed needs
+`pre-commit install` run again to add it.
+
 ## Conventions
 
 - **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/)

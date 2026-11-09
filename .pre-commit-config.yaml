@@ -7,8 +7,23 @@
 # Pinned to a release tag, as `claims`' own installation guide asks, so an
 # upstream change starts deciding this repo's commits only once a bump
 # lands here — Renovate proposes those (`renovate.json5`'s `pre-commit`).
+#
+# A second entry runs CI's claims command before each push, failing on an
+# advisory finding that is neither fixed nor marked checked. The commit
+# hook's list covers only that commit, so it can't size a PR's claims work
+# (ratect#813). This run comes close to CI's, not equal to it: it diffs the
+# checked-out branch from its merge-base with the local `origin/main`, as
+# fresh as the last fetch, and reads this clone's own `claims.local.toml`
+# grants, where CI writes its own list.
+default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: https://github.com/or1can/claims
     rev: v0.24.0
     hooks:
       - id: claims
+        stages: [pre-commit]
+      - id: claims
+        alias: claims-unmarked
+        name: claims (branch since origin/main, unmarked findings fail)
+        stages: [pre-push]
+        entry: python -m claims.cli --repo-root . --diff-range origin/main...HEAD --fail-on-unmarked
