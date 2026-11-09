@@ -91,3 +91,4 @@ record refined this way.
 | [0021](0021-native-field-follows-its-file.md) | A native field follows its file, on include entries as on containers | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0022](0022-written-for-refusal-says-what-applies.md) | A written-for refusal says which changes touch the project | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0023](0023-git-include-entry-lock.md) | A Git include's entry lock proves its holder dead, and correctness doesn't depend on it | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
+| [0024](0024-host-identity.md) | Host identity: what Ratect needs from the host user | Accepted — planned (ratect-compat 0.34.0 · ratect 0.13.0) |
