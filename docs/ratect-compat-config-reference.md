@@ -446,7 +446,8 @@ For a `local` mount, `local` (the host path) is resolved:
   string form's host path is used as written, as in Batect: a `$` or `<` in
   `$HOME/.m2:/root/.m2` is just part of a relative path, so a host path that needs
   an expression is written as an object. (`ratect.toml` interpolates both forms.)
-- A leading `~` is then expanded to the host user's home directory, so
+- A leading `~` is then expanded to the host user's home directory — `$HOME` when
+  it is set and absolute, else the passwd entry's, as for the Docker CLI — so
   `~/.cache/tool` mounts the real cache directory. Only a whole leading `~`
   *component* expands: `~user/…` (another user's home) isn't supported, and a `~`
   anywhere but the front is a literal character. Note that a bare `~` must be

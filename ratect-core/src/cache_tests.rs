@@ -547,9 +547,9 @@ fn the_two_scopes_use_prefixes_that_cannot_match_each_other() {
     );
 }
 
-/// The shared directory location, pinned by shape rather than exercised:
-/// `home_directory()` reads the passwd entry rather than `$HOME`, so a test
-/// cannot redirect it without writing into the developer's own home. The
+/// The shared directory location, pinned by shape rather than exercised: the home
+/// follows `$HOME`, which a test can't change for itself alone, so exercising it
+/// here would write into the developer's own home. The
 /// sweep and removal machinery underneath is shared with project-scoped
 /// directory caches and covered by their tests; what is specific here — and
 /// what this pins — is *where* it points.

@@ -887,11 +887,12 @@ fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
     let (doctor, _) = run(&["doctor"]);
 
     let rows = breaking_change_lines(&refusal);
-    assert_eq!(rows.len(), 10, "{refusal}");
+    assert_eq!(rows.len(), 11, "{refusal}");
     for row in &rows {
         let expected = if [
             "a Git bundle is refused",
             "a local include's 'path'",
+            "a home directory",
             "a '\\' in an expression",
             "every '$' or '<'",
         ]
@@ -2415,8 +2416,8 @@ fn project_with_directory_caches(names: &[&str]) -> PathBuf {
 
 /// The default-suite cache tests all pass `--scope project`.
 ///
-/// A shared cache lives under the *real* `~/.ratect/caches` — `home_directory()`
-/// reads the passwd entry, not `$HOME`, so a test cannot redirect it. Without
+/// A shared cache lives under `$HOME/.ratect/caches`, the *real* one, since these
+/// tests leave `HOME` as it is. Without
 /// the flag these tests would read, and one would remove, a developer's own
 /// shared caches: a machine with `~/.ratect/caches/npm-cache` saw this suite
 /// delete it. Scoping them says what they are actually about, which is a
@@ -2430,9 +2431,8 @@ fn caches_command(project: &Path) -> Command {
 /// Requires a real Docker daemon. Run with `cargo test -- --ignored`.
 ///
 /// The shared half of `caches`, which only volumes can exercise: a shared
-/// cache's directory form lives under the real `~/.ratect/caches`, and
-/// `home_directory()` reads the passwd entry rather than `$HOME`, so a test
-/// cannot redirect it without writing into the developer's own home.
+/// cache's directory form lives under `$HOME/.ratect/caches`, which this test
+/// leaves as the developer's own.
 ///
 /// Covers the scope column, the `--scope` filter, and the case the column
 /// exists for — one name in both scopes, which `clean` must refuse rather

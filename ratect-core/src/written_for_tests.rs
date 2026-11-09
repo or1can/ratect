@@ -529,6 +529,73 @@ fn the_home_directory_row_finds_nothing_the_change_leaves_alone() {
     assert_eq!(includes_from_home_directory(&files), []);
 }
 
+/// The `$HOME` row's detector (#845): a local include or a host path whose first
+/// component is `~`, in each host-path field, and nothing else.
+#[test]
+fn the_home_first_row_finds_each_path_starting_with_a_tilde() {
+    let files = [
+        toml_file("include", "include = [\"~/shared.toml\"]\n"),
+        toml_file(
+            "volume",
+            "[containers.a]\nimage = \"i\"\nvolumes = [\"~/.m2:/root/.m2\"]\n",
+        ),
+        toml_file(
+            "local",
+            "[containers.a]\nimage = \"i\"\nvolumes = [{ local = \"~/.m2\", container = \"/m2\" }]\n",
+        ),
+        toml_file(
+            "build",
+            "[containers.a]\nbuild_directory = \"~/images/a\"\n",
+        ),
+        toml_file(
+            "secret",
+            "[containers.a]\nbuild_directory = \"a\"\nbuild_secrets = { s = { path = \"~/s\" } }\n",
+        ),
+        toml_file(
+            "ssh",
+            "[containers.a]\nbuild_directory = \"a\"\nbuild_ssh = [{ id = \"d\", paths = [\"~/.ssh/id\"] }]\n",
+        ),
+        toml_file(
+            "dotted",
+            "[containers.\"app.web\"]\nimage = \"i\"\nvolumes = [\"~/.m2:/root/.m2\"]\n",
+        ),
+        toml_file(
+            "reference",
+            "[containers.a]\nimage = \"i\"\nvolumes = [\"<tools:/tools\"]\n",
+        ),
+        toml_file(
+            "escaped",
+            "[containers.a]\nimage = \"i\"\nvolumes = [\"\\\\~/data:/data\"]\n",
+        ),
+        toml_file(
+            "lookalike",
+            "[containers.\"a.build_secrets\"]\nimage = \"i\"\nenvironment = { \"x.path\" = \"~/x\" }\n",
+        ),
+        toml_file(
+            "untouched",
+            "include = [\"~user/x.toml\"]\n[containers.a]\nimage = \"i\"\n\
+             volumes = [\"a/~/b:/b\"]\nenvironment = { HOME = \"~/x\" }\n",
+        ),
+    ];
+    let found: Vec<(String, String)> = paths_from_home_directory(&files)
+        .into_iter()
+        .map(|hit| (hit.file, hit.field))
+        .collect();
+    let expected = [
+        ("include", "include"),
+        ("volume", "containers.a.volumes"),
+        ("local", "containers.a.volumes"),
+        ("build", "containers.a.build_directory"),
+        ("secret", "containers.a.build_secrets.s.path"),
+        ("ssh", "containers.a.build_ssh.paths"),
+        ("dotted", "containers.app.web.volumes"),
+        ("reference", "containers.a.volumes"),
+        ("escaped", "containers.a.volumes"),
+    ]
+    .map(|(file, field)| (file.to_string(), field.to_string()));
+    assert_eq!(found, expected);
+}
+
 /// decisions/0022: the bundle row and the rows changing what a value means
 /// are detected; every other row only fails the load.
 #[test]
@@ -538,6 +605,7 @@ fn every_row_in_the_real_table_declares_how_it_is_checked() {
         "every '$' or '<'",
         "a local include's 'path'",
         "a Git bundle",
+        "a home directory",
     ];
     for row in BREAKING_CHANGES {
         let expected = if detected.iter().any(|start| row.summary.starts_with(start)) {

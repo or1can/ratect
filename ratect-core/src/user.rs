@@ -27,7 +27,7 @@
 //! editing is never decoded, reflowed or re-terminated.
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The host user Ratect itself is running as — looked up once per
 /// `run_as_current_user`-enabled container (see
@@ -102,21 +102,37 @@ fn only_on_unix(asked_by: &str) -> anyhow::Error {
     anyhow::anyhow!("{asked_by} is only supported on Unix hosts")
 }
 
-/// The current host user's home directory — used to anchor the Git include
-/// cache (`~/.ratect/incl`, see `git_include.rs`). Unix-only, same rationale
-/// as `current_user` above; deliberately not `$HOME` (which a user could
-/// override to something inconsistent with their actual passwd entry) —
-/// looked up the same way `current_user` looks up everything else.
+/// The current host user's home directory: an absolute `$HOME`, else the passwd
+/// entry's (decisions/0024). The Docker CLI's rule, so Ratect's `~/.docker` is the
+/// one `docker login` wrote, and the home can be overridden. Anchors `~/.docker`,
+/// `~/.ratect` and `~` in a path. Unix-only, same rationale as `current_user`.
 #[cfg(unix)]
 pub fn home_directory() -> Result<PathBuf> {
     use nix::unistd::{Uid, User};
 
     let uid = Uid::current();
-    let user = User::from_uid(uid)
-        .context("Failed to look up the current user")?
-        .with_context(|| format!("No passwd entry found for the current user (uid {uid})"))?;
+    chosen_home(std::env::var_os("HOME"), || {
+        Ok(User::from_uid(uid)
+            .context("Failed to look up the current user")?
+            .map(|user| user.dir))
+    })?
+    .with_context(|| format!("No home directory: HOME is unset, empty or not absolute, and uid {uid} has no passwd entry with an absolute home"))
+}
 
-    Ok(user.dir)
+/// The home given `home`, the value of `$HOME`, and `passwd_home`, the passwd
+/// entry's, asked only when `home` is unset, empty or not absolute. The Docker CLI
+/// takes a relative `$HOME` as written, but every use here builds an absolute path
+/// from the home, so a relative one counts as unset, and so does a passwd entry's.
+/// `None` is no home from either.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn chosen_home(
+    home: Option<std::ffi::OsString>,
+    passwd_home: impl FnOnce() -> Result<Option<PathBuf>>,
+) -> Result<Option<PathBuf>> {
+    match home.filter(|home| Path::new(home).is_absolute()) {
+        Some(home) => Ok(Some(PathBuf::from(home))),
+        None => Ok(passwd_home()?.filter(|home| home.is_absolute())),
+    }
 }
 
 #[cfg(not(unix))]

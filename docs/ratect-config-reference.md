@@ -117,8 +117,8 @@ Each change's outcome depends on how it can be checked:
   has a check.
 
 So for the project above, every change is ruled out: it loads, and declares
-no Git include, no local include starting with `~`, and no expression a
-change reads differently. Once you've read the changes and agree, set
+no Git include, no local include starting with `~`, no host path starting with
+`~`, a reference or an escape, and no expression a change reads differently. Once you've read the changes and agree, set
 `ratect_version` to 0.13.0 and it loads.
 
 `ratect doctor` and `ratect config validate` report a refusal the same way:

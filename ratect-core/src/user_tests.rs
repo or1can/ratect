@@ -639,3 +639,65 @@ fn path_owner_reads_a_paths_owner_and_follows_a_link() {
     assert_eq!(path_owner(&directory.join("missing")), None);
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+/// A non-empty `$HOME` is the home, as in the Docker CLI, and the passwd entry is
+/// asked only without one (#845).
+#[test]
+fn chosen_home_is_home_first_then_the_passwd_entry() {
+    let cases = [
+        (
+            "HOME set: it wins",
+            Some("/home/env"),
+            Some("/home/passwd"),
+            Some("/home/env"),
+        ),
+        (
+            "HOME relative: counts as unset",
+            Some("env"),
+            Some("/home/passwd"),
+            Some("/home/passwd"),
+        ),
+        ("HOME '?', JDK 11's: counts as unset", Some("?"), None, None),
+        (
+            "HOME set, no passwd entry",
+            Some("/home/env"),
+            None,
+            Some("/home/env"),
+        ),
+        (
+            "HOME empty: counts as unset",
+            Some(""),
+            Some("/home/passwd"),
+            Some("/home/passwd"),
+        ),
+        (
+            "HOME unset: the passwd entry",
+            None,
+            Some("/home/passwd"),
+            Some("/home/passwd"),
+        ),
+        ("neither: no home", None, None, None),
+        ("passwd home relative: no home", None, Some("rel"), None),
+        ("passwd home empty: no home", None, Some(""), None),
+    ];
+    for (name, home, passwd, expected) in cases {
+        let chosen = chosen_home(home.map(std::ffi::OsString::from), || {
+            Ok(passwd.map(PathBuf::from))
+        });
+        assert_eq!(chosen.unwrap(), expected.map(PathBuf::from), "{name}");
+    }
+}
+
+/// A failing passwd lookup fails only when it is the source asked.
+#[test]
+fn chosen_home_asks_the_passwd_entry_only_without_home() {
+    let failing = || Err(anyhow::anyhow!("lookup failed"));
+    assert_eq!(
+        chosen_home(Some("/home/env".into()), failing).unwrap(),
+        Some(PathBuf::from("/home/env"))
+    );
+    assert_eq!(
+        chosen_home(None, failing).unwrap_err().to_string(),
+        "lookup failed"
+    );
+}

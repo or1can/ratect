@@ -263,6 +263,15 @@ Beyond any one flag:
 Batect behavior not implemented in task execution, beyond what's covered by the field
 tables above:
 
+- **The home directory is `$HOME` first**, when it is set and absolute, then the
+  passwd entry's, as in the Docker CLI. Batect uses the JVM's `user.home`, which is
+  the passwd entry's whenever there is one, so where it and `$HOME` differ Batect
+  reads a different `~/.docker` from the one `docker login` wrote, and the
+  credentials and contexts there go missing. It also expands `~` in a path to that
+  directory, where a shell would use `$HOME`. With no passwd entry, `user.home`
+  depends on the JDK: `$HOME` on Java 21, `?` on Java 11. Not copied, as a Batect
+  bug, under [0013](../decisions/0013-when-ratect-compat-copies-batect.md)'s rule 3.
+
 - **Cleanup on a termination signal (Ctrl+C, `SIGTERM`, `SIGHUP`)**: four deliberate
   differences from Batect, which traps `SIGINT` only:
 
