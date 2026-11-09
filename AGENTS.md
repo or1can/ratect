@@ -629,6 +629,12 @@ for — note that in `TODO.md` instead.
       then write it down here. Standing method — **stage explicit paths, never
       `-A`, whenever more than one commit is planned, and rebuild a mis-split
       pair with `reset --soft` rather than `--amend` or an interactive rebase.**
+      Where a slip is mechanical, the method is a check rather than a rule:
+      `.claude/settings.json` makes an amend, force-push, rebase or hard
+      reset ask first and denies `--no-verify`, and
+      `.claude/hooks/unfiltered-check-output.py` refuses a check piped
+      straight into a filter. Both read the command as typed, so they catch
+      a slip, not a workaround.
     - **Not every finding is a class, and saying so is part of the job.**
 
 ## Agent skills
