@@ -214,7 +214,12 @@ jobs:
       # (ratect-compat/tests/conformance/) — the drop-in-replacement proof —
       # and `--test volume_cleanup`, one daemon-global test kept in its own
       # binary so it runs with exclusive Docker access (see that file).
+      # The runner has passwordless sudo and `setpriv`, so a test that runs
+      # Ratect as a host user with no passwd entry must run here, not skip
+      # (ratect/tests/support/unnamed_host_user.rs).
       - run: cargo test --workspace --test cli --test conformance --test volume_cleanup -- --ignored
+        env:
+          RATECT_REQUIRE_UNNAMED_HOST_USER: "1"
 
   # `docs/worked-examples.md` `{{#include}}`s each project's `ratect.toml`/
   # `batect.yml` directly rather than a copy pasted into the doc, so the
