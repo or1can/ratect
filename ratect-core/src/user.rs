@@ -246,12 +246,17 @@ fn chosen_home(
 /// (i.e. Ratect itself is running as root), there's only one `root` entry
 /// (using the configured `home_directory` as its home) rather than two
 /// conflicting ones.
+///
+/// Each generated file ends its last line, which Batect's don't: musl libc
+/// (alpine's) reads an unterminated last line one character short, so every
+/// program there would see the shell as `/bin/s` and the group's member a letter
+/// short.
 pub fn generate_passwd_file(user: &NamedUser, home_directory: &str) -> String {
     if user.uid == 0 {
-        format!("root:x:0:0:root:{home_directory}:/bin/sh")
+        format!("root:x:0:0:root:{home_directory}:/bin/sh\n")
     } else {
         format!(
-            "root:x:0:0:root:/root:/bin/sh\n{}:x:{}:{}:{}:{}:/bin/sh",
+            "root:x:0:0:root:/root:/bin/sh\n{}:x:{}:{}:{}:{}:/bin/sh\n",
             user.username, user.uid, user.gid, user.username, home_directory
         )
     }
@@ -261,10 +266,10 @@ pub fn generate_passwd_file(user: &NamedUser, home_directory: &str) -> String {
 /// `generateShadowFile`.
 pub fn generate_shadow_file(user: &NamedUser) -> String {
     if user.uid == 0 {
-        "root:*:19500:0:99999:7:::".to_string()
+        "root:*:19500:0:99999:7:::\n".to_string()
     } else {
         format!(
-            "root:*:19500:0:99999:7:::\n{}:*:19500:0:99999:7:::",
+            "root:*:19500:0:99999:7:::\n{}:*:19500:0:99999:7:::\n",
             user.username
         )
     }
@@ -276,10 +281,10 @@ pub fn generate_group_file(user: &NamedUser) -> String {
     let root_group = "root:x:0:root";
 
     if user.gid == 0 {
-        root_group.to_string()
+        format!("{root_group}\n")
     } else {
         format!(
-            "{root_group}\n{}:x:{}:{}",
+            "{root_group}\n{}:x:{}:{}\n",
             user.groupname, user.gid, user.username
         )
     }

@@ -7300,7 +7300,7 @@ tasks:
   show:
     run:
       container: app
-      command: 'sh -c "whoami; getent group $(id -g) | cut -d: -f1-3; echo $HOME"'
+      command: 'sh -c "whoami; getent group $(id -g); getent passwd $(id -u); echo $HOME"'
 "#;
     let Some(output) = unnamed_host_user::run(
         Path::new(env!("CARGO_BIN_EXE_ratect-compat")),
@@ -7321,7 +7321,11 @@ tasks:
         lines,
         [
             unnamed_host_user::ID,
-            &format!("{0}:x:{0}", unnamed_host_user::ID),
+            &format!("{0}:x:{0}:{0}", unnamed_host_user::ID),
+            &format!(
+                "{0}:x:{0}:{0}:{0}:/home/container-user:/bin/sh",
+                unnamed_host_user::ID
+            ),
             "/home/container-user"
         ],
         "{stdout}"

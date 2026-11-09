@@ -37,14 +37,14 @@ fn generate_passwd_file_for_a_normal_user_includes_both_root_and_that_user() {
     let passwd = generate_passwd_file(&current_user_fixture(), "/home/ratect");
     assert_eq!(
         passwd,
-        "root:x:0:0:root:/root:/bin/sh\nratect:x:1000:1000:ratect:/home/ratect:/bin/sh"
+        "root:x:0:0:root:/root:/bin/sh\nratect:x:1000:1000:ratect:/home/ratect:/bin/sh\n"
     );
 }
 
 #[test]
 fn generate_passwd_file_for_uid_zero_has_a_single_root_entry_using_the_configured_home() {
     let passwd = generate_passwd_file(&root_user_fixture(), "/home/ratect");
-    assert_eq!(passwd, "root:x:0:0:root:/home/ratect:/bin/sh");
+    assert_eq!(passwd, "root:x:0:0:root:/home/ratect:/bin/sh\n");
 }
 
 #[test]
@@ -52,26 +52,26 @@ fn generate_shadow_file_for_a_normal_user_includes_both_root_and_that_user() {
     let shadow = generate_shadow_file(&current_user_fixture());
     assert_eq!(
         shadow,
-        "root:*:19500:0:99999:7:::\nratect:*:19500:0:99999:7:::"
+        "root:*:19500:0:99999:7:::\nratect:*:19500:0:99999:7:::\n"
     );
 }
 
 #[test]
 fn generate_shadow_file_for_uid_zero_has_a_single_root_entry() {
     let shadow = generate_shadow_file(&root_user_fixture());
-    assert_eq!(shadow, "root:*:19500:0:99999:7:::");
+    assert_eq!(shadow, "root:*:19500:0:99999:7:::\n");
 }
 
 #[test]
 fn generate_group_file_for_a_normal_group_includes_both_root_and_that_group() {
     let group = generate_group_file(&current_user_fixture());
-    assert_eq!(group, "root:x:0:root\nratect:x:1000:ratect");
+    assert_eq!(group, "root:x:0:root\nratect:x:1000:ratect\n");
 }
 
 #[test]
 fn generate_group_file_for_gid_zero_has_a_single_root_entry() {
     let group = generate_group_file(&root_user_fixture());
-    assert_eq!(group, "root:x:0:root");
+    assert_eq!(group, "root:x:0:root\n");
 }
 
 /// `run_as_current_user` names a uid or gid the host has no entry for with its
@@ -115,22 +115,22 @@ fn generated_files_name_an_unnamed_user_with_its_digits() {
     let user = unnamed(1000, 20);
     assert_eq!(
         generate_passwd_file(&user, "/home/me"),
-        "root:x:0:0:root:/root:/bin/sh\n1000:x:1000:20:1000:/home/me:/bin/sh"
+        "root:x:0:0:root:/root:/bin/sh\n1000:x:1000:20:1000:/home/me:/bin/sh\n"
     );
     assert_eq!(
         generate_shadow_file(&user),
-        "root:*:19500:0:99999:7:::\n1000:*:19500:0:99999:7:::"
+        "root:*:19500:0:99999:7:::\n1000:*:19500:0:99999:7:::\n"
     );
-    assert_eq!(generate_group_file(&user), "root:x:0:root\n20:x:20:1000");
+    assert_eq!(generate_group_file(&user), "root:x:0:root\n20:x:20:1000\n");
 
     let same_ids = unnamed(1000, 1000);
     assert_eq!(
         generate_group_file(&same_ids),
-        "root:x:0:root\n1000:x:1000:1000"
+        "root:x:0:root\n1000:x:1000:1000\n"
     );
 
     let root_gid = unnamed(1000, 0);
-    assert_eq!(generate_group_file(&root_gid), "root:x:0:root");
+    assert_eq!(generate_group_file(&root_gid), "root:x:0:root\n");
 
     let root_uid = CurrentUser {
         uid: 0,
@@ -141,11 +141,11 @@ fn generated_files_name_an_unnamed_user_with_its_digits() {
     .named();
     assert_eq!(
         generate_passwd_file(&root_uid, "/home/me"),
-        "root:x:0:0:root:/home/me:/bin/sh"
+        "root:x:0:0:root:/home/me:/bin/sh\n"
     );
     assert_eq!(
         generate_group_file(&root_uid),
-        "root:x:0:root\n20:x:20:root"
+        "root:x:0:root\n20:x:20:root\n"
     );
 }
 
