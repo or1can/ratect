@@ -2414,25 +2414,33 @@ fn project_with_directory_caches(names: &[&str]) -> PathBuf {
     directory
 }
 
-/// The default-suite cache tests all pass `--scope project`.
-///
-/// A shared cache lives under `$HOME/.ratect/caches`, the *real* one, since these
-/// tests leave `HOME` as it is. Without
-/// the flag these tests would read, and one would remove, a developer's own
-/// shared caches: a machine with `~/.ratect/caches/npm-cache` saw this suite
-/// delete it. Scoping them says what they are actually about, which is a
-/// project's own storage.
+/// `caches` for `project`, run with `HOME` set to it, so a shared directory cache
+/// is looked for under the project rather than in a developer's own
+/// `~/.ratect/caches`: a machine with `~/.ratect/caches/npm-cache` once saw this
+/// suite delete it. The Docker config stays the real one, so a test that connects
+/// reaches the daemon the rest of the suite does. Most also pass `--scope
+/// project`, which says what they are about: a project's own storage.
 fn caches_command(project: &Path) -> Command {
     let mut command = ratect_command();
     command.arg("-f").arg(project.join("batect.yml"));
+    command.env("HOME", project);
+    if std::env::var_os("DOCKER_CONFIG").is_none() {
+        // The home this test process has, by Ratect's own rule.
+        let real_home = ratect_core::user::home().ok().flatten();
+        if let Some(docker_config) = real_home.map(|home| home.join(".docker")) {
+            if docker_config.is_dir() {
+                command.env("DOCKER_CONFIG", docker_config);
+            }
+        }
+    }
     command
 }
 
 /// Requires a real Docker daemon. Run with `cargo test -- --ignored`.
 ///
-/// The shared half of `caches`, which only volumes can exercise: a shared
-/// cache's directory form lives under `$HOME/.ratect/caches`, which this test
-/// leaves as the developer's own.
+/// The shared half of `caches`, for volumes. A shared cache's directory form
+/// lives under `$HOME/.ratect/caches`, which `caches_command` points at its
+/// project.
 ///
 /// Covers the scope column, the `--scope` filter, and the case the column
 /// exists for — one name in both scopes, which `clean` must refuse rather
