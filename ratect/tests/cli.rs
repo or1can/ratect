@@ -4907,6 +4907,113 @@ fn identity_adds_additional_users_on_every_daemon() {
     );
 }
 
+/// A uid and gid the host has no passwd or group entry for still run (#818):
+/// `whoami` prints the uid's digits, from the entry appended for it, and alpine's
+/// `/etc/group` gets no entry for the gid. Ratect runs as those ids through
+/// `setpriv`, which needs root, so as root or with passwordless `sudo` (which CI's
+/// runner has), keeping the socket's group to reach the daemon. Ratect runs with
+/// a cleared environment, so it reaches the default local socket whatever the
+/// test's own `docker` uses: the test skips unless that is the same daemon. The
+/// binary and project are copied under `/tmp`, since the ids can't be assumed to
+/// reach the checkout or `TMPDIR`.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_runs_a_host_user_with_no_names() {
+    const ID: &str = "4242";
+    let _guard = shared_docker();
+    if !on_a_rootful_linux_daemon() {
+        return;
+    }
+    const SOCKET: &str = "/var/run/docker.sock";
+    let context = Command::new("docker")
+        .args(["context", "show"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string());
+    if ["DOCKER_HOST", "DOCKER_CONTEXT"]
+        .iter()
+        .any(|variable| std::env::var_os(variable).is_some())
+        || context.as_deref().ok() != Some("default")
+        || !Path::new(SOCKET).exists()
+    {
+        eprintln!("skipped: needs the default context's daemon, on {SOCKET}");
+        return;
+    }
+    let mut setpriv = if host_id("-u") == 0 {
+        Command::new("setpriv")
+    } else if Command::new("sudo")
+        .args(["-n", "true"])
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        let mut sudo = Command::new("sudo");
+        sudo.args(["-n", "setpriv"]);
+        sudo
+    } else {
+        eprintln!("skipped: needs root or passwordless sudo");
+        return;
+    };
+    for database in ["passwd", "group"] {
+        let found = Command::new("getent")
+            .args([database, ID])
+            .output()
+            .unwrap();
+        if found.status.success() {
+            eprintln!("skipped: {database} has an entry for {ID}");
+            return;
+        }
+    }
+    let socket_group = std::os::unix::fs::MetadataExt::gid(&std::fs::metadata(SOCKET).unwrap());
+
+    let directory = Path::new("/tmp").join(format!(
+        "ratect-unnamed-host-user-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let binary = directory.join("ratect");
+    std::fs::copy(env!("CARGO_BIN_EXE_ratect"), &binary).unwrap();
+    let config = directory.join("ratect.toml");
+    std::fs::write(
+        &config,
+        "ratect_version = \"0.13.0\"\nproject_name = \"ratect-unnamed-host-user-test\"\n\n\
+         [containers.build-env]\nimage = \"alpine:3.18.2\"\nidentity = { home = \"/home/me\" }\n\n\
+         [tasks.show]\nrun = { container = \"build-env\", command = \
+         \"\"\"sh -c 'whoami; getent group $(id -g) || echo none; echo $HOME'\"\"\" }\n",
+    )
+    .unwrap();
+    for path in [&directory, &binary] {
+        std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+    }
+    std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
+
+    let output = setpriv
+        .args(["--reuid", ID, "--regid", ID, "--groups"])
+        .arg(socket_group.to_string())
+        .arg("--")
+        .args(["env", "-i", "PATH=/usr/bin:/bin"])
+        .arg(format!("HOME={}", directory.display()))
+        .arg(&binary)
+        .arg("-f")
+        .arg(&config)
+        .args(["run", "show"])
+        .output()
+        .expect("failed to run ratect");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let _ = std::fs::remove_dir_all(&directory);
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    let [whoami, group, home] = &lines[..] else {
+        panic!("{stdout}");
+    };
+    assert_eq!(*whoami, ID, "{stdout}");
+    assert_eq!(*group, "none", "{stdout}");
+    assert_eq!(*home, "/home/me", "{stdout}");
+}
+
 /// Adding to the image's files leaves its users there.
 #[test]
 #[ignore]

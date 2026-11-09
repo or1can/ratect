@@ -34,15 +34,45 @@ use std::path::{Path, PathBuf};
 /// `TaskEngine::resolve_user_mapping`) and once per `identity` container on a
 /// rootful Linux daemon (`identity::host_user`), not cached, since there's only
 /// ever one real host user per process.
+///
+/// A uid or gid the host has no passwd or group entry for has no name, which
+/// is ordinary in a container run with a numeric `-u`: `None`, not a failed
+/// lookup. Whoever uses a name decides what its absence means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentUser {
+    pub uid: u32,
+    pub gid: u32,
+    pub username: Option<String>,
+    pub groupname: Option<String>,
+}
+
+impl CurrentUser {
+    /// This user with both names, as `run_as_current_user`'s generated files
+    /// need: an absent one is its id's digits, as in Batect
+    /// (`UnixNativeMethods.getUserName`/`getGroupName`).
+    pub fn named(self) -> NamedUser {
+        NamedUser {
+            uid: self.uid,
+            gid: self.gid,
+            username: self.username.unwrap_or_else(|| self.uid.to_string()),
+            groupname: self.groupname.unwrap_or_else(|| self.gid.to_string()),
+        }
+    }
+}
+
+/// A [`CurrentUser`] with both names, an absent one filled in with its id's
+/// digits ([`CurrentUser::named`]): the one `run_as_current_user` maps a
+/// container onto, since its generated files name both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedUser {
     pub uid: u32,
     pub gid: u32,
     pub username: String,
     pub groupname: String,
 }
 
-/// Looks up the real host user Ratect is running as. Unix-only — Ratect's
+/// Looks up the real host user Ratect is running as. An entry the host lacks is
+/// a name of `None`, and only a lookup that fails is an error. Unix-only — Ratect's
 /// own testing has been Unix-only so far (see the `crossterm` caveat for
 /// interactive mode), and there's no meaningful "current uid/gid" concept to
 /// map a container onto on other platforms, so this errors clearly rather
@@ -54,18 +84,14 @@ pub fn current_user(_asked_by: &str) -> Result<CurrentUser> {
     let uid = Uid::current();
     let gid = Gid::current();
 
-    let user = User::from_uid(uid)
-        .context("Failed to look up the current user")?
-        .with_context(|| format!("No passwd entry found for the current user (uid {uid})"))?;
-    let group = Group::from_gid(gid)
-        .context("Failed to look up the current group")?
-        .with_context(|| format!("No group entry found for the current group (gid {gid})"))?;
+    let user = User::from_uid(uid).context("Failed to look up the current user")?;
+    let group = Group::from_gid(gid).context("Failed to look up the current group")?;
 
     Ok(CurrentUser {
         uid: uid.as_raw(),
         gid: gid.as_raw(),
-        username: user.name,
-        groupname: group.name,
+        username: user.map(|user| user.name),
+        groupname: group.map(|group| group.name),
     })
 }
 
@@ -74,8 +100,8 @@ pub fn current_user(asked_by: &str) -> Result<CurrentUser> {
     Err(only_on_unix(asked_by))
 }
 
-/// The ids Ratect runs as, needing no passwd or group entry as [`current_user`]
-/// does. `None` on a host with no uid or gid.
+/// The ids Ratect runs as, without [`current_user`]'s passwd and group lookups.
+/// `None` on a host with no uid or gid.
 #[cfg(unix)]
 pub fn current_owner() -> Option<DirectoryOwner> {
     Some(DirectoryOwner {
@@ -220,7 +246,7 @@ fn chosen_home(
 /// (i.e. Ratect itself is running as root), there's only one `root` entry
 /// (using the configured `home_directory` as its home) rather than two
 /// conflicting ones.
-pub fn generate_passwd_file(user: &CurrentUser, home_directory: &str) -> String {
+pub fn generate_passwd_file(user: &NamedUser, home_directory: &str) -> String {
     if user.uid == 0 {
         format!("root:x:0:0:root:{home_directory}:/bin/sh")
     } else {
@@ -233,7 +259,7 @@ pub fn generate_passwd_file(user: &CurrentUser, home_directory: &str) -> String 
 
 /// Generates a minimal `/etc/shadow` for `user`. Ported from Batect's
 /// `generateShadowFile`.
-pub fn generate_shadow_file(user: &CurrentUser) -> String {
+pub fn generate_shadow_file(user: &NamedUser) -> String {
     if user.uid == 0 {
         "root:*:19500:0:99999:7:::".to_string()
     } else {
@@ -246,7 +272,7 @@ pub fn generate_shadow_file(user: &CurrentUser) -> String {
 
 /// Generates a minimal `/etc/group` for `user`. Ported from Batect's
 /// `generateGroupFile`.
-pub fn generate_group_file(user: &CurrentUser) -> String {
+pub fn generate_group_file(user: &NamedUser) -> String {
     let root_group = "root:x:0:root";
 
     if user.gid == 0 {
@@ -454,7 +480,8 @@ pub fn edit_passwd_home(passwd: &[u8], configured_user: &str, home: &str) -> Pas
 /// runs as on a rootful Linux daemon. Its uid's first entry, the one the runtime
 /// uses, keeps its name and gid and gets `home`; the process's gid is `--user`'s
 /// whatever the entry says. A uid with no entry gets one appended, named after
-/// `user`, or with the uid's digits if the image uses that name for another uid.
+/// `user`, or with the uid's digits if the image uses that name for another uid or
+/// the host has no name for it.
 ///
 /// `home` is as [`edit_passwd_home`]'s is.
 pub fn edit_passwd_for_host_user(passwd: &[u8], user: &CurrentUser, home: &str) -> Vec<u8> {
@@ -462,13 +489,11 @@ pub fn edit_passwd_for_host_user(passwd: &[u8], user: &CurrentUser, home: &str) 
     {
         return with_passwd_home(passwd, position, &entry, home);
     }
-    let name_taken =
-        first_passwd_entry(passwd, |entry| entry.name == user.username.as_bytes()).is_some();
-    let name = if name_taken {
-        user.uid.to_string()
-    } else {
-        user.username.clone()
-    };
+    let name = user
+        .username
+        .clone()
+        .filter(|name| first_passwd_entry(passwd, |entry| entry.name == name.as_bytes()).is_none())
+        .unwrap_or_else(|| user.uid.to_string());
     with_passwd_entry_appended(passwd, &name, user.uid, user.gid, home)
 }
 
@@ -476,10 +501,12 @@ pub fn edit_passwd_for_host_user(passwd: &[u8], user: &CurrentUser, home: &str) 
 /// process runs as on a rootful Linux daemon, or `None` to leave it alone: an
 /// entry named after `user`'s group is appended only if neither its gid nor that
 /// name is in the file. A group entry only gives `id` and `ls` a name to print, so
-/// on a clash there is nothing worth inventing one for.
+/// on a clash, or for a gid the host has no name for, there is nothing worth
+/// inventing one for.
 pub fn edit_group_for_host_user(group: &[u8], user: &CurrentUser) -> Option<Vec<u8>> {
-    let taken = group_entry_taken(group, &user.groupname, user.gid);
-    (!taken).then(|| with_line_appended(group, &format!("{}:x:{}:", user.groupname, user.gid)))
+    let name = user.groupname.as_deref()?;
+    let taken = group_entry_taken(group, name, user.gid);
+    (!taken).then(|| with_line_appended(group, &format!("{name}:x:{}:", user.gid)))
 }
 
 /// Who a clash found in the file can be with. Which of them it is can't be told

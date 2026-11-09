@@ -1108,11 +1108,13 @@ replaced:
   such entry keeps its name and gid, and only its home changes. So `whoami` says `node`, and
   the process still has your gid, not the entry's.
 - **`/etc/passwd`, your uid absent:** an entry is appended with your username, or
-  with your uid's digits if the image uses that name for another uid, password `*`,
-  your gid, `home`, and shell `/bin/sh`.
+  with your uid's digits if the image uses that name for another uid or your uid
+  has no name on the host, password `*`, your gid, `home`, and shell `/bin/sh`.
 - **`/etc/group`:** an entry named after your group is appended only if both its gid
   and that name are free. If the gid exists, that entry is reused untouched. If only
-  the name is taken, nothing is added, and `id` prints your gid with no name.
+  the name is taken, nothing is added, and `id` prints your gid with no name. If your
+  gid has no name on the host, nothing is added either, so `id` names it only if the
+  image has an entry for it.
 - **Host directories a mount needs** are created as you before the container is, when
   the daemon is local: a missing bind mount source, and a mount point nested inside
   another host mount.

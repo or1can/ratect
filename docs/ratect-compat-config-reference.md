@@ -642,7 +642,9 @@ A few things happen automatically to make this actually work, not just set `--us
 - The container's own image has no `/etc/passwd`/`/etc/group` entry for an arbitrary
   host uid/gid — many programs misbehave or refuse to run at all without one (no
   `$HOME`, no username resolution). Minimal synthetic `/etc/passwd`, `/etc/shadow`,
-  and `/etc/group` entries are uploaded into the container before it starts.
+  and `/etc/group` entries are uploaded into the container before it starts, named
+  after your user and group, or with the uid's or gid's digits where the host has no
+  name for it, as in Batect.
 - `home_directory` itself is created inside the container (owned by the mapped
   uid/gid) before it starts — it's a path inside the container's own filesystem, not
   host-mounted, so it doesn't persist across runs, matching Ratect's existing

@@ -1446,7 +1446,7 @@ fn collect_build_context_entries(
 /// `PartialEq`/`Eq` so it can nest inside `ContainerSpec`, which does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserMapping {
-    pub user: crate::user::CurrentUser,
+    pub user: crate::user::NamedUser,
     pub home_directory: String,
     /// Absolute container paths of this container's writable `cache`
     /// mounts, which need the same ownership treatment the home directory

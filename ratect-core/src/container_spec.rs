@@ -665,11 +665,14 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
     let labels = run_labels.for_container(name, role, container_config.labels.as_ref());
     // From the plan rather than the input, so only a container with an
     // `identity` can get one this way.
-    let host_user = user_mapping
-        .map(|mapping| &mapping.user)
-        .or(identity.as_ref().and_then(|plan| plan.host_user.as_ref()));
-    let runs_as_host_user = host_user.is_some();
-    let process_user = process_user(container_config, host_user);
+    let host_ids = user_mapping
+        .map(|mapping| (mapping.user.uid, mapping.user.gid))
+        .or(identity
+            .as_ref()
+            .and_then(|plan| plan.host_user.as_ref())
+            .map(|user| (user.uid, user.gid)));
+    let runs_as_host_user = host_ids.is_some();
+    let process_user = process_user(container_config, host_ids);
 
     ContainerSpec {
         shared: SharedContainerSpec {
@@ -959,9 +962,9 @@ fn device_triples(
 }
 
 /// See [`SharedContainerSpec::process_user`].
-fn process_user(container: &Container, host_user: Option<&CurrentUser>) -> Option<String> {
-    if let Some(user) = host_user {
-        return Some(format!("{}:{}", user.uid, user.gid));
+fn process_user(container: &Container, host_ids: Option<(u32, u32)>) -> Option<String> {
+    if let Some((uid, gid)) = host_ids {
+        return Some(format!("{uid}:{gid}"));
     }
     let user = container.user.as_ref()?.as_str();
     Some(match &container.group {

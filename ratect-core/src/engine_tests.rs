@@ -19632,8 +19632,8 @@ fn host_me() -> crate::user::CurrentUser {
     crate::user::CurrentUser {
         uid: 4000,
         gid: 20,
-        username: "me".to_string(),
-        groupname: "staff".to_string(),
+        username: Some("me".to_string()),
+        groupname: Some("staff".to_string()),
     }
 }
 
@@ -19641,8 +19641,8 @@ fn host_root() -> crate::user::CurrentUser {
     crate::user::CurrentUser {
         uid: 0,
         gid: 0,
-        username: "root".to_string(),
-        groupname: "root".to_string(),
+        username: Some("root".to_string()),
+        groupname: Some("root".to_string()),
     }
 }
 
@@ -19889,7 +19889,7 @@ async fn identity_on_rootful_linux_writes_the_edited_files() {
     );
 
     let clashing = crate::user::CurrentUser {
-        username: "node".to_string(),
+        username: Some("node".to_string()),
         ..host_me()
     };
     let docker = identity_runtime(DaemonClass::RootfulLinux);
@@ -19899,6 +19899,27 @@ async fn identity_on_rootful_linux_writes_the_edited_files() {
         b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n\
           4000:*:4000:20::/home/me:/bin/sh\n",
     );
+}
+
+/// A host uid and gid with no names (#818): the appended entry is named with the
+/// uid's digits, `/etc/group` is left as it was, and the run goes on to make the
+/// home, as with named ones.
+#[tokio::test]
+async fn identity_on_rootful_linux_adopts_a_host_user_with_no_names() {
+    let unnamed = crate::user::CurrentUser {
+        username: None,
+        groupname: None,
+        ..host_me()
+    };
+    let docker = identity_runtime(DaemonClass::RootfulLinux);
+    apply_adopting(&docker, unnamed, vec![]).await.unwrap();
+    assert_eq!(
+        written_to(&docker, "/etc/passwd").unwrap().contents,
+        b"root:x:0:0:root:/root:/bin/ash\nnode:x:1000:1000::/home/node:/bin/sh\n\
+          4000:*:4000:20::/home/me:/bin/sh\n",
+    );
+    assert_eq!(written_to(&docker, "/etc/group"), None);
+    assert_eq!(docker.created_directories()[0].3, home_owner(4000, 20));
 }
 
 fn additional_users() -> Vec<crate::user::AdditionalUser> {
@@ -19986,8 +20007,8 @@ async fn additional_users_are_added_beside_the_adopted_host_user_on_rootful_linu
     let spec = adopting_spec_with_additional_users(crate::user::CurrentUser {
         uid: 4000,
         gid: 4000,
-        username: "me".to_string(),
-        groupname: "mine".to_string(),
+        username: Some("me".to_string()),
+        groupname: Some("mine".to_string()),
     })
     .await;
     crate::identity::apply(&docker, &spec, "sidecar-id-app", |_| {})
@@ -20114,8 +20135,8 @@ async fn an_additional_user_clashing_with_the_host_user_fails_the_run_writing_no
             crate::user::CurrentUser {
                 uid: 1500,
                 gid: 4000,
-                username: "me".to_string(),
-                groupname: "mine".to_string(),
+                username: Some("me".to_string()),
+                groupname: Some("mine".to_string()),
             },
             "'svc' has uid 1500, which '/etc/passwd' already gives to 'me'",
         ),
@@ -20123,8 +20144,8 @@ async fn an_additional_user_clashing_with_the_host_user_fails_the_run_writing_no
             crate::user::CurrentUser {
                 uid: 4000,
                 gid: 4000,
-                username: "svc".to_string(),
-                groupname: "mine".to_string(),
+                username: Some("svc".to_string()),
+                groupname: Some("mine".to_string()),
             },
             "'svc' has a name '/etc/passwd' already has",
         ),

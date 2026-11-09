@@ -1169,7 +1169,7 @@ fn derive_spec_maps_host_root_to_a_process_user_of_0_0() {
     let container_config = sample_container();
     let run_labels = RunLabels::new("demo", "task", "run-id", None);
     let mapping = crate::docker::UserMapping {
-        user: crate::user::CurrentUser {
+        user: crate::user::NamedUser {
             uid: 0,
             gid: 0,
             username: "root".to_string(),
@@ -1209,8 +1209,8 @@ fn derive_spec_takes_an_identity_host_user_only_with_an_identity() {
     let user = crate::user::CurrentUser {
         uid: 1000,
         gid: 20,
-        username: "me".to_string(),
-        groupname: "staff".to_string(),
+        username: Some("me".to_string()),
+        groupname: Some("staff".to_string()),
     };
     let derive = |container_config: &Container| {
         derive_spec(ContainerSpecInputs {

@@ -2377,7 +2377,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             return Ok(None);
         }
 
-        let user = crate::user::current_user("'run_as_current_user'")?;
+        let user = crate::user::current_user("'run_as_current_user'")?.named();
         let home_directory = run_as_current_user
             .home_directory
             .clone()
