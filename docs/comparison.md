@@ -56,7 +56,11 @@ stack is meant to be brought up once and left running, its network and
 containers shared across however many `docker compose exec` calls you make
 against it afterward. Ratect's network and containers, by default, are
 scoped to one task invocation and torn down when it finishes, rather than
-persisting for the next run to reach.
+persisting for the next run to reach. And a Compose service runs as its image's
+user unless you set `user:` to a uid yourself, so on a rootful Linux daemon what
+it writes through a bind mount is usually root's, where Ratect's
+[`identity`](file-ownership.md) runs the container as you there, and gives it the same
+`$HOME` on every daemon.
 
 ## Make
 

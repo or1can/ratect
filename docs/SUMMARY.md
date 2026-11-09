@@ -23,6 +23,7 @@
 - [Reusable Pipeline Building Blocks](reusable-building-blocks.md)
 - [Output Styles](output-styles.md)
 - [Connecting to Docker](connecting-to-docker.md)
+- [File Ownership and the Home Directory](file-ownership.md)
 - [Interactive Mode](interactive-mode.md)
 - [Proxies](proxies.md)
 - [Troubleshooting](troubleshooting.md)

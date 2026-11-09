@@ -1,0 +1,71 @@
+# Who owns what a container writes through a bind mount, and what `$HOME` is
+# inside it, with `identity` and without. docs/file-ownership.md walks through it.
+ratect_version = "0.13.0"
+project_name = "example-identity"
+
+# ANCHOR: as-you
+[containers.as-you]
+image = "alpine:3.24"
+working_directory = "/code"
+identity = { home = "/home/me" }
+groups = ["users"]
+volumes = [
+    { local = ".", container = "/code" },
+    { local = "ssh", container = "/home/me/.ssh", options = "ro" },
+]
+# ANCHOR_END: as-you
+
+# ANCHOR: as-image
+[containers.as-image]
+image = "alpine:3.24"
+working_directory = "/code"
+volumes = [{ local = ".", container = "/code" }]
+# ANCHOR_END: as-image
+
+# ANCHOR: app
+[containers.app]
+build_directory = "app-image"
+identity = { home = "/home/me" }
+volumes = [
+    { type = "cache", name = "prepared", container = "/home/me/.cache/prepared" },
+    { type = "cache", name = "unprepared", container = "/home/me/.cache/unprepared" },
+]
+# ANCHOR_END: app
+
+# ANCHOR: show-home
+[tasks.show-home]
+description = "Show the running user, its groups and its home"
+run = { container = "as-you", command = """sh -c 'echo "user:   $(id -un) ($(id -u)), groups: $(id -Gn)"; echo "HOME:   $HOME"; echo "passwd: $(getent passwd $(id -u) | cut -d: -f6)"; ls -ld ~ ~/.ssh'""" }
+# ANCHOR_END: show-home
+
+# ANCHOR: show-home-override
+[tasks.show-home-override]
+description = "Show the home when HOME is set in environment"
+run = { container = "as-you", environment = { HOME = "/code" }, command = """sh -c 'echo "HOME:   $HOME"; echo "passwd: $(getent passwd $(id -u) | cut -d: -f6)"'""" }
+# ANCHOR_END: show-home-override
+
+# ANCHOR: write
+[tasks.write-as-you]
+description = "Write out/as-you/ through the bind mount, with identity"
+run = { container = "as-you", command = "sh -c 'mkdir -p out/as-you && id -u > out/as-you/uid'" }
+
+[tasks.write-as-image]
+description = "Write out/as-image/ through the bind mount, without identity"
+run = { container = "as-image", command = "sh -c 'mkdir -p out/as-image && id -u > out/as-image/uid'" }
+
+[tasks.clean]
+description = "Remove what the write tasks left in out/, whoever owns it"
+run = { container = "as-image", command = "rm -rf out/as-you out/as-image" }
+# ANCHOR_END: write
+
+# ANCHOR: show-app-home
+[tasks.show-app-home]
+description = "Show the running user and its home in an image with its own USER and HOME"
+run = { container = "app", command = """sh -c 'echo "user:   $(id -un) ($(id -u))"; echo "HOME:   $HOME"; echo "passwd: $(getent passwd $(id -u) | cut -d: -f6)"'""" }
+# ANCHOR_END: show-app-home
+
+# ANCHOR: fill-caches
+[tasks.fill-caches]
+description = "Write to the two cache volumes below the home"
+run = { container = "app", command = "sh -c 'set -e; touch ~/.cache/prepared/ok; echo prepared: written; touch ~/.cache/unprepared/ok; echo unprepared: written'" }
+# ANCHOR_END: fill-caches

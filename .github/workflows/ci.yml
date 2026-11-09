@@ -288,13 +288,14 @@ jobs:
           cmd() { "$bin" -f "$cfg" "${prefix[@]}" "$@"; }
           for dir in examples/*/; do
             name=$(basename "$dir")
-            # Two aren't one of these, and get their own sections below
+            # Three aren't one of these, and get their own sections below
             # rather than this generic build/test/run/lint/shell sweep:
             # getting-started's tasks are docs/getting-started.md's own
-            # steps, and full-stack's names differ too (no bare `test`, and
-            # `run` is a long-lived server that never exits on its own).
+            # steps, full-stack's names differ too (no bare `test`, and
+            # `run` is a long-lived server that never exits on its own), and
+            # identity's tasks show who owns what a container writes.
             case "$name" in
-              getting-started|full-stack) continue ;;
+              getting-started|full-stack|identity) continue ;;
             esac
             if [ -f "$dir/ratect.toml" ]; then
               bin=./target/debug/ratect
@@ -339,6 +340,46 @@ jobs:
           assert_output "getting-started's greet task" "hello-world in dev" cmd greet || exit 1
           assert_output "getting-started's greet task with an override" "hello-world in staging" \
             cmd greet --config-var environment_name=staging || exit 1
+          echo "::endgroup::"
+
+          # docs/file-ownership.md's project. Its point is who owns what a
+          # container writes through a bind mount, which an exit code can't
+          # show, so the owner is read from the host after the writes: root
+          # without `identity`, and this runner's own uid with it. This
+          # runner's daemon is rootful Linux, the one class where those
+          # differ.
+          echo "::group::identity"
+          bin=./target/debug/ratect
+          cfg=examples/identity/ratect.toml
+          prefix=(run)
+          assert_owner() {
+            local path=examples/identity/out/$1 expected=$2 actual
+            actual=$(stat -c %u "$path") || return 1
+            echo "$path is owned by uid $actual"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$path is owned by uid $actual, not $expected"
+              return 1
+            fi
+          }
+          cmd write-as-image
+          cmd write-as-you
+          assert_owner as-image 0 || exit 1
+          assert_owner as-image/uid 0 || exit 1
+          assert_owner as-you "$(id -u)" || exit 1
+          assert_owner as-you/uid "$(id -u)" || exit 1
+          # What the page tells a reader stranded with a root-owned directory.
+          cmd clean
+          if [ -e examples/identity/out/as-image ]; then
+            echo "::error::identity's clean task left out/as-image behind"
+            exit 1
+          fi
+          assert_output "identity's show-home task" "HOME:   /home/me" cmd show-home || exit 1
+          assert_output "identity's show-home task's passwd home" "passwd: /home/me" cmd show-home || exit 1
+          assert_output "identity's show-home-override task" "HOME:   /code" cmd show-home-override || exit 1
+          assert_output "identity's show-app-home task" "HOME:   /home/me" cmd show-app-home || exit 1
+          # The task writes `prepared` first under `set -e`, so reaching
+          # `unprepared` means both were writable.
+          assert_output "identity's fill-caches task" "unprepared: written" cmd fill-caches || exit 1
           echo "::endgroup::"
 
           echo "::group::full-stack"

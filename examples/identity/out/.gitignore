@@ -1,0 +1,3 @@
+# Kept in the clone, so out/ is yours rather than whichever container made it.
+*
+!.gitignore

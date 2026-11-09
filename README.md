@@ -123,6 +123,7 @@ as the site groups them:
 - [Reusable Pipeline Building Blocks](docs/reusable-building-blocks.md)
 - [Output Styles](docs/output-styles.md)
 - [Connecting to Docker](docs/connecting-to-docker.md)
+- [File Ownership and the Home Directory](docs/file-ownership.md)
 - [Interactive Mode](docs/interactive-mode.md)
 - [Proxies](docs/proxies.md)
 - [Troubleshooting](docs/troubleshooting.md)

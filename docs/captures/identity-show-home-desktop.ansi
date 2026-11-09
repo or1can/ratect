@@ -1,0 +1,5 @@
+user:   root (0), groups: root bin daemon sys adm disk wheel floppy dialout tape video users
+HOME:   /home/me
+passwd: /home/me
+drwxr-xr-x    1 root     root             8 Nov  8 22:35 [1;34m/home/me[m
+drwxr-xr-x    1 root     root            96 Nov  8 22:31 [1;34m/home/me/.ssh[m
