@@ -40,6 +40,7 @@ history, from when it was the only binary.
 - **ratect only:** `ratect run` warns about `identity` on a userns-remap daemon, a non-root `user` on a rootless or userns-remap daemon, and `identity` under a non-root image `USER` on either. `ratect doctor` reports the first two as warnings. None of them stops a run.
 
 - [File Ownership and the Home Directory](docs/file-ownership.md): who owns what a container writes through a bind mount, and what `$HOME` is, on each kind of Docker daemon, with `identity` and without, built around a new `examples/identity` project. Troubleshooting links to it for root-owned files.
+- `pre-commit install` also installs a `pre-push` hook that runs CI's `claims` checks over the branch and refuses a push with an unmarked finding; run it again in an existing clone to add it. No effect on the released binaries; contributor-tooling only.
 
 ### Changed
 

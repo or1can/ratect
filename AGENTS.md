@@ -258,7 +258,10 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   so a bump of the hook moves CI with it; runs the checks against the PR's
   base branch, which covers the PR's whole change; and fails on a gate
   finding, or on an advisory finding that is neither fixed nor marked checked
-  (`--fail-on-unmarked`, CI's alone: the hook still lets a commit through).
+  (`--fail-on-unmarked`; the commit hook still lets a commit through). A
+  `pre-push` hook runs the same checks over the branch from its merge-base
+  with `origin/main`, with your own grants, so its unmarked count is the
+  one to quote when sizing a PR's claims work.
   So a PR resolves the findings it brings in, and whoever batches Renovate's
   changes marks what those bring in. It writes its own `claims.local.toml` with the grant list
   above, so **a new `<!-- verify: -->` marker's command goes in that job

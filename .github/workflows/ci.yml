@@ -195,7 +195,8 @@ jobs:
       # Exits 1 on a gate finding, 2 on an unparsable `claims.toml` and 3 on an
       # advisory finding that is neither fixed nor marked checked, all failing
       # the job: a PR resolves the findings it brings in, or nobody reads them.
-      # `--fail-on-unmarked` is CI's alone, so local commits stay advisory.
+      # Local commits stay advisory; the `pre-push` hook in
+      # `.pre-commit-config.yaml` runs these checks over the branch first.
       - name: Run the claims checks
         env:
           BASE_REF: ${{ github.base_ref }}
