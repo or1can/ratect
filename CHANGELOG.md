@@ -24,6 +24,8 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-11-10
+
 ### Breaking
 
 - A `build_ssh` `paths` RSA key whose parts don't make a valid key fails the run before its image build starts, naming the file, instead of failing each signature during the build. That includes some unusual keys that signed before, such as one whose private exponent isn't reduced below its modulus.
