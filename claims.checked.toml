@@ -13634,15 +13634,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/engine.rs" = "5654683ac1c7f6c4" }
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "163356029bb73ffc"
-copies = 1
-note = "deferred installers corrected in Status against dist-workspace.toml installers = [shell, homebrew] (ratect#844)"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "b1b1fcfacb4e76414fbe61ec6d0f2247a2d3d707", "ROADMAP.md" = "b2bfb89c20e69299", "ratect-core/Cargo.toml" = "a4b9e2111097320c" }
-
-[[mark]]
 file = "decisions/0019-readiness-gates-starting-only.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -14127,3 +14118,12 @@ copies = 1
 note = "Consequences read: \"agents/probing.md gains a probe for a host user with no entries\" still holds; this branch adds a scope paragraph and a /tmp note and leaves that bullet as it is."
 by = "Claude Code agent, approval pending from Kevin Rogers"
 subjects = { "agents/probing.md" = "bf91674285619801", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "163356029bb73ffc"
+copies = 1
+note = "Alternatives section read: its Cargo.toml claims are about the bollard [patch.crates-io] pin blocking a crates.io publish; this branch only bumps jsonschema (ratect-core/Cargo.toml) and toml (Cargo.lock), neither of which it mentions."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = { "CHANGELOG.md" = "b1b1fcfacb4e76414fbe61ec6d0f2247a2d3d707", "ROADMAP.md" = "b2bfb89c20e69299", "ratect-core/Cargo.toml" = "c5353372b01745dd" }
