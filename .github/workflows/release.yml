@@ -265,8 +265,9 @@ jobs:
       # binary from inside the archive dist just built (not a separate
       # target/<triple>/ build output) on this matrix entry's own runner —
       # dist picks a native GitHub-hosted runner per target triple (the
-      # `dist plan` manifest's own `runner` field: macos-14/macos-15-intel
-      # for the two macOS targets, ubuntu-22.04/-arm for the three Linux
+      # `dist plan` manifest's own `runner` field: macos-15/macos-15-intel
+      # for the two macOS targets, the first set by dist-workspace.toml's
+      # `github-custom-runners`, ubuntu-22.04/-arm for the three Linux
       # ones), so this genuinely executes the artifact, never something
       # QEMU- or Rosetta-emulated.
       #
