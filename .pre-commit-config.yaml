@@ -18,7 +18,7 @@
 default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: https://github.com/or1can/claims
-    rev: v0.24.0
+    rev: v0.28.1
     hooks:
       - id: claims
         stages: [pre-commit]

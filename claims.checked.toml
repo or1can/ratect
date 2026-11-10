@@ -14129,15 +14129,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0024-host-identity.md" = "bc84ea5051abe040", "ratect/tests/support/unnamed_host_user.rs" = "7f4bfc83e06a1456" }
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "163356029bb73ffc"
-copies = 1
-note = "An accepted ADR's Alternatives, ranked because this release touched CHANGELOG.md and the crates' Cargo.toml versions. Its CHANGELOG and Cargo.toml points are about structure and the bollard patch, which version bumps don't change. Earlier reading: ratect-core/Cargo.toml still requires bollard = \"0.22\", and the root Cargo.toml says crates.io's latest is 0.21.1. The deferred Homebrew tap (dist-workspace.toml now has installers = [\"shell\", \"homebrew\"]) and the open #796 are both corrected in the Status notes, so they are covered history."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "bbe4642d810af8a8b330f552ccf8bd6a4450e1d4", "ROADMAP.md" = "b2bfb89c20e69299", "ratect-core/Cargo.toml" = "fe9bab1f80ff6b61" }
-
-[[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "4ca303a3bf7ddf7b"
@@ -14208,3 +14199,12 @@ copies = 1
 note = "Guideline 8's release rules read against this change: its release.yml edit is a comment, merged with no release run in flight, as both 0.34.0 · 0.13.0 runs were cancelled first. Earlier reading: Guidelines 7 to 9 and 13 read against this release: versions bumped in a separate chore commit, Unreleased moved under the dated heading, RELEASES.md entries added, statuses in their own commit. Guideline 8's milestone rename is still to do, and holds as a rule. Earlier reading: Ran the guideline-6 smoke command and got the exact listed output. Found every symbol named in the guidelines: every_entry_leading_with_a_ratect_verb_is_marked, every_marked_breaking_change_has_a_written_for_row, written_for::BREAKING_CHANGES, exit_code::already_reported, include_trust::restricting (returns Option<&Bundle>), batect_shaped_containers, CACHE_MOUNT_PROJECT and the CI literal-brackets step. Nothing here concerns YAML tags."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "199997b8fc027b82", ".github/workflows/release.yml" = "1a32b4e0ea48a20a", "CHANGELOG.md" = "bbe4642d810af8a8b330f552ccf8bd6a4450e1d4", "ROADMAP.md" = "b2bfb89c20e69299", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "163356029bb73ffc"
+copies = 1
+note = "Its section names the crates' Cargo.toml files, which this bump changed only in their version lines; what it says of them, the bollard patch and the dockerignore path dependency, still holds. Earlier reading: An accepted ADR's Alternatives, ranked because this release touched CHANGELOG.md and the crates' Cargo.toml versions. Its CHANGELOG and Cargo.toml points are about structure and the bollard patch, which version bumps don't change. Earlier reading: ratect-core/Cargo.toml still requires bollard = \"0.22\", and the root Cargo.toml says crates.io's latest is 0.21.1. The deferred Homebrew tap (dist-workspace.toml now has installers = [\"shell\", \"homebrew\"]) and the open #796 are both corrected in the Status notes, so they are covered history."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "bbe4642d810af8a8b330f552ccf8bd6a4450e1d4", "ROADMAP.md" = "b2bfb89c20e69299", "ratect-core/Cargo.toml" = "45c40cc7423a5ea9" }
