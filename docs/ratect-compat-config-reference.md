@@ -9,8 +9,7 @@ A field documented as a string also takes an unquoted number or boolean, read
 as the text written: `description: 12.6000` is `12.6000`, and `PYTHON_VERSION:
 3.10` in `build_args` is `3.10`, not `3.1`. An empty value, `~` or `null` is
 not read as text: as a map value such as a `build_args` entry, or as a list
-entry, it is refused. In a file containing a YAML tag, unquoted values are
-re-formatted instead — see [differences from Batect](differences-from-batect.md#configuration-format).
+entry, it is refused.
 
 Standard YAML features — anchors (`&name`), aliases (`*name`), and merge keys
 (`<<:`) — work throughout the file, not just in specific fields: they're core

@@ -59,6 +59,7 @@ history, from when it was the only binary.
 - `run_as_current_user` runs under a host uid or gid with no passwd or group entry, naming it with its digits in the generated files.
 - `run_as_current_user`'s generated `/etc/passwd`, `/etc/shadow` and `/etc/group` end their last line, so musl-based images (alpine) no longer read that line one character short.
 - A host user with no home — no passwd entry and `HOME` unset or not absolute, as under a numeric `docker run -u` — can run tasks: Ratect connects with no Docker config directory, `ratect includes` (ratect only) finds no Git includes and `ratect caches` (ratect only) no shared directory caches, and only what needs a home (`~` in a path, a shared directory cache, a Git include, a named Docker context or TLS certificates from `~/.docker`) is refused, naming it.
+- Upgraded `noyalib` to 0.0.60. In a YAML file containing a tag (`!!int 7`, `!!str x`), an unquoted number or boolean in a field that takes text is read as written, as it is in every other YAML file and in Batect: `3.10` stays `3.10`, not `3.1`. The same holds for a config variables file.
 
 ### Security
 

@@ -185,6 +185,25 @@ fn a_containers_environment_keeps_an_unquoted_scalars_source_text() {
     assert_eq!(env["NAME"], "already-a-string");
 }
 
+/// The same with a tag in the file, which sends `noyalib` down its AST path
+/// (re-formatting there until `noyalib` 0.0.59).
+#[test]
+fn a_containers_environment_keeps_an_unquoted_scalars_source_text_beside_a_tag() {
+    let config = parse(&format!(
+        "project_name: p\n\
+         containers:\n\
+         \x20 app:\n\
+         \x20   image: alpine\n\
+         \x20   environment:\n\
+         {}\
+         \x20     TAGGED: !!str x\n\
+         tasks: {{}}\n",
+        unquoted_environment_lines(6)
+    ));
+    let env = config.containers["app"].environment.as_ref().unwrap();
+    assert_unquoted_environment_kept_as_written(env);
+}
+
 #[test]
 fn a_task_runs_environment_keeps_an_unquoted_scalars_source_text() {
     let config = parse(&format!(
@@ -316,10 +335,22 @@ fn every_plain_string_field(v: &str) -> String {
 /// written, as in Batect, whose `decodeString` returns a scalar's source
 /// text (#376): `3.10` stays `3.10` rather than failing to load — or, worse,
 /// loading as `3.1`. Each value is one a parse-then-reformat would change.
+/// Each is checked again with a tag in the file, on an extra label so every
+/// checked value stays plain, which sends `noyalib` down its AST path
+/// (re-formatting there until `noyalib` 0.0.59).
 #[test]
 fn every_plain_string_field_keeps_an_unquoted_scalars_source_text() {
-    for v in ["3.10", "12.6000", "0x10", "True"] {
-        let config = parse(&every_plain_string_field(v));
+    for (tagged, v) in [false, true]
+        .into_iter()
+        .flat_map(|tagged| ["3.10", "12.6000", "0x10", "True"].map(|v| (tagged, v)))
+    {
+        let text = every_plain_string_field(v);
+        let text = if tagged {
+            text.replacen("labels: {label: ", "labels: {tagged: !!str x, label: ", 1)
+        } else {
+            text
+        };
+        let config = parse(&text);
         let variable = &config.config_variables.as_ref().unwrap()["var"];
         let app = &config.containers["app"];
         let secrets = app.build_secrets.as_ref().unwrap();
@@ -425,7 +456,7 @@ fn every_plain_string_field_keeps_an_unquoted_scalars_source_text() {
             ),
         ];
         for (field, value) in fields {
-            assert_eq!(*value, Some(v), "{field}");
+            assert_eq!(*value, Some(v), "{field}, tagged: {tagged}");
         }
     }
 }
@@ -13563,6 +13594,35 @@ fn load_config_vars_file_keeps_unquoted_scalars_as_written() {
     std::fs::write(
         &vars_path,
         "int: 1\nbool: true\ntrailing: 1.50\nwide: 12.6000\nhex: 0x1F\nzeros: 007\nversion: 3.10\nquoted: \"1\"\n",
+    )
+    .unwrap();
+
+    let vars = Config::load_config_vars_file(&vars_path).unwrap();
+    for (name, text) in [
+        ("int", "1"),
+        ("bool", "true"),
+        ("trailing", "1.50"),
+        ("wide", "12.6000"),
+        ("hex", "0x1F"),
+        ("zeros", "007"),
+        ("version", "3.10"),
+        ("quoted", "1"),
+    ] {
+        assert_eq!(vars.get(name).map(String::as_str), Some(text), "{name}");
+    }
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The same with a tag in the file, which sends `noyalib` down its AST path
+/// (re-formatting there until `noyalib` 0.0.59).
+#[test]
+fn load_config_vars_file_keeps_unquoted_scalars_as_written_beside_a_tag() {
+    let dir = unique_temp_dir();
+    let vars_path = dir.join("vars.yml");
+    std::fs::write(
+        &vars_path,
+        "int: 1\nbool: true\ntrailing: 1.50\nwide: 12.6000\nhex: 0x1F\nzeros: 007\nversion: 3.10\nquoted: \"1\"\ntagged: !!str x\n",
     )
     .unwrap();
 

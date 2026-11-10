@@ -18,14 +18,18 @@ serde = { version = "1.0", features = ["derive"] }
 # the same derive-based approach applied to actual JSON.
 serde_json = "1.0"
 # **`noyalib`**: Safe, pure-Rust YAML parser (used as a modern alternative
-# to `serde_yaml`). 0.0.58 is the floor: it is the first release whose
-# `from_str` gives an unknown or missing field its line, column and field path
-# (noyalib#482), which config load errors rely on to name where the bad entry
-# is (ratect#415). Every read goes through `ratect-core/src/yaml.rs`'s one
-# `ParserConfig`, whose module notes say why each setting is on — including
-# `DuplicateKeyPolicy::Error`, since the default keeps a repeated key's last
-# value where Batect refuses it (ratect#372).
-noyalib = { version = "0.0.58", features = ["compat-serde-yaml"] }
+# to `serde_yaml`). 0.0.58 is the first release whose `from_str` gives an
+# unknown or missing field its line, column and field path (noyalib#482),
+# which config load errors rely on to name where the bad entry is
+# (ratect#415), and 0.0.59 the first whose `plain_scalar_strings` keeps a
+# plain scalar's text in a document with a tag (noyalib#494), which the
+# tagged tests in `config_tests.rs` and `yaml_tests.rs` pin. The requirement
+# is 0.0.60, which for a 0.0.x version allows only that release. Every read
+# goes through `ratect-core/src/yaml.rs`'s one `ParserConfig`, whose module
+# notes say why each setting is on — including `DuplicateKeyPolicy::Error`,
+# since the default keeps a repeated key's last value where Batect refuses
+# it (ratect#372).
+noyalib = { version = "0.0.60", features = ["compat-serde-yaml"] }
 # **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
 # **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):
 # Asynchronous Docker API client. Which branch is pinned (upstream `master` or a

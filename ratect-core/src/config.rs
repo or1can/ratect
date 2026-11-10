@@ -278,8 +278,8 @@ pub struct Container {
     pub dependencies: Option<Vec<String>>,
     /// Environment variables to set inside the container. Values support
     /// expressions, and a number or boolean is accepted: in a YAML file as
-    /// its text as written, as in Batect (`12.6000` stays `12.6000`) unless
-    /// the file contains a YAML tag, and in a TOML file as its string form.
+    /// its text as written, as in Batect (`12.6000` stays `12.6000`), and in
+    /// a TOML file as its string form.
     #[serde(default, deserialize_with = "deserialize_scalar_string_map")]
     pub environment: Option<HashMap<String, String>>,
     /// Runs the container as the host's own user rather than the image's
@@ -1475,18 +1475,17 @@ where
     deserializer.deserialize_any(ShmSizeVisitor)
 }
 
-/// `serde` `deserialize_with` for the `environment` maps — accepts a scalar
-/// of any type as a value, so `MY_VAR: 1` or `DEBUG: true` loads rather than
-/// being rejected with a type-mismatch error. In a YAML file the value is
-/// the scalar's text as written, as in Batect — `12.6000` stays `"12.6000"`
-/// and `0x10` stays `"0x10"` — because it is read as a string and
-/// [`crate::yaml`] keeps a plain scalar's text for a string, except in a
-/// file with a tag in it. A null is still refused there. In a TOML file,
-/// whose parser hands the string read a typed value, the `visit_*` methods
-/// below re-render it (`1.50` is `"1.5"`). Only the *values* are read this
-/// way (keys are already strings), and only when the field is present;
-/// `#[serde(default)]` handles the absent case. Each value is an
-/// expression, checked as it is read — see [`checked_expression`].
+/// `serde` `deserialize_with` for the `environment` maps — accepts a scalar of
+/// any type as a value, so `MY_VAR: 1` or `DEBUG: true` loads rather than being
+/// rejected with a type-mismatch error. In a YAML file the value is the
+/// scalar's text as written, as in Batect — `12.6000` stays `"12.6000"` and
+/// `0x10` stays `"0x10"` — because it is read as a string and [`crate::yaml`]
+/// keeps a plain scalar's text for a string. A null is still refused there. In
+/// a TOML file, whose parser hands the string read a typed value, the `visit_*`
+/// methods below re-render it (`1.50` is `"1.5"`). Only the *values* are read
+/// this way (keys are already strings), and only when the field is present;
+/// `#[serde(default)]` handles the absent case. Each value is an expression,
+/// checked as it is read — see [`checked_expression`].
 fn deserialize_scalar_string_map<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<HashMap<String, String>>, D::Error>
@@ -4779,15 +4778,15 @@ impl Config {
         })
     }
 
-    /// Loads a `--config-vars-file`: a flat YAML map of config variable
-    /// names to values, in the same format/parser as `batect.yml` itself.
+    /// Loads a `--config-vars-file`: a flat YAML map of config variable names
+    /// to values, in the same format/parser as `batect.yml` itself.
     ///
     /// Every value is a string, as in Batect (which decodes the file with
     /// `String.serializer()`): an unquoted number or boolean is read as the
-    /// text written, so `3.10` stays `"3.10"` rather than being resolved to
-    /// a float and reformatted as `"3.1"` (#324) — except in a file with a
-    /// tag in it. A null is still refused, as Batect's non-null decode
-    /// refuses it. Both are the `yaml` module's, shared with `batect.yml`.
+    /// text written, so `3.10` stays `"3.10"` rather than being resolved to a
+    /// float and reformatted as `"3.1"` (#324). A null is still refused, as
+    /// Batect's non-null decode refuses it. Both are the `yaml` module's,
+    /// shared with `batect.yml`.
     pub fn load_config_vars_file(path: &Path) -> Result<HashMap<String, String>> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to open config vars file {:?}", path))?;

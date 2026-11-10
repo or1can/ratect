@@ -76,10 +76,11 @@
 //! a key or value with a line break in it can't add a line to the error. A
 //! message that already quotes its value escaped is unchanged by it.
 //!
-//! **Not on `noyalib`'s AST path.** A YAML tag (`!!int 7`, `!custom`)
+//! **On `noyalib`'s AST path too.** A YAML tag (`!!int 7`, `!custom`)
 //! anywhere in a document sends the whole document through `noyalib`'s AST
-//! loader instead, where `plain_scalar_strings` re-formats the resolved
-//! value (`3.10` becomes `3.1`) — `TODO.md` 18.
+//! loader instead, which keeps a plain scalar's text the same way since
+//! `noyalib` 0.0.59 (sebastienrousseau/noyalib#494); before that it
+//! re-formatted the resolved value, `3.10` becoming `3.1`.
 
 use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, Visitor};
 use std::cell::Cell;

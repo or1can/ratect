@@ -240,20 +240,23 @@ fn a_null_is_refused_as_a_string_in_a_document_with_a_tag() {
     );
 }
 
-/// Pins the known divergence `TODO.md` 18 records: on the AST path the
-/// option re-formats the resolved value rather than keeping the text, so
-/// `3.10` beside a tag is `3.1`. When `noyalib` fixes it this fails —
-/// assert `3.10` here instead and delete the TODO entry.
+/// A tag anywhere in a document sends it down `noyalib`'s AST path, which
+/// re-formatted a resolved value (`3.10` to `3.1`) until `noyalib` 0.0.59
+/// (sebastienrousseau/noyalib#494). The text as written is kept there too,
+/// for each spelling a parse-then-reformat would change.
 #[test]
-fn a_document_with_a_tag_reformats_an_unquoted_number() {
+fn a_document_with_a_tag_keeps_an_unquoted_scalar_as_written() {
     #[derive(Debug, Deserialize)]
     #[allow(dead_code)]
     struct Tagged {
         tagged: String,
         value: String,
     }
-    let Tagged { value, .. } = from_str("tagged: !!str a\nvalue: 3.10\n").unwrap();
-    assert_eq!(value, "3.1");
+    for written in ["3.10", "12.6000", "1e3", "0x10", "True"] {
+        let Tagged { value, .. } =
+            from_str(&format!("tagged: !!str a\nvalue: {written}\n")).unwrap();
+        assert_eq!(value, written);
+    }
 }
 
 /// A key given twice in one mapping is refused, at any depth, naming the
