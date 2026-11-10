@@ -155,8 +155,9 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   migration). It runs on every commit as a git `pre-commit` hook, declared
   in `.pre-commit-config.yaml` (pinned to a `claims` release tag, which
   Renovate bumps) — a gate finding blocks the commit, an advisory finding
-  is printed alongside it — once `pre-commit install` has been run in the
-  clone; until then commits go unchecked, and a Claude Code session with
+  is printed alongside it, and an unmarked one from a check `claims.toml`'s
+  `[hook] fail_on_unmarked` lists blocks it too — once `pre-commit
+  install` has been run in the clone; until then commits go unchecked, and a Claude Code session with
   the plugin enabled says so when it starts. It also runs on demand via
   the `check-claims` skill (ask an agent to check
   claims, any time mid-task, not only at commit time). Checks: `stale-claims`
@@ -193,7 +194,9 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   `.rs` — see its own comment for why.
 
   `claims.toml` also scopes `stale-claims`'s bare-name module matching to
-  `decisions/`/`AGENTS.md` — see its own comment for why — and raises
+  `decisions/`/`AGENTS.md`, keeps it from ranking an ADR's Context and
+  Alternatives considered sections — see its own comment for why, for
+  both — and raises
   `executable-claims`'s timeout past this repo's own cold-build time.
 
   `claims.toml` also opts `docs/*.md`, `CONTEXT.md`, `agents/*.md` and
@@ -258,7 +261,9 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   so a bump of the hook moves CI with it; runs the checks against the PR's
   base branch, which covers the PR's whole change; and fails on a gate
   finding, or on an advisory finding that is neither fixed nor marked checked
-  (`--fail-on-unmarked`; the commit hook still lets a commit through). A
+  (`--fail-on-unmarked`; of advisory findings, the commit hook blocks only
+  on those, and on an orphaned mark, from the checks `[hook]
+  fail_on_unmarked` lists). A
   `pre-push` hook runs the same checks over the branch from its merge-base
   with `origin/main`, with your own grants, so its unmarked count is the
   one to quote when sizing a PR's claims work.
@@ -279,7 +284,10 @@ Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.
   saying what was checked against what, and `--by` naming who did the
   reading: an agent's marks name the agent and whoever approved them, as
   `--by "Claude Code agent, approved by Kevin Rogers"`. Deleting an entry
-  by hand lifts a mark early. Mark a finding only
+  by hand lifts a mark early; `--prune` removes every orphaned one, as when
+  a reworded sentence is marked again. A `stale-claims` section or
+  `spliced-docs` doc comment read only in part is marked with `--partial`,
+  which the summary counts apart. Mark a finding only
   after reading it against the code, file or section it names, never on
   the strength of its own wording, and never mark a batch nobody read: a
   mark records a reading, and one without a reading quiets a claim nobody
