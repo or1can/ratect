@@ -106,3 +106,11 @@ allow-dirty = ["ci"]
 # guideline 8) are what satisfy "never a shared workspace-wide tag" — by
 # always pushing one, not by making the other form impossible to push.
 
+
+# dist 0.33.0 builds aarch64-apple-darwin on `macos-14`, an image GitHub
+# retired on 2026-11-02, after which a job asking for it is cancelled with
+# "The configuration 'macos-14-arm64-us-default' is not supported". The
+# other targets keep dist's defaults. Drop this table once a dist release
+# defaults to a supported image and `cargo-dist-version` moves to it.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"

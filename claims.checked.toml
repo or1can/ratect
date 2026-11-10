@@ -13688,24 +13688,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "8315afbbe9b7e2e7c375018d14351db425a79824", "CLAUDE.md" = "fc80615c835f3933", "ROADMAP.md" = "b2bfb89c20e69299", "agents/domain.md" = "befc2eb13561a492" }
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Checked Decision against dist-workspace.toml (the five targets, create-release = false, github-attestations-phase = \"host\", filters *.tar.xz/*.cdx.json/sha256.sum, allow-dirty = [\"ci\"]) and release.yml (create-draft-release job, cargo-cyclonedx spec 1.5). \"Reports rather than blocks\" is corrected in Status. The branch doesn't touch release tooling."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "199997b8fc027b82", ".github/workflows/release.yml" = "0a212b498601f490", "CHANGELOG.md" = "8315afbbe9b7e2e7c375018d14351db425a79824", "dist-workspace.toml" = "00b7f7edb35b372b", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
-
-[[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Consequences checked against dist-workspace.toml: installers = [\"shell\", \"homebrew\"] and publish-jobs = [\"homebrew\"] match the ticket #58/#59 claims. cargo-binstall is still unrealized and the crates.io deferral still holds (bollard comes from the git patch tag). Unaffected by the rsa change."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "199997b8fc027b82", ".github/workflows/release.yml" = "0a212b498601f490", "dist-workspace.toml" = "00b7f7edb35b372b", "docs/installation.md" = "c1490b152407630e" }
-
-[[mark]]
 file = "SECURITY.md"
 mode = "stale-claims"
 unit = "f6a589cf70c5e404"
@@ -14201,10 +14183,28 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "bbe4642d810af8a8b330f552ccf8bd6a4450e1d4", "agents/docs.md" = "2dd3d49fca72d0d0", "decisions/README.md" = "07650c4af48a8466" }
 
 [[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "The target-matrix bullet says every target builds on a native GitHub-hosted runner, confirmed via dist plan's manifest. dist plan on this branch gives macos-15 (arm64) for aarch64-apple-darwin and the other four unchanged, so it holds; the section names no runner image. Earlier reading: Checked Decision against dist-workspace.toml (the five targets, create-release = false, github-attestations-phase = \"host\", filters *.tar.xz/*.cdx.json/sha256.sum, allow-dirty = [\"ci\"]) and release.yml (create-draft-release job, cargo-cyclonedx spec 1.5). \"Reports rather than blocks\" is corrected in Status. The branch doesn't touch release tooling."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "199997b8fc027b82", ".github/workflows/release.yml" = "1a32b4e0ea48a20a", "CHANGELOG.md" = "bbe4642d810af8a8b330f552ccf8bd6a4450e1d4", "dist-workspace.toml" = "7852e95f01af7dc8", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Ranked from churn in ci.yml, installation.md and release.yml. It says nothing about runners, and this change touched release.yml only in a comment naming them. Earlier reading: Consequences checked against dist-workspace.toml: installers = [\"shell\", \"homebrew\"] and publish-jobs = [\"homebrew\"] match the ticket #58/#59 claims. cargo-binstall is still unrealized and the crates.io deferral still holds (bollard comes from the git patch tag). Unaffected by the rsa change."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "199997b8fc027b82", ".github/workflows/release.yml" = "1a32b4e0ea48a20a", "dist-workspace.toml" = "7852e95f01af7dc8", "docs/installation.md" = "c1490b152407630e" }
+
+[[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
-note = "Guidelines 7 to 9 and 13 read against this release: versions bumped in a separate chore commit, Unreleased moved under the dated heading, RELEASES.md entries added, statuses in their own commit. Guideline 8's milestone rename is still to do, and holds as a rule. Earlier reading: Ran the guideline-6 smoke command and got the exact listed output. Found every symbol named in the guidelines: every_entry_leading_with_a_ratect_verb_is_marked, every_marked_breaking_change_has_a_written_for_row, written_for::BREAKING_CHANGES, exit_code::already_reported, include_trust::restricting (returns Option<&Bundle>), batect_shaped_containers, CACHE_MOUNT_PROJECT and the CI literal-brackets step. Nothing here concerns YAML tags."
+note = "Guideline 8's release rules read against this change: its release.yml edit is a comment, merged with no release run in flight, as both 0.34.0 · 0.13.0 runs were cancelled first. Earlier reading: Guidelines 7 to 9 and 13 read against this release: versions bumped in a separate chore commit, Unreleased moved under the dated heading, RELEASES.md entries added, statuses in their own commit. Guideline 8's milestone rename is still to do, and holds as a rule. Earlier reading: Ran the guideline-6 smoke command and got the exact listed output. Found every symbol named in the guidelines: every_entry_leading_with_a_ratect_verb_is_marked, every_marked_breaking_change_has_a_written_for_row, written_for::BREAKING_CHANGES, exit_code::already_reported, include_trust::restricting (returns Option<&Bundle>), batect_shaped_containers, CACHE_MOUNT_PROJECT and the CI literal-brackets step. Nothing here concerns YAML tags."
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "199997b8fc027b82", ".github/workflows/release.yml" = "0a212b498601f490", "CHANGELOG.md" = "bbe4642d810af8a8b330f552ccf8bd6a4450e1d4", "ROADMAP.md" = "b2bfb89c20e69299", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "199997b8fc027b82", ".github/workflows/release.yml" = "1a32b4e0ea48a20a", "CHANGELOG.md" = "bbe4642d810af8a8b330f552ccf8bd6a4450e1d4", "ROADMAP.md" = "b2bfb89c20e69299", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
