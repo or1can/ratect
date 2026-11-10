@@ -3,6 +3,17 @@
 # tools/verify-docs.py — see decisions/0009-adopt-claims-plugin.md for the
 # migration). Full knob reference: the plugin's own docs/configuration.md.
 
+[hook]
+# CI and the pre-push hook fail on any unmarked advisory finding. A finding
+# from these three is brought in by the commit's own edit — a sentence it
+# added, or one it retracted that another file still asserts — so that commit
+# is where it's cheapest to fix or mark, and the commit hook blocks on them.
+# Not stale-claims or spliced-docs, whose findings rank or sweep text the
+# commit didn't write, and not judgment-agent, whose candidates (every
+# backticked Rust/Swift name a diff touched) each want an agent's reading:
+# those stay with pre-push and CI.
+fail_on_unmarked = ["claim-words", "temporal-words", "restatement"]
+
 [stale-claims]
 # A bare backtick name (`` `cache` ``, no extension) is ambiguous — as often
 # an ordinary English/config-field word as a module reference — so only
@@ -15,6 +26,15 @@ module_reference_scope = ["decisions/*.md", "AGENTS.md"]
 # own: a shipped entry describes its release, so the code it names moving on
 # afterwards is expected, not a sign the entry needs rereading.
 exclude = ["RELEASES.md"]
+# An ADR's Context and Alternatives considered describe the world the
+# decision was made in and the options it weighed then: true of that world
+# however far the code moves, so a ranking there only ever asked for a mark.
+# Its Decision and Consequences still describe what the code does, and its
+# Status takes a note when it's superseded or reworked, so those stay ranked.
+exclude_sections = [
+    "decisions/*.md#context",
+    "decisions/*.md#alternatives-considered",
+]
 
 # CHANGELOG.md/RELEASES.md/decisions/*.md are this repo's own append-only
 # historical records (AGENTS.md's own rules) — they legitimately cite a path

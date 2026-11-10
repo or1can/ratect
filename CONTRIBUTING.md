@@ -41,6 +41,13 @@ the branch and refuses a push with an unmarked finding, as CI's `claims`
 job would. A clone with only the `pre-commit` hook installed needs
 `pre-commit install` run again to add it.
 
+The commit hook itself refuses a commit that brings in an unmarked
+`claim-words`, `temporal-words` or `restatement` finding, or leaves an
+orphaned mark for one, such as a marked sentence's old mark after it is
+reworded (the list is `claims.toml`'s `[hook] fail_on_unmarked`): fix or
+mark the finding, as [AGENTS.md](AGENTS.md) describes, and prune the
+orphan.
+
 ## Conventions
 
 - **Commits** follow [Conventional Commits](https://www.conventionalcommits.org/)
