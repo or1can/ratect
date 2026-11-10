@@ -809,15 +809,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "TODO.md"
-mode = "claim-words-totalising"
-unit = "e20aa2edbbc16fdd"
-copies = 1
-note = "Every Batect-format read into the model goes through crate::yaml::from_str: config file at ratect-core/src/config.rs:3818, config vars file at config.rs:4624 (load_config_vars_file), project_name_of's YAML branch at config.rs:5699. No other noyalib::from_* call outside yaml.rs (noyalib::load_all at config.rs:3812 only checks for an empty document). yaml.rs:102 sets plain_scalar_strings(true); yaml.rs:80-83 documents the AST-path re-format, and yaml_tests.rs:248 pins it ('tagged: !!str a\\nvalue: 3.10' gives '3.1'). The 'every' holds."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "decisions/0002-runtime-ownership-labels.md"
 mode = "claim-words-totalising"
 unit = "9985b9a0c5046ebc"
