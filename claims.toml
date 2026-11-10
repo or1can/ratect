@@ -1,7 +1,7 @@
 # This repo's own config for the `claims` plugin (replaces
 # tools/echoed-claims.py, tools/spliced-docs.py, tools/stale-claims.py and
 # tools/verify-docs.py — see decisions/0009-adopt-claims-plugin.md for the
-# migration). Full knob reference: the plugin's own docs/configuration.md.
+# migration). Full knob reference: the plugin's own docs/configuring.md.
 
 [hook]
 # CI and the pre-push hook fail on any unmarked advisory finding. A finding
