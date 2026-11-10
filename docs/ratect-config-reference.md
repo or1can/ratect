@@ -1283,11 +1283,5 @@ nor `build_directory` is still only reported when a task runs it.
 
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only
-fields (`extends`, a cache's `scope`, a dependency's `run_to_completion` or
-`external_health_check`, a setup command's `run_in`, a container's
-`stop_signal`/`stop_grace_period`, `ulimits`,
-`dns`/`dns_search`/`dns_options`, `network_mode` or
-`user`/`group`/`groups`) and the handful of behaviours in [Where
-the semantics differ](#where-the-semantics-differ), which exist because
-`extends` gives some combinations a meaning `batect.yml` has no way to
-express.
+fields, the rows above with no `batect.yml` entry, and the handful of
+behaviours in [Where the semantics differ](#where-the-semantics-differ).
