@@ -223,6 +223,77 @@ fn signing_with_an_rsa_key_honours_the_requested_sha2_algorithm() {
     }
 }
 
+/// `RSASSA-PKCS1-v1_5` is deterministic, so a signature from a separate
+/// implementation over the same key and data is an exact answer to check
+/// against, and it doesn't share any code with the signer under test.
+/// These come from OpenSSL: [`TEST_RSA_KEY`] converted to PEM with
+/// `ssh-keygen -p -m PEM`, then `openssl dgst -sha512 -sign` (and
+/// `-sha256`) over the bytes `session identifier and authentication
+/// request`.
+const OPENSSL_RSA_SHA2_512_SIGNATURE: &[&str] = &[
+    "8d4e0fa29992b1f774fcd11e6c0bfa78f51e2ad01c2dc4e6b5b0c64f942ba18e",
+    "b5e40bd7391fc50bdbf4754d42756bfc57b108581b23f31ddc043519f856ae3f",
+    "bfb0c0b154875cd5f1d31af1f1d1ba20df8abde2de14707165a7cfb495d0bd6c",
+    "1830202364fa1ed4d56f29a339009914a95d87e0ba5320d8a412aca1bdf57e1a",
+    "cdedf553ed7582b2370f2522bfc82714b1ec79162eaeaf453982b941b436106d",
+    "6d67427e0674d2d9ef8dc7cc21963db1724d3b5909228c5c4ca162345cd79314",
+    "60f44d74471e103b93869113067176239d52a660b9f8f95b0133b8a086be1553",
+    "6d21d48f331f46d28f9cd4e1535e92790403901cfc387a0ddbd3fe052f9d3fcf",
+];
+const OPENSSL_RSA_SHA2_256_SIGNATURE: &[&str] = &[
+    "a3c9fc3b33fcaa02bfc84b3a705b6d17088c445ffb446ffe943a7d459e651404",
+    "bbc10308d58bfcc37f63e46ea82124a42bd54225404c476424a6891aa0c82501",
+    "b118ffed204079441f24a432dfc368d1a44b686522da874b162b39104fd46c44",
+    "59c0e993de218dfe5389dfc98fb255f29321e96ce1f86d6f74b5912a6f44978a",
+    "825245382641dd245b080ed9b4ce7e392cb1632e4ae5e1f212a9c583a5de028c",
+    "ef0714caa17cbdb987fbc4d9af981551129d3fb6ff6a3be6d4267890ccff1e39",
+    "af7d5a075922e614049d2eaea305ef2166883ae062bdd38037a88cd411a52655",
+    "95df60dfb23c657594b0856dcd7f483e73d94c26c778d527d49b40f6c31019a5",
+];
+
+fn hex_bytes(lines: &[&str]) -> Vec<u8> {
+    let hex = lines.concat();
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// The agent's RSA signature has to be byte-for-byte the one OpenSSL makes
+/// from the same key, under each SHA-2 algorithm a client can ask for.
+/// Verifying with the same library that signed would pass a signer and a
+/// verifier that agree on the same mistake.
+#[test]
+fn signing_with_an_rsa_key_matches_openssl_byte_for_byte() {
+    let keys = vec![test_rsa_key()];
+    let data = b"session identifier and authentication request";
+
+    for (flags, expected_algorithm, expected) in [
+        (
+            RSA_SHA2_512_FLAG,
+            "rsa-sha2-512",
+            OPENSSL_RSA_SHA2_512_SIGNATURE,
+        ),
+        (
+            RSA_SHA2_256_FLAG,
+            "rsa-sha2-256",
+            OPENSSL_RSA_SHA2_256_SIGNATURE,
+        ),
+    ] {
+        let response = respond(&keys, &sign_request(&keys[0].blob, data, flags));
+
+        let (algorithm, _) = signature_parts(&response);
+        assert_eq!(algorithm, expected_algorithm);
+        let mut reader = Reader::new(&response[1..]);
+        let signature = Signature::try_from(reader.string().unwrap()).unwrap();
+        assert_eq!(
+            signature.as_bytes(),
+            hex_bytes(expected).as_slice(),
+            "the {expected_algorithm} signature should be OpenSSL's"
+        );
+    }
+}
+
 /// No flags means the legacy SHA-1 `ssh-rsa` algorithm, which this
 /// agent refuses — see [`rsa_signature`]. Answering with a SHA-2
 /// signature instead would be worse than failing: the client asked for
