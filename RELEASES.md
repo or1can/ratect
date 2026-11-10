@@ -1292,6 +1292,22 @@ to live at, so links written before the split still resolve.
   configuration is printed escaped. See the closed
   [milestone](https://github.com/or1can/ratect/milestone/14) for everything
   that shipped.
+- **0.34.0** — The host-identity release, shared with [`ratect`
+  0.13.0](#ratect) below through `ratect-core`, with its breaking changes
+  listed under Breaking in [`CHANGELOG.md`](CHANGELOG.md). What Ratect needs
+  from the host user is decided once
+  ([decisions/0024](decisions/0024-host-identity.md)): `run_as_current_user`
+  runs under a host uid or gid with no passwd or group entry, as under a
+  numeric `docker run -u`, a host user with no home can still run tasks, and
+  the home directory is `$HOME` when it is set and absolute, before the
+  passwd entry's. `run_as_current_user`'s generated files end their last
+  line, so musl-based images read it whole. A `build_ssh` RSA key that isn't
+  a valid key fails before the build starts, and `build_ssh` signs with
+  `rsa` 0.10, which fixes RUSTSEC-2023-0071. Each binary's GitHub Release
+  notes list only the changelog entries that apply to it. See the closed
+  [milestone](https://github.com/or1can/ratect/milestone/12) for everything
+  that shipped, and [#813](https://github.com/or1can/ratect/issues/813) for
+  the milestone's process observations and where each went.
 - **1.0.0** — the [Batect Parity](ROADMAP.md#batect-parity) section above substantially checked
   off (all of the above, including 0.7.0–0.19.0, not just the items shipped through
   0.6.0), and verified against real Batect projects — the conformance corpus above
@@ -1650,6 +1666,26 @@ to live at, so links written before the split still resolve.
   ([decisions/0017](decisions/0017-output-streams-and-styles.md)), and
   `ratect resources clean` reports a removal the daemon refuses. See the
   closed [milestone](https://github.com/or1can/ratect/milestone/14) for
+  everything that shipped.
+- **0.13.0** — The container-identity release, on top of the shared
+  `ratect-core` work in [`ratect-compat` 0.34.0](#ratect-compat) above. In
+  `ratect.toml`, `run_as_current_user` gives way to `identity`
+  ([decisions/0011](decisions/0011-container-identity.md)), which states the
+  intent rather than the mechanism. A container gets a guaranteed home, and
+  on a rootful Linux daemon it runs as the host user, with the image's own
+  `/etc/passwd` and `/etc/group` added to rather than replaced. On Desktop and
+  remapped daemons, where the host user already owns what a container writes
+  or can't, the image's user is left alone. Which of these applies depends on
+  the kind of daemon a connection reaches, which `ratect doctor` reports.
+  Containers also take `user`, `group` and `groups`, handed to the runtime as
+  written, and `identity` takes `additional_users`. `ratect doctor` and
+  `ratect config validate` report a mount above the `identity` home, and
+  `ratect doctor` warns about bind mounts written as root or owned by another
+  uid on rootful Linux. [File Ownership and the Home
+  Directory](docs/file-ownership.md) explains it by daemon. Removing
+  `run_as_current_user` is a `**ratect.toml:**` breaking change with its own
+  written-for row, and `ratect config convert` turns it into `identity`. See
+  the closed [milestone](https://github.com/or1can/ratect/milestone/12) for
   everything that shipped.
 
 Its **1.0.0** means something different from `ratect-compat`'s: interface stability

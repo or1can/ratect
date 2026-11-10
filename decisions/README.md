@@ -78,7 +78,7 @@ record refined this way.
 | [0008](0008-tracking-release-scope-with-github-issues.md) | Tracking release scope with GitHub Issues, not RELEASES.md | Accepted — adopted immediately |
 | [0009](0009-adopt-claims-plugin.md) | Adopting the `claims` plugin for documentation checks | Accepted — adopted immediately |
 | [0010](0010-release-binary-distribution.md) | Automated release pipeline: prebuilt binaries, SBOM, provenance | Accepted — implemented (ratect-compat 0.28.0 · ratect 0.7.0) |
-| [0011](0011-container-identity.md) | Container identity: state the intent, add to the image (`ratect` native) | Accepted — planned (ratect 0.13.0) |
+| [0011](0011-container-identity.md) | Container identity: state the intent, add to the image (`ratect` native) | Accepted — shipped (ratect 0.13.0) |
 | [0012](0012-native-task-container-has-no-readiness-gate.md) | A task's own container's readiness gate | Accepted — implemented (ratect 0.10.0, ratect-compat 0.31.0) |
 | [0013](0013-when-ratect-compat-copies-batect.md) | When `ratect-compat` copies Batect, and when it diverges | Accepted — adopted (parity triage, #284) |
 | [0014](0014-config-checked-at-load-evaluated-per-task.md) | Config is checked at load, and evaluated per task | Accepted — shipped (ratect-compat 0.32.0 · ratect 0.11.0) |
@@ -91,4 +91,4 @@ record refined this way.
 | [0021](0021-native-field-follows-its-file.md) | A native field follows its file, on include entries as on containers | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0022](0022-written-for-refusal-says-what-applies.md) | A written-for refusal says which changes touch the project | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0023](0023-git-include-entry-lock.md) | A Git include's entry lock proves its holder dead, and correctness doesn't depend on it | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
-| [0024](0024-host-identity.md) | Host identity: what Ratect needs from the host user | Accepted — planned (ratect-compat 0.34.0 · ratect 0.13.0) |
+| [0024](0024-host-identity.md) | Host identity: what Ratect needs from the host user | Accepted — shipped (ratect-compat 0.34.0 · ratect 0.13.0) |

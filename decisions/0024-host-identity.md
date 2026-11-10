@@ -1,6 +1,6 @@
 # 0024 — Host identity: what Ratect needs from the host user
 
-**Status:** Accepted — planned (ratect-compat 0.34.0 · ratect 0.13.0). Scope is
+**Status:** Accepted — shipped (ratect-compat 0.34.0 · ratect 0.13.0). Scope was
 tracked as the spec [#844](https://github.com/or1can/ratect/issues/844) and its
 sub-issues, in the
 [ratect 0.13.0 milestone](https://github.com/or1can/ratect/milestone/12).
