@@ -332,7 +332,9 @@ task's own container, as a dependency, or by more than one task) — but never r
 
   Keys must not be protected by a passphrase, and must be Ed25519, RSA or ECDSA
   (Ratect rejects anything else up front, naming the file, rather than failing
-  mid-build). RSA keys are signed with `rsa-sha2-256`/`rsa-sha2-512`; the legacy
+  mid-build). An RSA key whose parts don't make a valid key is rejected the
+  same way, and so is an unusual one whose private exponent isn't reduced
+  below its modulus. RSA keys are signed with `rsa-sha2-256`/`rsa-sha2-512`; the legacy
   SHA-1 `ssh-rsa` algorithm, which OpenSSH has disabled by default since 8.8, is
   not offered.
 
