@@ -1,9 +1,11 @@
 # Probing a daemon class from a Mac
 
-A Mac's own Docker Desktop or OrbStack daemon, over its local socket,
-classifies as `desktop`, and its file sharing makes a container's writes
-yours. The other classes still run on a Mac, in minutes, by the methods
-below (ratect#813 has the notes they came from).
+On a Mac, a client reaching Docker Desktop's or OrbStack's daemon over its
+local socket classifies it as `desktop` (the class comes from the client's
+OS and transport, unless the daemon reports rootless or userns-remap), and
+on OrbStack its file sharing makes a container's writes yours. The other
+classes still run on a Mac, in minutes, by the methods below (ratect#813
+has the notes they came from).
 
 ## Rootful Linux: a Linux client on the Mac's socket
 
