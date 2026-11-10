@@ -1,9 +1,20 @@
 # Probing a daemon class from a Mac
 
-A Mac's own Docker Desktop or OrbStack daemon, over its local socket,
-classifies as `desktop`, and its file sharing makes a container's writes
-yours. The other classes still run on a Mac, in minutes, by the methods
-below (ratect#813 has the notes they came from).
+On a Mac, a client reaching Docker Desktop's or OrbStack's daemon over its
+local socket classifies it as `desktop` (the class comes from the client's
+OS and transport, unless the daemon reports rootless or userns-remap), and
+on OrbStack its file sharing makes a container's writes yours. The other
+classes still run on a Mac, in minutes, by the methods below (ratect#813
+has the notes they came from).
+
+These methods were probed with OrbStack only. The classification half of
+the rootful method doesn't depend on the runtime: `daemon_class::classify`
+gives a Linux client `rootful Linux` unless the daemon reports rootless or
+userns-remap. The rest of that method (where the socket is, which group
+owns it, how bind mounts resolve) may differ on Docker Desktop, Lima or
+Colima, none of them tried. The `/info` proxy only rewrites what the
+socket answers, so it should carry over as it is. The OrbStack-machine
+section has no counterpart here for those runtimes.
 
 ## Rootful Linux: a Linux client on the Mac's socket
 
@@ -65,3 +76,10 @@ what the daemon does with files.
   daemon and the user missed what the image and the mounts did; record
   the axes left fixed beside the result, in the ADR if there is one.
 - **Spend ten minutes trying before writing "not probed".**
+- **Before reading a real-daemon test failure in the probe container as
+  real, check where its project lives.** On ratect#847 three tests failed
+  there and passed on CI, because they bind-mount from the probe
+  container's own `/tmp`, which the daemon can't see: the same-path rule
+  above, broken by the tests rather than the prober. Mounting `/tmp` at the same path on both sides, or
+  pointing `TMPDIR` at the mirrored scratch directory, should avoid it;
+  neither has been tried.

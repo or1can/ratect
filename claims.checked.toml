@@ -13589,15 +13589,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "b1b1fcfacb4e76414fbe61ec6d0f2247a2d3d707", "ROADMAP.md" = "b2bfb89c20e69299" }
 
 [[mark]]
-file = ".claude/skills/ready/SKILL.md"
-mode = "stale-claims"
-unit = "b7595e2a863957fc"
-copies = 1
-note = "agents/probing.md per-class methods; .pre-commit-config.yaml pre-push claims-unmarked over origin/main...HEAD"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/probing.md" = "62d4ee678a6933b8" }
-
-[[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "7189cc442a4a7479"
@@ -13605,15 +13596,6 @@ copies = 1
 note = "agents/ directory and decisions/0007 link; issue-tracker.md exists"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0007-where-agent-process-docs-live.md" = "3ad12b72630d25fa" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "0a1b1b5f0bb6313c"
-copies = 1
-note = "agents/probing.md Mac methods per class plus the no-entry probe matching unnamed_host_user.rs"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/probing.md" = "62d4ee678a6933b8" }
 
 [[mark]]
 file = "agents/probing.md"
@@ -14059,15 +14041,6 @@ subjects = { "CHANGELOG.md" = "b1b1fcfacb4e76414fbe61ec6d0f2247a2d3d707", "RELEA
 [[mark]]
 file = "decisions/0024-host-identity.md"
 mode = "stale-claims"
-unit = "ea7792a26f405e2a"
-copies = 1
-note = "whole Context re-read: origin/main user.rs current_user/home_directory, connection.rs paths, origin/main probing.md, Batect SystemInfo/UnixNativeMethods, the JDK probe table and homedir.Get"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/probing.md" = "62d4ee678a6933b8" }
-
-[[mark]]
-file = "decisions/0024-host-identity.md"
-mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
 note = "whole Decision re-read against user.rs home/chosen_home/named, connection.rs no-home and TLS gate, cache.rs, git_include.rs, config.rs refusals, identity edits"
@@ -14084,10 +14057,73 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/docker.rs" = "2f2543eac749ae10" }
 
 [[mark]]
+file = "agents/probing.md"
+mode = "claim-words-totalising"
+unit = "a1e1977409022d07"
+copies = 1
+note = "Every probe recorded on ratect#813 and in this page's methods ran against OrbStack (the Mac socket, orb machines, the /info proxy in front of OrbStack's socket); no comment records another runtime."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-totalising"
+unit = "7edf61f8ddea4cac"
+copies = 1
+note = "The sentence hedges with \"may differ\" and says none of Docker Desktop, Lima or Colima was tried, which matches #813's notes."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-totalising"
+unit = "ba8cc122e5c084d2"
+copies = 1
+note = "Per #813's #237 note the proxy was about 40 lines in front of the socket rewriting /info; it talks to no runtime-specific API, and the sentence hedges with \"should\"."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/probing.md"
+mode = "claim-words-about-elsewhere"
+unit = "6acb3dbc68b8fb20"
+copies = 1
+note = "Matches #813's 2026-11-10 comment and #847: three older real-daemon tests fail only from the probe container's /tmp and pass on CI's docker-integration job."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/ready/SKILL.md"
+mode = "stale-claims"
+unit = "b7595e2a863957fc"
+copies = 1
+note = "Steps read: step 2's pointer (\"agents/probing.md says how, for each daemon class\") still holds after this branch's edits to probing.md, which keep every class's method."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = { "agents/probing.md" = "bf91674285619801" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "0a1b1b5f0bb6313c"
+copies = 1
+note = "Pointer section read: probing.md still gives a method for rootful Linux, rootless and userns-remap, each run on a Mac, so \"each one runs on a Mac\" holds."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = { "agents/probing.md" = "bf91674285619801" }
+
+[[mark]]
+file = "decisions/0024-host-identity.md"
+mode = "stale-claims"
+unit = "ea7792a26f405e2a"
+copies = 1
+note = "Context read: its probing.md sentence describes the page before #847 added the no-entries probe, which this branch keeps unchanged; accepted record, nothing here contradicts it."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = { "agents/probing.md" = "bf91674285619801" }
+
+[[mark]]
 file = "decisions/0024-host-identity.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "whole Consequences re-read against CHANGELOG Changed/Breaking entries, written_for row and detector, connection.rs refusals, ratect main.rs shared_cache_root, unnamed_host_user.rs and ci.yml"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/probing.md" = "62d4ee678a6933b8", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
+note = "Consequences read: \"agents/probing.md gains a probe for a host user with no entries\" still holds; this branch adds a scope paragraph and a /tmp note and leaves that bullet as it is."
+by = "Claude Code agent, approval pending from Kevin Rogers"
+subjects = { "agents/probing.md" = "bf91674285619801", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
