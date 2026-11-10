@@ -67,6 +67,17 @@ For both reviewers, alongside guideline 15's checks in `AGENTS.md`:
 - **A mutation check counts once it has shown red.** A green result from a
   mutation that disabled nothing proves nothing.
 - **A design record names the axes its probes didn't vary.**
+- **A comment calling a behaviour deliberate should say whose decision it
+  was.** Behaviour carried over from Batect can be a platform default it
+  inherited (the JVM's `user.home`,
+  [decisions/0024](../../../decisions/0024-host-identity.md)) or a bug it
+  shipped (no final newline), rather than a choice. Ask where it came from,
+  then judge it by
+  [decisions/0013](../../../decisions/0013-when-ratect-compat-copies-batect.md)'s
+  rules like any other Batect behaviour, since knowing its origin doesn't
+  settle whether to copy it. 0024 declined to copy Batect's `user.home` home into
+  `ratect-compat` under rule 3, since it reads a different `~/.docker` from
+  the one `docker login` wrote (ratect#813, the comment of 2026-11-10).
 - **A brief is a specification, not a source for what exists.** A ticket's
   "settled" or "don't" may only flag something as hard; check what was
   actually decided.
