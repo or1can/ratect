@@ -25,7 +25,7 @@ serde_json = "1.0"
 # `ParserConfig`, whose module notes say why each setting is on — including
 # `DuplicateKeyPolicy::Error`, since the default keeps a repeated key's last
 # value where Batect refuses it (ratect#372).
-noyalib = { version = "0.0.58", features = ["compat-serde-yaml"] }
+noyalib = { version = "0.0.60", features = ["compat-serde-yaml"] }
 # **`bollard`** (`features = ["buildkit_providerless", "chrono", "ssl"]`,
 # **consumed via a `[patch.crates-io]` fork** — see the root `Cargo.toml`):
 # Asynchronous Docker API client. Which branch is pinned (upstream `master` or a
