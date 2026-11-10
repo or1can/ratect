@@ -16,9 +16,16 @@ rootful path runs from a Linux container with the socket mounted:
 - Mount the scratch directory at the same path on both sides. The daemon
   resolves a bind mount's source on its own side, so a path that differs
   fails in a way that looks like a product bug.
-- Run as a non-root user with real entries: `groupadd` and `useradd`
-  first, then `setpriv`. A user with no passwd or group entry fails the
-  harness, and the failure says nothing about the code.
+- Run as a non-root user through `setpriv`. For most probes give it real
+  entries first (`groupadd`, `useradd`), since a harness of your own may
+  fail without them in ways that say nothing about the code.
+- Probe a user with **no** entries too: Ratect supports one
+  ([decisions/0024](../decisions/0024-host-identity.md)), and leaving it
+  out is how a run of failures in that case went unseen. Run it as uid and
+  gid 4242 with `setpriv --reuid 4242 --regid 4242 --groups <socket gid>
+  -- env -i PATH=/usr/bin:/bin`, with and without `HOME`, as
+  `ratect/tests/support/unnamed_host_user.rs` does for the real-daemon
+  tests.
 - Reach the socket by adding that user to the group that owns it (on
   OrbStack, `root`). The mount is
   OrbStack's real socket, so a `chmod` inside the container changes the

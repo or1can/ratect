@@ -11,6 +11,11 @@ The native-certs PR *Alternatives considered* names as still open
 waits on a bollard release containing it, and the `[patch.crates-io]` now
 carries the open build-cancel PR (fussybeaver/bollard#849).
 
+Corrected since (ratect#844): the Release Pipeline Config check that Decision
+says reports rather than blocks is now required by the `main` ruleset, as
+Consequences records, and the Homebrew tap and install script that
+Alternatives lists as deferred have shipped (see Consequences).
+
 ## Context
 
 Before this, Ratect published no binaries at all — `docs/installation.md`

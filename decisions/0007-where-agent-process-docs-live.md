@@ -4,6 +4,10 @@
 
 Accepted — adopted immediately.
 
+Corrected since (ratect#844): `.claude/` then held only
+`settings.json`/`settings.local.json`; it now also holds `hooks/` and
+`skills/`.
+
 ## Context
 
 [0006](0006-code-and-documentation-locality.md) settled where code's own

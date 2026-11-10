@@ -1446,7 +1446,7 @@ fn collect_build_context_entries(
 /// `PartialEq`/`Eq` so it can nest inside `ContainerSpec`, which does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserMapping {
-    pub user: crate::user::CurrentUser,
+    pub user: crate::user::NamedUser,
     pub home_directory: String,
     /// Absolute container paths of this container's writable `cache`
     /// mounts, which need the same ownership treatment the home directory
@@ -2440,8 +2440,10 @@ pub struct DockerClient {
     /// Kept as a plain path rather than through `credential_resolver`
     /// itself, since a fake resolver used in tests has no file of its own —
     /// enumeration and per-registry resolution are deliberately separate
-    /// concerns.
-    docker_config_path: std::path::PathBuf,
+    /// concerns. `None` where there is no Docker config directory (a host user
+    /// with no home, decisions/0024): no proxies and no registries, as for a
+    /// missing file.
+    docker_config_path: Option<std::path::PathBuf>,
     /// The daemon host this client connected to, as the Docker CLI spells
     /// it — what `config.json`'s `proxies` map is keyed by.
     daemon_host: String,
@@ -2829,7 +2831,7 @@ impl DockerClient {
             credential_resolver: std::sync::Arc::new(
                 crate::registry_auth::DockerCredentialHelperResolver::new(config_directory.clone()),
             ),
-            docker_config_path: config_directory.join("config.json"),
+            docker_config_path: config_directory.map(|directory| directory.join("config.json")),
             daemon_host: connected.daemon_host.clone(),
         })
     }
@@ -3459,9 +3461,10 @@ impl ContainerRuntime for DockerClient {
         // `config.json` can't change between them (a `docker login` mid-run,
         // however unlikely). A missing or unreadable file is nothing
         // configured, silently, as a pull's resolver reads it.
-        let config_json = tokio::fs::read_to_string(&self.docker_config_path)
-            .await
-            .ok();
+        let config_json = match &self.docker_config_path {
+            Some(path) => tokio::fs::read_to_string(path).await.ok(),
+            None => None,
+        };
         let build_args =
             build_args_with_config_file_proxies(spec, config_json.as_deref(), &self.daemon_host);
         let build_args = build_args.as_ref();

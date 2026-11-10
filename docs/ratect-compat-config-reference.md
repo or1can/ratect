@@ -446,8 +446,10 @@ For a `local` mount, `local` (the host path) is resolved:
   string form's host path is used as written, as in Batect: a `$` or `<` in
   `$HOME/.m2:/root/.m2` is just part of a relative path, so a host path that needs
   an expression is written as an object. (`ratect.toml` interpolates both forms.)
-- A leading `~` is then expanded to the host user's home directory, so
-  `~/.cache/tool` mounts the real cache directory. Only a whole leading `~`
+- A leading `~` is then expanded to the host user's home directory — `$HOME` when
+  it is set and absolute, else the passwd entry's, as for the Docker CLI — so
+  `~/.cache/tool` mounts the real cache directory. With no home from either, the
+  path is refused. Only a whole leading `~`
   *component* expands: `~user/…` (another user's home) isn't supported, and a `~`
   anywhere but the front is a literal character. Note that a bare `~` must be
   quoted (`local: "~"`) — unquoted, YAML reads it as null.
@@ -640,7 +642,9 @@ A few things happen automatically to make this actually work, not just set `--us
 - The container's own image has no `/etc/passwd`/`/etc/group` entry for an arbitrary
   host uid/gid — many programs misbehave or refuse to run at all without one (no
   `$HOME`, no username resolution). Minimal synthetic `/etc/passwd`, `/etc/shadow`,
-  and `/etc/group` entries are uploaded into the container before it starts.
+  and `/etc/group` entries are uploaded into the container before it starts, named
+  after your user and group, or with the uid's or gid's digits where the host has no
+  name for it, as in Batect.
 - `home_directory` itself is created inside the container (owned by the mapped
   uid/gid) before it starts — it's a path inside the container's own filesystem, not
   host-mounted, so it doesn't persist across runs, matching Ratect's existing

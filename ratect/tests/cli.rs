@@ -887,11 +887,12 @@ fn a_refusal_says_what_each_change_means_for_a_project_that_loads() {
     let (doctor, _) = run(&["doctor"]);
 
     let rows = breaking_change_lines(&refusal);
-    assert_eq!(rows.len(), 10, "{refusal}");
+    assert_eq!(rows.len(), 11, "{refusal}");
     for row in &rows {
         let expected = if [
             "a Git bundle is refused",
             "a local include's 'path'",
+            "a home directory",
             "a '\\' in an expression",
             "every '$' or '<'",
         ]
@@ -2413,26 +2414,33 @@ fn project_with_directory_caches(names: &[&str]) -> PathBuf {
     directory
 }
 
-/// The default-suite cache tests all pass `--scope project`.
-///
-/// A shared cache lives under the *real* `~/.ratect/caches` — `home_directory()`
-/// reads the passwd entry, not `$HOME`, so a test cannot redirect it. Without
-/// the flag these tests would read, and one would remove, a developer's own
-/// shared caches: a machine with `~/.ratect/caches/npm-cache` saw this suite
-/// delete it. Scoping them says what they are actually about, which is a
-/// project's own storage.
+/// `caches` for `project`, run with `HOME` set to it, so a shared directory cache
+/// is looked for under the project rather than in a developer's own
+/// `~/.ratect/caches`: a machine with `~/.ratect/caches/npm-cache` once saw this
+/// suite delete it. The Docker config stays the real one, so a test that connects
+/// reaches the daemon the rest of the suite does. Most also pass `--scope
+/// project`, which says what they are about: a project's own storage.
 fn caches_command(project: &Path) -> Command {
     let mut command = ratect_command();
     command.arg("-f").arg(project.join("batect.yml"));
+    command.env("HOME", project);
+    if std::env::var_os("DOCKER_CONFIG").is_none() {
+        // The home this test process has, by Ratect's own rule.
+        let real_home = ratect_core::user::home().ok().flatten();
+        if let Some(docker_config) = real_home.map(|home| home.join(".docker")) {
+            if docker_config.is_dir() {
+                command.env("DOCKER_CONFIG", docker_config);
+            }
+        }
+    }
     command
 }
 
 /// Requires a real Docker daemon. Run with `cargo test -- --ignored`.
 ///
-/// The shared half of `caches`, which only volumes can exercise: a shared
-/// cache's directory form lives under the real `~/.ratect/caches`, and
-/// `home_directory()` reads the passwd entry rather than `$HOME`, so a test
-/// cannot redirect it without writing into the developer's own home.
+/// The shared half of `caches`, for volumes. A shared cache's directory form
+/// lives under `$HOME/.ratect/caches`, which `caches_command` points at its
+/// project.
 ///
 /// Covers the scope column, the `--scope` filter, and the case the column
 /// exists for — one name in both scopes, which `clean` must refuse rather
@@ -4905,6 +4913,92 @@ fn identity_adds_additional_users_on_every_daemon() {
         groups.split_whitespace().any(|group| group == "1600"),
         "`svc` in {groups}"
     );
+}
+
+#[path = "support/unnamed_host_user.rs"]
+mod unnamed_host_user;
+
+/// A project of one `alpine` container with `identity`, with `extra` appended to
+/// it, whose `show` task prints the running user, its group's entry or `none`,
+/// its passwd entry and `$HOME`.
+fn unnamed_host_user_project(extra: &str) -> String {
+    format!(
+        "ratect_version = \"0.13.0\"\nproject_name = \"ratect-unnamed-host-user-test\"\n\n\
+         [containers.build-env]\nimage = \"alpine:3.18.2\"\nidentity = {{ home = \"/home/me\" }}\n\
+         {extra}\n\
+         [tasks.show]\nrun = {{ container = \"build-env\", command = \
+         \"\"\"sh -c 'whoami; getent group $(id -g) || echo none; getent passwd $(id -u); echo $HOME'\"\"\" }}\n"
+    )
+}
+
+/// A uid and gid the host has no passwd or group entry for still run, with a
+/// `HOME` and without one (#818, #846): the Docker connection needs no home, `whoami` prints the
+/// uid's digits from the entry appended for it, and alpine's `/etc/group` gets no
+/// entry for the gid. See [`unnamed_host_user`] for how the ids are arranged.
+#[test]
+#[ignore]
+fn identity_on_a_rootful_daemon_runs_a_host_user_with_no_names() {
+    let _guard = shared_docker();
+    let project = unnamed_host_user_project("");
+    for home in [
+        unnamed_host_user::Home::None,
+        unnamed_host_user::Home::Project,
+    ] {
+        let Some(output) = unnamed_host_user::run(
+            Path::new(env!("CARGO_BIN_EXE_ratect")),
+            &[("ratect.toml", &project)],
+            home,
+            &["-f", "ratect.toml", "run", "show"],
+        ) else {
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            output.status.success(),
+            "stdout:\n{stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lines: Vec<&str> = stdout.lines().collect();
+        let [whoami, group, passwd, home] = &lines[..] else {
+            panic!("{stdout}");
+        };
+        assert_eq!(*whoami, unnamed_host_user::ID, "{stdout}");
+        assert_eq!(*group, "none", "{stdout}");
+        assert_eq!(
+            *passwd,
+            format!("{0}:*:{0}:{0}::/home/me:/bin/sh", unnamed_host_user::ID),
+            "the appended entry, read whole: {stdout}"
+        );
+        assert_eq!(*home, "/home/me", "{stdout}");
+    }
+}
+
+/// With no home at all, a path starting with `~` is refused naming it, and
+/// nothing runs (#846).
+#[test]
+#[ignore]
+fn with_no_home_a_tilde_path_is_refused_naming_it() {
+    let _guard = shared_docker();
+    let project = unnamed_host_user_project("volumes = [\"~/cache:/cache\"]\n");
+    let Some(output) = unnamed_host_user::run(
+        Path::new(env!("CARGO_BIN_EXE_ratect")),
+        &[("ratect.toml", &project)],
+        unnamed_host_user::Home::None,
+        &["-f", "ratect.toml", "run", "show"],
+    ) else {
+        return;
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "'~' in path '~/cache' needs a home directory, and neither HOME nor a passwd entry \
+             for uid {} gives one",
+            unnamed_host_user::ID
+        )),
+        "{stderr}"
+    );
+    assert!(output.stdout.is_empty(), "nothing ran");
 }
 
 /// Adding to the image's files leaves its users there.

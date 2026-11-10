@@ -480,7 +480,7 @@ pub(crate) fn cached_working_copy(
 ) -> Option<PathBuf> {
     let root = match root {
         Some(root) => root.to_path_buf(),
-        None => CacheRoot::Home.resolve().ok()?,
+        None => CacheRoot::Home.resolve().ok()??,
     };
     let working_copy = root.join(cache_key(remote, git_ref));
     working_copy.is_dir().then_some(working_copy)
@@ -501,11 +501,15 @@ enum CacheRoot {
 }
 
 impl CacheRoot {
-    fn resolve(&self) -> Result<PathBuf> {
+    /// The cache's directory, or `None` for a host user with no home, who has no
+    /// cache: nothing to list, remove or sweep, and nowhere to clone.
+    fn resolve(&self) -> Result<Option<PathBuf>> {
         match self {
             #[cfg(test)]
-            CacheRoot::Fixed(path) => Ok(path.clone()),
-            CacheRoot::Home => Ok(crate::user::home_directory()?.join(".ratect").join("incl")),
+            CacheRoot::Fixed(path) => Ok(Some(path.clone())),
+            CacheRoot::Home => {
+                Ok(crate::user::home()?.map(|home| home.join(".ratect").join("incl")))
+            }
         }
     }
 }
@@ -592,7 +596,12 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// any other — announcing the wait on this cache's [`LoadOutput`] — for
     /// up to `lock_timeout` (see `acquire_lock`).
     pub async fn ensure_cached(&self, remote: &Remote, git_ref: &str) -> Result<PathBuf> {
-        let root = self.root.resolve()?;
+        let root = self.root.resolve()?.ok_or_else(|| {
+            crate::user::no_home(&format!(
+                "Git include {}",
+                describe_include(remote, git_ref)
+            ))
+        })?;
         tokio::fs::create_dir_all(&root)
             .await
             .with_context(|| format!("Failed to create Git include cache directory {root:?}"))?;
@@ -837,7 +846,9 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// [`cleanup_stale`](Self::cleanup_stale) has: one corrupt file
     /// shouldn't make the whole cache unreportable.
     pub async fn list(&self) -> Result<Vec<CachedInclude>> {
-        let root = self.root.resolve()?;
+        let Some(root) = self.root.resolve()? else {
+            return Ok(Vec::new());
+        };
         let mut entries = self.read_entries(&root).await?;
         // The key breaks ties: `last_used` is whole seconds, so includes
         // resolved by the same run routinely share one, and `read_entries`
@@ -871,7 +882,9 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// much is a re-clone — which is why this has no confirmation of any
     /// kind, unlike removing containers.
     pub async fn clean(&self, minimum_age: Option<Duration>) -> Result<Outcome> {
-        let root = self.root.resolve()?;
+        let Some(root) = self.root.resolve()? else {
+            return Ok(Outcome::default());
+        };
         let now = (self.clock)();
         let entries = self.read_entries(&root).await?;
 
@@ -908,7 +921,9 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// re-fetched. It is returned as failed, as is an entry that couldn't be
     /// removed, and neither stops the rest.
     pub async fn refresh(&self) -> Result<Outcome> {
-        let root = self.root.resolve()?;
+        let Some(root) = self.root.resolve()? else {
+            return Ok(Outcome::default());
+        };
         let entries = self.read_entries(&root).await?;
 
         let mut outcome = Outcome::default();
@@ -1015,7 +1030,9 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// covers only the deletion: a sidecar it can't read or parse throws
     /// from `GitRepositoryCache.listAll`, before any entry is deleted.
     pub async fn cleanup_stale(&self) -> Result<()> {
-        let root = self.root.resolve()?;
+        let Some(root) = self.root.resolve()? else {
+            return Ok(());
+        };
         let now = (self.clock)();
         let mut stale_keys = Vec::new();
         for entry in self.read_entries(&root).await? {

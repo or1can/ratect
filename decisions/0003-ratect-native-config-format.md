@@ -3,7 +3,7 @@
 **Status:** Accepted — shipped (ratect 0.3.0). Its include-entry exception
 ("Generalized (ratect#214)") is superseded by
 [0021](0021-native-field-follows-its-file.md). Supersedes the exploratory "Alternative Configuration Format (TOML)"
-[Future Vision](../ROADMAP.md#future-vision) item.
+[Future Vision](../ROADMAP.md#future-vision) item. Corrected since (found by a claims sweep, ratect#844): the Consequence that `engine.rs` needs no format awareness did not hold — it varies by dialect (`TaskEngineSettings::dialect`, [0012](0012-native-task-container-has-no-readiness-gate.md)), and native-only container fields such as `identity` reach `engine.rs` and `docker.rs`.
 
 Corrections found after it shipped (2026-11-02), left in place below as
 written: `config validate` does not enforce the object shape — it accepts the

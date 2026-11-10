@@ -720,7 +720,9 @@ pub(crate) fn refuse_read(check: Result<()>) -> bool {
 /// time; the same log is often visible to whoever can propose a change to
 /// that bundle. The detail goes to `RUST_LOG=debug` instead, which is a
 /// deliberate trade: the person who can read the debug log is the person
-/// running the build, not the person who wrote the bundle.
+/// running the build, not the person who wrote the bundle. A missing home
+/// directory ([`crate::user::NoHome`]) says nothing about the network, so it is
+/// shown, attributed to the bundle.
 ///
 /// `candidates` are the files the entry would have loaded — its `path`, or
 /// the default bundle names standing in for a pathless one — named in the
@@ -745,6 +747,9 @@ pub(crate) fn hide_clone_detail(
             "Failed to resolve Git include {files} from {include}"
         ));
     };
+    if error.chain().any(|cause| cause.is::<crate::user::NoHome>()) {
+        return error.context(format!("In the bundle {}", declaring.id));
+    }
     tracing::debug!(
         error = format!("{error:#}"),
         repo = %repo,

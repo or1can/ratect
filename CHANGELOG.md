@@ -27,13 +27,14 @@ history, from when it was the only binary.
 ### Breaking
 
 - **ratect.toml:** `run_as_current_user` fails the load in a `.toml` file, enabled or not, and on a TOML container inheriting an enabled one from a `.yml` through `extends`. Use `identity` instead: [what changes](docs/ratect-config-reference.md#coming-from-run_as_current_user). A `.yml` keeps the field, and `ratect-compat` is unchanged.
+- **ratect.toml:** A `~` leading a local include's `path` or a host path (a volume's, `build_directory`, a build secret's or a `build_ssh` path) is `$HOME` when it is set and absolute, and only otherwise the passwd entry's home.
 
 ### Added
 
 - **ratect only:** `ratect doctor` reports the Docker daemon's class: `rootless`, `userns-remap`, `desktop` or `rootful Linux`.
 - **ratect only:** `identity` takes `additional_users`, each a required `name`, `uid` and `gid`, added to the container's `/etc/passwd` and `/etc/group` on every daemon. A name or uid the file already has fails the run.
 - **ratect only:** Containers in a `ratect.toml` take `user`, `group` and `groups`, handed to the runtime as written, with `group` needing `user`. Setup commands exec as the same user. A `.yml` refuses all three.
-- **ratect only:** Containers in a `ratect.toml` take `identity = { home = "…" }`: `$HOME` and the running user's passwd entry both say `home`, which is created if nothing is there. On a rootful Linux daemon the container also runs as the host's uid and gid, adding to the image's `/etc/passwd` and `/etc/group`, creating host mount directories as that user and taking ownership of root-owned writable named caches. Refused by a `.yml`.
+- **ratect only:** Containers in a `ratect.toml` take `identity = { home = "…" }`: `$HOME` and the running user's passwd entry both say `home`, which is created if nothing is there. On a rootful Linux daemon the container also runs as the host's uid and gid, adding to the image's `/etc/passwd` and `/etc/group`, creating host mount directories as that user and taking ownership of root-owned writable named caches. A host uid with no name that the image lacks gets a passwd entry named with its digits, and a gid with no name gets no group entry. Refused by a `.yml`.
 - **ratect only:** `ratect doctor` and `ratect config validate` report a mount above a container's `identity` home: a problem for a `tmpfs`, and a warning for a read-only mount or a writable bind mount.
 - **ratect only:** `ratect doctor` warns on a rootful Linux daemon about each writable bind mount, other than a socket or file over a local socket, of a container with no `identity`, no enabled `run_as_current_user`, and no non-root `user`.
 - **ratect only:** `ratect doctor` warns, over a local socket to a rootful Linux daemon, when a writable bind mount of a container that runs as the host user is owned by another uid.
@@ -50,6 +51,13 @@ history, from when it was the only binary.
 - Each binary's GitHub Release notes list only the changelog entries that apply to it.
 - **ratect only:** The error for a native-only field on a container in a `.yml` says how to use it: convert the project, move the container into a TOML file, or, in a bundle, have its author do so.
 - **ratect only:** The error for a native-only field on a Git include entry in a `.yml` a YAML root reaches no longer suggests a TOML file that root would refuse.
+- The home directory is `$HOME` when it is set and absolute, else the passwd entry's. Where the two differ, `~/.docker`, `~/.ratect` (shared caches, Git includes) and `~` in a path follow `$HOME`: caches rebuild and Git includes re-clone there, and the old ones under the passwd entry's home stay until removed by hand. Run as root with another user's `$HOME` (`sudo -E`), Ratect writes root-owned entries under that user's `~/.ratect`, as the Docker CLI does under `~/.docker`.
+
+### Fixed
+
+- `run_as_current_user` runs under a host uid or gid with no passwd or group entry, naming it with its digits in the generated files.
+- `run_as_current_user`'s generated `/etc/passwd`, `/etc/shadow` and `/etc/group` end their last line, so musl-based images (alpine) no longer read that line one character short.
+- A host user with no home — no passwd entry and `HOME` unset or not absolute, as under a numeric `docker run -u` — can run tasks: Ratect connects with no Docker config directory, `ratect includes` (ratect only) finds no Git includes and `ratect caches` (ratect only) no shared directory caches, and only what needs a home (`~` in a path, a shared directory cache, a Git include, a named Docker context or TLS certificates from `~/.docker`) is refused, naming it.
 
 ## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
 

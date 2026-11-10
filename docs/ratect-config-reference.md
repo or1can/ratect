@@ -117,8 +117,8 @@ Each change's outcome depends on how it can be checked:
   has a check.
 
 So for the project above, every change is ruled out: it loads, and declares
-no Git include, no local include starting with `~`, and no expression a
-change reads differently. Once you've read the changes and agree, set
+no Git include, no local include starting with `~`, no host path starting with
+`~`, a reference or an escape, and no expression a change reads differently. Once you've read the changes and agree, set
 `ratect_version` to 0.13.0 and it loads.
 
 `ratect doctor` and `ratect config validate` report a refusal the same way:
@@ -343,8 +343,9 @@ control.
 **Where it is stored.** A shared cache is the Docker volume
 `ratect-shared-cache-<name>`, or the directory `~/.ratect/caches/<name>` under
 `--cache-type=directory` — beside `~/.ratect/incl`, where Git includes are
-cloned, because both belong to the machine rather than to any one project. A
-project cache remains `batect-cache-<project key>-<name>`.
+cloned, because both belong to the machine rather than to any one project. With
+no home directory the directory form is refused, naming the cache. A project
+cache remains `batect-cache-<project key>-<name>`.
 
 **A name has one scope per project.** Declaring `cargo-registry` as `project`
 in one container and `shared` in another is rejected when the file loads: one
@@ -1107,11 +1108,13 @@ replaced:
   such entry keeps its name and gid, and only its home changes. So `whoami` says `node`, and
   the process still has your gid, not the entry's.
 - **`/etc/passwd`, your uid absent:** an entry is appended with your username, or
-  with your uid's digits if the image uses that name for another uid, password `*`,
-  your gid, `home`, and shell `/bin/sh`.
+  with your uid's digits if the image uses that name for another uid or your uid
+  has no name on the host, password `*`, your gid, `home`, and shell `/bin/sh`.
 - **`/etc/group`:** an entry named after your group is appended only if both its gid
   and that name are free. If the gid exists, that entry is reused untouched. If only
-  the name is taken, nothing is added, and `id` prints your gid with no name.
+  the name is taken, nothing is added, and `id` prints your gid with no name. If your
+  gid has no name on the host, nothing is added either, so `id` names it only if the
+  image has an entry for it.
 - **Host directories a mount needs** are created as you before the container is, when
   the daemon is local: a missing bind mount source, and a mount point nested inside
   another host mount.

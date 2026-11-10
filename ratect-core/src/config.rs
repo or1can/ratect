@@ -5466,12 +5466,10 @@ fn expand_home_directory(path: impl AsRef<Path>) -> Result<Option<PathBuf>> {
     if !leads_with_tilde {
         return Ok(None);
     }
-    let home = crate::user::home_directory().with_context(|| {
-        format!(
-            "Cannot expand '~' in path '{}'",
-            printable(&path.display().to_string())
-        )
-    })?;
+    let home = crate::user::home_directory(&format!(
+        "'~' in path '{}'",
+        printable(&path.display().to_string())
+    ))?;
     // For a bare `~` the remainder is empty, and joining that yields the home
     // directory itself.
     Ok(Some(home.join(components.as_path())))

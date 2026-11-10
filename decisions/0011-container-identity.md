@@ -59,7 +59,10 @@ is mounted at the home. Refined after a correctness review found a mount below t
 home getting past that refusal ([#829](https://github.com/or1can/ratect/issues/829)):
 it applies whether or not the home exists, since a `tmpfs` hides one the image ships,
 and one the daemon made for a mount below it leaves a root-owned mount point in its
-place.
+place. Refined before release ([#818](https://github.com/or1can/ratect/issues/818)):
+a host uid or gid with no name on the host takes the clash fallbacks below rather
+than failing the run, since `--user` needs only the numbers; what Ratect needs from
+the host user in general is [0024](0024-host-identity.md).
 
 
 ## Context
@@ -204,17 +207,19 @@ and appending or editing — never replacing**:
 
 - Host uid absent from the image's passwd: append one entry — host username
   (falling back to the literal uid digits if the image already uses that name
-  for a different uid — Podman's own naming convention for synthesized
-  entries), password `*`, the configured `home`, shell `/bin/sh`.
+  for a different uid, or the host has no name for the uid — Podman's own
+  naming convention for synthesized entries), password `*`, the configured
+  `home`, shell `/bin/sh`.
 - Host uid already present (`node` at 1000 is the common case): the process
   runs as that existing entry. Keep its name and gid fields untouched; edit
   its home field to the configured `home`. `--user` governs the process gid
   regardless of the entry.
 - Group entry: append one, named after the host group, only when the host gid
   *and* that name are both absent from the image's group file; if the gid
-  exists, reuse the entry untouched; if only the name is taken, append
-  nothing. A group entry is cosmetic (name resolution for `id` and `ls`), so
-  the escape hatch on collision is to do nothing rather than invent names.
+  exists, reuse the entry untouched; if only the name is taken, or the host has
+  no name for the gid, append nothing. A group entry is cosmetic (name
+  resolution for `id` and `ls`), so the escape hatch on collision is to do
+  nothing rather than invent names.
   This is Podman's keep-id rule.
 - Create the home directory as [below](#the-home-guarantee), and take ownership
   of each writable cache mount that is a named volume with a root-owned root,

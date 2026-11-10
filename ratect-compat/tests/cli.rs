@@ -7278,6 +7278,60 @@ fn piped_stdin_eof_ends_a_non_tty_task_container() {
     );
 }
 
+#[path = "../../ratect/tests/support/unnamed_host_user.rs"]
+mod unnamed_host_user;
+
+/// A host user with no passwd or group entry, and no `HOME`, runs a
+/// `run_as_current_user` container (#843, #846): the Docker connection needs no
+/// home, and the generated files name the user and group with the ids' digits,
+/// as Batect's do. See [`unnamed_host_user`] for how the ids are arranged.
+#[test]
+#[ignore]
+fn run_as_current_user_names_an_unnamed_host_user_with_its_digits() {
+    let project = r#"
+project_name: ratect-unnamed-host-user-test
+containers:
+  app:
+    image: alpine:3.18.2
+    run_as_current_user:
+      enabled: true
+      home_directory: /home/container-user
+tasks:
+  show:
+    run:
+      container: app
+      command: 'sh -c "whoami; getent group $(id -g); getent passwd $(id -u); echo $HOME"'
+"#;
+    let Some(output) = unnamed_host_user::run(
+        Path::new(env!("CARGO_BIN_EXE_ratect-compat")),
+        &[("batect.yml", project)],
+        unnamed_host_user::Home::None,
+        &["-f", "batect.yml", "-o", "quiet", "show"],
+    ) else {
+        return;
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            unnamed_host_user::ID,
+            &format!("{0}:x:{0}:{0}", unnamed_host_user::ID),
+            &format!(
+                "{0}:x:{0}:{0}:{0}:/home/container-user:/bin/sh",
+                unnamed_host_user::ID
+            ),
+            "/home/container-user"
+        ],
+        "{stdout}"
+    );
+}
+
 /// Requires a running Docker daemon with network access to pull
 /// `alpine:3.18.2`, and runs against the real host user (this doesn't need a
 /// TTY, unlike the interactive test above — `run_as_current_user` and
@@ -10000,7 +10054,7 @@ fn a_tilde_in_docker_cert_path_is_the_home_directory() {
         .output()
         .expect("failed to run ratect");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let home = ratect_core::user::home_directory().unwrap();
+    let home = ratect_core::user::home().unwrap().unwrap();
     assert_eq!(output.status.code(), Some(2), "{stderr}");
     assert!(
         stderr.contains(&format!(

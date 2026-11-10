@@ -14,8 +14,8 @@
 
 use super::*;
 
-fn current_user_fixture() -> CurrentUser {
-    CurrentUser {
+fn current_user_fixture() -> NamedUser {
+    NamedUser {
         uid: 1000,
         gid: 1000,
         username: "ratect".to_string(),
@@ -23,8 +23,8 @@ fn current_user_fixture() -> CurrentUser {
     }
 }
 
-fn root_user_fixture() -> CurrentUser {
-    CurrentUser {
+fn root_user_fixture() -> NamedUser {
+    NamedUser {
         uid: 0,
         gid: 0,
         username: "root".to_string(),
@@ -37,14 +37,14 @@ fn generate_passwd_file_for_a_normal_user_includes_both_root_and_that_user() {
     let passwd = generate_passwd_file(&current_user_fixture(), "/home/ratect");
     assert_eq!(
         passwd,
-        "root:x:0:0:root:/root:/bin/sh\nratect:x:1000:1000:ratect:/home/ratect:/bin/sh"
+        "root:x:0:0:root:/root:/bin/sh\nratect:x:1000:1000:ratect:/home/ratect:/bin/sh\n"
     );
 }
 
 #[test]
 fn generate_passwd_file_for_uid_zero_has_a_single_root_entry_using_the_configured_home() {
     let passwd = generate_passwd_file(&root_user_fixture(), "/home/ratect");
-    assert_eq!(passwd, "root:x:0:0:root:/home/ratect:/bin/sh");
+    assert_eq!(passwd, "root:x:0:0:root:/home/ratect:/bin/sh\n");
 }
 
 #[test]
@@ -52,26 +52,101 @@ fn generate_shadow_file_for_a_normal_user_includes_both_root_and_that_user() {
     let shadow = generate_shadow_file(&current_user_fixture());
     assert_eq!(
         shadow,
-        "root:*:19500:0:99999:7:::\nratect:*:19500:0:99999:7:::"
+        "root:*:19500:0:99999:7:::\nratect:*:19500:0:99999:7:::\n"
     );
 }
 
 #[test]
 fn generate_shadow_file_for_uid_zero_has_a_single_root_entry() {
     let shadow = generate_shadow_file(&root_user_fixture());
-    assert_eq!(shadow, "root:*:19500:0:99999:7:::");
+    assert_eq!(shadow, "root:*:19500:0:99999:7:::\n");
 }
 
 #[test]
 fn generate_group_file_for_a_normal_group_includes_both_root_and_that_group() {
     let group = generate_group_file(&current_user_fixture());
-    assert_eq!(group, "root:x:0:root\nratect:x:1000:ratect");
+    assert_eq!(group, "root:x:0:root\nratect:x:1000:ratect\n");
 }
 
 #[test]
 fn generate_group_file_for_gid_zero_has_a_single_root_entry() {
     let group = generate_group_file(&root_user_fixture());
-    assert_eq!(group, "root:x:0:root");
+    assert_eq!(group, "root:x:0:root\n");
+}
+
+/// `run_as_current_user` names a uid or gid the host has no entry for with its
+/// digits, as Batect does (#843).
+#[test]
+fn named_falls_back_to_each_ids_digits() {
+    let user = |username: Option<&str>, groupname: Option<&str>| CurrentUser {
+        uid: 1000,
+        gid: 20,
+        username: username.map(str::to_string),
+        groupname: groupname.map(str::to_string),
+    };
+    let named = |username: &str, groupname: &str| NamedUser {
+        uid: 1000,
+        gid: 20,
+        username: username.to_string(),
+        groupname: groupname.to_string(),
+    };
+    assert_eq!(
+        user(Some("me"), Some("staff")).named(),
+        named("me", "staff")
+    );
+    assert_eq!(user(None, Some("staff")).named(), named("1000", "staff"));
+    assert_eq!(user(Some("me"), None).named(), named("me", "20"));
+    assert_eq!(user(None, None).named(), named("1000", "20"));
+}
+
+/// The generated files for an unnamed uid or gid, as [`CurrentUser::named`] gives
+/// them, match Batect's, root's special cases included.
+#[test]
+fn generated_files_name_an_unnamed_user_with_its_digits() {
+    let unnamed = |uid: u32, gid: u32| {
+        CurrentUser {
+            uid,
+            gid,
+            username: None,
+            groupname: None,
+        }
+        .named()
+    };
+    let user = unnamed(1000, 20);
+    assert_eq!(
+        generate_passwd_file(&user, "/home/me"),
+        "root:x:0:0:root:/root:/bin/sh\n1000:x:1000:20:1000:/home/me:/bin/sh\n"
+    );
+    assert_eq!(
+        generate_shadow_file(&user),
+        "root:*:19500:0:99999:7:::\n1000:*:19500:0:99999:7:::\n"
+    );
+    assert_eq!(generate_group_file(&user), "root:x:0:root\n20:x:20:1000\n");
+
+    let same_ids = unnamed(1000, 1000);
+    assert_eq!(
+        generate_group_file(&same_ids),
+        "root:x:0:root\n1000:x:1000:1000\n"
+    );
+
+    let root_gid = unnamed(1000, 0);
+    assert_eq!(generate_group_file(&root_gid), "root:x:0:root\n");
+
+    let root_uid = CurrentUser {
+        uid: 0,
+        gid: 20,
+        username: Some("root".to_string()),
+        groupname: None,
+    }
+    .named();
+    assert_eq!(
+        generate_passwd_file(&root_uid, "/home/me"),
+        "root:x:0:0:root:/home/me:/bin/sh\n"
+    );
+    assert_eq!(
+        generate_group_file(&root_uid),
+        "root:x:0:root\n20:x:20:root\n"
+    );
 }
 
 const HOME: &str = "/home/me";
@@ -289,8 +364,18 @@ fn host_user(uid: u32, gid: u32, username: &str, groupname: &str) -> CurrentUser
     CurrentUser {
         uid,
         gid,
-        username: username.to_string(),
-        groupname: groupname.to_string(),
+        username: Some(username.to_string()),
+        groupname: Some(groupname.to_string()),
+    }
+}
+
+/// A host user whose uid and gid have no passwd or group entry on the host.
+fn unnamed_host_user(uid: u32, gid: u32) -> CurrentUser {
+    CurrentUser {
+        uid,
+        gid,
+        username: None,
+        groupname: None,
     }
 }
 
@@ -320,6 +405,18 @@ fn edit_passwd_for_host_user_covers_every_case() {
             passwd: b"me:x:70:70::/var/me:/bin/sh\n",
             user: me.clone(),
             contents: b"me:x:70:70::/var/me:/bin/sh\n1000:*:1000:20::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "uid absent, no host username: named with the uid's digits",
+            passwd: b"root:x:0:0:root:/root:/bin/ash\n",
+            user: unnamed_host_user(1234, 999),
+            contents: b"root:x:0:0:root:/root:/bin/ash\n1234:*:1234:999::/home/me:/bin/sh\n",
+        },
+        Case {
+            name: "uid present, no host username: the same home edit, needing no name",
+            passwd: b"node:x:1234:1000:Node:/home/node:/bin/bash\n",
+            user: unnamed_host_user(1234, 999),
+            contents: b"node:x:1234:1000:Node:/home/me:/bin/bash\n",
         },
         Case {
             name: "uid present: its name, gid and everything else stay, only the home moves",
@@ -412,6 +509,12 @@ fn edit_group_for_host_user_covers_every_case() {
             group: b"root:x:0:root\n",
             user: me.clone(),
             contents: Some(b"root:x:0:root\nstaff:x:20:\n"),
+        },
+        Case {
+            name: "no host group name: nothing is appended, even with the gid free",
+            group: b"root:x:0:root\n",
+            user: unnamed_host_user(1234, 999),
+            contents: None,
         },
         Case {
             name: "gid taken: the entry is reused untouched",
@@ -638,4 +741,82 @@ fn path_owner_reads_a_paths_owner_and_follows_a_link() {
     assert_eq!(path_owner(&link), Some(expected));
     assert_eq!(path_owner(&directory.join("missing")), None);
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// A non-empty `$HOME` is the home, as in the Docker CLI, and the passwd entry is
+/// asked only without one (#845).
+#[test]
+fn chosen_home_is_home_first_then_the_passwd_entry() {
+    let cases = [
+        (
+            "HOME set: it wins",
+            Some("/home/env"),
+            Some("/home/passwd"),
+            Some("/home/env"),
+        ),
+        (
+            "HOME relative: counts as unset",
+            Some("env"),
+            Some("/home/passwd"),
+            Some("/home/passwd"),
+        ),
+        ("HOME '?', JDK 11's: counts as unset", Some("?"), None, None),
+        (
+            "HOME set, no passwd entry",
+            Some("/home/env"),
+            None,
+            Some("/home/env"),
+        ),
+        (
+            "HOME empty: counts as unset",
+            Some(""),
+            Some("/home/passwd"),
+            Some("/home/passwd"),
+        ),
+        (
+            "HOME unset: the passwd entry",
+            None,
+            Some("/home/passwd"),
+            Some("/home/passwd"),
+        ),
+        ("neither: no home", None, None, None),
+        ("passwd home relative: no home", None, Some("rel"), None),
+        ("passwd home empty: no home", None, Some(""), None),
+    ];
+    for (name, home, passwd, expected) in cases {
+        let chosen = chosen_home(home.map(std::ffi::OsString::from), || {
+            Ok(passwd.map(PathBuf::from))
+        });
+        assert_eq!(chosen.unwrap(), expected.map(PathBuf::from), "{name}");
+    }
+}
+
+/// A failing passwd lookup fails only when it is the source asked.
+#[test]
+fn chosen_home_asks_the_passwd_entry_only_without_home() {
+    let failing = || Err(anyhow::anyhow!("lookup failed"));
+    assert_eq!(
+        chosen_home(Some("/home/env".into()), failing).unwrap(),
+        Some(PathBuf::from("/home/env"))
+    );
+    assert_eq!(
+        chosen_home(None, failing).unwrap_err().to_string(),
+        "lookup failed"
+    );
+}
+
+/// A host user with no home has none to give, and a caller that needs one refuses
+/// naming itself and both places a home is looked for (#846).
+#[test]
+fn with_no_home_a_caller_that_needs_one_refuses_naming_itself() {
+    let _no_home = without_home();
+    assert_eq!(home().unwrap(), None);
+    let uid = current_owner().unwrap().uid;
+    assert_eq!(
+        home_directory("'~' in path '~/x'").unwrap_err().to_string(),
+        format!(
+            "'~' in path '~/x' needs a home directory, and neither HOME nor a passwd entry for \
+             uid {uid} gives one"
+        )
+    );
 }

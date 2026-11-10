@@ -250,14 +250,19 @@ fn shared_cache_volume_name(name: &str) -> String {
 /// `~/.ratect/incl`'s Git-include clones, for the same reason: it belongs to
 /// the user's machine rather than to any one project.
 fn shared_cache_directory(name: &str) -> Result<PathBuf> {
-    Ok(shared_cache_root()?.join(name))
+    let root = shared_cache_root()?.ok_or_else(|| {
+        crate::user::no_home(&format!("Shared cache '{}'", crate::ui::printable(name)))
+    })?;
+    Ok(root.join(name))
 }
 
-/// Where every shared cache directory lives — `~/.ratect/caches`.
-pub fn shared_cache_root() -> Result<PathBuf> {
-    Ok(crate::user::home_directory()?
-        .join(".ratect")
-        .join("caches"))
+/// `~/.ratect/caches`, below the home.
+const SHARED_CACHE_ROOT: &str = ".ratect/caches";
+
+/// Where every shared cache directory lives — `~/.ratect/caches` — or `None` for
+/// a host user with no home, who can't have any.
+pub fn shared_cache_root() -> Result<Option<PathBuf>> {
+    Ok(crate::user::home()?.map(|home| home.join(SHARED_CACHE_ROOT)))
 }
 
 /// Resolves `mount` to a [`BindMount`] — its source a bare Docker volume
@@ -712,8 +717,9 @@ pub enum CacheStore<'a, D: VolumeStore + Send + Sync> {
     Directory {
         project_directory: PathBuf,
         /// Where every shared cache directory lives, resolved once by the
-        /// caller — `None` when this host has no home directory to resolve
-        /// it against, which `list`/`remove` then treat as "no shared
+        /// caller — `None` where there are none to read: this host has no
+        /// home directory to resolve it against, or the caller isn't asking
+        /// for shared caches. `list`/`remove` then treat it as "no shared
         /// caches" rather than a failure. Injected rather than resolved
         /// here so a test can point it at a fixture directory instead of
         /// the real `~/.ratect/caches`.

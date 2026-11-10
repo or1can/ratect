@@ -162,17 +162,18 @@ const CREDENTIAL_HELPER_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// own internal path resolution, so `--docker-config`/`DOCKER_CONFIG` are
 /// honored here exactly as everywhere else Ratect reads Docker's config.
 pub struct DockerCredentialHelperResolver {
-    config_path: std::path::PathBuf,
+    config_path: Option<std::path::PathBuf>,
 }
 
 impl DockerCredentialHelperResolver {
     /// `config_directory` is the directory `config.json` lives in (e.g.
     /// `~/.docker`) — not necessarily where it exists yet: a missing file
     /// resolves like an empty one (nothing configured), matching the real
-    /// `docker` CLI's own behavior on a fresh machine.
-    pub fn new(config_directory: std::path::PathBuf) -> Self {
+    /// `docker` CLI's own behavior on a fresh machine, and so does `None`, no
+    /// directory at all (a host user with no home, decisions/0024).
+    pub fn new(config_directory: Option<std::path::PathBuf>) -> Self {
         Self {
-            config_path: config_directory.join("config.json"),
+            config_path: config_directory.map(|directory| directory.join("config.json")),
         }
     }
 }
@@ -183,7 +184,9 @@ impl RegistryCredentialResolver for DockerCredentialHelperResolver {
         &self,
         registry: &str,
     ) -> anyhow::Result<Option<bollard::auth::DockerCredentials>> {
-        let config_path = self.config_path.clone();
+        let Some(config_path) = self.config_path.clone() else {
+            return Ok(None);
+        };
         let registry = registry.to_string();
 
         let attempt = tokio::task::spawn_blocking(move || {

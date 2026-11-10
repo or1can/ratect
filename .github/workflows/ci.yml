@@ -214,7 +214,12 @@ jobs:
       # (ratect-compat/tests/conformance/) — the drop-in-replacement proof —
       # and `--test volume_cleanup`, one daemon-global test kept in its own
       # binary so it runs with exclusive Docker access (see that file).
+      # The runner has passwordless sudo and `setpriv`, so a test that runs
+      # Ratect as a host user with no passwd entry must run here, not skip
+      # (ratect/tests/support/unnamed_host_user.rs).
       - run: cargo test --workspace --test cli --test conformance --test volume_cleanup -- --ignored
+        env:
+          RATECT_REQUIRE_UNNAMED_HOST_USER: "1"
 
   # `docs/worked-examples.md` `{{#include}}`s each project's `ratect.toml`/
   # `batect.yml` directly rather than a copy pasted into the doc, so the
@@ -452,9 +457,8 @@ jobs:
   # this duplicate exists so the *same* signal is reported from ci.yml,
   # where a future ruleset change could make it required the way every
   # other job in this file already is (see AGENTS.md's guideline 12); it
-  # is NOT yet in that ruleset itself (tracked in TODO.md), so today this
-  # job reports on every PR without blocking a merge, same as release.yml's
-  # own copy. Deliberately not paths-filtered despite ratect#34's wording:
+  # is in that ruleset itself as Release Pipeline Config, so it blocks a
+  # merge, while release.yml's own copy only reports. Deliberately not paths-filtered despite ratect#34's wording:
   # a required check that's skipped on some PRs (via workflow-level
   # `paths:`, the only first-party mechanism) never reports on those PRs
   # and leaves them pending forever — msrv-floor.yml uses paths-filtering

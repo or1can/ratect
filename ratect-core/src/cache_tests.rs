@@ -547,16 +547,16 @@ fn the_two_scopes_use_prefixes_that_cannot_match_each_other() {
     );
 }
 
-/// The shared directory location, pinned by shape rather than exercised:
-/// `home_directory()` reads the passwd entry rather than `$HOME`, so a test
-/// cannot redirect it without writing into the developer's own home. The
+/// The shared directory location, pinned by shape rather than exercised: the home
+/// follows `$HOME`, which a test can't change for itself alone, so exercising it
+/// here would write into the developer's own home. The
 /// sweep and removal machinery underneath is shared with project-scoped
 /// directory caches and covered by their tests; what is specific here — and
 /// what this pins — is *where* it points.
 #[test]
 fn a_shared_cache_directory_lives_beside_the_git_include_cache() {
-    let root = shared_cache_root().unwrap();
-    let home = crate::user::home_directory().unwrap();
+    let root = shared_cache_root().unwrap().unwrap();
+    let home = crate::user::home().unwrap().unwrap();
 
     assert_eq!(root, home.join(".ratect").join("caches"));
     assert_eq!(
@@ -1414,4 +1414,29 @@ async fn a_directory_clean_follows_a_linked_cache_root() {
     assert!(cache_directory(&linked.project_dir).is_symlink());
 
     linked.remove();
+}
+
+/// With no home there are no shared caches to list, and a shared directory cache
+/// is refused naming it (#846).
+#[test]
+fn with_no_home_a_shared_directory_cache_is_refused() {
+    let _no_home = crate::user::without_home();
+    assert_eq!(shared_cache_root().unwrap(), None);
+    let options = CacheOptions {
+        cache_type: CacheType::Directory,
+        project_directory: std::env::temp_dir(),
+    };
+    let mount = CacheVolumeMount {
+        name: "cargo".to_string(),
+        container: "/cargo".to_string(),
+        options: None,
+        scope: Some(crate::config::CacheScope::Shared),
+    };
+    let error = resolve_cache_mount(&options, || unreachable!(), &mount)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("Shared cache 'cargo' needs a home directory"),
+        "{error}"
+    );
 }

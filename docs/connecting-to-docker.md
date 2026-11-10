@@ -38,7 +38,14 @@ active context), otherwise to Docker's own platform default, the Unix socket
 A path given to `--docker-config`, `--docker-cert-path`, `--docker-tls-ca-cert`,
 `--docker-tls-cert` or `--docker-tls-key`, or by `DOCKER_CONFIG` or `DOCKER_CERT_PATH`,
 has a leading `~` expanded to your home directory, and `.` and `..` removed, before it
-is used, as in Batect. The Docker CLI takes the two variables as written.
+is used, as in Batect. The Docker CLI takes the two variables as written. Your home
+directory, here and for `~/.docker`, is `$HOME` when it is set and absolute, else
+your passwd entry's: the Docker CLI's rule, so Ratect reads the `~/.docker` that
+`docker login` writes to. The Docker CLI also takes a relative `$HOME`; Ratect
+doesn't. With no home from either, as under a numeric `docker run -u` with `HOME`
+unset, there is no `~/.docker`: Ratect connects with no stored credentials, and
+refuses a named context or TLS that would read its certificates from there
+unless `--docker-config` or `DOCKER_CONFIG` names a directory instead.
 
 ## TLS through the options
 

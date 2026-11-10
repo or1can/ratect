@@ -1654,7 +1654,7 @@ async fn docker_client_new_reads_config_json_from_the_chosen_config_directory() 
 
     assert_eq!(
         client.docker_config_path,
-        config_directory.join("config.json")
+        Some(config_directory.join("config.json"))
     );
     std::fs::remove_dir_all(&config_directory).unwrap();
 }
@@ -2832,7 +2832,7 @@ fn stdin_flags_are_all_unset_when_not_interactive() {
 
 fn user_mapping_fixture() -> UserMapping {
     UserMapping {
-        user: crate::user::CurrentUser {
+        user: crate::user::NamedUser {
             uid: 1000,
             gid: 1000,
             username: "ratect".to_string(),
@@ -3755,7 +3755,7 @@ async fn container_config_creates_host_directories_only_for_a_container_running_
 #[test]
 fn host_directories_are_created_only_for_a_local_daemon_unless_user_mapped() {
     let mapping = UserMapping {
-        user: crate::user::CurrentUser {
+        user: crate::user::NamedUser {
             uid: 1000,
             gid: 20,
             username: "me".to_string(),

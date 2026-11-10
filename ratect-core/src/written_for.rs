@@ -172,12 +172,6 @@ fn includes_from_home_directory(files: &[TomlFile]) -> Vec<Hit> {
             _ => None,
         }
     }
-    let from_home = |path: &str| {
-        matches!(
-            Path::new(path).components().next(),
-            Some(std::path::Component::Normal(first)) if first == "~"
-        )
-    };
     files
         .iter()
         .filter(|file| {
@@ -191,6 +185,44 @@ fn includes_from_home_directory(files: &[TomlFile]) -> Vec<Hit> {
             file: file.name.clone(),
         })
         .collect()
+}
+
+/// Whether `path` has `~` as its first component, by the loader's own rule
+/// (`config::expand_home_directory`'s): `~` and `~/x`, never `~user/x`.
+fn from_home(path: &str) -> bool {
+    matches!(
+        Path::new(path).components().next(),
+        Some(std::path::Component::Normal(first)) if first == "~"
+    )
+}
+
+/// The `$HOME` row's detector (decisions/0024): each file with a local include
+/// whose `path` has `~` as its first component, as [`includes_from_home_directory`]
+/// finds them, and every host path — a volume's, a `build_directory`, a build secret's and a
+/// `build_ssh` path — whose first component is `~`, since from 0.13.0 each of
+/// those means `$HOME` where it is set and absolute. A host path starting with a
+/// reference or an escape counts too, since its value may start with `~`.
+fn paths_from_home_directory(files: &[TomlFile]) -> Vec<Hit> {
+    let mut hits = includes_from_home_directory(files);
+    hits.extend(expression_hits(files, |document, field, value| {
+        is_host_path(document, field) && (from_home(value) || value.starts_with(['$', '<', '\\']))
+    }));
+    hits
+}
+
+/// Whether `field`, as [`expressions`] names it, is a container's host path. Found
+/// by the container's name rather than by splitting `field` at its dots, since a
+/// container name may hold a `.`.
+fn is_host_path(document: &toml::Table, field: &str) -> bool {
+    let containers = document.get("containers").and_then(toml::Value::as_table);
+    containers.into_iter().flatten().any(|(name, _)| {
+        field
+            .strip_prefix(&format!("containers.{name}."))
+            .is_some_and(|rest| {
+                matches!(rest, "volumes" | "build_directory" | "build_ssh.paths")
+                    || rest.starts_with("build_secrets.") && rest.ends_with(".path")
+            })
+    })
 }
 
 /// Every string a `ratect.toml` reads as an expression, with the field it
@@ -287,15 +319,16 @@ fn expressions(document: &toml::Table) -> Vec<(String, &str)> {
     found
 }
 
-/// Every file's expressions that `uses` picks out, one [`Hit`] per field —
-/// so a container's several `volumes` entries using it make one.
-fn expression_hits(files: &[TomlFile], uses: fn(&str) -> bool) -> Vec<Hit> {
+/// Every file's expressions that `uses` picks out, given the file, the field and
+/// the value, one [`Hit`] per field — so a container's several `volumes` entries
+/// using it make one.
+fn expression_hits(files: &[TomlFile], uses: fn(&toml::Table, &str, &str) -> bool) -> Vec<Hit> {
     let mut hits: Vec<Hit> = files
         .iter()
         .flat_map(|file| {
             expressions(&file.document)
                 .into_iter()
-                .filter(|(_, value)| uses(value))
+                .filter(|(field, value)| uses(&file.document, field, value))
                 .map(|(field, _)| Hit {
                     field,
                     file: file.name.clone(),
@@ -310,7 +343,7 @@ fn expression_hits(files: &[TomlFile], uses: fn(&str) -> bool) -> Vec<Hit> {
 /// The backslash row's detector: every expression holding a `\`, as the
 /// TOML string decodes — so `"\\$X"` holds one and `"a\tb"` doesn't.
 fn expressions_with_a_backslash(files: &[TomlFile]) -> Vec<Hit> {
-    expression_hits(files, |value| value.contains('\\'))
+    expression_hits(files, |_, _, value| value.contains('\\'))
 }
 
 /// The reference row's detector: every expression whose references the
@@ -320,7 +353,7 @@ fn expressions_with_a_backslash(files: &[TomlFile]) -> Vec<Hit> {
 /// on it. An escaped sigil counts, so a `\$X` is found by the backslash row
 /// too: it was a reference, and isn't.
 fn expressions_read_differently(files: &[TomlFile]) -> Vec<Hit> {
-    expression_hits(files, |value| {
+    expression_hits(files, |_, _, value| {
         crate::expressions::references(value).is_ok_and(|now| now != references_before_0_12(value))
     })
 }
@@ -457,6 +490,12 @@ pub const BREAKING_CHANGES: &[BreakingChange] = &[
         summary: "'run_as_current_user' in a TOML file, or inherited through 'extends' from a \
                   YAML file and enabled, fails the load; use 'identity' instead",
         check: Check::FailsTheLoad,
+    },
+    BreakingChange {
+        version: "0.13.0",
+        summary: "a home directory ('~' first in a local include's 'path' or a host path) is \
+                  'HOME' when it is set and absolute, and only otherwise the passwd entry's",
+        check: Check::Detected(paths_from_home_directory),
     },
 ];
 
