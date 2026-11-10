@@ -6,38 +6,29 @@
 # what mitigates it in the meantime, and what would let it be removed. An
 # advisory with a fixed release available should never appear here — upgrade
 # instead — unless no stable release of what depends on it can take the fix,
-# and its entry says so.
+# or the affected version is in Cargo.lock without being compiled (a CI step
+# checks that it stays so), and its entry says so.
 
 [advisories]
 ignore = [
     # RUSTSEC-2023-0071 — "Marvin Attack: potential key recovery through
-    # timing sidechannels", in `rsa` 0.9.x. No fixed release exists; the
-    # RustCrypto rewrite that addresses it has not shipped, so there is
-    # nothing to upgrade to.
+    # timing sidechannels", in `rsa` 0.9.x, fixed in 0.10.0.
     #
-    # Where `rsa` is used: only by `ratect-core`'s in-process ssh-agent
-    # (`src/ssh_agent.rs`), to sign with an RSA private key a `build_ssh`
-    # entry's `paths` names. Ratect never performs RSA *decryption*, which is
-    # the operation the advisory's proof-of-concept attacks.
+    # Nothing Ratect builds uses `rsa` 0.9. `ratect-core`'s in-process
+    # ssh-agent (`src/ssh_agent.rs`), the only RSA user, signs with `rsa`
+    # 0.10, and `ssh-key`'s own `rsa` feature, which would compile 0.9, is
+    # off. The advisory still matches because `rsa` 0.9.10 is still listed
+    # in `Cargo.lock`: `ssh-key` 0.6's `std` feature names it as a weak
+    # dependency (`rsa?/std`), and Cargo records an optional dependency named
+    # that way even when no feature enables it. `cargo audit` reads the
+    # lockfile, so it reports a crate that is never compiled. CI's Security
+    # Audit job checks that it stays so: its "Nothing compiles rsa 0.9" step
+    # runs `cargo tree --locked --workspace --all-features -i rsa@0.9 --target all
+    # -e normal,dev,build` and fails if that finds anything.
     #
-    # Why it is accepted rather than fixed by dropping RSA: RSA keys remain
-    # common as deploy keys and in older CI setups, and refusing them would
-    # be a real gap in the `build_ssh` parity this exists to provide.
-    #
-    # Mitigations actually in place:
-    #
-    #  * Signing goes through `try_sign_with_rng`, not `try_sign`, so the
-    #    `rsa` crate applies RSA blinding — the standard defence against
-    #    precisely this class of timing side channel. `try_sign` skips it.
-    #  * The exposure is narrow. The signing oracle is a Unix socket in a
-    #    `0700` directory, reachable only by the invoking user's own
-    #    processes and only for the duration of one image build. Anything
-    #    able to make the many precisely-timed requests the attack needs can
-    #    already *use* the key directly over that same socket, so key
-    #    recovery buys persistence rather than access.
-    #
-    # Remove this entry when a fixed `rsa` release exists, or if `build_ssh`
-    # stops supporting RSA keys.
+    # Remove this entry, and that step, when `ssh-key` 0.7 is adopted
+    # (ratect#664), which drops `rsa` 0.9 from the lockfile; the step fails
+    # then too, on a spec matching nothing.
     "RUSTSEC-2023-0071",
 
     # RUSTSEC-2026-0387 — "Multiple timing variability issues in operations
@@ -52,16 +43,18 @@ ignore = [
     #
     # Where it is used: only by `ratect-core`'s in-process ssh-agent
     # (`src/ssh_agent.rs`), to sign with an ECDSA private key a `build_ssh`
-    # entry's `paths` names. Ed25519 and RSA keys don't use this crate.
+    # entry's `paths` names. Ed25519 keys don't use this crate. RSA keys sign
+    # through `rsa` 0.10, which uses `crypto-bigint` 0.7.11, a fixed release:
+    # the advisory covers only the 0.5.5 that ECDSA brings.
     #
-    # Why it is accepted rather than fixed by dropping ECDSA: refusing ECDSA
-    # keys would be a real gap in `build_ssh`, as for RSA above.
+    # Why it is accepted rather than fixed by dropping ECDSA: ECDSA keys are
+    # in use, and refusing them would be a real gap in `build_ssh`'s parity.
     #
-    # Mitigation: the same narrow exposure as the RSA entry — a signing
-    # oracle on a Unix socket in a `0700` directory, reachable only by the
-    # invoking user's own processes, for the duration of one image build, so
-    # anything able to time it can already use the key. Unlike RSA, there is
-    # no blinding: ECDSA signs through `ssh-key`'s own `try_sign`.
+    # Mitigation: the exposure is narrow. The signing oracle is a Unix
+    # socket in a `0700` directory, reachable only by the invoking user's own
+    # processes, for the duration of one image build, so anything able to
+    # time it can already use the key. There is no blinding: ECDSA signs
+    # through `ssh-key`'s own `try_sign`.
     #
     # Remove this entry once `ssh-key` 0.7 is stable and Ratect moves to it
     # (ratect#664), or if `build_ssh` stops supporting ECDSA keys.

@@ -56,7 +56,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use signature::{RandomizedSigner, SignatureEncoding, Signer};
+use signature::Signer;
 use ssh_key::private::{KeypairData, RsaKeypair};
 use ssh_key::{Algorithm, HashAlg, PrivateKey, Signature};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -124,8 +124,9 @@ pub struct Keyring {
 impl Keyring {
     /// Loads every key in `key_files` and starts serving them.
     ///
-    /// Fails if any key can't be read, is protected by a passphrase, or uses
-    /// an algorithm this agent can't sign with — all of which are reported
+    /// Fails if any key can't be read, is protected by a passphrase, uses an
+    /// algorithm this agent can't sign with, or is an RSA key whose
+    /// components don't make a key it can sign with — all of which are reported
     /// here, up front, rather than as an opaque authentication failure
     /// inside a build minutes later.
     pub async fn start(key_files: &[PathBuf]) -> Result<Self> {
@@ -182,6 +183,9 @@ struct LoadedKey {
     blob: Vec<u8>,
     comment: String,
     key: PrivateKey,
+    /// An RSA key as `rsa` signs with it, built and validated once at load
+    /// (see [`rsa_private_key`]); `None` for every other algorithm.
+    rsa: Option<rsa::PrivateKey>,
 }
 
 fn load_keys(key_files: &[PathBuf]) -> Result<Vec<LoadedKey>> {
@@ -231,16 +235,38 @@ fn load_key(path: &Path) -> Result<LoadedKey> {
         ),
     }
 
-    let blob = key
-        .public_key()
-        .to_bytes()
-        .with_context(|| format!("Failed to encode the public key of '{}'", shown(path)))?;
-
-    Ok(LoadedKey {
-        blob,
-        comment: key.comment().to_string(),
-        key,
+    LoadedKey::new(key).with_context(|| {
+        format!(
+            "This agent cannot use the SSH private key '{}'",
+            shown(path)
+        )
     })
+}
+
+impl LoadedKey {
+    /// The only way to build one, so an RSA key always carries the `rsa`
+    /// key [`sign`] needs. Built here rather than per request, so a key
+    /// `rsa` refuses is refused at load, naming its file, instead of
+    /// failing mid-build.
+    fn new(key: PrivateKey) -> Result<Self> {
+        let blob = key
+            .public_key()
+            .to_bytes()
+            .context("Failed to encode its public key")?;
+        let rsa = match key.key_data() {
+            KeypairData::Rsa(keypair) => Some(
+                rsa_private_key(keypair)
+                    .context("Its RSA components don't make a key this agent can sign with")?,
+            ),
+            _ => None,
+        };
+        Ok(Self {
+            blob,
+            comment: key.comment().to_string(),
+            key,
+            rsa,
+        })
+    }
 }
 
 /// Creates this agent's own directory under the system temporary directory,
@@ -433,7 +459,7 @@ fn sign_response(keys: &[LoadedKey], reader: &mut Reader<'_>) -> Option<Vec<u8>>
     let flags = reader.u32()?;
 
     let key = keys.iter().find(|key| key.blob == blob)?;
-    let signature = sign(&key.key, data, flags)?;
+    let signature = sign(key, data, flags)?;
 
     let mut response = vec![SSH_AGENT_SIGN_RESPONSE];
     write_string(&mut response, &signature);
@@ -443,12 +469,12 @@ fn sign_response(keys: &[LoadedKey], reader: &mut Reader<'_>) -> Option<Vec<u8>>
 /// Signs `data`, returning the `string algorithm` + `string blob` pair RFC
 /// 9987 §5.3 calls the signature — which is exactly what `ssh-key`'s own
 /// `Signature` encodes to, so there's no separate wire format to assemble.
-fn sign(key: &PrivateKey, data: &[u8], flags: u32) -> Option<Vec<u8>> {
-    let signature = match key.key_data() {
-        KeypairData::Rsa(keypair) => rsa_signature(keypair, data, flags)?,
+fn sign(key: &LoadedKey, data: &[u8], flags: u32) -> Option<Vec<u8>> {
+    let signature = match &key.rsa {
+        Some(private_key) => rsa_signature(private_key, data, flags)?,
         // Every other algorithm has exactly one signature format, and RFC
         // 9987's flags are defined only for RSA, so they're ignored here.
-        _ => key.try_sign(data).ok()?,
+        None => key.key.try_sign(data).ok()?,
     };
     Vec::<u8>::try_from(signature).ok()
 }
@@ -463,29 +489,39 @@ fn sign(key: &PrivateKey, data: &[u8], flags: u32) -> Option<Vec<u8>> {
 /// deliberate, narrow divergence from Go BuildKit's keyring, which inherits
 /// SHA-1 support from `x/crypto`.
 ///
-/// Signing goes through `try_sign_with_rng`, never `try_sign`: the `rsa`
-/// crate applies RSA blinding *only* when it is given a source of
-/// randomness, and blinding is the mitigation for the timing side channel
+/// Signing passes the operating system's RNG explicitly, through
+/// `sign_with_rng`: with an RNG, `rsa` blinds the private-key
+/// operation, the defence against the timing side channel
 /// [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071)
-/// describes. There is no fixed release of `rsa` to upgrade to, so taking
-/// the blinded path is the mitigation available — see `audit.toml`.
-fn rsa_signature(keypair: &RsaKeypair, data: &[u8], flags: u32) -> Option<Signature> {
-    let private_key = rsa_private_key(keypair)?;
-    let mut rng = rsa::rand_core::OsRng;
+/// describes. `rsa` 0.10 also moves to `crypto-bigint`'s constant-time
+/// arithmetic, the advisory's fix, so blinding is a second line, not the
+/// only one. Passing the RNG here keeps it from depending on a Cargo
+/// feature: `rsa`'s RNG-less signing blinds only when its `getrandom`
+/// feature is on, and signs unblinded without saying so when it isn't.
+fn rsa_signature(private_key: &rsa::PrivateKey, data: &[u8], flags: u32) -> Option<Signature> {
+    use rsa::sha2::{Digest, Sha256, Sha512};
+
+    let mut rng = getrandom::SysRng;
 
     // A client sets exactly one of these; preferring the stronger one is
-    // only a tie-break for a request that sets both.
+    // only a tie-break for a request that sets both. Signing borrows the
+    // key rather than moving a copy into a `SigningKey`: `rsa` doesn't wipe
+    // every precomputed value when a key is dropped.
     let (hash, blob) = if flags & SSH_AGENT_RSA_SHA2_512 != 0 {
-        let signing_key = rsa::pkcs1v15::SigningKey::<ssh_key::sha2::Sha512>::new(private_key);
+        let padding = rsa::Pkcs1v15Sign::new::<Sha512>();
         (
             HashAlg::Sha512,
-            signing_key.try_sign_with_rng(&mut rng, data).ok()?.to_vec(),
+            private_key
+                .sign_with_rng(&mut rng, padding, &Sha512::digest(data))
+                .ok()?,
         )
     } else if flags & SSH_AGENT_RSA_SHA2_256 != 0 {
-        let signing_key = rsa::pkcs1v15::SigningKey::<ssh_key::sha2::Sha256>::new(private_key);
+        let padding = rsa::Pkcs1v15Sign::new::<Sha256>();
         (
             HashAlg::Sha256,
-            signing_key.try_sign_with_rng(&mut rng, data).ok()?.to_vec(),
+            private_key
+                .sign_with_rng(&mut rng, padding, &Sha256::digest(data))
+                .ok()?,
         )
     } else {
         return None;
@@ -497,31 +533,46 @@ fn rsa_signature(keypair: &RsaKeypair, data: &[u8], flags: u32) -> Option<Signat
 /// Rebuilds the `rsa` crate's own private key from a parsed OpenSSH RSA
 /// keypair's components.
 ///
-/// `ssh-key` offers `TryFrom<&RsaKeypair>` for exactly this, and it is
-/// **broken in 0.6.7** (the latest release of that line): it passes the
-/// prime `p` twice instead of `p` and `q`, so `from_components` rejects
-/// every real key and no RSA signature can be produced at all — including
-/// through `ssh-key`'s own `Signer` impl, which is why that isn't used
-/// either. Fixed only on the unreleased 0.7 line, so this stays until
-/// `ssh-key` 0.7 is published and adopted.
+/// `ssh-key` 0.6 has a `TryFrom<&RsaKeypair>` for this, behind its own
+/// `rsa` feature, which is off: it builds an `rsa` 0.9 key, the version
+/// RUSTSEC-2023-0071 covers, and in 0.6.7 (the latest release of that line)
+/// it is **broken** anyway, passing the prime `p` twice instead of `p` and
+/// `q`, so every real key is rejected. Fixed only on the unreleased 0.7
+/// line; this stays until `ssh-key` 0.7 is published and adopted.
 ///
-/// `from_components` validates the result (that `n` really is `p * q`, and
-/// that `d` is consistent with `e`), so a key whose components don't agree
-/// is rejected here rather than producing signatures that never verify.
-fn rsa_private_key(keypair: &RsaKeypair) -> Option<rsa::RsaPrivateKey> {
-    let component =
-        |mpint: &ssh_key::Mpint| mpint.as_positive_bytes().map(rsa::BigUint::from_bytes_be);
+/// `from_components_with_wide_primes` validates the result (that `n` really
+/// is `p * q`, and that `d` is consistent with `e`), so a key whose
+/// components don't agree is refused at load rather than producing
+/// signatures that never verify. `rsa` 0.10 refuses some keys 0.9 accepted
+/// (a `d` not reduced below `n`, a repeated prime), and its error is kept as
+/// the refusal's cause. The wide-primes constructor is used rather than
+/// `from_components` so that unbalanced primes, which `from_components`
+/// refuses when they don't each fit in half the modulus, still load. It
+/// costs some speed on a handful of signatures per build. `rsa` asks that
+/// the width be a fixed policy, never chosen by looking at a key's primes
+/// or by retrying a refused key.
+fn rsa_private_key(keypair: &RsaKeypair) -> Result<rsa::PrivateKey> {
+    fn bytes<'a>(mpint: &'a ssh_key::Mpint, name: &str) -> Result<&'a [u8]> {
+        mpint
+            .as_positive_bytes()
+            .with_context(|| format!("Its {name} is not a positive integer"))
+    }
+    // Every secret component at the modulus's precision, as `rsa` decodes a
+    // PKCS#1 key itself, so none sizes to its own length. `e` is public.
+    let bits = u32::try_from(bytes(&keypair.public.n, "modulus")?.len())? * 8;
+    let component = |mpint: &ssh_key::Mpint, name: &str| -> Result<rsa::BoxedUint> {
+        Ok(rsa::BoxedUint::from_be_slice(bytes(mpint, name)?, bits)?)
+    };
 
-    rsa::RsaPrivateKey::from_components(
-        component(&keypair.public.n)?,
-        component(&keypair.public.e)?,
-        component(&keypair.private.d)?,
+    Ok(rsa::PrivateKey::from_components_with_wide_primes(
+        component(&keypair.public.n, "modulus")?,
+        rsa::BoxedUint::from_be_slice_vartime(bytes(&keypair.public.e, "public exponent")?),
+        component(&keypair.private.d, "private exponent")?,
         vec![
-            component(&keypair.private.p)?,
-            component(&keypair.private.q)?,
+            component(&keypair.private.p, "first prime")?,
+            component(&keypair.private.q, "second prime")?,
         ],
-    )
-    .ok()
+    )?)
 }
 
 /// Reads the primitives RFC 9987 messages are built from: `byte`, `uint32`

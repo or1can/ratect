@@ -199,44 +199,50 @@ rustls-native-certs = "0.8"
 schemars = { version = "1.2", optional = true, features = ["indexmap2"] }
 jsonschema = { version = "0.61", optional = true, default-features = false }
 # **`ssh-key`** (`default-features = false`, features
-# `std`/`ed25519`/`rsa`/`p256`/`p384`/`p521`/`getrandom`), plus
-# **`ssh-encoding`**, **`signature`** and **`rsa`**: parse OpenSSH private
-# key files and sign with them, for `build_ssh`'s `paths`
-# (`ratect-core/src/ssh_agent.rs`, 0.25.0). Ratect's **only cryptographic
-# dependency outside TLS** (`rustls`'s, client keys included) and `sha2`,
-# which only derives directory names; taken knowingly —
+# `std`/`ed25519`/`p256`/`p384`/`p521`), plus **`ssh-encoding`**,
+# **`signature`** and **`rsa`**: parse OpenSSH private key files and sign with
+# them, for `build_ssh`'s `paths` (`ratect-core/src/ssh_agent.rs`, 0.25.0).
+# Ratect's **only cryptographic dependency outside TLS** (`rustls`'s, client
+# keys included) and `sha2`, which only derives directory names; taken
+# knowingly —
 # [decisions/0005](https://github.com/or1can/ratect/blob/main/decisions/0005-build-ssh-keyring-placement.md)
 # chose owning that choice over pushing it onto the `bollard` fork, and it
 # deserves proportionate scrutiny plus an eye on advisories (`cargo audit`
 # already runs in CI). Feature selection is the whole cost control: this is
-# the RustCrypto tree, so it's granular by design (~45 crates), and each
-# flag is a deliberate call — `encryption` is **off**, which alone saves ~16
-# crates and matches Go BuildKit's own inability to use a
-# passphrase-protected key; `p384`/`p521` cost only two crates on top of
-# `p256`, so all of ECDSA is covered rather than an arbitrary slice of it;
-# `dsa` is off (removed from OpenSSH entirely). `std` is what provides
-# `PrivateKey::read_openssh_file`. **`getrandom` is load-bearing and looks
-# redundant** — it is what puts `OsRng` in `rand_core`, and `OsRng` is what
-# `rsa_signature` passes to `try_sign_with_rng`, the blinded path
-# `.cargo/audit.toml` names as the sole mitigation for RUSTSEC-2023-0071.
-# Removing the flag compiles today only because `p256`/`p384`/`p521` happen
-# to enable `rand_core/getrandom` themselves; the day the curve features
-# change, blinding would go with them and nothing would say so. Declared
-# explicitly for that reason, not because the build currently needs it. The
-# other three add **no** crates — all are already in `ssh-key`'s own tree —
-# and exist only because Rust's strict-deps rule won't let us `use` a
-# transitive dependency's items: `ssh-encoding` for the `Encode`/`Decode`
-# traits, `signature` for the `Signer`/`Verifier` traits (`ssh-key`
-# re-exports neither), and `rsa` to sign under `rsa-sha2-256` and to work
-# around 0.6.7's broken RSA key conversion. **Take SHA-2 from
-# `ssh_key::sha2`, not from `ratect-core`'s own direct `sha2`**: the two are
-# different major versions (0.10 vs 0.11) and only the re-export matches
-# what `rsa` expects. Not `ssh-agent-lib`: it would have added ~5 more
-# crates including a socket-activation tree (`service-binding`/`raunch`) for
-# a use case we don't have, while still leaving the per-algorithm signing to
-# us — and this module has to own socket creation anyway, to make it `0700`.
-ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rsa", "p256", "p384", "p521", "getrandom"] }
-rsa = "0.9.10"
+# the RustCrypto tree, so it's granular by design (~45 crates), and each flag
+# is a deliberate call — `encryption` is **off**, which alone saves ~16 crates
+# and matches Go BuildKit's own inability to use a passphrase-protected key;
+# `p384`/`p521` cost only two crates on top of `p256`, so all of ECDSA is
+# covered rather than an arbitrary slice of it; `dsa` is off (removed from
+# OpenSSH entirely). `std` is what provides `PrivateKey::read_openssh_file`.
+# **`ssh-key`'s `rsa` feature is off**: it would compile `rsa` 0.9, which
+# RUSTSEC-2023-0071 covers, for a key conversion that is broken in 0.6.7
+# anyway (`rsa_private_key` says how). `rsa` 0.9 still appears in
+# `Cargo.lock`, through `ssh-key`'s weak `rsa?/std` feature, but nothing
+# compiles it; `.cargo/audit.toml` says why its advisory is still listed.
+# `ssh-encoding` and `signature` add **no** crates — both are already in
+# `ssh-key`'s own tree — and exist only because Rust's strict-deps rule won't
+# let us `use` a transitive dependency's items: `ssh-encoding` for the
+# `Encode`/`Decode` traits, `signature` (2) for the `Signer`/`Verifier` traits
+# (`ssh-key` re-exports neither). **`rsa`** (0.10, `default-features = false`)
+# signs RSA keys under `rsa-sha2-256`/`-512`, separately from anything
+# `ssh-key` would use; it brings eight crates of its own (itself,
+# `crypto-bigint` 0.7, `crypto-primes`, `ctutils`, `cmov`, `cpubits`, `hmac`
+# 0.13 and `signature` 3). `pkcs1v15` gates the signing module; blinding comes
+# from the RNG `rsa_signature` passes, not from a feature (see `getrandom`
+# below). Take SHA-2 for RSA from `rsa::sha2`, the version `rsa`'s own
+# `digest` expects. Not `ssh-agent-lib`: it would have added ~5 more crates
+# including a socket-activation tree (`service-binding`/`raunch`) for a use
+# case we don't have, while still leaving the per-algorithm signing to us —
+# and this module has to own socket creation anyway, to make it `0700`.
+ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "p256", "p384", "p521"] }
+rsa = { version = "0.10.0", default-features = false, features = ["pkcs1v15"] }
+# **`getrandom`** (0.4, `sys_rng`): the OS RNG `rsa_signature` passes to
+# `rsa::PrivateKey::sign_with_rng`, which is what makes `rsa` blind the private-key
+# operation. Named at the call site rather than left to `rsa`'s own
+# `getrandom` feature, whose absence would sign unblinded without a word.
+# Adds no crates: `uuid` already compiles it.
+getrandom = { version = "0.4", features = ["sys_rng"] }
 ssh-encoding = "0.2"
 signature = "2"
 

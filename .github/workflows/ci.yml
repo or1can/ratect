@@ -444,6 +444,19 @@ jobs:
       - uses: actions/checkout@v7
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
+      # `.cargo/audit.toml` lists RUSTSEC-2023-0071 only because `rsa` 0.9 is
+      # in `Cargo.lock` without being compiled (see that entry). This fails if
+      # anything compiles it again, when the ignore would hide a real finding.
+      # Once `rsa` 0.9 leaves the lockfile, `cargo tree` errors on the
+      # unmatched spec and fails this too: remove both then.
+      - name: Nothing compiles rsa 0.9
+        run: |
+          out=$(cargo tree --locked --workspace --all-features -i rsa@0.9 --target all -e normal,dev,build)
+          if [ -n "$out" ]; then
+            echo "$out"
+            echo "rsa 0.9 is compiled again; see .cargo/audit.toml"
+            exit 1
+          fi
 
   # ratect#34: catches a broken dist-workspace.toml (or a Cargo.toml version
   # dist can't reconcile — e.g. the two binaries' dev versions disagreeing

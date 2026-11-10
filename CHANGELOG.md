@@ -26,6 +26,7 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- A `build_ssh` `paths` RSA key whose parts don't make a valid key fails the run before its image build starts, naming the file, instead of failing each signature during the build. That includes some unusual keys that signed before, such as one whose private exponent isn't reduced below its modulus.
 - **ratect.toml:** `run_as_current_user` fails the load in a `.toml` file, enabled or not, and on a TOML container inheriting an enabled one from a `.yml` through `extends`. Use `identity` instead: [what changes](docs/ratect-config-reference.md#coming-from-run_as_current_user). A `.yml` keeps the field, and `ratect-compat` is unchanged.
 - **ratect.toml:** A `~` leading a local include's `path` or a host path (a volume's, `build_directory`, a build secret's or a `build_ssh` path) is `$HOME` when it is set and absolute, and only otherwise the passwd entry's home.
 
@@ -58,6 +59,10 @@ history, from when it was the only binary.
 - `run_as_current_user` runs under a host uid or gid with no passwd or group entry, naming it with its digits in the generated files.
 - `run_as_current_user`'s generated `/etc/passwd`, `/etc/shadow` and `/etc/group` end their last line, so musl-based images (alpine) no longer read that line one character short.
 - A host user with no home — no passwd entry and `HOME` unset or not absolute, as under a numeric `docker run -u` — can run tasks: Ratect connects with no Docker config directory, `ratect includes` (ratect only) finds no Git includes and `ratect caches` (ratect only) no shared directory caches, and only what needs a home (`~` in a path, a shared directory cache, a Git include, a named Docker context or TLS certificates from `~/.docker`) is refused, naming it.
+
+### Security
+
+- `build_ssh` signs with an RSA key using `rsa` 0.10, which fixes [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071) (the Marvin timing attack).
 
 ## [ratect-compat 0.33.0 · ratect 0.12.0] - 2026-11-03
 
