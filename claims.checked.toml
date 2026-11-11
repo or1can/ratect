@@ -14030,15 +14030,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read against ci.yml (Tools Tests runs every tools/test_*.py; the claims job runs on every PR) and .pre-commit-config.yaml (rev v0.28.1). The PreToolUse, not-in-CI and Tools Tests bullets are corrected by the Status, the last since af8ffa5f."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "43a1bae83cecb299", "TODO.md" = "c2a680921ef48d01", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
 file = "decisions/0010-release-binary-distribution.md"
 mode = "stale-claims"
 unit = "073c1634c496cdb6"
@@ -14048,24 +14039,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read against dist-workspace.toml (targets, create-release = false, allow-dirty = [\"ci\"], attestation phase and filters) and release.yml's header (three hand-added customizations; the new Set up Python step is folded into create-draft-release's) and its draft create/edit step. Superseded sentences are corrected in the Status. `dist plan` was not re-run."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "43a1bae83cecb299", ".github/workflows/release.yml" = "2283ecd585f09f6c", "CHANGELOG.md" = "f347d1c835e84c71de19440cb7a0fe74e905545e", "dist-workspace.toml" = "7852e95f01af7dc8", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read against dist-workspace.toml (cargo-dist-version 0.33.0, shell and homebrew installers, homebrew publish job, or1can/homebrew-tap), release.yml's v0.33.0 installer pin, ci.yml's Release Pipeline Config job reading that version, and docs/installation.md:18-92."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "43a1bae83cecb299", ".github/workflows/release.yml" = "2283ecd585f09f6c", "dist-workspace.toml" = "7852e95f01af7dc8", "docs/installation.md" = "c1490b152407630e" }
-
-[[mark]]
 file = "agents/domain.md"
 mode = "stale-claims"
 unit = "57c8e234debc95bb"
@@ -14073,25 +14046,6 @@ copies = 1
 note = "Checked that CONTEXT.md and decisions/README.md exist, and that agents/docs.md's \"Around docs/\" section gives the decisions/-not-docs/adr/ rationale."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "f347d1c835e84c71de19440cb7a0fe74e905545e", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "07650c4af48a8466" }
-
-[[mark]]
-file = "decisions/0001-two-binaries.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Checked the bare v0.1.0-v0.21.0 tags, CHANGELOG's ratect-compat 0.22.0 heading, the crate versions (ratect-core with ratect-compat at 0.35.0-dev, ratect at 0.14.0-dev) and the fixture-layer pointer. The parenthetical-marker sentence is superseded by guideline 7's leading marker, which the Status records."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "f347d1c835e84c71de19440cb7a0fe74e905545e", "CLAUDE.md" = "d488405ab6e88f5a" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "acec0e5a5304cd93"
-copies = 1
-note = "Checked tools/, ci.yml (Tools Tests, claims job and its grant list, coverage, audit), the pre-commit/pre-push config, claims.toml, the ruleset required checks (gh api), fixture counts and twin names against the current files. Not checked: the plugin's own check behaviour, or the 0009 history and upstream issue fixes."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "43a1bae83cecb299", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "decisions/0009-adopt-claims-plugin.md" = "bc2002e2b21854c2", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "134b1b35c479e6a3", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "4f847facc4676784", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "970b43c4e8cd9e97", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -14119,3 +14073,48 @@ copies = 1
 note = "The step name moved with the step into its one-line form rather than being retracted; the step runs tools/check-doc-links.py, which checks exactly that no written doc link renders as literal brackets."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Read the whole Decision section against dist-workspace.toml (targets, create-release = false, github-attestations-phase/filters, allow-dirty = [\"ci\"]), release.yml (three hand-added customizations in its header, create-draft-release running tools/changelog-section.py, the smoke test's --version/--help) and ci.yml's dist-plan job: all hold. \"It reports today rather than blocks\" is historical, corrected in the Consequences bullet that says it now gates."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "835fc92077c5367a", ".github/workflows/release.yml" = "2283ecd585f09f6c", "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "dist-workspace.toml" = "7852e95f01af7dc8", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read the whole Consequences section: installers = [\"shell\", \"homebrew\"], publish-jobs/tap, and the Release Pipeline Config job reading cargo-dist-version from dist-workspace.toml all match; the main branch protection ruleset's required checks include Release Pipeline Config. This branch's ci.yml change (the Rustdoc job) touches none of it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "835fc92077c5367a", ".github/workflows/release.yml" = "2283ecd585f09f6c", "dist-workspace.toml" = "7852e95f01af7dc8", "docs/installation.md" = "c1490b152407630e" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read the whole Consequences section: its PreToolUse-hook, not-in-CI and Tools-Tests-scope lines no longer hold, and the Status section already says so (af8ffa5f); the record is append-only, so nothing to change. This branch's ci.yml change (the Rustdoc job) touches none of it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "835fc92077c5367a", "TODO.md" = "c2a680921ef48d01", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0001-two-binaries.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read the whole Consequences section: prefixed ratect/v and ratect-compat/v tags exist alongside bare v0.21.0; the anonymous-volume fix is in CHANGELOG.md under ratect-compat 0.22.0; the marker spelling change is recorded in Status. This branch's Unreleased Added entry is tooling-only and applies to both, consistent with it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "CLAUDE.md" = "b786d14bf31b0a6c" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "acec0e5a5304cd93"
+copies = 1
+note = "Read the whole Tooling & CI section against ci.yml (claims job's pinned-rev checkout, grant list identical to the section's, --fail-on-unmarked; test, docker-integration, coverage, audit jobs), .pre-commit-config.yaml (v0.28.1, pre-commit and pre-push claims-unmarked hooks), claims.toml's [hook], [claim-words] and [temporal-words] lists, and the ruleset (Claims not required): all hold."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "835fc92077c5367a", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "decisions/0009-adopt-claims-plugin.md" = "bc2002e2b21854c2", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "134b1b35c479e6a3", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "4f847facc4676784", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "970b43c4e8cd9e97", "tools/changelog-section.py" = "45082c17a3944098" }
