@@ -13,6 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 """mdBook preprocessor: renders a ```ansi fenced block as coloured HTML.
 
 Wired up in `book.toml` as `[preprocessor.ansi]`, and never run by hand.
@@ -61,9 +66,23 @@ recording, not here (agents/docs.md's captured-output rules).
   emits them, only a container's own output can.
 """
 
+import sys
+
+# Before any other import: the PEP 723 header above is what `uv run` reads,
+# and this is what a plain `python3` older than it meets instead. Except for
+# mdBook's `supports` probe: a preprocessor failing that is skipped and the
+# build still succeeds, publishing every ```ansi block raw. Answering it
+# makes mdBook run this for real, which refuses and fails the build.
+if sys.version_info < (3, 11):
+    if sys.argv[1:2] == ["supports"]:
+        sys.exit(0 if sys.argv[2:] == ["html"] else 1)
+    sys.exit(
+        "tools/mdbook-ansi.py needs Python 3.11 or later, and this is %d.%d. "
+        "Run it as `uv run tools/mdbook-ansi.py`, which fetches one." % sys.version_info[:2]
+    )
+
 import json
 import re
-import sys
 from dataclasses import dataclass, replace
 from html import escape
 

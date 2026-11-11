@@ -14019,3 +14019,57 @@ copies = 1
 note = "Re-read Consequences against this change's CHANGELOG.md edit, a contributor-tooling Unreleased entry with no binary marker: the shared-file, independent-version-line and prefixed-tag claims still hold. Its \"(ratect only)\" spelling predates guideline 7's leading marker; a shipped ADR left as written, guideline 7 being the current rule."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "41ae03bb2455524b682a2a45072a46cb71b6daa1", "CLAUDE.md" = "24b1bd19079946c3" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "26870f6fa7fa112d"
+copies = 1
+note = "\"Every tools/*.py script\": four scripts (capture-output, changelog-section, check-readme-docs-list, mdbook-ansi), each with the requires-python header and the version check; tools/test_python_minimum.py's SCRIPTS glob and its header/refusal tests check each one, and its workflow/CONTRIBUTING test checks the other places listed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "43a1bae83cecb299", ".github/workflows/release.yml" = "2283ecd585f09f6c", "CONTRIBUTING.md" = "66d486de717ab1f6", "tools/test_python_minimum.py" = "0f95a0649be0f7d3" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "13c9c886c594d2b1"
+copies = 1
+note = "\"Every pull request / every re-run\": Tools Tests is a required status check in the main ruleset (gh api rulesets) and runs on every pull_request, so a date-based failure in it would fail each PR and each re-run of an older commit."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/docs.md"
+mode = "claim-words-about-elsewhere"
+unit = "10fe12179b4c2bd0"
+copies = 1
+note = "Only the `uv run` prefix changed here. The pty, 80x24, TERM=xterm-256color, stdin-included and docs/captures/<name>.ansi facts match tools/capture-output.py's docstring and code."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/capture-output.py" = "90b2416bf81dab8d" }
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "647a11b2952d372d-8e2f05bd2f7644dd"
+copies = 2
+note = "Deliberate: Tools Tests runs `python3 -m unittest discover -s tools` after actions/setup-python pins the interpreter. ratect#858 lets workflows keep python3 after setup-python; the test docstrings now point at CONTRIBUTING.md's uv form instead."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "20ac6d7b335be12b-d82e1114e7a2ac03"
+copies = 1
+note = "Deliberate: `python3 tools/check-readme-docs-list.py` runs after setup-python 3.11 in the same job. ratect#858 lets workflows keep python3 after setup-python."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
+
+[[mark]]
+file = ".github/workflows/release.yml"
+mode = "restatement-ngram"
+unit = "6483c76ca1ad098a-9ed25dd757af1876"
+copies = 1
+note = "Deliberate: create-draft-release's new `Set up Python` step (3.11) runs before `python3 tools/changelog-section.py`. ratect#858 lets workflows keep python3 after setup-python."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/changelog-section.py" = "45082c17a3944098" }

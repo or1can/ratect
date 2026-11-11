@@ -53,6 +53,12 @@ jobs:
       - uses: taiki-e/install-action@mdbook
       # book.toml's [preprocessor.mermaid] — see the comment there.
       - uses: taiki-e/install-action@mdbook-mermaid
+      # book.toml's [preprocessor.ansi] runs tools/mdbook-ansi.py through
+      # `uv run`, which picks a Python meeting the script's `requires-python`
+      # header. No `python-version` input: it sets UV_PYTHON, which overrides
+      # that header, so it would only be a second copy of the minimum to keep
+      # in step. A full version, since setup-uv publishes no `v10` tag.
+      - uses: astral-sh/setup-uv@v10.3.3
       - run: mdbook build
       # Generated rather than a static file under docs/, so a page added or
       # removed from SUMMARY.md can't leave it stale. 404.html/print.html/

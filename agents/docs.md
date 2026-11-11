@@ -50,8 +50,8 @@ The captured-output rules (settled on #158; the tooling landed in #161):
    `book.toml` loads; the homepage and the `fancy` section share the one
    recording). Everything else is static: `simple`, `quiet`, `all`,
    listings, `doctor`, `caches`/`includes`/`resources`, errors.
-3. **Colour is captured, not added.** `tools/capture-output.py <name> --
-   <command...>` runs the command on a pseudo-terminal
+3. **Colour is captured, not added.** `uv run tools/capture-output.py
+   <name> -- <command...>` runs the command on a pseudo-terminal
    (`TERM=xterm-256color`, 80×24, stdin included — so a task container gets
    its TTY, as it would in a shell) and writes the raw bytes to
    `docs/captures/<name>.ansi`: the green/red exit code, `all`'s

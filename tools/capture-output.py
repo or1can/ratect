@@ -13,9 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 """Runs a command on a real terminal and keeps every byte it printed.
 
-    tools/capture-output.py <name> -- <command> [args...]
+    uv run tools/capture-output.py <name> -- <command> [args...]
 
 Writes `docs/captures/<name>.ansi` (relative to this repo, whatever the
 current directory), for a docs page to show as
@@ -30,7 +35,7 @@ block (a red exit code, a `doctor` finding), so the file is written either
 way. Example, from the repo root:
 
     cargo build -q -p ratect
-    tools/capture-output.py output-styles-simple -- \\
+    uv run tools/capture-output.py output-styles-simple -- \\
         target/debug/ratect run journey-test -f examples/full-stack/ratect.toml -o simple
 
 # Why a pty, and why not `script`
@@ -51,12 +56,21 @@ the terminal's echo of it and two backspaces. Reading the pty directly and
 forwarding nothing avoids both.
 """
 
+import sys
+
+# Before any other import: the PEP 723 header above is what `uv run` reads,
+# and this is what a plain `python3` older than it meets instead.
+if sys.version_info < (3, 11):
+    sys.exit(
+        "tools/capture-output.py needs Python 3.11 or later, and this is %d.%d. "
+        "Run it as `uv run tools/capture-output.py`, which fetches one." % sys.version_info[:2]
+    )
+
 import fcntl
 import os
 import pty
 import re
 import struct
-import sys
 import termios
 from pathlib import Path
 

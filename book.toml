@@ -26,9 +26,12 @@ additional-js = [
 # `tools/mdbook-ansi.css` above (agents/docs.md's captured-output rules). `after`
 # matters: the built-in `links` preprocessor is what expands the include,
 # and this one refuses a block that still holds the marker rather than
-# publishing it as the transcript.
+# publishing it as the transcript. Run through `uv`, which picks a Python
+# meeting tools/' minimum whatever `python3` is; given an older one anyway
+# (`UV_PYTHON`, say), the script fails the build rather than letting mdBook
+# skip it (see its version check).
 [preprocessor.ansi]
-command = "python3 tools/mdbook-ansi.py"
+command = "uv run tools/mdbook-ansi.py"
 after = ["links"]
 
 # Turns a ```mermaid fenced block into the <pre class="mermaid"> the vendored

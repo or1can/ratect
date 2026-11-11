@@ -15,7 +15,7 @@
 
 """Tests for `.claude/hooks/unfiltered-check-output.py`.
 
-    python3 -m unittest discover -s tools -p 'test_*.py'
+Run as `CONTRIBUTING.md`'s "The `tools/` scripts" section says.
 
 The hook lives beside Claude Code's settings rather than under `tools/`, but
 its tests run here so the Tools Tests CI job covers it. Each refused command

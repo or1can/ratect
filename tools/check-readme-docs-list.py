@@ -13,9 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 """Fails if `README.md`'s Documentation list has drifted from `docs/SUMMARY.md`.
 
-    python3 tools/check-readme-docs-list.py [readme] [summary]
+    uv run tools/check-readme-docs-list.py [readme] [summary]
 
 `readme` defaults to `README.md` and `summary` to `docs/SUMMARY.md`, both
 relative to the current directory. Exits 0 when the two agree, 1 with a
@@ -49,9 +54,18 @@ with no SUMMARY.md counterpart, which is the right time to decide how the
 README should render it.
 """
 
+import sys
+
+# Before any other import: the PEP 723 header above is what `uv run` reads,
+# and this is what a plain `python3` older than it meets instead.
+if sys.version_info < (3, 11):
+    sys.exit(
+        "tools/check-readme-docs-list.py needs Python 3.11 or later, and this is %d.%d. "
+        "Run it as `uv run tools/check-readme-docs-list.py`, which fetches one." % sys.version_info[:2]
+    )
+
 import argparse
 import difflib
-import sys
 from pathlib import Path
 
 

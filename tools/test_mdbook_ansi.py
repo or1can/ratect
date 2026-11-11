@@ -15,7 +15,7 @@
 
 """Tests for `mdbook-ansi.py`.
 
-    python3 -m unittest discover -s tools -p 'test_*.py'
+Run as `CONTRIBUTING.md`'s "The `tools/` scripts" section says.
 
 The preprocessor's output is what the published site shows for every
 captured transcript, and nothing downstream checks it: mdBook passes the
