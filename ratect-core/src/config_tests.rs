@@ -17606,11 +17606,28 @@ fn running_0_12() -> crate::written_for::Version {
     "0.12.0".parse().unwrap()
 }
 
-/// The version the bundle tests run as: the release of the latest row in the
-/// real table, so every row applies to an unmarked bundle, and a bundle
-/// written for this version is covered by all of them.
-fn running_0_13() -> crate::written_for::Version {
-    "0.13.0".parse().unwrap()
+/// The version the bundle tests run as, and the one a file they mean to be
+/// current declares: the newest row's in the real table, so every row applies
+/// to an unmarked bundle, and a bundle written for this version is covered by
+/// all of them. Derived from the table, so a new row changes only the tests
+/// about that row (ratect#837).
+fn latest() -> crate::written_for::Version {
+    crate::written_for::BREAKING_CHANGES
+        .iter()
+        .map(|row| row.version.parse::<crate::written_for::Version>().unwrap())
+        .max_by_key(|version| (version.major, version.minor, version.patch))
+        .expect("the table has rows")
+}
+
+/// The release line after [`latest`]'s: what a file written for a newer
+/// Ratect than this one declares.
+fn future() -> crate::written_for::Version {
+    let latest = latest();
+    crate::written_for::Version {
+        minor: latest.minor + 1,
+        patch: 0,
+        ..latest
+    }
 }
 
 /// A native project whose root includes one bundle, `files` committed at
@@ -17622,8 +17639,9 @@ fn native_project_including_a_bundle(files: &[(&str, &str)], entry: &str) -> (Pa
     std::fs::write(
         project.join("ratect.toml"),
         format!(
-            "project_name = \"demo\"\nratect_version = \"0.13.0\"\n\n[[include]]\ntype = \"git\"\n\
+            "project_name = \"demo\"\nratect_version = \"{}\"\n\n[[include]]\ntype = \"git\"\n\
              repo = \"{}\"\nref = \"v1\"\n{entry}",
+            latest(),
             bundle.display()
         ),
     )
@@ -17658,7 +17676,7 @@ async fn an_unmarked_bundle_is_refused_whatever_the_root_declares() {
     let (bundle, project) =
         native_project_including_a_bundle(&[("ratect-bundle.toml", BUNDLE_TASK)], "");
 
-    let error = load_bundled(&project, running_0_13())
+    let error = load_bundled(&project, latest())
         .await
         .expect_err("an unmarked bundle predates every row");
     let error = format!("{error:#}");
@@ -17670,7 +17688,7 @@ async fn an_unmarked_bundle_is_refused_whatever_the_root_declares() {
         "doesn't set 'ratect_version'",
         "ratect 0.12.0: ",
         "raise its 'ratect_version'",
-        "set 'reviewed_ratect_version' to 0.13.0",
+        &format!("set 'reviewed_ratect_version' to {}", latest()),
     ] {
         assert!(error.contains(expected), "missing {expected:?} in: {error}");
     }
@@ -17697,7 +17715,7 @@ async fn a_refusals_detectors_read_only_the_files_its_version_covers() {
         )],
         "",
     );
-    let refusal = load_bundled(&project, running_0_13())
+    let refusal = load_bundled(&project, latest())
         .await
         .expect_err("an unmarked bundle predates every row")
         .downcast::<crate::written_for::Refusal>()
@@ -17731,9 +17749,9 @@ async fn a_refusals_detectors_read_only_the_files_its_version_covers() {
     // The same root, unmarked: refused itself, before the load.
     let unmarked = std::fs::read_to_string(&root)
         .unwrap()
-        .replace("ratect_version = \"0.13.0\"\n", "");
+        .replace(&format!("ratect_version = \"{}\"\n", latest()), "");
     std::fs::write(&root, unmarked).unwrap();
-    let project_refusal = crate::written_for::check(&root, running_0_13())
+    let project_refusal = crate::written_for::check(&root, latest())
         .expect_err("an unmarked root predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17787,7 +17805,10 @@ fn bundle_row_outcome(
 async fn a_yaml_file_in_scope_leaves_a_detected_row_unknown() {
     let bundle = git_bundle_repo(&[(
         "ratect-bundle.toml",
-        "ratect_version = \"0.13.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+        &format!(
+            "ratect_version = \"{}\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+            latest()
+        ),
     )]);
     let project = unique_temp_dir();
     let root = project.join("ratect.toml");
@@ -17804,7 +17825,7 @@ async fn a_yaml_file_in_scope_leaves_a_detected_row_unknown() {
         ),
     )
     .unwrap();
-    let refusal = crate::written_for::check(&root, running_0_13())
+    let refusal = crate::written_for::check(&root, latest())
         .expect_err("an unmarked root predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17840,7 +17861,7 @@ async fn a_detector_finds_a_use_in_a_local_include() {
          [containers.app.environment]\nBACKSLASH = 'a\\b'\nREFERENCE = '<foo.txt'\n",
     )
     .unwrap();
-    let refusal = crate::written_for::check(&root, running_0_13())
+    let refusal = crate::written_for::check(&root, latest())
         .expect_err("an unmarked root predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17882,7 +17903,10 @@ async fn a_detector_finds_a_use_in_a_local_include() {
 async fn a_yaml_roots_refusal_never_finds_nothing_for_want_of_toml() {
     let bundle = git_bundle_repo(&[(
         "ratect-bundle.toml",
-        "ratect_version = \"0.13.0\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+        &format!(
+            "ratect_version = \"{}\"\n\n[containers.c]\nimage = \"alpine:3.18\"\n",
+            latest()
+        ),
     )]);
     let project = unique_temp_dir();
     let root = project.join("batect.yml");
@@ -17896,7 +17920,7 @@ async fn a_yaml_roots_refusal_never_finds_nothing_for_want_of_toml() {
     .unwrap();
     let cache_root = unique_temp_dir();
     let trial = trial_load(&root, &cache_root).await;
-    let refusal = crate::written_for::check_yaml_root(&root, trial.toml_files(), running_0_13())
+    let refusal = crate::written_for::check_yaml_root(&root, trial.toml_files(), latest())
         .expect_err("a YAML root including a TOML file predates every row")
         .downcast::<crate::written_for::Refusal>()
         .unwrap();
@@ -17915,7 +17939,7 @@ async fn a_yaml_roots_refusal_never_finds_nothing_for_want_of_toml() {
 async fn bundled_refusal(project: &Path) -> String {
     format!(
         "{:#}",
-        load_bundled(project, running_0_13())
+        load_bundled(project, latest())
             .await
             .expect_err("the bundle should be refused")
     )
@@ -17926,17 +17950,13 @@ async fn bundled_refusal(project: &Path) -> String {
 /// whichever side it is on.
 #[tokio::test]
 async fn a_bundle_loads_once_its_version_or_its_review_covers_every_row() {
+    let declares = format!("ratect_version = \"{}\"\n", latest());
+    let reviewed = format!("reviewed_ratect_version = \"{}\"\n", latest());
     for (bundle_declares, entry) in [
-        ("ratect_version = \"0.13.0\"\n", ""),
-        ("", "reviewed_ratect_version = \"0.13.0\"\n"),
-        (
-            "ratect_version = \"0.11.0\"\n",
-            "reviewed_ratect_version = \"0.13.0\"\n",
-        ),
-        (
-            "ratect_version = \"0.13.0\"\n",
-            "reviewed_ratect_version = \"0.11.0\"\n",
-        ),
+        (declares.as_str(), ""),
+        ("", reviewed.as_str()),
+        ("ratect_version = \"0.11.0\"\n", reviewed.as_str()),
+        (declares.as_str(), "reviewed_ratect_version = \"0.11.0\"\n"),
     ] {
         let (bundle, project) = native_project_including_a_bundle(
             &[(
@@ -17946,7 +17966,7 @@ async fn a_bundle_loads_once_its_version_or_its_review_covers_every_row() {
             entry,
         );
 
-        let config = load_bundled(&project, running_0_13())
+        let config = load_bundled(&project, latest())
             .await
             .unwrap_or_else(|error| panic!("{bundle_declares:?} {entry:?}: {error:#}"));
         assert!(config.config.tasks.contains_key("bundled"));
@@ -17984,17 +18004,21 @@ async fn a_bundle_written_and_reviewed_before_a_row_is_refused() {
 /// fields are parsed — not for the field this binary doesn't know.
 #[tokio::test]
 async fn a_bundle_from_the_future_is_refused_before_it_is_parsed() {
+    let newer = future();
     let (bundle, project) = native_project_including_a_bundle(
         &[(
             "ratect-bundle.toml",
-            &format!("ratect_version = \"0.14.0\"\nfield_from_the_future = true\n{BUNDLE_TASK}"),
+            &format!("ratect_version = \"{newer}\"\nfield_from_the_future = true\n{BUNDLE_TASK}"),
         )],
         "",
     );
 
     let error = bundled_refusal(&project).await;
     for expected in [
-        "its 'ratect_version' is 0.14.0, so it needs ratect 0.14 or later",
+        &format!(
+            "its 'ratect_version' is {newer}, so it needs ratect {}.{} or later",
+            newer.major, newer.minor
+        ),
         "Upgrade ratect, or set the include's 'ref'",
     ] {
         assert!(error.contains(expected), "missing {expected:?} in: {error}");
@@ -18011,12 +18035,15 @@ async fn a_bundle_from_the_future_is_refused_before_it_is_parsed() {
 async fn a_review_from_the_future_is_refused() {
     let (bundle, project) = native_project_including_a_bundle(
         &[("ratect-bundle.toml", BUNDLE_TASK)],
-        "reviewed_ratect_version = \"0.14.0\"\n",
+        &format!("reviewed_ratect_version = \"{}\"\n", future()),
     );
 
     let error = bundled_refusal(&project).await;
     assert!(
-        error.contains("the include's 'reviewed_ratect_version' is 0.14.0, newer than this ratect"),
+        error.contains(&format!(
+            "the include's 'reviewed_ratect_version' is {}, newer than this ratect",
+            future()
+        )),
         "got: {error}"
     );
 
@@ -18050,11 +18077,14 @@ async fn ratect_version_is_refused_in_a_bundle_file_no_git_include_names() {
         &[
             (
                 "ratect-bundle.toml",
-                "ratect_version = \"0.13.0\"\ninclude = [\"more.toml\"]\n",
+                &format!(
+                    "ratect_version = \"{}\"\ninclude = [\"more.toml\"]\n",
+                    latest()
+                ),
             ),
             (
                 "more.toml",
-                &format!("ratect_version = \"0.13.0\"\n{BUNDLE_TASK}"),
+                &format!("ratect_version = \"{}\"\n{BUNDLE_TASK}", latest()),
             ),
         ],
         "",
@@ -18117,24 +18147,23 @@ async fn ratect_version_is_still_refused_in_an_owned_included_file() {
 /// version nor the root's — but its parent's entry for it can acknowledge it.
 #[tokio::test]
 async fn a_nested_bundle_is_covered_by_its_parents_entry_for_it() {
-    for (acknowledgement, loads) in [
-        ("", false),
-        ("reviewed_ratect_version = \"0.13.0\"\n", true),
-    ] {
+    let reviewed = format!("reviewed_ratect_version = \"{}\"\n", latest());
+    for (acknowledgement, loads) in [("", false), (reviewed.as_str(), true)] {
         let inner = git_bundle_repo(&[("ratect-bundle.toml", BUNDLE_TASK)]);
         let (outer, project) = native_project_including_a_bundle(
             &[(
                 "ratect-bundle.toml",
                 &format!(
-                    "ratect_version = \"0.13.0\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\n\
+                    "ratect_version = \"{}\"\n\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\n\
                      ref = \"v1\"\n{acknowledgement}",
+                    latest(),
                     inner.display()
                 ),
             )],
             "allow_nested_git_includes = true\n",
         );
 
-        let result = load_bundled(&project, running_0_13()).await;
+        let result = load_bundled(&project, latest()).await;
         if loads {
             result.unwrap();
         } else {
@@ -18167,8 +18196,11 @@ async fn a_refusal_for_an_include_in_a_yaml_file_says_how_to_reach_toml_first() 
     let project = unique_temp_dir();
     std::fs::write(
         project.join("ratect.toml"),
-        "project_name = \"demo\"\nratect_version = \"0.13.0\"\n\
-         include = [{ path = \"shared.yml\" }]\n",
+        format!(
+            "project_name = \"demo\"\nratect_version = \"{}\"\n\
+             include = [{{ path = \"shared.yml\" }}]\n",
+            latest()
+        ),
     )
     .unwrap();
     std::fs::write(
@@ -18183,8 +18215,9 @@ async fn a_refusal_for_an_include_in_a_yaml_file_says_how_to_reach_toml_first() 
     let error = bundled_refusal(&project).await;
     assert!(
         error.contains(&format!(
-            "set 'reviewed_ratect_version' to 0.13.0 on its include in {:?}, which a \
+            "set 'reviewed_ratect_version' to {} on its include in {:?}, which a \
              Batect-format (YAML) file can't set: first, move that Git include into a TOML file.",
+            latest(),
             project.join("shared.yml")
         )),
         "got: {error}"
@@ -18208,7 +18241,7 @@ async fn a_refusal_for_an_include_in_a_yaml_file_says_how_to_reach_toml_first() 
         Config::load_from_file_native_written_for(
             &project.join("batect.yml"),
             &git_cache,
-            running_0_13()
+            latest()
         )
         .await
         .expect_err("the bundle should be refused")
@@ -18234,9 +18267,9 @@ async fn every_entry_reaching_a_bundle_must_cover_it() {
                 "\n[[include]]\ntype = \"git\"\nrepo = \"{}\"\nref = \"v1\"\n{}",
                 bundle.display(),
                 if reviewed {
-                    "reviewed_ratect_version = \"0.13.0\"\n"
+                    format!("reviewed_ratect_version = \"{}\"\n", latest())
                 } else {
-                    ""
+                    String::new()
                 }
             )
         };
@@ -18282,7 +18315,7 @@ async fn a_yaml_bundle_is_judged_only_once_it_reaches_a_toml_file() {
         ("last.toml", BUNDLE_TASK),
     ];
     let (bundle, project) = native_project_including_a_bundle(&yaml_only, "");
-    load_bundled(&project, running_0_13()).await.unwrap();
+    load_bundled(&project, latest()).await.unwrap();
     std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
 
@@ -18301,9 +18334,11 @@ async fn a_yaml_bundle_is_judged_only_once_it_reaches_a_toml_file() {
     std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
 
-    let (bundle, project) =
-        native_project_including_a_bundle(&reaching_toml, "reviewed_ratect_version = \"0.13.0\"\n");
-    load_bundled(&project, running_0_13()).await.unwrap();
+    let (bundle, project) = native_project_including_a_bundle(
+        &reaching_toml,
+        &format!("reviewed_ratect_version = \"{}\"\n", latest()),
+    );
+    load_bundled(&project, latest()).await.unwrap();
     std::fs::remove_dir_all(&bundle).ok();
     std::fs::remove_dir_all(&project).ok();
 }
@@ -18361,8 +18396,9 @@ async fn an_invalid_review_names_the_include_without_its_credentials() {
     std::fs::write(
         project.join("ratect.toml"),
         format!(
-            "project_name = \"demo\"\nratect_version = \"0.13.0\"\n\n[[include]]\ntype = \"git\"\n\
-             repo = \"{REMOTE}\"\nref = \"v1\"\nreviewed_ratect_version = \"latest\"\n"
+            "project_name = \"demo\"\nratect_version = \"{}\"\n\n[[include]]\ntype = \"git\"\n\
+             repo = \"{REMOTE}\"\nref = \"v1\"\nreviewed_ratect_version = \"latest\"\n",
+            latest()
         ),
     )
     .unwrap();
@@ -18379,7 +18415,7 @@ async fn an_invalid_review_names_the_include_without_its_credentials() {
         Config::load_from_file_native_written_for(
             &project.join("ratect.toml"),
             &git_cache,
-            running_0_13()
+            latest()
         )
         .await
         .unwrap_err()

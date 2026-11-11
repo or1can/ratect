@@ -168,8 +168,8 @@ fn ratect_local_toml_is_auto_discovered_for_config_variables() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 [containers.app]
@@ -181,6 +181,7 @@ environment = { GREETING = "<greeting" }
 [tasks.t]
 run = { container = "app" }
 "#,
+        ),
     )
     .unwrap();
 
@@ -225,8 +226,8 @@ fn tasks_list_succeeds_when_an_unused_container_cannot_be_evaluated() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 [config_variables.region]
@@ -242,6 +243,7 @@ environment = { REGION = "<region", OTHER = "<never_declared" }
 [tasks.build]
 run = { container = "app" }
 "#,
+        ),
     )
     .unwrap();
 
@@ -271,10 +273,10 @@ fn tasks_list_reads_a_backslash_in_an_expression_as_an_escape() {
     let tasks_list = |value: &str| {
         std::fs::write(
             dir.join("ratect.toml"),
-            format!(
-                "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
+            written_for_latest(&format!(
+                "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\
                  environment = {{ X = '{value}' }}\n\n[tasks.build]\nrun = {{ container = \"app\" }}\n"
-            ),
+            )),
         )
         .unwrap();
         ratect_command()
@@ -313,9 +315,11 @@ fn tasks_list_refuses_a_malformed_expression_located_in_the_file() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
-         image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
-         [tasks.build]\nrun = { container = \"app\" }\n",
+        written_for_latest(
+            "project_name = \"demo\"\n\n[containers.app]\n\
+             image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
+             [tasks.build]\nrun = { container = \"app\" }\n",
+        ),
     )
     .unwrap();
     let output = ratect_command()
@@ -345,9 +349,11 @@ fn a_git_include_remotes_credentials_are_never_printed() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\
-         include = [{ type = \"git\", repo = \"https://ci:s3cret@127.0.0.1:9/b.git\", \
-         ref = \"native-751\" }]\n",
+        written_for_latest(
+            "project_name = \"demo\"\n\
+             include = [{ type = \"git\", repo = \"https://ci:s3cret@127.0.0.1:9/b.git\", \
+             ref = \"native-751\" }]\n",
+        ),
     )
     .unwrap();
 
@@ -386,9 +392,11 @@ fn a_git_include_remotes_control_characters_print_escaped() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\
-         include = [{ type = \"git\", repo = \"https://127.0.0.1:9/\\u001b]0;pwned\\u0007b.git\", \
-         ref = \"native-752\" }]\n",
+        written_for_latest(
+            "project_name = \"demo\"\n\
+             include = [{ type = \"git\", repo = \"https://127.0.0.1:9/\\u001b]0;pwned\\u0007b.git\", \
+             ref = \"native-752\" }]\n",
+        ),
     )
     .unwrap();
 
@@ -425,9 +433,11 @@ fn a_run_failing_before_its_task_starts_prints_its_error_once() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\n\
-         image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
-         [tasks.build]\nrun = { container = \"app\" }\n",
+        written_for_latest(
+            "project_name = \"demo\"\n\n[containers.app]\n\
+             image = \"alpine:3.18\"\nenvironment = { X = '${X:default}' }\n\n\
+             [tasks.build]\nrun = { container = \"app\" }\n",
+        ),
     )
     .unwrap();
     let output = ratect_command()
@@ -456,8 +466,10 @@ fn tasks_list_warns_that_its_config_variable_options_are_deprecated() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
-         [tasks.build]\nrun = { container = \"app\" }\n",
+        written_for_latest(
+            "project_name = \"demo\"\n\n[containers.app]\nimage = \"alpine:3.18\"\n\n\
+             [tasks.build]\nrun = { container = \"app\" }\n",
+        ),
     )
     .unwrap();
     std::fs::write(dir.join("ratect.local.toml"), "not toml at all = = =\n").unwrap();
@@ -540,8 +552,8 @@ fn a_command_line_config_var_overrides_the_config_vars_file() {
     // which value won observable without running anything.
     std::fs::write(
         dir.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 [containers.app]
@@ -552,6 +564,7 @@ build_directory = "<{which}"
 [tasks.t]
 run = { container = "app" }
 "#,
+        ),
     )
     .unwrap();
     std::fs::write(dir.join("ratect.local.toml"), "which = \"from-file\"\n").unwrap();
@@ -614,8 +627,8 @@ fn config_validate_passes_a_good_config_and_fails_a_broken_one() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 [containers.app]
@@ -624,6 +637,7 @@ build_directory = "does-not-exist"
 [tasks.t]
 run = { container = "app" }
 "#,
+        ),
     )
     .unwrap();
     let bad = ratect_command()
@@ -651,8 +665,8 @@ fn config_validate_reports_a_reference_to_an_undeclared_container() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 [containers.app]
@@ -662,6 +676,7 @@ image = "alpine:3.18"
 run = { container = "app" }
 dependencies = ["ghost"]
 "#,
+        ),
     )
     .unwrap();
     let output = ratect_command()
@@ -690,9 +705,8 @@ fn config_validate_warns_about_each_value_this_machine_cannot_evaluate() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        format!(
+        written_for_latest(&format!(
             r#"
-ratect_version = "0.13.0"
 project_name = "demo"
 
 [containers.build-env]
@@ -709,7 +723,7 @@ environment = {{ TOKEN = "${SECOND}" }}
 [tasks.build]
 run = {{ container = "build-env" }}
 "#
-        ),
+        )),
     )
     .unwrap();
     let validate = |set: &[&str]| {
@@ -767,6 +781,22 @@ fn written_for_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
         .split_once('-')
         .map_or(env!("CARGO_PKG_VERSION"), |(release, _)| release)
+}
+
+/// `project`, the text of a `ratect.toml`, marked as written for the newest row's version
+/// in `written_for::BREAKING_CHANGES`, so a new row changes only the tests
+/// about that row (ratect#837).
+fn written_for_latest(project: &str) -> String {
+    let latest = ratect_core::written_for::BREAKING_CHANGES
+        .iter()
+        .map(|row| {
+            row.version
+                .parse::<ratect_core::written_for::Version>()
+                .unwrap()
+        })
+        .max_by_key(|version| (version.major, version.minor, version.patch))
+        .expect("the table has rows");
+    format!("ratect_version = \"{latest}\"\n{project}")
 }
 
 /// decisions/0015: a project written for a newer Ratect is refused for that
@@ -1786,8 +1816,8 @@ fn a_native_container_may_override_an_inherited_build_directory_with_an_image() 
     std::fs::write(dir.join("ctx/Dockerfile"), "FROM alpine:3.18\n").unwrap();
     std::fs::write(
         dir.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 [containers.base]
@@ -1800,6 +1830,7 @@ image = "alpine:3.18"
 [tasks.t]
 run = { container = "app" }
 "#,
+        ),
     )
     .unwrap();
 
@@ -1834,8 +1865,8 @@ fn a_base_only_container_needs_no_image_and_validates() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 # No image and no build_directory: this exists only to be extended.
@@ -1849,6 +1880,7 @@ image = "alpine:3.18"
 [tasks.t]
 run = { container = "app" }
 "#,
+        ),
     )
     .unwrap();
 
@@ -1969,7 +2001,7 @@ fn tasks_list_in_quiet_output_prints_nothing_when_there_are_no_tasks() {
     let dir = unique_project_dir();
     std::fs::write(
         dir.join("ratect.toml"),
-        "ratect_version = \"0.13.0\"\nproject_name = \"demo\"\n",
+        written_for_latest("project_name = \"demo\"\n"),
     )
     .unwrap();
 
@@ -4182,16 +4214,15 @@ fn doctor_stdout_on_rootful_linux(project: &str) -> String {
 /// The class reaches the check; its rules are `ratect-core`'s to test.
 #[test]
 fn doctor_warns_about_a_mount_written_as_root_on_rootful_linux() {
-    let stdout = doctor_stdout_on_rootful_linux(
+    let stdout = doctor_stdout_on_rootful_linux(&written_for_latest(
         r#"
-ratect_version = "0.13.0"
 project_name = "x"
 
 [containers.app]
 image = "alpine:3.18.2"
 volumes = [{ local = "/srv/code", container = "/code" }]
 "#,
-    );
+    ));
     assert!(
         stdout.contains("ok      Docker daemon class: rootful Linux"),
         "{stdout}"
@@ -4206,9 +4237,8 @@ volumes = [{ local = "/srv/code", container = "/code" }]
 /// `/` isn't this test's user's, unless it is root.
 #[test]
 fn doctor_does_not_read_a_mounts_owner_for_a_daemon_over_the_network() {
-    let stdout = doctor_stdout_on_rootful_linux(
+    let stdout = doctor_stdout_on_rootful_linux(&written_for_latest(
         r#"
-ratect_version = "0.13.0"
 project_name = "x"
 
 [containers.app]
@@ -4216,7 +4246,7 @@ image = "alpine:3.18.2"
 identity = { home = "/home/me" }
 volumes = [{ local = "/", container = "/host" }]
 "#,
-    );
+    ));
     assert!(
         stdout.contains("ok      Docker daemon class: rootful Linux"),
         "{stdout}"
@@ -4237,8 +4267,8 @@ fn doctor_warns_about_a_mount_someone_else_owns_on_a_local_rootful_daemon() {
     let directory = unique_project_dir();
     std::fs::write(
         directory.join("ratect.toml"),
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "x"
 
 [containers.app]
@@ -4246,6 +4276,7 @@ image = "alpine:3.18.2"
 identity = { home = "/home/me" }
 volumes = [{ local = "/usr", container = "/host-usr" }]
 "#,
+        ),
     )
     .unwrap();
     let output = ratect_command()
@@ -4525,13 +4556,14 @@ fn run_refuses_tagging_and_overriding_one_container_before_anything_runs() {
     let project = unique_project_dir();
     std::fs::write(
         project.join("ratect.toml"),
-        "ratect_version = \"0.13.0\"\n\
-         project_name = \"conflict\"\n\
-         [containers.build-env]\nimage = \"alpine:3.18.2\"\n\
-         [containers.other]\nimage = \"alpine:3.18.2\"\n\
-         [tasks.pre]\nrun = { container = \"other\", command = \"true\" }\n\
-         [tasks.main]\nprerequisites = [\"pre\"]\n\
-         run = { container = \"other\", command = \"true\" }\n",
+        written_for_latest(
+            "project_name = \"conflict\"\n\
+             [containers.build-env]\nimage = \"alpine:3.18.2\"\n\
+             [containers.other]\nimage = \"alpine:3.18.2\"\n\
+             [tasks.pre]\nrun = { container = \"other\", command = \"true\" }\n\
+             [tasks.main]\nprerequisites = [\"pre\"]\n\
+             run = { container = \"other\", command = \"true\" }\n",
+        ),
     )
     .unwrap();
     let conflict = [
@@ -4922,13 +4954,13 @@ mod unnamed_host_user;
 /// it, whose `show` task prints the running user, its group's entry or `none`,
 /// its passwd entry and `$HOME`.
 fn unnamed_host_user_project(extra: &str) -> String {
-    format!(
-        "ratect_version = \"0.13.0\"\nproject_name = \"ratect-unnamed-host-user-test\"\n\n\
+    written_for_latest(&format!(
+        "project_name = \"ratect-unnamed-host-user-test\"\n\n\
          [containers.build-env]\nimage = \"alpine:3.18.2\"\nidentity = {{ home = \"/home/me\" }}\n\
          {extra}\n\
          [tasks.show]\nrun = {{ container = \"build-env\", command = \
          \"\"\"sh -c 'whoami; getent group $(id -g) || echo none; getent passwd $(id -u); echo $HOME'\"\"\" }}\n"
-    )
+    ))
 }
 
 /// A uid and gid the host has no passwd or group entry for still run, with a
@@ -5486,8 +5518,8 @@ fn remapped_hazards_project() -> PathBuf {
     let path = unique_project_dir().join("ratect.toml");
     std::fs::write(
         &path,
-        r#"
-ratect_version = "0.13.0"
+        written_for_latest(
+            r#"
 project_name = "demo"
 
 [containers.with-user]
@@ -5501,6 +5533,7 @@ identity = { home = "/home/me" }
 [tasks.run]
 run = { container = "with-user" }
 "#,
+        ),
     )
     .unwrap();
     path
