@@ -14517,3 +14517,21 @@ note = "Read every per-repo setting against claims.toml (claim-words and tempora
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "c2a680921ef48d01" }
+
+[[mark]]
+file = "docs/installation.md"
+mode = "claim-words-counts"
+unit = "ef8327d55b58f0a3"
+copies = 1
+note = "Measured with `ldd --version` in container images: ubuntu:22.04 2.35, debian:12 2.36, rockylinux:9 (for RHEL 9) 2.34, ubuntu:20.04 2.31, debian:11 2.31, rockylinux:8 (for RHEL 8) 2.28. ratect 0.13.0's x86_64-unknown-linux-gnu binary runs on rockylinux:9 and is refused on rockylinux:8 (GLIBC_2.29 not found); its x86_64-unknown-linux-musl binary runs on rockylinux:8, and `file` reports it static-pie linked."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/installation.md"
+mode = "claim-words-counts"
+unit = "cf4241eff8f67edd"
+copies = 1
+note = "Measured with `ldd --version` in container images: ubuntu:22.04 2.35, debian:12 2.36, rockylinux:9 (for RHEL 9) 2.34, ubuntu:20.04 2.31, debian:11 2.31, rockylinux:8 (for RHEL 8) 2.28. ratect 0.13.0's x86_64-unknown-linux-gnu binary runs on rockylinux:9 and is refused on rockylinux:8 (GLIBC_2.29 not found); its x86_64-unknown-linux-musl binary runs on rockylinux:8, and `file` reports it static-pie linked."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

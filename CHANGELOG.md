@@ -27,6 +27,7 @@ history, from when it was the only binary.
 ### Added
 
 - `tools/check-doc-links.py` rebuilds the workspace's documentation and fails on a doc link that renders as literal brackets; CI's Rustdoc job runs it. No effect on the released binaries; contributor-tooling only.
+- The installation page lists each prebuilt binary's minimum OS: glibc 2.34 for `x86_64-unknown-linux-gnu`, macOS 10.12 for `x86_64-apple-darwin`, macOS 11.0 for `aarch64-apple-darwin`, and no shared libc for the statically linked `musl` builds, which a distribution with an older glibc should use. Raising one of these is a breaking change, listed under `### Breaking`.
 - CI's Windows Check job compiles the workspace, tests included, for Windows; nothing is run there. `nix` is a dependency on Unix targets only. No effect on the released binaries, none of which targets Windows.
 
 ### Changed
