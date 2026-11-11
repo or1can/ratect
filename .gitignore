@@ -19,7 +19,7 @@
 # crashed run leaves one behind rather than dirtying `git status`.
 ratect-compat/tests/conformance/batect-journey/*/output/
 
-# Python bytecode from tools/ (see AGENTS.md guideline 15).
+# Python bytecode, from tools/' scripts and tests and whatever they import.
 __pycache__/
 
 # Per-machine executable-claims grants (decisions/0009) — deliberately never

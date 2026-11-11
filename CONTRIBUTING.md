@@ -50,8 +50,8 @@ The commit hook itself refuses a commit that brings in an unmarked
 `claim-words`, `temporal-words` or `restatement` finding, or leaves an
 orphaned mark for one, such as a marked sentence's old mark after it is
 reworded (the list is `claims.toml`'s `[hook] fail_on_unmarked`): fix or
-mark the finding, as [AGENTS.md](AGENTS.md) describes, and prune the
-orphan.
+mark the finding, as [`agents/claims.md`](agents/claims.md) describes, and
+prune the orphan.
 
 ## The `tools/` scripts
 

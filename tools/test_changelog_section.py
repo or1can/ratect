@@ -22,7 +22,7 @@ a wrong answer from it is not a bad ranking a human skims past — it either
 publishes a release with the wrong notes or an empty body. It is the one
 script in `tools/` that *decides* something rather than ranking candidates
 for a human to read (`tools/`'s other doc-integrity scripts are now the
-`claims` Claude Code plugin instead — see `AGENTS.md`'s Tooling & CI section).
+`claims` Claude Code plugin instead — see `agents/claims.md`).
 
 `test_a_short_target_is_not_matched_inside_a_longer_version` pins the bug a
 naive substring search would ship with: `"7.0.0"` is a substring of
