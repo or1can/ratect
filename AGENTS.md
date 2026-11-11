@@ -139,85 +139,19 @@ tests use it.
 
 - **Documentation checks**: the [`claims`](https://github.com/or1can/claims)
   Claude Code plugin (enabled in `.claude/settings.json`, configured for this
-  repo in `claims.toml`) — not the four hand-rolled `tools/` scripts this
-  repo used before it existed (`stale-claims.py`, `spliced-docs.py`,
-  `echoed-claims.py`, `verify-docs.py`; see
-  [decisions/0009](decisions/0009-adopt-claims-plugin.md) for the
-  migration). It runs on every commit as a git `pre-commit` hook, declared
-  in `.pre-commit-config.yaml` (pinned to a `claims` release tag, which
-  Renovate bumps) — a gate finding blocks the commit, an advisory finding
-  is printed alongside it, and an unmarked one from a check `claims.toml`'s
-  `[hook] fail_on_unmarked` lists blocks it too — once `pre-commit
-  install` has been run in the clone; until then commits go unchecked, and a Claude Code session with
-  the plugin enabled says so when it starts. It also runs on demand via
-  the `check-claims` skill (ask an agent to check
-  claims, any time mid-task, not only at commit time). Checks: `stale-claims`
-  (advisory, ranks Markdown prose by how much the code it names has moved
-  since the claim was last touched — generalized from this repo's own former
-  stale-claims script), `spliced-docs` (advisory, doc comments that document
-  an item other than the one they sit on — generalized from this repo's own
-  former spliced-docs script to sweep every tracked `.rs` file rather than a
-  narrower scan), `restatement` (advisory, prose a diff retracted that's
-  still asserted verbatim elsewhere — generalized from this repo's own
-  former echoed-claims script), `executable-claims` (gate, `<!-- verify: ...
-  -->` markers — generalized from this repo's own former verify-docs
-  script), plus checks with no prior equivalent here: `check-links`
-  (gate, dead internal Markdown links/anchors), `check-file-refs` (gate, a
-  bare repo path in prose that names no tracked file), `check-citations` (gate, a
-  backticked name citing a symbol this repo once declared but no longer
-  has, Markdown/Swift only — no Rust support yet), `check-cli-flags`
-  (advisory, a script and a flag named on one line, checked against the
-  script's `--help`; see its grant below), `temporal-words` (advisory, see
-  below), `claim-words` (advisory, totalising language, opt-in via
-  `claims.toml`'s `[claim-words] files` — this repo opts in `AGENTS.md`,
-  `agents/*.md`, `CONTEXT.md`, `ROADMAP.md`, `RELEASES.md`, `TODO.md`,
-  `decisions/*.md`, `docs/*.md`), and `judgment-agent` (advisory, every
-  backticked Rust/Swift name a diff added or removed, in any tracked
-  Markdown file, as candidates for architecture-claim review; not opt-in).
-  `check-config-defaults` and `check-env-vars` are registered too, but find
-  nothing here: there is no `[check-config-defaults]` mapping and no
-  `.env.example`. The four
-  former scripts' own paths and the full migration story are in
-  [decisions/0009](decisions/0009-adopt-claims-plugin.md) — not repeated
-  here now that they no longer exist to link to.
-
-  `claims.toml` also widens `restatement`'s default `extensions` to add
-  `.rs` — see its own comment for why.
-
-  `claims.toml` also scopes `stale-claims`'s bare-name module matching to
-  `decisions/`/`AGENTS.md`, keeps it from ranking an ADR's Context and
-  Alternatives considered sections — see its own comment for why, for
-  both — and raises
-  `executable-claims`'s timeout past this repo's own cold-build time.
-
-  `claims.toml` also opts `docs/*.md`, `CONTEXT.md`, `agents/*.md` and
-  `README.md` into `temporal-words` (advisory, flags version-dated wording
-  added to reference prose) — leaving out the files that are dated or
-  forward-looking by design (`AGENTS.md`, `ROADMAP.md`, `TODO.md`,
-  `RELEASES.md`, `decisions/*.md`), all of which `claim-words` does read;
-  see its own comment for where the line sits.
-
-  Every noise/timeout issue found comparing 0.2.2 against this repo's old
-  tooling is now fixed upstream (`decisions/0009` has the detail and issue
-  links). `executable-claims` also refuses to run a `<!-- verify: -->`
-  marker containing shell chaining, redirection, substitution, or
-  `sed`/`awk`/`grep` — a fixed, no-config-needed gate, not a per-project
-  knob.
+  repo in `claims.toml`). It runs on every commit as a git `pre-commit` hook,
+  declared in `.pre-commit-config.yaml`, once `pre-commit install` has been
+  run in the clone; until then commits go unchecked, and a Claude Code session
+  with the plugin enabled says so when it starts. **Before marking a finding
+  checked, or when the hook blocks a commit, read
+  [`agents/claims.md`](agents/claims.md)** — where the checks run, how this
+  repo configures them, and how a mark is written.
 
   **`executable-claims` denies execution by default, gated on a local,
   git-ignored grant** (`claims.local.toml`, sibling to `claims.toml` —
-  never commit it; `.gitignore` already excludes it, see the plugin's own
-  [deny-by-default ADR](https://github.com/or1can/claims/blob/main/decisions/0001-executable-claims-deny-by-default.md)).
-  A marker's command
-  with no exact-string entry in that file's `[executable-claims]` section
-  is a **gate finding** naming the command and the exact TOML to add,
-  regardless of whether it's actually safe — a fresh clone hits this
-  immediately on this repo's markers (`AGENTS.md`'s smoke-test example
-  below, and the task listings on
-  [`docs/worked-examples.md`](docs/worked-examples.md),
-  [`docs/getting-started.md`](docs/getting-started.md) and
-  [`docs/ratect-compat-config-reference.md`](docs/ratect-compat-config-reference.md)).
-  Add, once per machine:
+  never commit it; `.gitignore` already excludes it), so it must exist
+  before committing: a fresh clone hits this immediately on this repo's
+  markers. Add, once per machine:
 
   ```toml
   [executable-claims]
@@ -233,57 +167,11 @@ tests use it.
   denied = ["tools/changelog-section.py --help"]
   ```
 
-  `check-cli-flags` asks for the same kind of grant before running a
-  script it finds named next to a flag. Its one candidate here is denied:
-  guideline 8 names `tools/changelog-section.py` on the same line as the
-  `gh` flags of the release recovery steps, so its `--help` could only
-  report that the script lacks flags nobody claims it has. A denied
-  command is still listed, as skipped, rather than asked about.
+  **A new `<!-- verify: -->` marker's command goes in three places**: the
+  `claims` job in `.github/workflows/ci.yml`, the list above, and your own
+  grant. Until it does, CI fails on it, which is deliberate: someone has to
+  have read what the marker runs.
 
-  This closes the automatic-execution risk `decisions/0009` originally
-  documented as an accepted, unresolved gap — filed upstream as
-  [or1can/claims#15](https://github.com/or1can/claims/issues/15), now
-  fixed and no longer merely mitigated by caution.
-
-  **CI runs the same checks on every pull request** — the `claims` job in
-  `.github/workflows/ci.yml`, so a PR from a clone without the hook, or
-  from a bot like Renovate, is checked too. It checks out the `claims`
-  release `.pre-commit-config.yaml` pins, read from that file at run time,
-  so a bump of the hook moves CI with it; runs the checks against the PR's
-  base branch, which covers the PR's whole change; and fails on a gate
-  finding, or on an advisory finding that is neither fixed nor marked checked
-  (`--fail-on-unmarked`; of advisory findings, the commit hook blocks only
-  on those, and on an orphaned mark, from the checks `[hook]
-  fail_on_unmarked` lists). A
-  `pre-push` hook runs the same checks over the branch from its merge-base
-  with `origin/main`, with your own grants, so its unmarked count is the
-  one to quote when sizing a PR's claims work.
-  So a PR resolves the findings it brings in, and whoever batches Renovate's
-  changes marks what those bring in. It writes its own `claims.local.toml` with the grant list
-  above, so **a new `<!-- verify: -->` marker's command goes in that job
-  and in the list above, as well as in your own grant** — until it does,
-  CI fails on it, which is deliberate: someone has to have read what the
-  marker runs. The job is not yet a required status check.
-
-  **An advisory finding that was read and found true can be marked
-  checked**, in the committed `claims.checked.toml` beside `claims.toml`,
-  so the hook and CI stop reporting it until its sentence's wording, or
-  the content of a file it names, changes (the plugin's
-  [Checked marks](https://github.com/or1can/claims/blob/main/docs/checked-marks.md)
-  page). Write marks with `python3 -m claims.cli mark-checked`, over the
-  same `--diff-range` the findings were read over, with a note on each
-  saying what was checked against what, and `--by` naming who did the
-  reading: an agent's marks name the agent and whoever approved them, as
-  `--by "Claude Code agent, approved by Kevin Rogers"`. Deleting an entry
-  by hand lifts a mark early; `--prune` removes every orphaned one, as when
-  a reworded sentence is marked again. A `stale-claims` section or
-  `spliced-docs` doc comment read only in part is marked with `--partial`,
-  which the summary counts apart. Mark a finding only
-  after reading it against the code, file or section it names, never on
-  the strength of its own wording, and never mark a batch nobody read: a
-  mark records a reading, and one without a reading quiets a claim nobody
-  checked. A finding that was wrong is fixed, not marked. The summary
-  line's `quiet while checked` count says how many marks applied.
 - **Formatting/Linting**: `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` must pass; both are enforced in CI (`.github/workflows/ci.yml`).
 - **Dependency Audit**: `cargo audit` runs in CI against `Cargo.lock`, which is committed to the repo (binary crate convention, not gitignored). One shared lockfile covers the whole workspace. Accepted advisories live in [`.cargo/audit.toml`](.cargo/audit.toml) — currently two, RUSTSEC-2023-0071 (the Marvin timing attack in `rsa` 0.9.x, which nothing compiles any more but `Cargo.lock` still lists through `ssh-key` 0.6's weak `rsa?/std` feature) and RUSTSEC-2026-0387 (timing variability in `crypto-bigint` 0.5.x, whose fix no stable `ssh-key` can use yet; ratect#664 tracks retiring both). **Every entry there carries a written justification**: what the advisory covers, why it's accepted rather than fixed, what mitigates it meanwhile, and what would let it be removed — an ignore without that is indistinguishable from silencing the check, and `cargo audit` prints nothing about what it skipped. An advisory with a fixed release available never belongs there — upgrade instead — unless no stable release of what depends on it can take the fix, or the affected version is in `Cargo.lock` without being compiled (a CI step checks that it stays so), and its entry says so.
 - **Tests**: `cargo test --workspace` runs in CI, covering unit tests per module (pattern matching in `dockerignore`, config parsing/resolution, expression interpolation, build-context tar construction, interactive-TTY eligibility, user-mapping generation, and task engine logic — dependency cycles, prerequisite dedup, sidecar/dependency resolution, dependency readiness (health-wait/setup-command ordering and failure paths), environment merging, image resolution — via a fake `ContainerRuntime`) and CLI argument/behavior tests in `ratect-compat/src/main.rs`/`ratect-compat/tests/cli.rs`. `ratect-compat/tests/cli.rs` also has end-to-end tests (`#[ignore]`d by default, run explicitly via `cargo test --workspace --test cli -- --ignored`) that exercise a real Docker daemon against the fixtures under `ratect-compat/tests/fixtures/` — one per feature (sidecars, dependency readiness, environment/config variables, image building, `.dockerignore`, interactive mode, user mapping, hostnames/ports, proxy, `--use-network`). These also run as their own `docker-integration` CI job (`--workspace --test cli` picks up `ratect`'s own `ratect/tests/cli.rs` too, against its own `ratect/tests/fixtures/`). See the fixture files themselves for what each one proves.

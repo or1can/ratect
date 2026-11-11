@@ -550,69 +550,6 @@ subjects = {}
 [[mark]]
 file = "AGENTS.md"
 mode = "claim-words-totalising"
-unit = "af7ed52516c92d24"
-copies = 1
-note = ".claude/settings.json enables claims@claims, and the session's skill list includes claims:check-claims, described as usable 'at any point mid-task — not only at commit time'."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "65e736edf559158c"
-copies = 1
-note = "AGENTS.md:451 (guideline 8) names tools/changelog-section.py on the same line as `--draft=false`, `--clobber` and `--prerelease`. The other script mentions next to a dash are agents/docs.md:53 `tools/capture-output.py <name> --` (a separator, not a flag) and the grant text at AGENTS.md:227/232 itself. ci.yml:191-192 carries the same denial."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "tools/changelog-section.py" = "ffcbbf2a0af92d8c" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-counts"
-unit = "65e736edf559158c"
-copies = 1
-note = "Grepped every tools/*.py mention in Markdown. Only AGENTS.md:451 puts a script on a line with real `--flag`s. capture-output.py's line (agents/docs.md:53) has only the `--` separator, and its usage is 'tools/capture-output.py <name> -- <command>'. So 'one candidate' holds, though it depends on how the plugin picks candidates, which I couldn't read."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "tools/changelog-section.py" = "ffcbbf2a0af92d8c" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "202e937d4fdf8e28"
-copies = 1
-note = "ci.yml:3-7 triggers on pull_request to main. ci.yml:144-201 is the `claims` job (if: pull_request): it reads rev from .pre-commit-config.yaml, writes claims.local.toml with the grant list, and runs `python3 -m claims.cli --diff-range origin/$BASE_REF`, exiting 1 on a gate finding."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "9d95d6af0846466c" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-about-elsewhere"
-unit = "202e937d4fdf8e28"
-copies = 1
-note = "The job runs on every pull_request event to main (ci.yml:6-7, 146), whoever opened it. renovate.json5 configures Renovate to open PRs, which take the same path."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "9d95d6af0846466c" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "bdb41a374e3a65b0"
-copies = 1
-note = "A normative process rule, consistent with AGENTS.md's own checked-marks paragraph (lines 256-271) and the claims.checked.toml mechanism. It makes no factual claim the code could contradict."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-counts"
-unit = "bdb41a374e3a65b0"
-copies = 1
-note = "No numeric claim. 'one without a reading' is a rule statement, consistent with the surrounding paragraph."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
 unit = "b490be8305e93016"
 copies = 1
 note = "ratect-core/tests/written_for_fields.rs:15-35: one test makes each string in each ratect.toml twin malformed and compares the loader's refusal with the backslash detector, which reads written_for's expression list. every_string_location_in_the_native_schema_is_set_to_a_string_by_some_twin requires each schema string location to be set, unless NOT_SETTABLE (line 65+) exempts it."
@@ -9163,33 +9100,6 @@ subjects = { "ratect-core/src/diagnostics.rs" = "e8322fb2ac9a3a3d" }
 [[mark]]
 file = "AGENTS.md"
 mode = "claim-words-totalising"
-unit = "d1c93682c6940e4c"
-copies = 1
-note = "The diff only rewrote AGENTS.md's diagnostics.rs row and fixture-verbs bullet, not the Tooling & CI checks list; the prior reading still holds against claims v0.21.1 (now pinned), whose only change from v0.21.0 is numbering lines by \\n (claims/lines.py), leaving spliced-docs' and judgment-agent's scopes as before. Earlier reading: \"every tracked .rs file\", \"every backticked Rust/Swift name a diff added or removed, in any tracked Markdown file\" and \"not opt-in\" checked against ~/git/or1can/claims at v0.21.0 (the rev .pre-commit-config.yaml pins): spliced_docs.py:46 sweeps every tracked *.rs/*.swift, judgment_agent.py:14-16 and :81 give a whole-tree Markdown scan of citations of names the diff added or removed and has no files key, and check_citations.py:26-30 confirms Markdown plus Swift only."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CONTEXT.md" = "f74756a356e23afd", "ROADMAP.md" = "efe86badabc6bf0d", "TODO.md" = "5f93f1d31b8064d1" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-counts"
-unit = "d1c93682c6940e4c"
-copies = 1
-note = "AGENTS.md's change was outside this sentence (rows at :82 and :287); claims v0.21.1, the pin now, changed only line numbering, so the 13-check registry and the four former scripts the prior note counted are unchanged. Earlier reading: The surviving counts hold: claims/checks/__init__.py at v0.21.0 registers 13 checks, which are the 11 the sentence lists plus check-config-defaults and check-env-vars (named in the next sentence); \"a script and a flag named on one line\" matches check_cli_flags.py's per-line claim; \"The four former scripts\" are the four tools/ scripts named at AGENTS.md:150-151."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CONTEXT.md" = "f74756a356e23afd", "ROADMAP.md" = "efe86badabc6bf0d", "TODO.md" = "5f93f1d31b8064d1" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-about-elsewhere"
-unit = "d1c93682c6940e4c"
-copies = 1
-note = "Untouched by the diff (which edited AGENTS.md :82 and :287 only); v0.21.1's diff from v0.21.0 is git-style line splitting, no gate/advisory tier changes, and claims.toml's claim-words list is unchanged. Earlier reading: Each check's tier checked against v0.21.0 source: check-links, check-file-refs and check-citations are gate=True; check-cli-flags, claim-words, judgment-agent and spliced-docs are gate=False; temporal_words.py:49 is advisory. The claim-words opt-in list equals claims.toml [claim-words] files (AGENTS.md, agents/*.md, CONTEXT.md, ROADMAP.md, RELEASES.md, TODO.md, decisions/*.md, docs/*.md)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "CONTEXT.md" = "f74756a356e23afd", "ROADMAP.md" = "efe86badabc6bf0d", "TODO.md" = "5f93f1d31b8064d1" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
 unit = "14b31edcb07f4089"
 copies = 1
 note = "Checked ratect/tests/fixtures: tasks.yml, cache.yml/resources.yml for the caches/resources verbs ratect-compat lacks, and labels.yml used only by a_run_stamps_this_binarys_own_version_onto_what_it_creates (ratect/tests/cli.rs), which is per-binary because labels.rs's VERSION comes from each main.rs's CARGO_PKG_VERSION; the remaining fixtures are native-format (next sentence) plus convert/, another own-verb fixture."
@@ -12537,24 +12447,6 @@ subjects = { ".out-of-scope/cheaper-fancy-repaints.md" = "2fc55e567f1d7bf3", ".o
 
 [[mark]]
 file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "2e247e0d74261020"
-copies = 1
-note = "The pre-push entry in .pre-commit-config.yaml runs claims.cli with --diff-range origin/main...HEAD --fail-on-unmarked, the same checks and failure mode as ci.yml's claims job; the differences (local origin/main, own grants) are stated in the sentence. Ran it: 16 findings over this branch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-counts"
-unit = "2e247e0d74261020"
-copies = 1
-note = "Same reading: one pre-push entry, one unmarked count; checked against .pre-commit-config.yaml and a run of the hook."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
 mode = "claim-words-about-elsewhere"
 unit = "791add7a54ab4ffb"
 copies = 1
@@ -13878,51 +13770,6 @@ subjects = { "decisions/README.md" = "07650c4af48a8466" }
 
 [[mark]]
 file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "1f97b854b2acd7c5"
-copies = 1
-note = "Checked against `python3 -m claims.cli mark-checked --help` at claims v0.28.1: --prune \"Also remove every orphaned mark, one a run reports as checked-mark\", and its 0.26.0 changelog entry on a reworded sentence's old mark going in the same call as the new one."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "62d6bad2403b78be"
-copies = 1
-note = "Checked against `mark-checked --help` at claims v0.28.1 (--partial: \"only part of each section or doc comment was read\", stale-claims and spliced-docs findings only) and its 0.27.0 changelog entry: the summary line counts partial marks apart (\"4 of them partly\")."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "2d3a28a7e7b877df"
-copies = 1
-note = "Checked against .pre-commit-config.yaml (claims hook at v0.28.1, stage pre-commit) and claims docs/configuring.md \"Blocking a commit on unmarked findings\": gate findings block, advisory ones print, and an unmarked one from a check in claims.toml's [hook] fail_on_unmarked blocks; tested by staging an unmarked claim-words sentence in TODO.md, which `pre-commit run claims` refused with exit 1."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-counts"
-unit = "2d3a28a7e7b877df"
-copies = 1
-note = "Same sentence: \"a gate finding\"/\"an advisory finding\" name kinds, not counts; checked against claims docs/configuring.md and a refused test commit as in the totalising mark."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "630bd01cc1bd7a73"
-copies = 1
-note = "Checked against claims v0.28.1 docs/configuring.md \"Blocking a commit on unmarked findings\" (of advisory findings, the hook blocks on an unmarked one from a listed check and on an orphaned mark whose mode belongs to one; gate findings block regardless) and .github/workflows/ci.yml:203, which runs --fail-on-unmarked over origin/$BASE_REF, the PR's whole change."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
@@ -14116,5 +13963,293 @@ mode = "claim-words-totalising"
 unit = "7dd2ab5b8ce75bdf"
 copies = 1
 note = "Read against the Cargo.toml files: [dependencies] — clap and tracing-subscriber in both binaries only, clap_complete in ratect only, anyhow/tokio/tracing in both binaries and ratect-core, every other runtime dependency in ratect-core; dockerignore/Cargo.toml declares exactly regex and path-clean, both also in ratect-core's; [dev-dependencies] — portable-pty and async-trait in the binaries whose tests use them, ratect-core's own test crates in ratect-core."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "315fc52b57b9f209"
+copies = 1
+note = "Checked against .pre-commit-config.yaml (the claims hook at stage pre-commit, default_install_hook_types) and claims v0.28.1's claims/hooks.json, whose SessionStart hook runs claims.nudge; docs/installation.md there says it reports a repo with claims.toml and no installed hook."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "6433e70ea5a92f8c"
+copies = 1
+note = "Checked: .gitignore:29 lists claims.local.toml; claims v0.28.1's executable-claims refuses an ungranted command as a gate finding (decisions/0001 there), and AGENTS.md, docs/worked-examples.md, docs/getting-started.md and docs/ratect-compat-config-reference.md carry verify markers."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "e016cbd681270f05"
+copies = 1
+note = "Checked against .github/workflows/ci.yml's claims job, whose \"Grant the verify markers' commands\" step writes its own claims.local.toml with the same five commands as AGENTS.md's TOML block; the third place is the contributor's own git-ignored claims.local.toml."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7", "agents/claims.md" = "a4b65185a7a1dc5a" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "525e56ff06fc54fb"
+copies = 1
+note = "Checked against claims v0.28.1: docs/checks/ holds one page per check (13, matching docs/SUMMARY.md) and docs/configuring.md is the settings reference; this page only says what this repo does."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-counts"
+unit = "4451426f00ec003b"
+copies = 1
+note = "Checked against decisions/0009, which names the four retired scripts: stale-claims.py, spliced-docs.py, echoed-claims.py and verify-docs.py."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0009-adopt-claims-plugin.md" = "bc2002e2b21854c2" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "55655536f7aa8162"
+copies = 1
+note = "Checked against .pre-commit-config.yaml (rev v0.28.1, stage pre-commit), renovate.json5's pre-commit manager, and claims.toml's [hook] fail_on_unmarked (claim-words, temporal-words, restatement). Moved verbatim from AGENTS.md."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-counts"
+unit = "55655536f7aa8162"
+copies = 1
+note = "Same reading as the totalising mark: .pre-commit-config.yaml pins one release tag; [hook] fail_on_unmarked lists three checks, each of which blocks the commit when unmarked."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "3bc8b81ae40233fe"
+copies = 1
+note = "Checked: claims v0.28.1 ships the check-claims skill (its installation.md lists Skills (1) check-claims), runnable any time."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "ec90d5d910fc0012"
+copies = 1
+note = "Checked against .pre-commit-config.yaml's claims-unmarked entry: stage pre-push, --diff-range origin/main...HEAD --fail-on-unmarked, reading the clone's own claims.local.toml."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-counts"
+unit = "ec90d5d910fc0012"
+copies = 1
+note = "Same entry: the pre-push run covers the whole branch from its merge-base, so its count is the PR's, unlike the commit hook's single-commit list."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "213dc9b121af591d"
+copies = 1
+note = "Checked against .github/workflows/ci.yml's claims job: `if: github.event_name == 'pull_request'`, so every PR, including Renovate's, runs it whatever the author's clone has installed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-about-elsewhere"
+unit = "213dc9b121af591d"
+copies = 1
+note = "Same job in ci.yml; Renovate's PRs are pull_request events like any other, and renovate.json5 opens them."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "630bd01cc1bd7a73"
+copies = 1
+note = "Checked against ci.yml's claims job: the rev is read from .pre-commit-config.yaml with awk at run time, the run uses --diff-range origin/$BASE_REF --fail-on-unmarked, and claims.toml's [hook] fail_on_unmarked is what the commit hook blocks on."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "632d3fab470720aa"
+copies = 1
+note = "Checked against claims v0.28.1's docs/SUMMARY.md, which lists exactly these four as gate checks; docs/checks/check-citations.md reads Swift declarations only and says a Rust file's name is not read."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "c318c84edd554416"
+copies = 1
+note = "Checked against claims v0.28.1's docs/SUMMARY.md advisory list (these seven plus check-config-defaults and check-env-vars), and docs/checks/judgment-agent.md for its candidate rule; claims.toml has no [check-config-defaults] table and the repo has no .env.example."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "65e736edf559158c"
+copies = 1
+note = "Checked: the hook's only check-cli-flags finding is AGENTS.md guideline 8's line naming tools/changelog-section.py next to gh flags, and it reports it as denied and skipped, as AGENTS.md's [check-cli-flags] denied entry asks."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-counts"
+unit = "65e736edf559158c"
+copies = 1
+note = "Same reading: this run reports exactly one check-cli-flags candidate, AGENTS.md's guideline 8 line."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "1f97b854b2acd7c5"
+copies = 1
+note = "Checked against `claims.cli mark-checked --help` at v0.28.1: --prune removes every mark a run reports as checked-mark. Moved verbatim from AGENTS.md."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "62d6bad2403b78be"
+copies = 1
+note = "Checked against `mark-checked --help`: --partial applies to stale-claims and spliced-docs findings only. Moved verbatim from AGENTS.md."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "bdb41a374e3a65b0"
+copies = 1
+note = "A process rule, not a claim about code; moved verbatim from AGENTS.md, and this branch's marks follow it (each read against what it names)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-counts"
+unit = "bdb41a374e3a65b0"
+copies = 1
+note = "Same rule; \"a reading\" is per mark, as mark-checked records one note per entry."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/ready/SKILL.md"
+mode = "restatement-ngram"
+unit = "4bc02f4687d91384-c8f2be7d9a8df64b"
+copies = 1
+note = "The phrase moved to agents/claims.md, not retracted; ready's step 5 runs the same pre-push claims-unmarked hook, whose count is the branch's."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "95bbbccc530efc20-293042dfeaa6ed64"
+copies = 1
+note = "Moved to agents/claims.md, not retracted; the comment still describes the step below it (--fail-on-unmarked exits 3)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "a47b8e5d12006591-389ad863365e464c"
+copies = 1
+note = "Same comment: true of the run step's --fail-on-unmarked."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "6a4b8e92c24d9e6b-1cd6ceffa4bb6c2c"
+copies = 1
+note = "Same comment: true of the run step."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "76313a07174cf8cc-6510f6805f6873f6"
+copies = 1
+note = "Same comment: claims.toml's [hook] fail_on_unmarked is what a local commit fails on."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTRIBUTING.md"
+mode = "restatement-ngram"
+unit = "301f395b6f3c4eb3-eb93b1566750ae0c"
+copies = 1
+note = "Moved to agents/claims.md, not retracted; CONTRIBUTING's sentence about [hook] fail_on_unmarked is still true of claims.toml."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "restatement-ngram"
+unit = "fe7fabee4468f4ff-488d17a2d22c940c"
+copies = 1
+note = "An ADR's Decision text as taken; the file list moved to agents/claims.md, not retracted."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "b2bfb89c20e69299" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "restatement-ngram"
+unit = "717e41204ce482b1-8eb13ee4ff36b043"
+copies = 1
+note = "Same ADR list as taken; moved, not retracted."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "TODO.md" = "c2a680921ef48d01" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "restatement-ngram"
+unit = "8d02cce4a563d671-1cba1eb6e826a8ae"
+copies = 1
+note = "ADR text as taken about stale-claims' module matching; moved to agents/claims.md, not retracted."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "restatement-ngram"
+unit = "f8185c4315b33586-21c1c19dc7c8f2f7"
+copies = 1
+note = "ADR's own record of filing or1can/claims#15; the AGENTS.md sentence repeating it was cut as history, not corrected."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "restatement-ngram"
+unit = "8b7dc6c571ca50ad-1f18bd6845c39fde"
+copies = 1
+note = "ADR's pointer at the plugin's deny-by-default ADR; agents/claims.md links the same record."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
