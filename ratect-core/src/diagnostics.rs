@@ -73,6 +73,7 @@ impl Finding {
 /// own — fine once its outcome rules it out, a warning otherwise — and the
 /// trial load a finding saying whether the project loads with the check set
 /// aside.
+/// Probe for ratect#838, never merged: [`REMAPPED_MOUNT_ACCESS`].
 pub fn load_failure_findings(config_file: &Path, error: &anyhow::Error) -> Vec<Finding> {
     let does_not_load = |message: String| {
         Finding::Problem(format!(
