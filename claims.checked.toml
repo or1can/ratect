@@ -14073,3 +14073,12 @@ copies = 1
 note = "Deliberate: create-draft-release's new `Set up Python` step (3.11) runs before `python3 tools/changelog-section.py`. ratect#858 lets workflows keep python3 after setup-python."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "claim-words-totalising"
+unit = "0b8f01f778e962b0"
+copies = 1
+note = "\".github/workflows/ci.yml's Tools Tests job runs `python3 -m unittest discover -s tools -p 'test_*.py'`, which collects every tools/test_*.py file (five today).\""
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/changelog-section.py" = "45082c17a3944098" }

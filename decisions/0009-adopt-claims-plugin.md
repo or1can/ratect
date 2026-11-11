@@ -8,7 +8,9 @@ from `claims` 0.16 it is a git `pre-commit` hook, declared in this repo's
 this record describes, so it now gates a commit whatever makes it, in a
 clone where `pre-commit install` has been run; and the same checks run in
 CI on every pull request (ratect#707), so the Consequences below that say
-they are not in CI no longer hold. What follows is the decision as it was
+they are not in CI no longer hold. Nor do the Decision and Consequences
+lines saying CI's `Tools Tests` job tests only `changelog-section.py`: it
+runs every `tools/test_*.py` file. What follows is the decision as it was
 taken; `AGENTS.md`'s Tooling & CI section describes the current setup.
 
 ## Context
