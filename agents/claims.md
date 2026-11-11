@@ -81,8 +81,8 @@ plugin's own
 
 `check-cli-flags` asks for the same kind of grant before running a script
 it finds named next to a flag. Its one candidate here is denied: guideline
-8 names `tools/changelog-section.py` on the same line as the `gh` flags of
-the release recovery steps, so its `--help` could only report that the
+8 names `tools/changelog-section.py` on the same line as the
+`--prerelease` flag, so its `--help` could only report that the
 script lacks flags nobody claims it has. A denied command is still listed,
 as skipped, rather than asked about.
 

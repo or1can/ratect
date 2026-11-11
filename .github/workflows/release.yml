@@ -194,8 +194,8 @@ jobs:
           # integration`. That stranded ratect-compat/v0.32.0 as a draft when
           # a `release.yml` PR merged 49 seconds after ratect/v0.11.0's
           # publish, and four re-runs — one with this target already set —
-          # failed the same way. The rule and the recovery are in AGENTS.md's
-          # Version Lifecycle guideline.
+          # failed the same way. The rule is AGENTS.md's Version Lifecycle
+          # guideline; the recovery is agents/releasing.md.
           is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo "missing")"
           case "$is_draft" in
             true)

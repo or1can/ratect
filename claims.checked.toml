@@ -568,27 +568,9 @@ subjects = {}
 [[mark]]
 file = "AGENTS.md"
 mode = "claim-words-totalising"
-unit = "f69b06d1709e9ea1"
-copies = 1
-note = "`gh release view ratect/v0.11.0` gives publishedAt 2026-10-13T21:08:02Z. PR #591 ('chore: publish 0.x versions as normal releases', touching release.yml) merged at 21:08:51Z, 49 seconds later. release.yml:179-189 records the 403 and that four re-runs failed the same way. The host job's `if` (release.yml:479) requires the builds to have succeeded first. release.yml:146 and :540 set PRERELEASE_FLAG only from dist's announcement_is_prerelease, which an -rc suffix triggers. The comment at 137-145 says plain 0.x is a normal release. `gh release list` shows every recent 0.x release with isPrerelease=false."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/release.yml" = "8abbb3e044a1b143" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
 unit = "63482c64b7ea86c6"
 copies = 1
 note = "`gh release view ratect/v0.11.0` gives publishedAt 2026-10-13T21:08:02Z. PR #591 ('chore: publish 0.x versions as normal releases', touching release.yml) merged at 21:08:51Z, 49 seconds later. release.yml:179-189 records the 403 and that four re-runs failed the same way. The host job's `if` (release.yml:479) requires the builds to have succeeded first. release.yml:146 and :540 set PRERELEASE_FLAG only from dist's announcement_is_prerelease, which an -rc suffix triggers. The comment at 137-145 says plain 0.x is a normal release. `gh release list` shows every recent 0.x release with isPrerelease=false."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-about-elsewhere"
-unit = "74da2fa72709bd61"
-copies = 1
-note = "release.yml:543-546: host runs `gh release upload <tag> artifacts/*` with no --clobber, then `gh release edit --draft=false`. release.yml:548-558: publish-homebrew-formula needs host, so re-running host is what lands the tap formula, and existing assets must be deleted first or the upload fails."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -10205,15 +10187,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "6ac99a6fca5bf3d016b951e4ba7c69d53f5e9ff5", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "a1e266aed6ac0234"
-copies = 1
-note = "Checked gh api rulesets/19050737: required contexts are Format, Clippy, Rustdoc, Build & Test, Tools Tests, Docker Integration Test, Dev-env CLI smoke test, Security Audit, Signed-off-by and Release Pipeline Config, so not Claims, Worked Examples or Coverage Report."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "decisions/0011-container-identity.md"
 mode = "claim-words-counts"
 unit = "ca4e2d83d6ef6bba"
@@ -12120,24 +12093,6 @@ copies = 1
 note = "Read the #825/#829 refinement against identity::tmpfs_hiding_home: the rule it states, a tmpfs above the home refused when it is the deepest mount there and nothing is mounted at the home, is the shared function's, unchanged by #831."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "b48d880d5428583b"
-copies = 1
-note = "Read against ci.yml's worked-examples step: the generic loop skips getting-started, full-stack and identity, each has its own section, and identity's calls assert_owner with stat -c %u on out/as-image and out/as-you after the writes."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-about-elsewhere"
-unit = "b48d880d5428583b"
-copies = 1
-note = "Read against ci.yml's worked-examples step: the generic loop skips getting-started, full-stack and identity, each has its own section, and identity's calls assert_owner with stat -c %u on out/as-image and out/as-you after the writes."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -14104,24 +14059,6 @@ subjects = {}
 [[mark]]
 file = "agents/claims.md"
 mode = "claim-words-totalising"
-unit = "65e736edf559158c"
-copies = 1
-note = "Checked: the hook's only check-cli-flags finding is AGENTS.md guideline 8's line naming tools/changelog-section.py next to gh flags, and it reports it as denied and skipped, as AGENTS.md's [check-cli-flags] denied entry asks."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "agents/claims.md"
-mode = "claim-words-counts"
-unit = "65e736edf559158c"
-copies = 1
-note = "Same reading: this run reports exactly one check-cli-flags candidate, AGENTS.md's guideline 8 line."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "agents/claims.md"
-mode = "claim-words-totalising"
 unit = "1f97b854b2acd7c5"
 copies = 1
 note = "Checked against `claims.cli mark-checked --help` at v0.28.1: --prune removes every mark a run reports as checked-mark. Moved verbatim from AGENTS.md."
@@ -14316,3 +14253,156 @@ copies = 1
 note = "Moved to the ready skill, not retracted; the test below runs twice and checks docker volume ls, as the rule asks."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "9f20970bd53da2e1"
+copies = 1
+note = "Process claim, unchanged but for the cut story: each Cargo.toml's dependency rationale is a comment above its declaration (decisions/0006), so editing that file is when it is read."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "981b65869af5b212"
+copies = 1
+note = "Checked against ci.yml's worked-examples job: its loop runs build/test/run/lint/shell for every examples/* project except getting-started, full-stack and identity, which each have their own section; shell runs with -- -c; identity's section stats each out/ file's owner. docs/worked-examples.md:28 carries the note on command having no shell."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "981b65869af5b212"
+copies = 1
+note = "Same reading: docs/worked-examples.md {{#include}}s each example's config, and its own note at line 28 says command is tokenized with no shell."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "95f542505e30b9e3"
+copies = 1
+note = "Unchanged sentence, recorded in ratect#593 (3b672ea7) with the REST \"Update a release\" rule; release.yml's host job carries the same explanation in its comments."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "c6edd3ea14797bc7"
+copies = 1
+note = "Checked against ROADMAP.md's Batect Parity section: it is now a pointer at docs/differences-from-batect.md and the conformance corpus, not an itemized list, as the sentence's example says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "b2bfb89c20e69299" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "71065eef9fd74e49"
+copies = 1
+note = "Checked against the \"main branch protection\" ruleset via gh api: rules deletion, non_fast_forward, pull_request (0 approvals, merge/rebase only) and required_status_checks, empty bypass_actors; required checks omit Claims, Worked Examples and Coverage Report and include Signed-off-by."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "faa0e1e7767a4051"
+copies = 1
+note = "Process rule; the cited trap is #200's \"record two conventions found while restructuring #199\" commit (831bb8f6), which tells it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "548dfa28743a404c"
+copies = 1
+note = "The loop is plain git and cargo; nothing here claims another tool's behaviour beyond what `cargo check --workspace --all-targets` does."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/releasing.md"
+mode = "claim-words-counts"
+unit = "c8c5f2d9fa5f5999"
+copies = 1
+note = "Checked: guideline 8 is AGENTS.md's Version Lifecycle guideline and now points here for a host job failing with HTTP 403."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/releasing.md"
+mode = "claim-words-totalising"
+unit = "bea50fdad8207d44"
+copies = 1
+note = "Moved from guideline 8, as recorded in ratect#593: the host job's undraft step fails after the build jobs it needs have succeeded, leaving the draft."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/release.yml" = "d071949da4b771e2" }
+
+[[mark]]
+file = "agents/releasing.md"
+mode = "claim-words-totalising"
+unit = "5d48f3690f0de8be"
+copies = 1
+note = "Moved from guideline 8 and release.yml's host comment, both from ratect#593: four re-runs failed the same way, one with --target already pinned."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/release.yml"
+mode = "restatement-ngram"
+unit = "cd9f34be2d4aac1c-87d1bc0055479108"
+copies = 1
+note = "The incident narrative was cut from AGENTS.md as history, not corrected; the release.yml comment beside the undraft step keeps the account, which is true."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/release.yml"
+mode = "restatement-ngram"
+unit = "bfc63c184cff71bc-4d8f1c3975102c02"
+copies = 1
+note = "Same comment, same reason."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/release.yml" = "d071949da4b771e2" }
+
+[[mark]]
+file = "agents/releasing.md"
+mode = "claim-words-about-elsewhere"
+unit = "fa20b6ae2da7ca6c"
+copies = 1
+note = "Checked against release.yml:554: the host job runs `gh release upload \"$tag\" artifacts/*` with no --clobber, so an asset already on the release fails a re-run."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "c05cbe085a81d78b"
+copies = 1
+note = "A process rule's own premise, not a claim about code: \"touch only what you must\" (Working principles 3) read strictly leaves every noticed defect; the examples that followed were cut as history."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "389ad1356f10425f"
+copies = 1
+note = "Checked: the hook's only check-cli-flags finding is AGENTS.md:348, guideline 8's line, which names tools/changelog-section.py and the `--prerelease` flag; it is reported as denied and skipped."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-counts"
+unit = "389ad1356f10425f"
+copies = 1
+note = "Same run: exactly one check-cli-flags candidate, at AGENTS.md:348."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/changelog-section.py" = "45082c17a3944098" }

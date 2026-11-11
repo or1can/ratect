@@ -103,9 +103,8 @@ Each of these has caught something a review missed:
   does X" sentences. Capture real output and `diff` it rather than editing
   what looks wrong, since what looks wrong is exactly the set you already
   believe. Grep is the fallback for claims nothing can be run against (a
-  roadmap entry, a design note); it is not the check. An earlier version of
-  this rule *was* grep — for strings naming the old scope — and it reported
-  clean while missing three, so the sweep was recorded as done.
+  roadmap entry, a design note); it is not the check (this rule was once
+  grep, and reported clean while missing three).
 
   To find which claims to re-read, the `claims` plugin's `stale-claims`
   check ranks prose by how much the code it names has moved since the
@@ -122,14 +121,8 @@ Each of these has caught something a review missed:
   `--help`, a mode against the code that would implement it, a path against
   the filesystem. This is the change loop's "the code includes whatever the
   prose *names*", applied to the one input that most looks like it has
-  already been checked.
-
-  Twice in one release, 0.26.0's scope was transcribed verbatim and was
-  wrong both times: `ratect-compat --cleanup` is a flag that has never
-  existed (and the nearest-looking one, `--clean`, destroys caches), and
-  "run as an MCP server" names a mode neither binary has. Both were true of
-  the author's *intent* and false of the binary, which is exactly the gap a
-  specification cannot see. Correct the handoff where it is still live;
+  already been checked (`RELEASES.md`'s 0.26.0 entry corrects one that
+  wasn't). Correct the handoff where it is still live;
   where it is already struck through, record the correction in its
   done-summary rather than editing history.
 - **A behaviour that depends on which format/mode you're in needs one
@@ -138,11 +131,10 @@ Each of these has caught something a review missed:
   site consume it, so the divergence is unrepresentable. Guarding
   site-by-site means the next site added is unguarded by default.
 - **Never spell config syntax in an error message — name the field.** `set
-  'x' to true`, not `add 'x: true'` or `'x = true'`. Unconditional: the
-  earlier form allowed the syntax where the message fires in one format
-  only, and that was refuted — `ConfigFormat::Native` is the **project's**
-  format, not the **file's**, so a native project can locally include a
-  `.yml` and the entry the message names may be YAML.
+  'x' to true`, not `add 'x: true'` or `'x = true'`. Unconditional, even
+  where the message fires in one format only: `ConfigFormat::Native` is the
+  **project's** format, not the **file's**, so a native project can locally
+  include a `.yml` and the entry the message names may be YAML.
 - **Watch for coverage shaped by the test harness rather than the
   behaviour.** If the fake can only express one ordering of something
   inherently timing-dependent, the untestable orderings are where the bug
