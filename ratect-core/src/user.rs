@@ -113,7 +113,8 @@ pub fn current_owner() -> Option<DirectoryOwner> {
 /// See the Unix form.
 #[cfg(not(unix))]
 pub fn current_owner() -> Option<DirectoryOwner> {
-    None
+    // Deliberate compile error for #839's red check; never merged.
+    None::<u32>
 }
 
 /// Whether `path` exists on this host as something other than a directory, a
