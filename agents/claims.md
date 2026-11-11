@@ -1,9 +1,9 @@
 # The `claims` checks
 
 How this repo runs and configures the [`claims`](https://github.com/or1can/claims)
-Claude Code plugin. `AGENTS.md`'s Tooling & CI section is the trigger: read
-this before marking a finding checked, or when the hook blocks a commit. What
-each check finds, and every setting it takes, is the plugin's own
+Claude Code plugin. `AGENTS.md` names the trigger, in Tooling & CI and in
+Agent skills: read this before marking a finding checked, or when the hook
+blocks a commit. What each check finds, and every setting it takes, is the plugin's own
 documentation ([its checks](https://github.com/or1can/claims/tree/main/docs/checks),
 [configuring](https://github.com/or1can/claims/blob/main/docs/configuring.md));
 this page is what this repo does with them. The plugin replaced four

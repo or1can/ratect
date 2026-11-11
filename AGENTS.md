@@ -462,6 +462,17 @@ Default canonical label strings, unchanged. See `agents/triage-labels.md`.
 Single-context: `CONTEXT.md` at the repo root; ADRs in `decisions/` (this
 repo's own established location, not `docs/adr/`). See `agents/domain.md`.
 
+### Claims checks
+
+Before marking a `claims` finding checked, or when the claims hook blocks a
+commit, read `agents/claims.md`: where each check runs, how `claims.toml`
+configures it, and how a mark is written.
+
+### Releasing
+
+When a release's `host` job fails with `HTTP 403` and leaves a draft, read
+`agents/releasing.md` for the recovery steps.
+
 ### Probing daemon classes
 
 Before saying a daemon class (rootful Linux, rootless, userns-remap) can't
