@@ -9476,15 +9476,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "AGENTS.md" = "ffd5702f09a657c0" }
 
 [[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "073c1634c496cdb6"
-copies = 1
-note = "Status names no claims version; .pre-commit-config.yaml now pins v0.21.1 (still a pre-commit hook) and AGENTS.md's Tooling & CI section is unchanged. Earlier reading: Status was checked against .pre-commit-config.yaml (repo or1can/claims, rev v0.21.0, hook id claims) and .github/workflows/ci.yml:144-149 (claims job on pull_request); AGENTS.md's Tooling & CI section, rewritten by the fix commits, still describes that setup."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0" }
-
-[[mark]]
 file = "agents/domain.md"
 mode = "stale-claims"
 unit = "dbc8351d469b2fd3"
@@ -12968,15 +12959,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/schema.rs" = "3c623a991c420654" }
 
 [[mark]]
-file = "TODO.md"
-mode = "stale-claims"
-unit = "602fae580f5863ab"
-copies = 1
-note = "each item against its code: task_output and simple_output test, resources.rs, schema_tests, yaml.rs/yaml_tests, ui Console Mutex, docker.rs resize warns"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0006-code-and-documentation-locality.md" = "b18987300e14cf76", "ratect-compat/tests/cli.rs" = "4f847facc4676784", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4" }
-
-[[mark]]
 file = "decisions/0002-runtime-ownership-labels.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -13227,15 +13209,6 @@ copies = 1
 note = "resize warns in docker.rs, exit_code::already_reported, Console::stderr().error"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4" }
-
-[[mark]]
-file = "TODO.md"
-mode = "stale-claims"
-unit = "da6d38ffc884cb42"
-copies = 1
-note = "ratect-compat tests/cli.rs task_output and simple_output_format_frames_task_output_via_docker"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-compat/tests/cli.rs" = "4f847facc4676784" }
 
 [[mark]]
 file = "decisions/README.md"
@@ -13725,15 +13698,6 @@ subjects = { "decisions/README.md" = "07650c4af48a8466" }
 
 [[mark]]
 file = "AGENTS.md"
-mode = "stale-claims"
-unit = "2f519634b0b93218"
-copies = 1
-note = "Re-read Repo-specific guidelines' ci.yml claims against this change's ci.yml edit (claims job comment only): the \"No doc link renders as literal brackets\" step is still at ci.yml:91; the decisions/0010 and release.yml claims (guideline 8) are untouched by this change."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "d6d618e9d6ddcce0", ".github/workflows/release.yml" = "1a32b4e0ea48a20a", "CHANGELOG.md" = "41ae03bb2455524b682a2a45072a46cb71b6daa1", "ROADMAP.md" = "b2bfb89c20e69299", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "3aa2268c4f4d04b1" }
-
-[[mark]]
-file = "AGENTS.md"
 mode = "claim-words-totalising"
 unit = "26870f6fa7fa112d"
 copies = 1
@@ -13814,15 +13778,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "f347d1c835e84c71de19440cb7a0fe74e905545e", "ROADMAP.md" = "b2bfb89c20e69299", "agents/docs.md" = "252e6e2722865b23" }
 
 [[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read against .claude/settings.json (claims marketplace, claims@claims enabled), claims.toml's restatement `.rs` and [claim-words] list, and tools/ (the four retired scripts gone, changelog-section.py kept). The Tools Tests and docs/** details are the decision as taken, which the Status says, and the Status now corrects the Tools Tests one."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
 file = "decisions/0010-release-binary-distribution.md"
 mode = "stale-claims"
 unit = "073c1634c496cdb6"
@@ -13868,33 +13823,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read the whole Decision section against dist-workspace.toml (targets, create-release = false, github-attestations-phase/filters, allow-dirty = [\"ci\"]), release.yml (three hand-added customizations in its header, create-draft-release running tools/changelog-section.py, the smoke test's --version/--help) and ci.yml's dist-plan job: all hold. \"It reports today rather than blocks\" is historical, corrected in the Consequences bullet that says it now gates."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "835fc92077c5367a", ".github/workflows/release.yml" = "2283ecd585f09f6c", "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "dist-workspace.toml" = "7852e95f01af7dc8", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read the whole Consequences section: installers = [\"shell\", \"homebrew\"], publish-jobs/tap, and the Release Pipeline Config job reading cargo-dist-version from dist-workspace.toml all match; the main branch protection ruleset's required checks include Release Pipeline Config. This branch's ci.yml change (the Rustdoc job) touches none of it."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "835fc92077c5367a", ".github/workflows/release.yml" = "2283ecd585f09f6c", "dist-workspace.toml" = "7852e95f01af7dc8", "docs/installation.md" = "c1490b152407630e" }
-
-[[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read the whole Consequences section: its PreToolUse-hook, not-in-CI and Tools-Tests-scope lines no longer hold, and the Status section already says so (af8ffa5f); the record is append-only, so nothing to change. This branch's ci.yml change (the Rustdoc job) touches none of it."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "835fc92077c5367a", "TODO.md" = "c2a680921ef48d01", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
 file = "decisions/0001-two-binaries.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -13902,15 +13830,6 @@ copies = 1
 note = "Read the whole Consequences section: prefixed ratect/v and ratect-compat/v tags exist alongside bare v0.21.0; the anonymous-volume fix is in CHANGELOG.md under ratect-compat 0.22.0; the marker spelling change is recorded in Status. This branch's Unreleased Added entry is tooling-only and applies to both, consistent with it."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "CLAUDE.md" = "b786d14bf31b0a6c" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "acec0e5a5304cd93"
-copies = 1
-note = "Read the whole Tooling & CI section against ci.yml (claims job's pinned-rev checkout, grant list identical to the section's, --fail-on-unmarked; test, docker-integration, coverage, audit jobs), .pre-commit-config.yaml (v0.28.1, pre-commit and pre-push claims-unmarked hooks), claims.toml's [hook], [claim-words] and [temporal-words] lists, and the ruleset (Claims not required): all hold."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "835fc92077c5367a", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "decisions/0009-adopt-claims-plugin.md" = "bc2002e2b21854c2", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "134b1b35c479e6a3", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "4f847facc4676784", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "970b43c4e8cd9e97", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -13938,15 +13857,6 @@ copies = 1
 note = "Checked: .gitignore:29 lists claims.local.toml; claims v0.28.1's executable-claims refuses an ungranted command as a gate finding (decisions/0001 there), and AGENTS.md, docs/worked-examples.md, docs/getting-started.md and docs/ratect-compat-config-reference.md carry verify markers."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-counts"
-unit = "e016cbd681270f05"
-copies = 1
-note = "Checked against .github/workflows/ci.yml's claims job, whose \"Grant the verify markers' commands\" step writes its own claims.local.toml with the same five commands as AGENTS.md's TOML block; the third place is the contributor's own git-ignored claims.local.toml."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7", "agents/claims.md" = "a4b65185a7a1dc5a" }
 
 [[mark]]
 file = "agents/claims.md"
@@ -14406,3 +14316,144 @@ copies = 1
 note = "Same run: exactly one check-cli-flags candidate, at AGENTS.md:348."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "TODO.md"
+mode = "stale-claims"
+unit = "602fae580f5863ab"
+copies = 1
+note = "Read the preamble (what TODO.md is for and what doesn't get an entry); this branch's only change near what it names is two code comments in ratect-compat/tests/cli.rs and engine_tests.rs, and decisions/0006 is unchanged here."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "decisions/0006-code-and-documentation-locality.md" = "b18987300e14cf76", "ratect-compat/tests/cli.rs" = "ceb72f91cb44d8ac", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4" }
+
+[[mark]]
+file = "TODO.md"
+mode = "stale-claims"
+unit = "da6d38ffc884cb42"
+copies = 1
+note = "Read item 4 on task_output's windowed extract; this branch's cli.rs change is two doc comments naming the ready skill, not task_output or its window."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "ratect-compat/tests/cli.rs" = "ceb72f91cb44d8ac" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Read the Decision's guideline 8 references (lines 34, 48): the shared combined-heading CHANGELOG and the tag-push process are still guideline 8's; this branch moves only the 403 recovery out to agents/releasing.md."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7", ".github/workflows/release.yml" = "d071949da4b771e2", "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "dist-workspace.toml" = "7852e95f01af7dc8", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read the Consequences' AGENTS.md line (223, the release-process guideline describes the tag-push flow, still true) and the GITHUB_TOKEN gotcha (186, about retargeting, not the publish 403 moved to agents/releasing.md)."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7", ".github/workflows/release.yml" = "d071949da4b771e2", "dist-workspace.toml" = "7852e95f01af7dc8", "docs/installation.md" = "c1490b152407630e" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "e016cbd681270f05"
+copies = 1
+note = "Re-read against ci.yml's claims job: its grant step writes the same five commands as AGENTS.md's TOML block; with that list and the contributor's own claims.local.toml, three places."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7", "agents/claims.md" = "17ea62e5c299c295" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "9154a208fde35ce7"
+copies = 1
+note = "Re-read; bare `claims` matches agents/claims.md by stem. agents/claims.md's later edits only reworded its trigger sentence, the --prerelease note and line wraps; the record is about adopting the plugin and nothing in it is contradicted."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "agents/claims.md" = "17ea62e5c299c295" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "073c1634c496cdb6"
+copies = 1
+note = "Re-read the Status: still true; agents/claims.md's later edits only reworded its trigger sentence, the --prerelease note and line wraps."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Re-read the Decision as taken; agents/claims.md's later edits only reworded its trigger sentence, the --prerelease note and line wraps, none of which it describes."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Re-read the Consequences: the deny-by-default pointer at AGENTS.md's Tooling & CI phrase still resolves; agents/claims.md's later edits only reworded its trigger sentence, the --prerelease note and line wraps."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7", "TODO.md" = "c2a680921ef48d01", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/README.md"
+mode = "stale-claims"
+unit = "1bc04b5291c26a46"
+copies = 1
+note = "Re-read the 0009 Index row; agents/claims.md's later edits only reworded its trigger sentence, the --prerelease note and line wraps."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "agents/claims.md" = "17ea62e5c299c295" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "acec0e5a5304cd93"
+copies = 1
+note = "Read the whole Tooling & CI section against agents/claims.md: the pointer's trigger and contents, the grant list (equal to ci.yml's), and the three-places rule all match it; the Tests, fixture and coverage bullets name no part of it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "a0ac475e101f67c7", "ROADMAP.md" = "b2bfb89c20e69299", "agents/claims.md" = "17ea62e5c299c295", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ceb72f91cb44d8ac", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "970b43c4e8cd9e97", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "694f6b1650954bb2"
+copies = 1
+note = "Read the Claims checks entry against agents/claims.md's opening: the same two triggers, and the page covers where checks run, claims.toml's settings and marking."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "agents/claims.md" = "17ea62e5c299c295" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "55751b5e71bf31ea"
+copies = 1
+note = "Read the Releasing entry against agents/releasing.md: its one runbook is the host job's HTTP 403 leaving a draft."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "agents/releasing.md" = "f4bbda4dc76cc0b1" }
+
+[[mark]]
+file = "CONTRIBUTING.md"
+mode = "stale-claims"
+unit = "9b4a78f293092bcf"
+copies = 1
+note = "Re-read the claims paragraphs of Development setup: the hook and pre-commit install unchanged, the marking sentence links agents/claims.md; agents/claims.md's later edits only reworded its trigger sentence, the --prerelease note and line wraps."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "agents/claims.md" = "17ea62e5c299c295" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "2f519634b0b93218"
+copies = 1
+note = "Read the guidelines naming agents/claims.md's subject: guideline 8's pointer at agents/releasing.md and 15's at /ready; agents/claims.md's own mention of guideline 8 (the --prerelease line, AGENTS.md:349) holds."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "a0ac475e101f67c7", ".github/workflows/release.yml" = "d071949da4b771e2", "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "CONTRIBUTING.md" = "291246760d8eeb42", "ROADMAP.md" = "b2bfb89c20e69299", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
