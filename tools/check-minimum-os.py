@@ -91,7 +91,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Each release target's minimum version: what `docs/installation.md`'s table
-# says, which a test holds it to. What kind of version it
+# says, and for glibc what `dist-workspace.toml`'s `min-glibc-version` makes
+# the shell installer require; tests hold both to it. What kind of version it
 # is comes from the target triple (`expectation`), and a `musl` target's is
 # `None`: it is statically linked, and needs no shared libc.
 RECORDED = {
@@ -305,6 +306,11 @@ def expectation(target):
 
 def where_recorded(requirement):
     """Every place a minimum of `requirement`'s kind is written down."""
+    if isinstance(requirement, Glibc):
+        return (
+            "RECORDED in tools/check-minimum-os.py, docs/installation.md's table "
+            "and dist-workspace.toml's min-glibc-version"
+        )
     return "RECORDED in tools/check-minimum-os.py and docs/installation.md's table"
 
 

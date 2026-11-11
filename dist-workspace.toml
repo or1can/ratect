@@ -114,3 +114,12 @@ allow-dirty = ["ci"]
 # defaults to a supported image and `cargo-dist-version` moves to it.
 [dist.github-custom-runners]
 aarch64-apple-darwin = "macos-15"
+
+# The glibc the shell installer requires before it picks the GNU build over
+# the musl one. Without this, dist uses the glibc of the runner that built
+# it: 0.13.0's installer asked for 2.35, from ubuntu-22.04, while its binary
+# needs 2.34, so a glibc 2.34 host got the musl build. The value is
+# tools/check-minimum-os.py's RECORDED minimum, which a test there holds it
+# to.
+[dist.min-glibc-version]
+x86_64-unknown-linux-gnu = "2.34"

@@ -249,6 +249,15 @@ class CheckTest(unittest.TestCase):
         self.assertIn("x86_64-unknown-linux-gnu needs glibc 2.39", err)
         self.assertIn("recorded minimum is glibc 2.34", err)
 
+    def test_a_raise_names_only_the_places_its_kind_is_recorded(self):
+        _, _, err = self.run_check("aarch64-apple-darwin", macho(build_version((11, 0, 1))))
+        self.assertIn("needs macOS 11.0.1", err)
+        self.assertIn("RECORDED in tools/check-minimum-os.py", err)
+        self.assertNotIn("min-glibc-version", err)
+        _, _, err = self.run_check("x86_64-unknown-linux-gnu", glibc_binary("GLIBC_2.39"))
+        self.assertIn("RECORDED in tools/check-minimum-os.py", err)
+        self.assertIn("min-glibc-version", err)
+
     def test_lowering_the_record_below_the_binary_fails(self):
         # Acceptance criterion's own example: the record lowered to 2.31.
         self.script.RECORDED["x86_64-unknown-linux-gnu"] = (2, 31)
@@ -261,8 +270,10 @@ class CheckTest(unittest.TestCase):
         _, out, _ = self.run_check("x86_64-unknown-linux-gnu", glibc_binary("GLIBC_2.31"))
         self.assertIn("could be lowered to glibc 2.31", out)
         self.assertIn("RECORDED in tools/check-minimum-os.py", out)
+        self.assertIn("min-glibc-version", out)
         _, out, _ = self.run_check("aarch64-apple-darwin", macho(build_version((10, 15))))
         self.assertIn("could be lowered to macOS 10.15", out)
+        self.assertNotIn("min-glibc-version", out)
 
     def test_a_wrong_file_names_both_platforms_and_architectures(self):
         code, _, err = self.run_check("aarch64-apple-darwin", elf(machine=AARCH64_ELF))
@@ -368,9 +379,20 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(sorted(self.recorded), sorted(dist["dist"]["targets"]))
         self.assertEqual(sorted(self.recorded), sorted(TARGETS))
 
-    # This test says which targets are GNU or macOS from the triple itself,
-    # rather than asking the script's `expectation`, so that a wrong rule
-    # there disagrees with it instead of agreeing.
+    # This test and the next say which targets are GNU or macOS from the
+    # triple themselves, rather than asking the script's `expectation`, so
+    # that a wrong rule there disagrees with them instead of agreeing.
+
+    def test_the_shell_installer_gates_on_each_recorded_glibc(self):
+        # dist's installer otherwise gates the GNU build on the build
+        # runner's glibc, which can differ from what the binary needs.
+        dist = tomllib.loads((ROOT / "dist-workspace.toml").read_text())
+        expected = {
+            target: ".".join(map(str, version))
+            for target, version in self.recorded.items()
+            if target.endswith("-linux-gnu")
+        }
+        self.assertEqual(dist["dist"].get("min-glibc-version"), expected)
 
     def test_the_installation_page_states_each_recorded_minimum(self):
         page = (ROOT / "docs" / "installation.md").read_text()
