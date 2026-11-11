@@ -14253,3 +14253,66 @@ copies = 1
 note = "ADR's pointer at the plugin's deny-by-default ADR; agents/claims.md links the same record."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
+
+[[mark]]
+file = ".claude/skills/ready/SKILL.md"
+mode = "restatement-ngram"
+unit = "9eb7d3d382630d5a-03c20eae62d9b3df"
+copies = 1
+note = "Moved, not retracted: guideline 15's handoff rule now sits in this same Review rules list, and this rule about briefs agrees with it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-compat/tests/conformance.rs"
+mode = "restatement-ngram"
+unit = "2a831e1049594836-a74ab41a106b97d7"
+copies = 1
+note = "Moved to the ready skill, not retracted; the comment is true of CACHE_MOUNT_PROJECT, the Mutex it documents, since cargo test runs a binary's tests on several threads."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-compat/tests/conformance.rs"
+mode = "restatement-ngram"
+unit = "cdfca8ebd5c1afbb-03e2f28309c4555b"
+copies = 1
+note = "Same comment on CACHE_MOUNT_PROJECT, still true."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config.rs"
+mode = "restatement-ngram"
+unit = "e0f0632f15912160-1056d05a6e11cd3e"
+copies = 1
+note = "Moved to the ready skill, not retracted; the doc comment's point that ConfigFormat::Native is the project's format, not the declaring file's, still holds."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/engine_tests.rs"
+mode = "restatement-ngram"
+unit = "6f3d4cf22176a4b4-8d63ebc763bf42b5"
+copies = 1
+note = "Moved to the ready skill, not retracted; the #[ignore]d real-daemon tests still don't run in the default suite."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/engine_tests.rs"
+mode = "restatement-ngram"
+unit = "b22dd53b870d0e7a-d483f84079890967"
+copies = 1
+note = "Same: the _via_docker tests in ratect/tests/cli.rs are #[ignore]d, so they don't run in the default cargo test."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect/tests/cli.rs" = "970b43c4e8cd9e97" }
+
+[[mark]]
+file = "ratect/tests/cli.rs"
+mode = "restatement-ngram"
+unit = "4881b419542d6392-14676f78049c90ee"
+copies = 1
+note = "Moved to the ready skill, not retracted; the test below runs twice and checks docker volume ls, as the rule asks."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

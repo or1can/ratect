@@ -407,84 +407,8 @@ for — note that in `TODO.md` instead.
 15. **Review before committing, not after.** Run `/ready` over the working
     diff *before* each commit, not over a run of commits afterwards, and
     before reporting work as done: it runs whichever of the bug review and
-    the two-axis review hasn't covered the change yet. The checks below have
-    each caught something a review missed:
-    - **Anchor an inserted item on the preceding item's closing brace, never on
-      the new one's attributes.** A Rust item's doc comment sits *above* its
-      `#[test]`/`#[derive]` attributes, so anchoring there splices the new item
-      into the previous one's documentation — silently, and the compiler is
-      happy. The `claims` plugin's `spliced-docs` check finds the ones that
-      get through; it's advisory (never blocks a commit), so read each
-      candidate rather than treating a report as a defect.
-    - **Re-read every string you added, in its final control-flow position.**
-      Nothing type-checks a log or error message, so they stay as written while
-      the code around them moves. For errors specifically: name something the
-      user actually wrote. A lower layer speaks its own vocabulary — `docker.rs`
-      knows an ssh agent id, not which container declared it — so an error
-      crossing up from one needs the caller to attach that.
-    - **When a change alters observable behaviour, re-read that behaviour's
-      whole doc section and *run* each claim against the binary.** Not grep —
-      execute. Every claim: the example output, the flag descriptions, the "this
-      does X" sentences. Capture real output and `diff` it rather than editing
-      what looks wrong, since what looks wrong is exactly the set you already
-      believe. Grep is the fallback for claims nothing can be run against (a
-      roadmap entry, a design note); it is not the check. An earlier version of
-      this rule *was* grep — for strings naming the old scope — and it reported
-      clean while missing three, so the sweep was recorded as done.
-
-      To find which claims to re-read, the `claims` plugin's `stale-claims`
-      check ranks prose by how much the code it names has moved since the
-      claim was last touched. Treat a hit as "re-read this", never as "this
-      is wrong" — it measures churn, so a true claim about a hot file looks
-      suspicious. Don't record its candidate count anywhere: the number rises
-      when code moves and falls when a doc is fixed, so it measures neither.
-    - **Verify a claim before writing it, not after a reviewer questions it** —
-      the review-time half of the change loop's write-prose step.
-    - **A claim copied from the handoff is unverified.** The handoff is a
-      *specification* — what to build, and why it is worth building. It is not
-      a source for what exists. So every name in it that you carry into a doc
-      comment, an error, or a page under `docs/` gets run first: a flag against
-      `--help`, a mode against the code that would implement it, a path against
-      the filesystem. This is the change loop's "the code includes whatever the
-      prose *names*", applied to the one input that most looks like it has
-      already been checked.
-
-      Twice in one release, 0.26.0's scope was transcribed verbatim and was
-      wrong both times: `ratect-compat --cleanup` is a flag that has never
-      existed (and the nearest-looking one, `--clean`, destroys caches), and
-      "run as an MCP server" names a mode neither binary has. Both were true of
-      the author's *intent* and false of the binary, which is exactly the gap a
-      specification cannot see. Correct the handoff where it is still live;
-      where it is already struck through, record the correction in its
-      done-summary rather than editing history.
-    - **A behaviour that depends on which format/mode you're in needs one
-      derived value, not a guard per call site.** Derive it once
-      (`include_trust::restricting`, returning `Option<&Bundle>`) and have every
-      site consume it, so the divergence is unrepresentable. Guarding
-      site-by-site means the next site added is unguarded by default.
-    - **Never spell config syntax in an error message — name the field.** `set
-      'x' to true`, not `add 'x: true'` or `'x = true'`. Unconditional: the
-      earlier form allowed the syntax where the message fires in one format
-      only, and that was refuted — `ConfigFormat::Native` is the **project's**
-      format, not the **file's**, so a native project can locally include a
-      `.yml` and the entry the message names may be YAML.
-    - **Watch for coverage shaped by the test harness rather than the
-      behaviour.** If the fake can only express one ordering of something
-      inherently timing-dependent, the untestable orderings are where the bug
-      will be — extend the harness instead of concluding the cases are covered.
-    - **Run a self-cleaning test twice, asserting external state (`docker volume
-      ls`) rather than the exit code.** One run passes whether or not the
-      cleanup matched anything — the first run starts clean by definition.
-    - **Two tests sharing a fixture directory need a lock, not luck.** `cargo
-      test` runs a binary's tests on several threads, and contention over a
-      shared fixture surfaces as a behaviour failure ("the cache did not
-      persist"), not as a race. A `static Mutex` around the project is the cheap
-      fix — see `CACHE_MOUNT_PROJECT`.
-    - **A real-daemon test can mask a missing unit test.** The `#[ignore]`d
-      Docker tests don't run in the default suite, so a path they cover can be
-      unprotected in `cargo test --workspace`. Assert each effect separately —
-      one assertion per thing removed, not one for "cleanup happened".
-
+    the two-axis review hasn't covered the change yet, and its review rules
+    are the checks both reviewers apply.
 16. **Fix the class, not the instance — and say what you swept.** A review
     finding is a *sample*. Before fixing it, ask what else in the codebase has
     that shape and go and look; then report the sweep, including when it comes
