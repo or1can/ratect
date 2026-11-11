@@ -19,7 +19,10 @@
 #
 # - That draft is created by this file's own `create-draft-release` job
 #   below, not by dist — see `dist-workspace.toml`'s `create-release`
-#   comment for why. `host`'s `needs`/`if` depend on it.
+#   comment for why. `host`'s `needs`/`if` depend on it. Its `Set up
+#   Python` step is part of it too, and easy to lose: the job runs
+#   `tools/changelog-section.py`, whose minimum Python is newer than the
+#   `python3` its `ubuntu-22.04` image ships.
 # - `build-local-artifacts`'s own `Smoke test` step (ratect#32) runs the
 #   just-built binary before it's uploaded.
 # - `build-global-artifacts` gains an `Install cargo-cyclonedx` step, its
@@ -160,6 +163,11 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+      # tools/' minimum, which `tools/changelog-section.py` checks for.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
       - name: Create draft release
         run: |
           release_count="$(jq '.releases | length' <<<"$PLAN_MANIFEST")"

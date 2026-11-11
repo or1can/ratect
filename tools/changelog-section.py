@@ -13,9 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 """Prints the `CHANGELOG.md` section for one released version.
 
-    python3 tools/changelog-section.py [--binary <package>] <version> [changelog]
+    uv run tools/changelog-section.py [--binary <package>] <version> [changelog]
 
 `changelog` defaults to `CHANGELOG.md` in the current directory.
 
@@ -67,9 +72,18 @@ release with no entries left has an empty body, which is not an error, whatever
 theme paragraph it opened with.
 """
 
+import sys
+
+# Before any other import: the PEP 723 header above is what `uv run` reads,
+# and this is what a plain `python3` older than it meets instead.
+if sys.version_info < (3, 11):
+    sys.exit(
+        "tools/changelog-section.py needs Python 3.11 or later, and this is %d.%d. "
+        "Run it as `uv run tools/changelog-section.py`, which fetches one." % sys.version_info[:2]
+    )
+
 import argparse
 import re
-import sys
 from pathlib import Path
 
 # A release heading's bracketed content, e.g. "ratect-compat 0.27.0 · ratect

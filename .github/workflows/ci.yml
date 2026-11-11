@@ -123,15 +123,51 @@ jobs:
       # with the config types it's generated from.
       - run: cargo test --workspace --all-targets --all-features
 
+  # At both ends of the range tools/ supports: the minimum its scripts'
+  # `requires-python` headers declare (tools/test_python_minimum.py keeps
+  # them agreeing on it), and the newest stable Python, which is where a
+  # contributor's own `python3` drifts. One job, not a matrix: `Tools Tests`
+  # is a required status check by that name, and a matrix renames its jobs.
   tools:
     name: Tools Tests
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: setup-python publishes the 3.9 the refusal step below
+    # runs on for 22.04 and 24.04 only.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
       - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
       # README.md's Documentation list mirrors docs/SUMMARY.md by hand; this
       # prints the diff when it has drifted (see the script's own docstring).
       - run: python3 tools/check-readme-docs-list.py
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+          # The newest release, not the newest the runner image has cached.
+          check-latest: true
+      - run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+      # On a real older Python, which the unit tests can't stand in for: they
+      # fake the version on a new interpreter, so a script using newer syntax
+      # still reaches its version check there, where 3.9 would stop at a
+      # SyntaxError first. 3.9 is stock macOS's `python3`.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.9"
+      - name: Each tools/ script refuses Python 3.9 with its message
+        run: |
+          version=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+          for script in $(git ls-files ':(glob)tools/*.py' ':!tools/test_*.py'); do
+            if out=$(python3 "$script" 2>&1 </dev/null); then
+              echo "$script ran on Python $version"
+              exit 1
+            fi
+            case "$out" in
+              *"or later, and this is $version"*"uv run $script"*) echo "$script: refused" ;;
+              *) echo "$script: $out"; exit 1 ;;
+            esac
+          done
 
   # The `claims` documentation checks (decisions/0009, `claims.toml`) as a
   # backstop for the `pre-commit` hook, which only gates a commit made in a

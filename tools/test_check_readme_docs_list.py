@@ -15,7 +15,7 @@
 
 """Tests for `check-readme-docs-list.py`.
 
-    python3 -m unittest discover -s tools -p 'test_*.py'
+Run as `CONTRIBUTING.md`'s "The `tools/` scripts" section says.
 
 The fixture tests pin what counts as drift — a missing page, an extra one, a
 reordered one, a renamed group — and what doesn't: the `docs/` link prefix,

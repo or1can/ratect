@@ -30,11 +30,16 @@ cargo test --workspace
 Documentation is checked on every commit by the
 [`claims`](https://github.com/or1can/claims) hook in
 `.pre-commit-config.yaml`. Turn it on once per clone, with
-[pre-commit](https://pre-commit.com) and Python 3.11 or later:
+[pre-commit](https://pre-commit.com):
 
 ```bash
 pre-commit install
 ```
+
+pre-commit brings the hook its own environment, built from the Python
+pre-commit itself runs on, so that Python, not your `python3`, is the one
+that needs to meet `claims`' minimum of 3.11.
+`uv tool install --python '>=3.11' pre-commit` installs it that way.
 
 That installs a `pre-push` hook too, which runs CI's claims checks over
 the branch and refuses a push with an unmarked finding, as CI's `claims`
@@ -47,6 +52,27 @@ orphaned mark for one, such as a marked sentence's old mark after it is
 reworded (the list is `claims.toml`'s `[hook] fail_on_unmarked`): fix or
 mark the finding, as [AGENTS.md](AGENTS.md) describes, and prune the
 orphan.
+
+## The `tools/` scripts
+
+The Python scripts under `tools/` (release notes extraction, the docs'
+captures and their `ansi` preprocessor, the README check) need Python 3.11
+or later and nothing outside the standard library. Run them with
+[uv](https://docs.astral.sh/uv/), which fetches a matching Python when
+yours is older:
+
+```bash
+uv run tools/check-readme-docs-list.py
+uv run --python '>=3.11' -m unittest discover -s tools -p 'test_*.py'
+```
+
+Plain `python3 tools/<script>.py` works too on 3.11 or later; an older
+`python3`, from 3.9, stops with a message naming the minimum. `mdbook build` runs the
+docs' preprocessor through `uv`, so it needs `uv` on your PATH. CI tests at
+the minimum and at the newest stable Python. The minimum is the oldest
+Python still supported upstream, and rises when that version reaches end of
+life; checking for that is part of cutting a release (AGENTS.md's Version
+Lifecycle guideline).
 
 ## Conventions
 

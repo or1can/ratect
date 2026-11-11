@@ -15,7 +15,7 @@
 
 """Tests for `changelog-section.py`.
 
-    python3 -m unittest discover -s tools -p 'test_*.py'
+Run as `CONTRIBUTING.md`'s "The `tools/` scripts" section says.
 
 This script's output becomes a real published GitHub Release's notes body, so
 a wrong answer from it is not a bad ranking a human skims past — it either
