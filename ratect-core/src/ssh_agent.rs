@@ -49,17 +49,30 @@
 //! gives up on an `accept` error, because most are per-connection or
 //! transient and quietly serving nothing for the rest of a build surfaces
 //! much later as an unexplained authentication failure.
+//!
+//! Unix-only, since what it serves on is a Unix socket: off Unix,
+//! [`Keyring::start`] refuses, and the protocol half below it is compiled but
+//! unused. A Windows agent would listen on a named pipe instead.
 
+// Everything past `Keyring::start` is reached only through its Unix form, so
+// off Unix it is all dead by construction; Linux clippy still lints it.
+#![cfg_attr(not(unix), allow(dead_code))]
+
+#[cfg(unix)]
 use std::io::ErrorKind;
+#[cfg(unix)]
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use signature::Signer;
 use ssh_key::private::{KeypairData, RsaKeypair};
 use ssh_key::{Algorithm, HashAlg, PrivateKey, Signature};
+#[cfg(unix)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
 /// Generic failure response — the answer to every request this agent
@@ -129,6 +142,7 @@ impl Keyring {
     /// components don't make a key it can sign with — all of which are reported
     /// here, up front, rather than as an opaque authentication failure
     /// inside a build minutes later.
+    #[cfg(unix)]
     pub async fn start(key_files: &[PathBuf]) -> Result<Self> {
         let keys = load_keys(key_files)?;
         let directory = create_private_directory()?;
@@ -157,6 +171,13 @@ impl Keyring {
             socket_path,
             server,
         })
+    }
+
+    /// See the Unix form: off Unix there's no socket to serve on, so this
+    /// refuses before reading any key.
+    #[cfg(not(unix))]
+    pub async fn start(_key_files: &[PathBuf]) -> Result<Self> {
+        anyhow::bail!("Serving keys as an ssh-agent is only supported on Unix hosts")
     }
 
     /// Where this agent is listening — the value to hand to anything
@@ -277,6 +298,7 @@ impl LoadedKey {
 /// world-writable, so a predictable name would let another local user
 /// pre-create the path, and a permissive mode would let them connect to the
 /// socket and sign with these keys for as long as the build runs.
+#[cfg(unix)]
 fn create_private_directory() -> Result<PathBuf> {
     // Half a UUID: 48 bits of unpredictability, while keeping the socket
     // path comfortably inside `sun_path` (see `MAX_SOCKET_PATH_LENGTH`).
@@ -310,6 +332,7 @@ fn create_private_directory() -> Result<PathBuf> {
 /// concurrent `create`/`open` anywhere else would silently inherit it. The
 /// window where the socket exists at its umask-derived mode is covered by
 /// the directory, which is created restrictive before the bind.
+#[cfg(unix)]
 fn restrict_socket_to_owner(socket_path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -352,6 +375,7 @@ const ACCEPT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis
 /// later `RUN --mount=type=ssh` steps still need an agent — quietly serving
 /// nothing for the rest of the build is the worst available outcome, since
 /// it surfaces as an unexplained authentication failure much later.
+#[cfg(unix)]
 async fn serve(listener: UnixListener, keys: Arc<Vec<LoadedKey>>) {
     let mut connections = tokio::task::JoinSet::new();
     loop {
@@ -387,6 +411,7 @@ async fn serve(listener: UnixListener, keys: Arc<Vec<LoadedKey>>) {
 /// Serves one client until it disconnects. Every message is a four-byte
 /// big-endian length followed by that many bytes, in both directions (RFC
 /// 9987 §4).
+#[cfg(unix)]
 async fn serve_connection(mut stream: UnixStream, keys: &[LoadedKey]) -> std::io::Result<()> {
     loop {
         let mut length = [0u8; 4];

@@ -680,6 +680,7 @@ fn build_log_config_is_none_when_log_driver_is_absent_even_with_options() {
 /// distinction is a `stat` result, and nothing else can fake it.
 struct ScratchPaths {
     directory: PathBuf,
+    #[cfg(unix)]
     listeners: Vec<std::os::unix::net::UnixListener>,
 }
 
@@ -693,6 +694,7 @@ impl ScratchPaths {
         std::fs::create_dir_all(&directory).unwrap();
         Self {
             directory,
+            #[cfg(unix)]
             listeners: Vec::new(),
         }
     }
@@ -703,6 +705,7 @@ impl ScratchPaths {
         path
     }
 
+    #[cfg(unix)]
     fn socket(&mut self, name: &str) -> PathBuf {
         let path = self.directory.join(name);
         self.listeners
@@ -749,6 +752,7 @@ fn a_missing_ssh_agent_path_is_treated_as_a_private_key() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn an_ssh_agent_path_naming_a_socket_forwards_that_socket() {
     let mut scratch = ScratchPaths::new();
@@ -762,6 +766,7 @@ fn an_ssh_agent_path_naming_a_socket_forwards_that_socket() {
 
 /// BuildKit's own rule, and the only sensible one: an id maps to one
 /// agent, so a socket can't be combined with anything.
+#[cfg(unix)]
 #[test]
 fn an_ssh_agent_mixing_a_socket_with_key_files_is_rejected() {
     let mut scratch = ScratchPaths::new();
@@ -778,6 +783,7 @@ fn an_ssh_agent_mixing_a_socket_with_key_files_is_rejected() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn an_ssh_agent_naming_two_sockets_is_rejected() {
     let mut scratch = ScratchPaths::new();
@@ -793,6 +799,7 @@ fn an_ssh_agent_naming_two_sockets_is_rejected() {
 
 /// Batect holds an agent's paths as a set, so a socket listed twice is one
 /// socket, not two agents under one id (ratect#390).
+#[cfg(unix)]
 #[test]
 fn an_ssh_agent_listing_the_same_socket_twice_forwards_that_socket() {
     let mut scratch = ScratchPaths::new();
@@ -3352,6 +3359,7 @@ fn ensure_host_volume_directories_exist_compares_container_paths_by_segment() {
 /// `/code/config.json` — gets an empty regular file at its mount point, with
 /// the directories above it: Linux binds a non-directory onto a file, so a
 /// directory there (Batect's) would fail the container at start.
+#[cfg(unix)]
 #[test]
 fn ensure_host_volume_directories_exist_creates_a_file_at_a_nested_file_or_socket_mount_point() {
     let mut scratch = ScratchPaths::new();
@@ -3491,6 +3499,7 @@ fn ensure_host_volume_directories_exist_compares_container_paths_as_cleaned() {
 
 /// A dangling symlink at a mount point is something already there, left for
 /// Docker like any other existing entry, not a missing path to create.
+#[cfg(unix)]
 #[test]
 fn ensure_host_volume_directories_exist_leaves_a_dangling_symlink_mount_point_alone() {
     let dir = unique_temp_dir();
@@ -3516,6 +3525,7 @@ fn ensure_host_volume_directories_exist_leaves_a_dangling_symlink_mount_point_al
 /// followed to a mount point: it's left for the daemon, which resolves it
 /// inside the container, rather than created wherever the link points on the
 /// host — possibly outside the project (ratect#703).
+#[cfg(unix)]
 #[test]
 fn ensure_host_volume_directories_exist_follows_no_symlink_out_of_the_host_mount() {
     let dir = unique_temp_dir();
@@ -3547,6 +3557,7 @@ fn ensure_host_volume_directories_exist_follows_no_symlink_out_of_the_host_mount
 /// daemon to the same place it leads the host, so it is followed: the mount
 /// point is created where the link leads, as the host user, rather than left
 /// for the daemon to create as root.
+#[cfg(unix)]
 #[test]
 fn ensure_host_volume_directories_exist_follows_a_symlink_that_stays_inside_the_host_mount() {
     let dir = unique_temp_dir();
@@ -3567,6 +3578,7 @@ fn ensure_host_volume_directories_exist_follows_a_symlink_that_stays_inside_the_
 
 /// What the host user can't see into is the daemon's to resolve, as root: it
 /// fails no run here.
+#[cfg(unix)]
 #[test]
 fn ensure_host_volume_directories_exist_leaves_a_mount_point_it_cant_see_to_the_daemon() {
     use std::os::unix::fs::PermissionsExt;
@@ -3595,6 +3607,7 @@ fn ensure_host_volume_directories_exist_leaves_a_mount_point_it_cant_see_to_the_
 /// A directory the host user can search but not write — a root-owned one a
 /// run before ratect#321 left behind — is the daemon's to create in, as
 /// root: it fails no run here.
+#[cfg(unix)]
 #[test]
 fn ensure_host_volume_directories_exist_leaves_a_mount_point_it_cant_create_to_the_daemon() {
     use std::os::unix::fs::PermissionsExt;
@@ -5344,6 +5357,7 @@ fn an_owned_directory_refusal_quotes_the_path_with_its_line_break_escaped() {
 }
 
 /// #770: a `build_ssh` refusal quotes the agent's id escaped.
+#[cfg(unix)]
 #[test]
 fn a_build_ssh_refusal_quotes_the_id_with_its_line_break_escaped() {
     let dir = std::env::temp_dir().join(format!("ratect-770-ssh-{}", std::process::id()));

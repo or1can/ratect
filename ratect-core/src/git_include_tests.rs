@@ -1041,6 +1041,7 @@ async fn a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+#[cfg(unix)]
 fn is_close_on_exec(file: &std::fs::File) -> bool {
     let flags = nix::fcntl::fcntl(file, nix::fcntl::FcntlArg::F_GETFD).unwrap();
     nix::fcntl::FdFlag::from_bits_truncate(flags).contains(nix::fcntl::FdFlag::FD_CLOEXEC)
@@ -1048,6 +1049,7 @@ fn is_close_on_exec(file: &std::fs::File) -> bool {
 
 /// Decision 2: the `git` a holder starts mustn't inherit its OS lock, or a
 /// `git` outliving its holder would keep the lock from ever being abandoned.
+#[cfg(unix)]
 #[tokio::test]
 async fn an_entry_lock_is_held_through_a_close_on_exec_descriptor() {
     let root = unique_temp_dir();

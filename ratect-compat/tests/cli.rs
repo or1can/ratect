@@ -7278,6 +7278,7 @@ fn piped_stdin_eof_ends_a_non_tty_task_container() {
     );
 }
 
+#[cfg(unix)]
 #[path = "../../ratect/tests/support/unnamed_host_user.rs"]
 mod unnamed_host_user;
 
@@ -7285,6 +7286,7 @@ mod unnamed_host_user;
 /// `run_as_current_user` container (#843, #846): the Docker connection needs no
 /// home, and the generated files name the user and group with the ids' digits,
 /// as Batect's do. See [`unnamed_host_user`] for how the ids are arranged.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn run_as_current_user_names_an_unnamed_host_user_with_its_digits() {
@@ -7347,6 +7349,7 @@ tasks:
 /// dependency), and that a file the container writes to the mounted volume
 /// comes back owned by the current host user on disk, not root — the actual
 /// practical point of the feature, not just that the right calls were made.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn run_as_current_user_maps_the_container_onto_the_host_user() {
@@ -7474,6 +7477,7 @@ tasks:
 /// Run twice: the second run meets every mount point already there and must
 /// leave it as it is. Writes its own temporary project, since the run
 /// creates state inside it.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn run_as_current_user_creates_nested_mount_points_as_the_host_user() {

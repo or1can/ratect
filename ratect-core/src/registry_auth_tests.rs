@@ -247,6 +247,7 @@ fn configured_creds_store_names_the_default_store() {
 }
 
 /// A unique scratch directory, removed by the caller.
+#[cfg(unix)]
 fn scratch_directory() -> std::path::PathBuf {
     let directory = std::env::temp_dir().join(format!("ratect-306-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).unwrap();

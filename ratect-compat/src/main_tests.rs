@@ -1606,6 +1606,7 @@ fn a_batect_local_yml_that_is_not_a_file_is_an_invalid_default() {
 
 /// #450: one whose metadata can't be read says so, rather than calling it
 /// not a file.
+#[cfg(unix)]
 #[test]
 fn a_batect_local_yml_that_cannot_be_read_says_so() {
     use std::os::unix::fs::PermissionsExt;

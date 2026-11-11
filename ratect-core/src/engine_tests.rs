@@ -4162,6 +4162,7 @@ async fn build_ssh_key_paths_reach_docker_as_a_named_key_source() {
 /// agent id — so its errors say nothing about which container is
 /// misconfigured. In a project with many containers that leaves the user
 /// searching. Every other config error in Ratect names its container.
+#[cfg(unix)]
 #[tokio::test]
 async fn an_invalid_build_ssh_entry_names_the_container_it_came_from() {
     let mut containers = IndexMap::new();

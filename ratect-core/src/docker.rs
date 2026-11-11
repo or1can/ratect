@@ -757,10 +757,18 @@ pub fn classify_ssh_agent_paths(id: &str, paths: &[PathBuf]) -> Result<SshAgentS
 /// read) is *not* reported as a socket, so it goes down the private-key
 /// route and fails naming the file, rather than as an opaque failure to
 /// connect.
+#[cfg(unix)]
 fn is_socket(path: &Path) -> bool {
     use std::os::unix::fs::FileTypeExt;
 
     std::fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
+}
+
+/// See the Unix form: off Unix `std` can't tell whether a path is a socket,
+/// so every path is a key file (ratect#867).
+#[cfg(not(unix))]
+fn is_socket(_path: &Path) -> bool {
+    false
 }
 
 /// One `build_secrets` entry's source, mirroring `config::BuildSecret` —
