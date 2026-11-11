@@ -119,18 +119,10 @@ tokio = { version = "1.52", features = ["full"] }
 # entry warns off; `crossterm::terminal::size()` is still what's actually
 # queried on each signal.
 crossterm = "0.29.0"
-# **`nix`** (`features = ["user"]`): looks up the real host user
-# (`Uid`/`Gid::current`, `User`/`Group::from_uid`/`from_gid`) for
-# `run_as_current_user` (`ratect-core/src/user.rs`) — Unix-only, matching
-# Ratect's own Unix-only testing so far. Already resolved in `Cargo.lock`
-# transitively (via `portable-pty`'s own dependency graph in
-# `ratect-compat`'s dev-dependencies); adding it directly to `ratect-core`
-# was a low-risk addition, not a new unknown quantity.
-nix = { version = "0.31.3", features = ["user"] }
 # **`url`**: parses/rewrites `localhost`/`127.0.0.1`/`::1` proxy URLs to
 # `host.docker.internal` in `ratect-core/src/proxy.rs`. Already resolved in
 # `Cargo.lock` transitively (via `bollard`'s own dependency graph) — same
-# low-risk-addition reasoning as `nix` above.
+# low-risk-addition reasoning as `nix` below.
 url = "2.5.8"
 sha2 = "0.11"
 # **`toml`**: parses `ratect.toml`. `preserve_order` keeps a table's keys in
@@ -250,6 +242,17 @@ getrandom = { version = "0.4", features = ["sys_rng"] }
 ssh-encoding = "0.2"
 signature = "2"
 
+# **`nix`** (`features = ["user"]`): looks up the real host user
+# (`Uid`/`Gid::current`, `User`/`Group::from_uid`/`from_gid`) for
+# `run_as_current_user` (`ratect-core/src/user.rs`). A Unix-only dependency,
+# so it's declared for Unix targets only: every use sits behind `cfg(unix)`,
+# beside the non-Unix fallback that CI's Windows Check job compiles. Already
+# resolved in `Cargo.lock` transitively (via `portable-pty`'s own dependency
+# graph in `ratect-compat`'s dev-dependencies); adding it directly to
+# `ratect-core` was a low-risk addition, not a new unknown quantity.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", features = ["user"] }
+
 [features]
 # Generates the JSON schema for `batect.yml` (`src/schema.rs`) — a tooling
 # concern, not a runtime one, so it's off by default and neither shipped
@@ -274,12 +277,6 @@ schema = ["dep:schemars", "dep:jsonschema"]
 # `bollard`/`hyper`'s own dependency graph) — same low-risk-addition
 # reasoning as `nix`/`url` above.
 bytes = "1.12.1"
-# **`nix`** feature `fs` (`ratect-core` dev-dependency only, on top of the
-# normal dependency's `user`): `fcntl(F_GETFD)`, which `git_include.rs`'s
-# tests read to pin that an entry lock's file is opened close-on-exec
-# (decisions/0023) — `std` exposes no way to ask. A dev-dependency so the
-# feature stays out of the shipped binaries' build.
-nix = { version = "0.31.3", features = ["fs"] }
 tokio = { version = "1.52", features = ["test-util"] }
 # **`rcgen`**, **`tokio-rustls`**, **`time`** (`ratect-core`
 # dev-dependencies only): generate a throwaway self-signed CA + leaf
@@ -313,3 +310,12 @@ time = "0.3"
 # manifest. Bumping this alone fails to compile (`CryptoRngCore` not
 # satisfied); see `renovate.json`'s matching `allowedVersions` rule.
 rand_chacha = "0.3"
+
+# **`nix`** feature `fs` (`ratect-core` dev-dependency only, on top of the
+# normal dependency's `user`): `fcntl(F_GETFD)`, which `git_include.rs`'s
+# tests read to pin that an entry lock's file is opened close-on-exec
+# (decisions/0023) — `std` exposes no way to ask. A dev-dependency so the
+# feature stays out of the shipped binaries' build; Unix-only, like the
+# normal dependency, and so is the test that uses it.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.31.3", features = ["fs"] }

@@ -42,10 +42,13 @@ Leveraging Rust's strengths to provide a superior experience compared to the ori
   below) needs to exist at all — today there's nothing to report progress on
   until the whole buffer is already built.
 - **First-class Cross-platform Support**: **Windows doesn't exist here at all
-  yet** — no target in the release matrix, no CI coverage, no Windows-specific
+  yet** — no target in the release matrix, no test run on it (CI's `Windows
+  Check` job compiles the workspace there, nothing more), no Windows-specific
   code path beyond the daemon classifier (a local socket from a Windows host is
   Desktop), the refusal of a daemon running Windows containers, and non-Unix
-  fallbacks in `user.rs` and `interrupt.rs`. macOS and Linux already have prebuilt binaries (see
+  fallbacks for the host user (`user.rs`), signals (`interrupt.rs`),
+  `build_ssh` agents (`ssh_agent.rs`, `docker.rs`) and the Git include entry
+  lock. macOS and Linux already have prebuilt binaries (see
   [decisions/0010](decisions/0010-release-binary-distribution.md)). Two
   specifics worth naming for whenever Windows work starts, so
   "cross-platform" isn't taken to already imply them: **Windows isolation

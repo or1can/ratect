@@ -1735,6 +1735,7 @@ async fn a_host_name_that_does_not_resolve_is_reported_as_an_unreachable_daemon(
 
 /// Something answered — the socket is there, but refuses this user — so the
 /// request's own headline stays.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_socket_refusing_permission_is_not_reported_as_an_unreachable_daemon() {
     use std::os::unix::fs::PermissionsExt;
@@ -2215,6 +2216,7 @@ fn check_chosen_directories_refuses_a_given_directory_that_is_not_one() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn check_chosen_directories_accepts_a_directory_and_a_symlink_to_one() {
     let scratch = unique_temp_dir();

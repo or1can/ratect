@@ -14212,15 +14212,6 @@ subjects = { "ROADMAP.md" = "b2bfb89c20e69299" }
 [[mark]]
 file = "AGENTS.md"
 mode = "claim-words-totalising"
-unit = "71065eef9fd74e49"
-copies = 1
-note = "Checked against the \"main branch protection\" ruleset via gh api: rules deletion, non_fast_forward, pull_request (0 approvals, merge/rebase only) and required_status_checks, empty bypass_actors; required checks omit Claims, Worked Examples and Coverage Report and include Signed-off-by."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
 unit = "faa0e1e7767a4051"
 copies = 1
 note = "Process rule; the cited trap is #200's \"record two conventions found while restructuring #199\" commit (831bb8f6), which tells it."
@@ -14457,3 +14448,57 @@ copies = 1
 note = "Read Tooling & CI against ratect/tests/cli.rs after ratect#837's change (inline projects now prepend a derived ratect_version): run_executes_a_task_via_docker is still the one #[ignore]d representative e2e, ratect/tests/cli.rs still runs against ratect/tests/fixtures/ (21 entries vs ratect-compat's 99, matching 'about twenty'/'about a hundred'); nothing in the section describes the changed helpers."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "a0ac475e101f67c7", "ROADMAP.md" = "b2bfb89c20e69299", "agents/claims.md" = "17ea62e5c299c295", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ceb72f91cb44d8ac", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "d00cf6b31c056205", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "99b890c91211c68d"
+copies = 1
+note = "Checked against .github/workflows/ci.yml: every job's runs-on is ubuntu-latest/ubuntu-24.04 except windows-check (windows-latest), which runs cargo check --workspace --all-targets --all-features with RUSTFLAGS -D warnings; no workflow runs cargo test on Windows, and Unix-only tests are gated cfg(unix) (#839)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "aa022f6a35c58565"
+copies = 1
+note = "Checked against .github/workflows/ci.yml: every job's runs-on is ubuntu-latest/ubuntu-24.04 except windows-check (windows-latest), which runs cargo check --workspace --all-targets --all-features with RUSTFLAGS -D warnings; no workflow runs cargo test on Windows, and Unix-only tests are gated cfg(unix) (#839)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "52723df576c6ea2d"
+copies = 1
+note = "Checked against .github/workflows/ci.yml: every job's runs-on is ubuntu-latest/ubuntu-24.04 except windows-check (windows-latest), which runs cargo check --workspace --all-targets --all-features with RUSTFLAGS -D warnings; no workflow runs cargo test on Windows, and Unix-only tests are gated cfg(unix) (#839)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "aa022f6a35c58565"
+copies = 1
+note = "Checked against .github/workflows/ci.yml: every job's runs-on is ubuntu-latest/ubuntu-24.04 except windows-check (windows-latest); no workflow runs cargo test on Windows (#839)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "52723df576c6ea2d"
+copies = 1
+note = "Checked against .github/workflows/ci.yml: every job's runs-on is ubuntu-latest/ubuntu-24.04 except windows-check (windows-latest); no workflow runs cargo test on Windows (#839)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "b0d683678529b07e"
+copies = 1
+note = "Checked against the \"main branch protection\" ruleset via gh api: rules deletion, non_fast_forward, pull_request and required_status_checks, empty bypass_actors; required checks omit Claims, Worked Examples, Windows Check and Coverage Report and include Signed-off-by."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

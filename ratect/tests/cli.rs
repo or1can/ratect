@@ -4947,12 +4947,14 @@ fn identity_adds_additional_users_on_every_daemon() {
     );
 }
 
+#[cfg(unix)]
 #[path = "support/unnamed_host_user.rs"]
 mod unnamed_host_user;
 
 /// A project of one `alpine` container with `identity`, with `extra` appended to
 /// it, whose `show` task prints the running user, its group's entry or `none`,
 /// its passwd entry and `$HOME`.
+#[cfg(unix)]
 fn unnamed_host_user_project(extra: &str) -> String {
     written_for_latest(&format!(
         "project_name = \"ratect-unnamed-host-user-test\"\n\n\
@@ -4967,6 +4969,7 @@ fn unnamed_host_user_project(extra: &str) -> String {
 /// `HOME` and without one (#818, #846): the Docker connection needs no home, `whoami` prints the
 /// uid's digits from the entry appended for it, and alpine's `/etc/group` gets no
 /// entry for the gid. See [`unnamed_host_user`] for how the ids are arranged.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn identity_on_a_rootful_daemon_runs_a_host_user_with_no_names() {
@@ -5007,6 +5010,7 @@ fn identity_on_a_rootful_daemon_runs_a_host_user_with_no_names() {
 
 /// With no home at all, a path starting with `~` is refused naming it, and
 /// nothing runs (#846).
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn with_no_home_a_tilde_path_is_refused_naming_it() {

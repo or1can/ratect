@@ -17,9 +17,10 @@
 //! `<key>.lock` created exclusively — which is all an older binary takes, and
 //! all it checks for — carrying, through the same open file, an OS lock (`flock`) and a format
 //! marker. The OS lock is what lets a waiter prove the **holder** has exited:
-//! the kernel releases it when the holder does, however it exits. Waiting,
-//! the notice and the timeout are `GitIncludeCache::acquire_lock`'s; this
-//! module only looks, once.
+//! the kernel releases it when the holder does, however it exits. Off Unix
+//! that proof is never complete (see [`still_at`]), so nothing is taken over
+//! there. Waiting, the notice and the timeout are
+//! `GitIncludeCache::acquire_lock`'s; this module only looks, once.
 //!
 //! Every call here is synchronous filesystem work measured in microseconds,
 //! except the blocking OS lock a new holder takes on its own new file, which
@@ -28,6 +29,7 @@
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -59,7 +61,7 @@ impl EntryLock {
         removed
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn file(&self) -> &File {
         &self.file
     }
@@ -73,8 +75,9 @@ pub(super) enum Attempt {
     /// Its holder is running: the OS lock is held.
     HeldByRunningHolder,
     /// Its holder can't be proved to have exited: the lock carries no marker
-    /// this version recognises, or the OS lock itself returned an error, as
-    /// it can on a network filesystem.
+    /// this version recognises, the OS lock itself returned an error, as
+    /// it can on a network filesystem, or, off Unix, the file's identity
+    /// can't be checked.
     HeldByUnknownHolder,
 }
 
@@ -154,8 +157,10 @@ pub(super) fn take_over_if_abandoned(mut file: File, path: &Path) -> TakeOver {
         Err(TryLockError::WouldBlock) => return TakeOver::Running,
         Err(TryLockError::Error(_)) => return TakeOver::Unknown,
     }
-    if !still_at(&file, path) {
-        return TakeOver::Replaced;
+    match still_at(&file, path) {
+        Some(true) => {}
+        Some(false) => return TakeOver::Replaced,
+        None => return TakeOver::Unknown,
     }
     let mut content = String::new();
     if file.read_to_string(&mut content).is_err() || content.lines().next() != Some(MARKER) {
@@ -176,10 +181,20 @@ pub(super) fn take_over_if_abandoned(mut file: File, path: &Path) -> TakeOver {
 }
 
 /// Whether `path` still names the file `file` was opened from, by device and
-/// inode.
-fn still_at(file: &File, path: &Path) -> bool {
-    match (file.metadata(), std::fs::metadata(path)) {
+/// inode, or `None` where that can't be told.
+#[cfg(unix)]
+fn still_at(file: &File, path: &Path) -> Option<bool> {
+    Some(match (file.metadata(), std::fs::metadata(path)) {
         (Ok(opened), Ok(current)) => opened.dev() == current.dev() && opened.ino() == current.ino(),
         _ => false,
-    }
+    })
+}
+
+/// See the Unix form. `None`: `std` has no stable way to compare file
+/// identities here, so no lock is ever proved abandoned, and a waiter treats
+/// it as one with no marker: it waits until the holder releases it, or until
+/// it times out if the holder died holding it (ratect#868).
+#[cfg(not(unix))]
+fn still_at(_file: &File, _path: &Path) -> Option<bool> {
+    None
 }

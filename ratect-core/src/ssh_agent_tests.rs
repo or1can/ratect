@@ -529,6 +529,7 @@ fn an_unimplemented_request_fails() {
 
 /// Sends one length-prefixed request and reads the length-prefixed
 /// response back, the way BuildKit's forwarded stream will.
+#[cfg(unix)]
 async fn round_trip(stream: &mut UnixStream, request: &[u8]) -> Vec<u8> {
     stream
         .write_all(&(request.len() as u32).to_be_bytes())
@@ -548,6 +549,7 @@ async fn round_trip(stream: &mut UnixStream, request: &[u8]) -> Vec<u8> {
 /// are only exercised by a real connection over a real socket — so this
 /// drives one, rather than calling [`respond`] directly as the tests
 /// above do.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_client_can_talk_to_the_agent_over_its_socket() {
     use std::os::unix::fs::PermissionsExt;
@@ -618,6 +620,7 @@ async fn a_client_can_talk_to_the_agent_over_its_socket() {
 /// leaves an open client able to keep getting signatures after the
 /// build that needed the keys has finished — the socket file is gone,
 /// but an established connection doesn't care.
+#[cfg(unix)]
 #[tokio::test]
 async fn dropping_the_agent_stops_a_connection_it_is_already_serving() {
     let directory = unique_temp_dir();

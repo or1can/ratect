@@ -74,6 +74,25 @@ jobs:
       # with the config types it's generated from.
       - run: cargo test --workspace --all-targets --all-features
 
+  # Every other job runs on Linux, so without this nothing compiles the
+  # `cfg(not(unix))` code: the non-Unix fallbacks for the host user,
+  # signals, `build_ssh` agents and the Git include entry lock, and the tests
+  # written for them (#839). A check, not a test run: it proves Windows
+  # builds, not that it works there. `-D warnings` so code a `cfg(unix)` gate
+  # leaves unused off Unix fails here, rather than accumulating where no other
+  # job looks.
+  # Not a required status check, like Claims and Worked Examples.
+  windows-check:
+    name: Windows Check
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --all-features
+
   # At both ends of the range tools/ supports: the minimum its scripts'
   # `requires-python` headers declare (tools/test_python_minimum.py keeps
   # them agreeing on it), and the newest stable Python, which is where a

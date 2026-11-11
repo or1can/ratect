@@ -706,6 +706,7 @@ fn remove_cache_volumes_named(cache_name: &str) {
 /// the host's own, which is the entire point of the feature. Batect reads
 /// these from the JVM and `id -gn`; the same two shell-outs here, so the
 /// expectation is derived from the host rather than hard-coded.
+#[cfg(unix)]
 fn host_user_and_group() -> (String, String) {
     let run = |args: &[&str]| {
         let out = Command::new("id")
@@ -733,6 +734,7 @@ fn host_user_and_group() -> (String, String) {
 /// A removal failure is fatal rather than ignored — the assertions below
 /// are only meaningful against a directory this run produced, so carrying
 /// on with a stale one would turn a real failure into a false pass.
+#[cfg(unix)]
 fn reset_output_dir(project: &str) -> PathBuf {
     let dir = project_dir(project).join("output");
     match std::fs::remove_dir_all(&dir) {
@@ -753,6 +755,7 @@ fn reset_output_dir(project: &str) -> PathBuf {
 /// prints plausible-looking lines, but leaves a root-owned file the
 /// developer then cannot delete. That is the bug `run_as_current_user`
 /// exists to prevent, so it is checked on the host, not in the container.
+#[cfg(unix)]
 fn run_as_current_user_case(project: &str) {
     let (user, group) = host_user_and_group();
     let output_dir = reset_output_dir(project);
@@ -798,6 +801,7 @@ fn run_as_current_user_case(project: &str) {
 /// The invoking user's real uid. Deliberately not `nix`, which
 /// `ratect-compat` doesn't depend on — `id -u` is already being shelled out
 /// to above.
+#[cfg(unix)]
 fn nix_getuid() -> u32 {
     let out = Command::new("id")
         .arg("-u")
@@ -811,6 +815,7 @@ fn nix_getuid() -> u32 {
 
 /// `run-as-current-user`: the task container runs as the host user, with a
 /// `home_directory` Ratect creates and chowns inside the container.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn run_as_current_user() {
@@ -820,6 +825,7 @@ fn run_as_current_user() {
 /// `run-as-current-user-with-mount`: the same, but the project directory is
 /// bind-mounted *inside* the container's home directory, so Ratect's home
 /// setup has to coexist with a mount rather than owning the whole tree.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn run_as_current_user_with_mount() {
