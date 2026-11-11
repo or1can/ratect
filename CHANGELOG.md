@@ -24,6 +24,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Added
+
+- `tools/check-doc-links.py` rebuilds the workspace's documentation and fails on a doc link that renders as literal brackets; CI's Rustdoc job runs it. No effect on the released binaries; contributor-tooling only.
+
 ### Changed
 
 - The `claims` commit hook refuses a commit that brings in an unmarked `claim-words`, `temporal-words` or `restatement` finding, or that leaves an orphaned mark for one. No effect on the released binaries; contributor-tooling only.

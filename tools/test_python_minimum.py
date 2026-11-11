@@ -57,6 +57,14 @@ MINIMUM = (3, 11)
 
 SCRIPTS = sorted(p for p in TOOLS.glob("*.py") if not p.name.startswith("test_"))
 
+# Arguments that keep a script from doing its work if it gets past its version
+# check, for a script whose argument-free run is too slow or too destructive
+# to make here: the guard comes before argument parsing, so it still runs.
+PAST_THE_CHECK = {
+    # A cold doc build of the whole workspace.
+    "check-doc-links.py": ["--help"],
+}
+
 HEADER = re.compile(
     r"^# /// script\n((?:#(?: .*)?\n)*?)# ///$",
     re.MULTILINE,
@@ -106,7 +114,7 @@ class PythonMinimumTest(unittest.TestCase):
         older = (MINIMUM[0], MINIMUM[1] - 1, 0, "final", 0)
         for script in SCRIPTS:
             with self.subTest(script=script.name):
-                result = run_as(older, script)
+                result = run_as(older, script, *PAST_THE_CHECK.get(script.name, ()))
                 self.assertNotEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, "")
                 self.assertIn(f"Python {MINIMUM[0]}.{MINIMUM[1]} or later", result.stderr)
@@ -119,7 +127,7 @@ class PythonMinimumTest(unittest.TestCase):
         minimum = (*MINIMUM, 0, "final", 0)
         for script in SCRIPTS:
             with self.subTest(script=script.name):
-                result = run_as(minimum, script)
+                result = run_as(minimum, script, *PAST_THE_CHECK.get(script.name, ()))
                 self.assertNotIn("needs Python", result.stderr)
                 self.assertNotIn("AttributeError", result.stderr)
 
