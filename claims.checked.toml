@@ -14092,3 +14092,30 @@ note = "Checked tools/, ci.yml (Tools Tests, claims job and its grant list, cove
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "43a1bae83cecb299", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "decisions/0009-adopt-claims-plugin.md" = "bc2002e2b21854c2", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "134b1b35c479e6a3", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "4f847facc4676784", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "970b43c4e8cd9e97", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "7e619a6b5e173126"
+copies = 1
+note = "Ran against the binary: a probe [`REMAPPED_MOUNT_ACCESS`] link to the pub(crate) const in ratect-core/src/diagnostics.rs; both cargo doc passes exited 0 and only tools/check-doc-links.py failed, naming it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/check-doc-links.py" = "bd4bfeb573196e1f" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "0c7a81b524bdf62b"
+copies = 1
+note = "Checked against tools/check-doc-links.py main: it runs `cargo clean --doc` (which printed \"Removed 729 files\", the whole target/doc) before passes that all use --no-deps, so dependencies' pages are not rebuilt."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "b938e1b1f8c29517-3f2132a466854756"
+copies = 1
+note = "The step name moved with the step into its one-line form rather than being retracted; the step runs tools/check-doc-links.py, which checks exactly that no written doc link renders as literal brackets."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

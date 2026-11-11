@@ -56,8 +56,9 @@ orphan.
 ## The `tools/` scripts
 
 The Python scripts under `tools/` (release notes extraction, the docs'
-captures and their `ansi` preprocessor, the README check) need Python 3.11
-or later and nothing outside the standard library. Run them with
+captures and their `ansi` preprocessor, the README and doc-link checks)
+need Python 3.11 or later and nothing outside the standard library. Run
+them with
 [uv](https://docs.astral.sh/uv/), which fetches a matching Python when
 yours is older:
 
