@@ -14414,15 +14414,6 @@ subjects = { "agents/claims.md" = "17ea62e5c299c295" }
 [[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
-unit = "acec0e5a5304cd93"
-copies = 1
-note = "Read the whole Tooling & CI section against agents/claims.md: the pointer's trigger and contents, the grant list (equal to ci.yml's), and the three-places rule all match it; the Tests, fixture and coverage bullets name no part of it."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "a0ac475e101f67c7", "ROADMAP.md" = "b2bfb89c20e69299", "agents/claims.md" = "17ea62e5c299c295", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ceb72f91cb44d8ac", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "970b43c4e8cd9e97", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
 unit = "694f6b1650954bb2"
 copies = 1
 note = "Read the Claims checks entry against agents/claims.md's opening: the same two triggers, and the page covers where checks run, claims.toml's settings and marking."
@@ -14457,3 +14448,12 @@ note = "Read the guidelines naming agents/claims.md's subject: guideline 8's poi
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "a0ac475e101f67c7", ".github/workflows/release.yml" = "d071949da4b771e2", "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "CONTRIBUTING.md" = "291246760d8eeb42", "ROADMAP.md" = "b2bfb89c20e69299", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "acec0e5a5304cd93"
+copies = 1
+note = "Read Tooling & CI against ratect/tests/cli.rs after ratect#837's change (inline projects now prepend a derived ratect_version): run_executes_a_task_via_docker is still the one #[ignore]d representative e2e, ratect/tests/cli.rs still runs against ratect/tests/fixtures/ (21 entries vs ratect-compat's 99, matching 'about twenty'/'about a hundred'); nothing in the section describes the changed helpers."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "a0ac475e101f67c7", "ROADMAP.md" = "b2bfb89c20e69299", "agents/claims.md" = "17ea62e5c299c295", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "ceb72f91cb44d8ac", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "d00cf6b31c056205", "tools/changelog-section.py" = "45082c17a3944098" }
