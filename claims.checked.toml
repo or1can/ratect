@@ -13510,15 +13510,6 @@ subjects = { "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d
 [[mark]]
 file = "AGENTS.md"
 mode = "claim-words-totalising"
-unit = "899f64b374117005"
-copies = 1
-note = "Read against the four Cargo.toml files on this branch: getrandom (new) is declared in ratect-core/Cargo.toml only, beside ssh-key/ssh-encoding/signature/rsa; ratect and ratect-compat declare none of them."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/schema.rs" = "3c623a991c420654" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
 unit = "982452f493bc7c0a"
 copies = 1
 note = "Checked against .cargo/audit.toml: its header now states the same rule with the same not-compiled exception, RUSTSEC-2023-0071's entry relies on it and names the ci.yml step, and RUSTSEC-2026-0387's entry says no stable ssh-key can take its fix."
@@ -14118,3 +14109,12 @@ copies = 1
 note = "Read the whole Tooling & CI section against ci.yml (claims job's pinned-rev checkout, grant list identical to the section's, --fail-on-unmarked; test, docker-integration, coverage, audit jobs), .pre-commit-config.yaml (v0.28.1, pre-commit and pre-push claims-unmarked hooks), claims.toml's [hook], [claim-words] and [temporal-words] lists, and the ruleset (Claims not required): all hold."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "835fc92077c5367a", "ROADMAP.md" = "b2bfb89c20e69299", "TODO.md" = "c2a680921ef48d01", "decisions/0009-adopt-claims-plugin.md" = "bc2002e2b21854c2", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/ratect-compat-config-reference.md" = "134b1b35c479e6a3", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "dff8a8ba70de35ac", "ratect-compat/tests/cli.rs" = "4f847facc4676784", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "970b43c4e8cd9e97", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "7dd2ab5b8ce75bdf"
+copies = 1
+note = "Read against the Cargo.toml files: [dependencies] — clap and tracing-subscriber in both binaries only, clap_complete in ratect only, anyhow/tokio/tracing in both binaries and ratect-core, every other runtime dependency in ratect-core; dockerignore/Cargo.toml declares exactly regex and path-clean, both also in ratect-core's; [dev-dependencies] — portable-pty and async-trait in the binaries whose tests use them, ratect-core's own test crates in ratect-core."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

@@ -127,22 +127,13 @@ Two things worth knowing without opening a `Cargo.toml`:
   and both accepted `cargo audit` advisories belong to that tree — see
   [`.cargo/audit.toml`](.cargo/audit.toml), which carries their justifications.
 
-
-Dependencies are split across the four `Cargo.toml`s along CLI-vs-core lines: `clap`
-and `tracing-subscriber` are in the binaries only; `serde`, `serde_json`, `noyalib`,
-`bollard`, `docker_credential`, `futures`, `async-recursion`, `async-trait`, `uuid`, `tar`, `path-clean`,
-`crossterm`, `nix`, `url`, `sha2`, `toml`, `indexmap`, `regex`, `unicode-width`, `rustls`,
-`hyper-util`, `hyper-rustls`, `rustls-native-certs`, `ssh-key`/`ssh-encoding`/`signature`/`rsa`/`getrandom`,
-`schemars`/`jsonschema` (optional, `schema` feature), and the
-local `dockerignore` crate are `ratect-core`-only (`dockerignore` itself depends on
-`regex` and `path-clean` too); `anyhow`, `tracing`, and `tokio` are needed by both
-`ratect-compat` and `ratect-core`. `tokio` is a normal dependency in both crates now —
-`ratect-core`'s non-test code needs it too, for `build_context_tar`'s
-`tokio::task::spawn_blocking` (it used to be a `ratect-core` dev-dependency only, for
-`#[tokio::test]` in its unit tests). `portable-pty` is `ratect-compat`'s first
-`[dev-dependencies]` entry. `ratect` shares `ratect-compat`'s CLI-side set
-(`clap`, `tokio`, `anyhow`, `tracing`, `tracing-subscriber`) plus `clap_complete`.
-Both binaries have `async-trait` as a dev-dependency (see each one's own `Cargo.toml`).
+Dependencies are split across the four `Cargo.toml`s along CLI-vs-core lines: a
+runtime dependency only a binary needs (`clap`, `clap_complete`,
+`tracing-subscriber`) is in that binary's alone, and every other runtime
+dependency is in `ratect-core`'s, plus each binary's that uses it directly
+(`anyhow`, `tokio`, `tracing`), and `dockerignore`'s own two (`regex`,
+`path-clean`) are in its own as well; a dev-dependency is in the crate whose
+tests use it.
 
 ## Tooling & CI
 
