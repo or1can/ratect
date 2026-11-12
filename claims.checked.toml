@@ -13247,15 +13247,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/resources.rs" = "f0ea7ca51cce5a90", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect/src/main.rs" = "c956894c42b3a54c" }
 
 [[mark]]
-file = "README.md"
-mode = "stale-claims"
-unit = "caf9f906b16a91cb"
-copies = 1
-note = "Every docs/ link in the Documentation list resolves (tools/check-readme-docs-list.py ran clean), and differences-from-batect.md is still listed; no YAML-tag content."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/comparison.md" = "0eb7bb383099fed1", "docs/connecting-to-docker.md" = "3c5685291bc57cfa", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "32ecbf6813f626b8", "docs/index.md" = "44c68e79c054a6cf", "docs/installation.md" = "c1490b152407630e", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "d7075e38c9465ccf", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "134b1b35c479e6a3", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "c8e426c4c33360b1", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
-
-[[mark]]
 file = "docs/ratect-config-reference.md"
 mode = "stale-claims"
 unit = "80332a1866e016fa"
@@ -14150,16 +14141,6 @@ subjects = { "agents/claims.md" = "17ea62e5c299c295" }
 [[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
-unit = "2f519634b0b93218"
-copies = 1
-note = "Read the guidelines naming agents/claims.md's subject: guideline 8's pointer at agents/releasing.md and 15's at /ready; agents/claims.md's own mention of guideline 8 (the --prerelease line, AGENTS.md:349) holds."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "a0ac475e101f67c7", ".github/workflows/release.yml" = "d071949da4b771e2", "CHANGELOG.md" = "eebea24b99826a32bf2c8acdd7badfa9903aeee4", "CONTRIBUTING.md" = "291246760d8eeb42", "ROADMAP.md" = "b2bfb89c20e69299", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "2f2543eac749ae10", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
 unit = "acec0e5a5304cd93"
 copies = 1
 note = "Read Tooling & CI against ratect/tests/cli.rs after ratect#837's change (inline projects now prepend a derived ratect_version): run_executes_a_task_via_docker is still the one #[ignore]d representative e2e, ratect/tests/cli.rs still runs against ratect/tests/fixtures/ (21 entries vs ratect-compat's 99, matching 'about twenty'/'about a hundred'); nothing in the section describes the changed helpers."
@@ -14257,15 +14238,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/schema.rs" = "3c623a991c420654" }
 
 [[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "01b8016fdce455c4"
-copies = 1
-note = "Read each model page it cites against docs/: the ratect-config-reference Semantics column links, includes.md's native-first rule, faq.md/reusable-building-blocks.md with no temporal wording, installation.md and includes.md linking 0010/0004, the Coming-from-Batect closers, getting-started's Next steps, SUMMARY.md's ordering, and ci.yml running check-readme-docs-list.py."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "e22f7b0ed47e83f03629994da02c1c77891091bb", "ROADMAP.md" = "edf7cca5bb31c742", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "32ecbf6813f626b8", "docs/installation.md" = "c1490b152407630e", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/ratect-config-reference.md#field-reference" = "26b25fdae4a72f87", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
-
-[[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "b8f51c8bb848e6ed"
@@ -14293,15 +14265,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "agents/probing.md" = "bf91674285619801", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
 
 [[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read against dist-workspace.toml and release.yml (create-release false, targets, attestations phase, draft-release job, smoke test, cyclonedx); the \"reports today rather than blocks\" sentence points at Consequences, whose own entry says Release Pipeline Config now gates, matching the gh api ruleset's required checks."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "d071949da4b771e2", "CHANGELOG.md" = "e22f7b0ed47e83f03629994da02c1c77891091bb", "dist-workspace.toml" = "7852e95f01af7dc8", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
 file = "decisions/0006-code-and-documentation-locality.md"
 mode = "stale-claims"
 unit = "cd82ea9cde0a70a4"
@@ -14318,15 +14281,6 @@ copies = 1
 note = "Read against ssh_agent.rs (standalone, no crate:: imports, including its new non-Unix Keyring::start), cache.rs as its own module, and AGENTS.md's Architecture table pointing at each module's //! doc."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
-
-[[mark]]
-file = "decisions/0010-release-binary-distribution.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read against dist-workspace.toml (installers, publish-jobs, tap, cargo-dist-version), release.yml's host/publish-homebrew-formula/announce order, ci.yml's Release Pipeline Config job, the gh api ruleset (Release Pipeline Config required, Windows Check not) and docs/installation.md."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "d071949da4b771e2", "dist-workspace.toml" = "7852e95f01af7dc8", "docs/installation.md" = "c1490b152407630e" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -14535,3 +14489,61 @@ copies = 1
 note = "Measured with `ldd --version` in container images: ubuntu:22.04 2.35, debian:12 2.36, rockylinux:9 (for RHEL 9) 2.34, ubuntu:20.04 2.31, debian:11 2.31, rockylinux:8 (for RHEL 8) 2.28. ratect 0.13.0's x86_64-unknown-linux-gnu binary runs on rockylinux:9 and is refused on rockylinux:8 (GLIBC_2.29 not found); its x86_64-unknown-linux-musl binary runs on rockylinux:8, and `file` reports it static-pie linked."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
+
+[[mark]]
+file = "agents/releasing.md"
+mode = "stale-claims"
+unit = "bc8a014b3a7c47bf"
+copies = 1
+note = "Read whole against ratect#855's release.yml change: it adds a Set up Python step and a check-minimum-os.py call to build-local-artifacts only, and leaves the host job, its 403 failure and the recovery steps untouched."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/release.yml" = "b6792a8571c0bd61" }
+
+[[mark]]
+file = "README.md"
+mode = "stale-claims"
+unit = "caf9f906b16a91cb"
+copies = 1
+note = "Read whole: the only named file ratect#855 changed is docs/installation.md, still at that path under its unchanged Installation title."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/comparison.md" = "0eb7bb383099fed1", "docs/connecting-to-docker.md" = "3c5685291bc57cfa", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "32ecbf6813f626b8", "docs/index.md" = "44c68e79c054a6cf", "docs/installation.md" = "f090088ec7661efd", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "d7075e38c9465ccf", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "134b1b35c479e6a3", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "c8e426c4c33360b1", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "01b8016fdce455c4"
+copies = 1
+note = "Read rules 3, 4 and 6 against docs/installation.md after ratect#855: it still links decisions/0010 as a why beside its own fact (rule 4's model), the added table column and paragraph are present tense with no version wording, and it still ends with Next steps. The rules' other model pages were not re-read."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "CHANGELOG.md" = "9fb7ab69beb054d8449da0d5d5e3a474b6d66de8", "ROADMAP.md" = "edf7cca5bb31c742", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "32ecbf6813f626b8", "docs/installation.md" = "f090088ec7661efd", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/ratect-config-reference.md#field-reference" = "26b25fdae4a72f87", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Read against ratect#855: release.yml's header still lists three hand-added customizations (the new Set up Python and minimum-OS check folded into the Smoke test bullet), the target matrix is unchanged, and the smoke test still runs --version/--help, now followed by tools/check-minimum-os.py. The rollout-validation history was not re-checked."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "9fb7ab69beb054d8449da0d5d5e3a474b6d66de8", "dist-workspace.toml" = "17839d788f79ca82", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0010-release-binary-distribution.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read against ratect#855's dist-workspace.toml, release.yml and docs/installation.md changes: the attestation-gap comment and cargo-dist-version pin are unchanged, and the installation page still documents GitHub Releases as the primary path. The historical GitHub Actions findings were not re-checked."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "dist-workspace.toml" = "17839d788f79ca82", "docs/installation.md" = "f090088ec7661efd" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "2f519634b0b93218"
+copies = 1
+note = "Read guidelines 7, 8 and 12 against ratect#855: release.yml's pipeline description still holds with the added step, and the Python-minimum paragraph covers the new script's requires-python header and version check and release.yml's new 3.11 pin, which tools/test_python_minimum.py enforces. The other guidelines were not re-read."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "9fb7ab69beb054d8449da0d5d5e3a474b6d66de8", "CONTRIBUTING.md" = "2eb16737419da988", "ROADMAP.md" = "edf7cca5bb31c742", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
