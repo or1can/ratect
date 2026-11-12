@@ -6,7 +6,9 @@ ratect#299: Docker names now follow Batect's (see the amendment under the label
 table); the labels themselves are unchanged. The docs site launched at
 `ratect.apps.orican.eu`, not the `ratect.orican.eu` *Alternatives considered*
 anticipates, so its reverse-DNS is not the label namespace; the namespace
-reasoning is unchanged.
+reasoning is unchanged. [0025](0025-task-run-lock.md) answers the last
+consequence below for a task run whose process it can prove dead, and
+[0026](0026-service-instances.md) adds labels for service instances.
 
 ## Context
 

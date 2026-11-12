@@ -110,6 +110,24 @@ otherwise.
 the first two. What an identity resolves to depends on it
 ([0011](decisions/0011-container-identity.md)).
 
+## Task runs
+
+**Task run** — one execution of one task: the task container and its
+dependencies, on a network made for that execution alone unless
+`--use-network` names an existing one. An invocation makes one for each task
+it runs that has a `run` of its own, prerequisites included; "a run",
+unqualified, is the whole invocation. A task run's containers, and its
+network where it made one, carry its `run` label, which no other task run
+shares.
+
+**Leftover** — what remains of a task run that no process will clean up:
+after a kill, a crash, a `--no-cleanup*` flag or a cleanup failure. Often the
+whole task run, sometimes a fragment: a container the daemon refused to
+remove, dependencies whose task container is already gone, or the network
+alone. Ratect does not know whether the process behind a task run is alive
+([0002](decisions/0002-runtime-ownership-labels.md)), so one still going looks
+the same as a leftover.
+
 ## Cancelling a run
 
 **Termination signal** — any signal Ratect traps so a run cleans up after

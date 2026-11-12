@@ -14547,3 +14547,939 @@ note = "Read guidelines 7, 8 and 12 against ratect#855: release.yml's pipeline d
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "9fb7ab69beb054d8449da0d5d5e3a474b6d66de8", "CONTRIBUTING.md" = "2eb16737419da988", "ROADMAP.md" = "edf7cca5bb31c742", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "07650c4af48a8466", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "32d52f8ee535723d", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "cb4ee4eddeac20af"
+copies = 1
+note = "Checked against engine.rs: one run id (Uuid) per task execution at run_task_internal, network created per execution unless --use-network; fourth review pass confirmed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "687f84c080f10b9f"
+copies = 1
+note = "Checked against engine.rs: a task with no `run` returns before a run id exists (fixture prerequisites-only-task); 'a run' as the invocation matches docs/ratect-cli.md and 0016's usage."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "fbbc3111e7168ffa"
+copies = 1
+note = "Checked against labels.rs: RUN is 'the single task execution that created it', and --use-network creates no network to label (labels.rs module doc)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "6bd221c8a0f03668"
+copies = 1
+note = "Checked against decisions/0002's last consequence and resources.rs's module doc ('nothing here claims to detect liveness'); true until ratect#265 ships, whose criteria update this section."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0002-runtime-ownership-labels.md" = "f46fc6d7d5f77262" }
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "b0de4a70e05960aa"
+copies = 1
+note = "Decision recorded on ratect#265's brief (the engine is shared, so both binaries take the lock); ratect-compat has no resources verb, checked in ratect-compat/src/main.rs's flag set via docs/ratect-compat-cli.md."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "92ebe1af29a80242"
+copies = 1
+note = "Checked against resources.rs `find`: filters on the project label and older_than only; fourth review pass confirmed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "ec36686583eb839a"
+copies = 1
+note = "My own reproduction on 2026-11-12, output recorded in the triage session and on ratect#265's triage notes."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "45c6cd05f7c07a96"
+copies = 1
+note = "Same reproduction: the dependency was still Up after the kill; resources.rs `find` selected every labelled resource, so the only sweep also took live runs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "7fed13190ba26446"
+copies = 1
+note = "The reproduction's own parameters: ratect-compat -o simple, stdin from a fifo, `docker info` reported OrbStack."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "b49605fca7970713"
+copies = 1
+note = "Checked against docker.rs `stdin_flags`: open_stdin/stdin_once are set only for an interactive run; the reproduction's task exited when its stdin closed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "b49605fca7970713"
+copies = 1
+note = "Checked against docker.rs `stdin_flags`: open_stdin/stdin_once are set only for an interactive run; the reproduction's task exited when its stdin closed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "289bd13392de60a6"
+copies = 1
+note = "The three rules are the three bullets that follow; each failure is from the first and second review passes, verified against docs/task-lifecycle.md and engine.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "2b6e95695044e606"
+copies = 1
+note = "Checked against engine.rs cleanup order (dependents stopped first, so the task container goes before its dependencies); third and fourth review passes confirmed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "4b2d2518cf36ca98"
+copies = 1
+note = "Checked against docker.rs: the exit code is read with wait_container after the attached output stream ends; ratect#875's results comment observed the draining case reading alive."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "4326851ce6ea5353"
+copies = 1
+note = "Rhetorical summary of 0002's last consequence: the daemon has no record of the Ratect process."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "38da5d23fc6aa3d5"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 1's table: control mid-task, during cleanup, during a dependency's setup command, and the exited-while-draining row."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "bcf9335b225507dd"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3: a container took a lock the macOS host held through a bind mount."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "cf7f64a2318d5bed"
+copies = 1
+note = "Checked against research/leftover-selection-and-instance-identity.md, Summary items 4 and 5."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "research/leftover-selection-and-instance-identity.md" = "27ed5a417ecf62be" }
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "cf7f64a2318d5bed"
+copies = 1
+note = "Checked against research/leftover-selection-and-instance-identity.md, Summary items 4 and 5."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "research/leftover-selection-and-instance-identity.md" = "27ed5a417ecf62be" }
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "20f8ef0e9766d88e"
+copies = 1
+note = "Decision from ratect#875's results comment (answers 2 and 4) as briefed on ratect#265; the runs directory's name is listed as open."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "b5e4f4d670ca7db9"
+copies = 1
+note = "Decision from ratect#875's results comment, answer 2."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "8b3bdd617f54796b"
+copies = 1
+note = "Checked against labels.rs: no label carries an invocation's identity, so a per-invocation lock needs a new one on each container."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "7a816de705c67099"
+copies = 1
+note = "Decision from ratect#875's results comment, answer 7 (a run that can't take its lock still runs, debug log only)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "92ef691c45bb6905"
+copies = 1
+note = "Heading for Decision 2; the finding it rests on is ratect#875's results comment, answer 3."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "0cbf72f1ed77f34b"
+copies = 1
+note = "Decision from ratect#875's results comment, answer 3 (boot identity guard)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "40e356ef7b808734"
+copies = 1
+note = "Heading; the three states are the table that follows, from ratect#875's results comment, answer 7."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "9acd11c123a3bb1e"
+copies = 1
+note = "Decision from ratect#875's results comment, answer 7's table: alive is never selected."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "732e7d88c5991cf6"
+copies = 1
+note = "Decision from ratect#875's results comment, answer 7's table: the ways of reaching unknown."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "79a3f9428eb85b48"
+copies = 1
+note = "Maintainer's decision in triage (decision 3 of the third review round), recorded on ratect#265's amendments comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "444f64c1b648e3e7" }
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "42367724c7644513"
+copies = 1
+note = "Checked against decisions/0002's last consequence, which this restates for the unknown state."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "a41c7314b6eab16a"
+copies = 1
+note = "Heading for Decision 4; follows from the two deletion rules beneath it, per ratect#265's amendments."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "35970ebbf344056b"
+copies = 1
+note = "Maintainer's decision in triage (decision 4 of the third review round), recorded on ratect#265's amendments comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "c2282346a6bbfa6d"
+copies = 1
+note = "Checked against resources.rs `remove`'s doc: a network still holding an endpoint can't be removed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "0c88f8f5189ca6ad"
+copies = 1
+note = "Checked against docs/ratect-cli.md ('resources list is clean's dry run') and the maintainer's answer to Q23 in triage."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "0c88f8f5189ca6ad"
+copies = 1
+note = "Checked against docs/ratect-cli.md ('resources list is clean's dry run') and the maintainer's answer to Q23 in triage."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "31b45dcdbec825b8"
+copies = 1
+note = "Heading; maintainer's answer to Q22 in triage, recorded on ratect#265's brief."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "16f4cf4ab7f725c1"
+copies = 1
+note = "Heading; maintainer's answer to Q8 in triage."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "caaff6991fa55660"
+copies = 1
+note = "Checked against docs/ratect-cli.md: --no-cleanup keeps a run's containers for inspection; a sweep at start would remove them."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "f971c36838910c25"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3: two separate containers reported the same boot_id."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "219b7c274d196618"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3: two separate containers reported the same boot_id."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "fb9dc5173a85d3f0"
+copies = 1
+note = "Checked against ratect#875's results comment's Not varied list and the fourth review pass: same-boot-identity processes through different mounts were not run."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "e2ab2a6bedc1eacd"
+copies = 1
+note = "The two rules are Decision 4's bullets; the three file kinds are from the third review pass's finding, recorded on ratect#265's correction comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "e2ab2a6bedc1eacd"
+copies = 1
+note = "The two rules are Decision 4's bullets; the three file kinds are from the third review pass's finding, recorded on ratect#265's correction comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "305e7adfe408c8e3"
+copies = 1
+note = "Reasoning from the fourth review pass's first two findings, recorded on ratect#265's correction comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "5391f6490f0b2e6e"
+copies = 1
+note = "Open point as recorded; ratect#875's results comment answer 4 designed the creation and its Not varied list says it was not built."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "bde3f45a6707cde6"
+copies = 1
+note = "Open point as recorded on ratect#265's amendments comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "444f64c1b648e3e7" }
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "3127743a7e3484c8"
+copies = 1
+note = "Cross-reference: Context's three bullets."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "887ad7c022558470"
+copies = 1
+note = "Follows from Decision 3: a run from a binary that wrote no file reads unknown; ratect#875's results comment answer 7 says the same."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "0255043380052c65"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 7 ('such a run may be another machine's live run draining output')."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "4bd821678b1adf0d"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3 ('would read every live host run as dead')."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "4bd821678b1adf0d"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3 ('would read every live host run as dead')."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "69a7252628c65df5"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3 (Alpine has no /etc/machine-id)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "69a7252628c65df5"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3 (Alpine has no /etc/machine-id)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "e5bd578d9105c343"
+copies = 1
+note = "Checked against docs/ratect-cli.md's resources section, which shows a bare `resources clean` and warns it can tear down an in-flight run."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "64ba320050134354"
+copies = 1
+note = "Reasoning from the third review pass, accepted by the maintainer (decision 4) and recorded on ratect#265's amendments comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "64ba320050134354"
+copies = 1
+note = "Reasoning from the third review pass, accepted by the maintainer (decision 4) and recorded on ratect#265's amendments comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "61a7e9d0ba6c11f3"
+copies = 1
+note = "Reasoning from the third review pass, accepted by the maintainer (decision 3) and recorded on ratect#265's amendments comment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "5c621b6f229b8818"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 7 (upgrade paragraph)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "cd3592e0b960514e"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 3 ('after a reboot, every earlier run reads unknown though it is certainly dead')."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "961e82eb671c6a43"
+copies = 1
+note = "Fourth review pass confirmed: shared caches under ~/.ratect are native-only, so ratect-compat wrote there only for Git includes."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "bfe2ba8dd9005fac"
+copies = 1
+note = "Checked against ratect/src/main.rs: `includes clean --all` conflicts_with older_than, and `resources` has --all-projects."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-totalising"
+unit = "e5f6e730304a05b5"
+copies = 1
+note = "Follows from Decision 1 (no lock off Unix) and Decision 3's table; ratect#876 tracks it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "claim-words-counts"
+unit = "7bb4915254eef9b8"
+copies = 1
+note = "Checked against ratect#875's results comment's last section and ratect#877."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "8ae2c6ed9d752dcb"
+copies = 1
+note = "Checked against docs/ratect-compat-cli.md: ratect-compat has no services verb, and ratect#103's brief scopes it to ratect."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "463c7c58f9ad712f"
+copies = 1
+note = "Checked against ratect#103's and ratect#124's briefs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "3e2b2831d20e4e65"
+copies = 1
+note = "The three things are the three bold paragraphs that follow."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "e640241facdbd856"
+copies = 1
+note = "Checked against ratect#103's brief ('reconciles — attaches/streams to what's already there')."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "e640241facdbd856"
+copies = 1
+note = "Checked against ratect#103's brief ('reconciles — attaches/streams to what's already there')."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "bea3ecbd82bc1b2f"
+copies = 1
+note = "Checked against ratect#124's brief ('No local lock file or other persisted state')."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "96db2724060424e2"
+copies = 1
+note = "Checked against labels.rs (RUN: the single task execution) and ratect#103's reconcile criterion."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "a1a57280b78c2ea3"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 6."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "1ab5385368061047"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 6: five pairs of concurrent docker create, exactly one winner each."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "1ab5385368061047"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 6: five pairs of concurrent docker create, exactly one winner each."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "68c81a0db8f3561b"
+copies = 1
+note = "Checked against ratect#875's results comment (Docker 29.8.2, one pair of network creates) and docs/task-lifecycle.md's cross-task isolation section; the third review pass confirmed in moby v24 source."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/task-lifecycle.md" = "997c855099b026a7" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "68c81a0db8f3561b"
+copies = 1
+note = "Checked against ratect#875's results comment (Docker 29.8.2, one pair of network creates) and docs/task-lifecycle.md's cross-task isolation section; the third review pass confirmed in moby v24 source."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/task-lifecycle.md" = "997c855099b026a7" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "e29b92f299658cc2"
+copies = 1
+note = "Definition decided in triage (Q4/Q6), recorded on ratect#103."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "2df2cce387dd1d51"
+copies = 1
+note = "Maintainer's answer to Q6 in triage, recorded on ratect#103."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "2df2cce387dd1d51"
+copies = 1
+note = "Maintainer's answer to Q6 in triage, recorded on ratect#103."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "74391a6c6cf5a11b"
+copies = 1
+note = "Maintainer's answer to Q6 in triage; research file Summary item 4 records Compose behaving the same."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "cf0f4e2cba3311de"
+copies = 1
+note = "Maintainer's answer to Q19 in triage, recorded on ratect#103."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "6e4523abceaef21e"
+copies = 1
+note = "Checked against decisions/0002's label table: project and version on containers and networks, container on containers."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "51cd8738ba9b234b"
+copies = 1
+note = "Checked against ratect#875's results comment's Not varied list (a remote daemon, a second machine); the name conflict is the daemon's, so it holds for any client by inference."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "51cd8738ba9b234b"
+copies = 1
+note = "Checked against ratect#875's results comment's Not varied list (a remote daemon, a second machine); the name conflict is the daemon's, so it holds for any client by inference."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "edf8b0ab13d76595"
+copies = 1
+note = "Checked against docs/task-lifecycle.md and resource_names.rs's doc comment: Docker 20.10 to 24 create a second same-named network."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "840b956c21767101"
+copies = 1
+note = "Heading; maintainer's answer to the revised Q3 and Q11 in triage."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "0662dbeb58e2cca0"
+copies = 1
+note = "Checked against config: the project label is Config::project_name (labels.rs), which two worktrees share; maintainer's answer to Q10."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "d4a64fd24b914614"
+copies = 1
+note = "Maintainer's decision 2 of the third review round, recorded on ratect#103 and ratect#124."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "5c1a5481d4892ce0"
+copies = 1
+note = "Checked against docs/task-lifecycle.md (members created before start) and Decision 1's adoption rule; ratect#103's latest comment gives the starting case."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "5893be6017664575"
+copies = 1
+note = "Rationale as decided with the maintainer (decision 2 of the third review round)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "5893be6017664575"
+copies = 1
+note = "Rationale as decided with the maintainer (decision 2 of the third review round)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "c1e36547880558e5"
+copies = 1
+note = "Checked against docs/task-lifecycle.md's cross-task isolation section."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "a13d9423a476e2d1"
+copies = 1
+note = "Reasoning from the third review pass, recorded on ratect#103's open points."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "da33dec35e42ff08"
+copies = 1
+note = "Checked against ratect#124's brief (no local state); the comparison is the table put to the maintainer for Q6."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "f12cc9d6fbd57918"
+copies = 1
+note = "Reasoning put to the maintainer for Q6; research file records a killed Compose `up` leaving its container running."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "f12cc9d6fbd57918"
+copies = 1
+note = "Reasoning put to the maintainer for Q6; research file records a killed Compose `up` leaving its container running."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "b6ba6be1d2be7a65"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 6 (no lock for a foreground up in 0.14.0)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "baab6081f47911a6"
+copies = 1
+note = "Checked against ratect#875's results comment, answers 3 and 6: a file lock is not visible through a shared daemon's clients."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "b4417055a8566d3f"
+copies = 1
+note = "Follows from Decision 1's adoption rule; decision 2 of the third review round."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "c7690aaedaeb1e95"
+copies = 1
+note = "Checked against labels.rs (RUN) and ratect#103's reconcile criterion."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "4e1590f3ba683e20"
+copies = 1
+note = "Checked against research/leftover-selection-and-instance-identity.md, Summary item 2 and its synthesis table (Dev Containers CLI)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "a256c8fcf4d6969d"
+copies = 1
+note = "Checked against docs/ratect-config-reference.md: `ports` entries are integers ({ local = 5432, container = 5432 }); recorded on ratect#873."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "b800a3b60b44ffc9"
+copies = 1
+note = "Open point as recorded on ratect#103; raised by the maintainer when reading the first draft."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "098dcf2fd796635e"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 6 and its Not varied list."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "098dcf2fd796635e"
+copies = 1
+note = "Checked against ratect#875's results comment, answer 6 and its Not varied list."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
