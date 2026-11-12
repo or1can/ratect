@@ -5,13 +5,19 @@
 Every tagged release of `ratect-compat` or `ratect` publishes prebuilt
 binaries as GitHub Release assets, for five platforms:
 
-| Target triple | Platform |
-| --- | --- |
-| `x86_64-unknown-linux-gnu` | x64 Linux |
-| `x86_64-unknown-linux-musl` | x64 MUSL Linux (Alpine, minimal containers) |
-| `aarch64-unknown-linux-musl` | ARM64 MUSL Linux (ARM servers, Raspberry Pi) |
-| `x86_64-apple-darwin` | Intel macOS |
-| `aarch64-apple-darwin` | Apple Silicon macOS |
+| Target triple | Platform | Minimum OS |
+| --- | --- | --- |
+| `x86_64-unknown-linux-gnu` | x64 Linux | glibc 2.34 or later |
+| `x86_64-unknown-linux-musl` | x64 MUSL Linux (Alpine, minimal containers) | No shared libc: statically linked |
+| `aarch64-unknown-linux-musl` | ARM64 MUSL Linux (ARM servers, Raspberry Pi) | No shared libc: statically linked |
+| `x86_64-apple-darwin` | Intel macOS | macOS 10.12 or later |
+| `aarch64-apple-darwin` | Apple Silicon macOS | macOS 11.0 or later |
+
+Ubuntu 22.04, Debian 12 and RHEL 9 and later ship glibc 2.34 or newer. On a
+distribution whose glibc is older, such as Ubuntu 20.04, Debian 11 or RHEL 8,
+use the `x86_64-unknown-linux-musl` build, which needs no shared libc at all.
+Raising any of these minimums is a breaking change, listed as one in the
+changelog.
 
 `ratect-compat` and `ratect` are tagged and released independently (see [Two
 binaries, two formats](index.md#two-binaries-two-formats)), so they're listed as

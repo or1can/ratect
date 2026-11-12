@@ -27,12 +27,17 @@ history, from when it was the only binary.
 ### Added
 
 - `tools/check-doc-links.py` rebuilds the workspace's documentation and fails on a doc link that renders as literal brackets; CI's Rustdoc job runs it. No effect on the released binaries; contributor-tooling only.
+- The installation page lists each prebuilt binary's minimum OS: glibc 2.34 for `x86_64-unknown-linux-gnu`, macOS 10.12 for `x86_64-apple-darwin`, macOS 11.0 for `aarch64-apple-darwin`, and no shared libc for the statically linked `musl` builds, which a distribution with an older glibc should use. Raising one of these is a breaking change, listed under `### Breaking`.
 - CI's Windows Check job compiles the workspace, tests included, for Windows; nothing is run there. `nix` is a dependency on Unix targets only. No effect on the released binaries, none of which targets Windows.
 
 ### Changed
 
 - The `claims` commit hook refuses a commit that brings in an unmarked `claim-words`, `temporal-words` or `restatement` finding, or that leaves an orphaned mark for one. No effect on the released binaries; contributor-tooling only.
 - The `tools/` scripts need Python 3.11 or later, and are run as `uv run tools/<script>.py`, which fetches one; a plain `python3` older than that, from 3.9, stops with a message saying so. `mdbook build` needs `uv` on `PATH`. No effect on the released binaries; contributor-tooling only.
+
+### Fixed
+
+- The shell installer installs the `x86_64-unknown-linux-gnu` build on any host with glibc 2.34 or later.
 
 ## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-11-10
 

@@ -24,7 +24,10 @@
 #   `tools/changelog-section.py`, whose minimum Python is newer than the
 #   `python3` its `ubuntu-22.04` image ships.
 # - `build-local-artifacts`'s own `Smoke test` step (ratect#32) runs the
-#   just-built binary before it's uploaded.
+#   just-built binary before it's uploaded, then checks its minimum OS
+#   with `tools/check-minimum-os.py` (ratect#855). The `Set up Python` step
+#   before it is part of that: it pins the script's minimum Python on every
+#   runner, which `ubuntu-22.04`'s own `python3` is older than.
 # - `build-global-artifacts` gains an `Install cargo-cyclonedx` step, its
 #   own `Generate SBOM` step (ratect#33), AND a third `target/distrib/
 #   ${{ ... }}.cdx.json` line in that job's `Upload artifacts` `path:` —
@@ -267,6 +270,15 @@ jobs:
           # Actually do builds and make zips and whatnot
           dist build ${{ needs.plan.outputs.tag-flag }} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      # Pins tools/' minimum Python on every runner for the Smoke test
+      # step's `tools/check-minimum-os.py`, rather than relying on each
+      # image's own `python3`, which on ubuntu-22.04 is older than the
+      # script accepts. A hand-added customization (see the file-level
+      # comment).
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
       # ratect#32: a cross-compilation or packaging mistake fails here,
       # before the artifact is uploaded, rather than only being discovered
       # by a user running a binary this job already published. Runs the
@@ -360,6 +372,11 @@ jobs:
           fi
           "$bin_path" --version
           "$bin_path" --help
+          # ratect#855: fails if the binary needs a newer OS than
+          # docs/installation.md promises for its target, or isn't a binary
+          # for that target at all.
+          target="$(jq -r 'if length == 1 then .[0] else error("expected exactly 1 target, found \(length)") end' <<<"$TARGET_TRIPLES")"
+          python3 tools/check-minimum-os.py "$target" "$bin_path"
       - id: cargo-dist
         name: Post-build
         # We force bash here just because github makes it really hard to get values up
