@@ -1,0 +1,46 @@
+# PROTOTYPE (ratect#875), throwaway.
+project_name: ratect-875-probe
+containers:
+  # sh as PID 1 ignores SIGTERM, so stopping it takes the full stop timeout:
+  # a wide window in which cleanup is under way.
+  slow-stop:
+    image: alpine:3.18.2
+    command: sh -c "while true; do sleep 1; done"
+  # A setup command that takes 20s: a wide window in which the run is starting.
+  slow-start:
+    image: alpine:3.18.2
+    command: sh -c "while true; do sleep 1; done"
+    setup_commands:
+      - command: sleep 20
+  app:
+    image: alpine:3.18.2
+tasks:
+  quick-with-slow-stop:
+    run:
+      container: app
+      command: echo task-done
+    dependencies: [slow-stop]
+  long:
+    run:
+      container: app
+      command: sleep 30
+    dependencies: [slow-stop]
+  slow-starting:
+    run:
+      container: app
+      command: echo task-done
+    dependencies: [slow-start]
+  big-output:
+    run:
+      container: app
+      command: sh -c "head -c 4000000 /dev/zero | tr '\\0' 'x'; echo; echo end"
+  prereq:
+    run:
+      container: app
+      command: echo prereq-done
+    dependencies: [slow-stop]
+  with-prereq:
+    prerequisites: [prereq]
+    run:
+      container: app
+      command: sleep 15

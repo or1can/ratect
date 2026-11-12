@@ -2738,6 +2738,29 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // no network is created at all — the containers still need to agree
         // on which run they belong to.
         let run_id = Uuid::new_v4().to_string();
+        // PROTOTYPE (ratect#875), throwaway: hold an OS lock named for this
+        // task run until this function returns or the process dies.
+        let _prototype_run_lock = {
+            let dir = std::env::var_os("RATECT_PROTOTYPE_RUNS_DIR")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    crate::user::home()
+                        .ok()
+                        .flatten()
+                        .map(|home| home.join(".ratect").join("runs"))
+                });
+            dir.and_then(|dir| {
+                std::fs::create_dir_all(&dir).ok()?;
+                let file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .write(true)
+                    .open(dir.join(format!("{run_id}.lock")))
+                    .ok()?;
+                file.lock().ok()?;
+                Some(file)
+            })
+        };
         let run_labels = crate::labels::RunLabels::new(
             &self.project.config.project_name,
             task_name,
