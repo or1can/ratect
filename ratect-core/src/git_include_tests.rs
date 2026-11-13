@@ -43,7 +43,7 @@ fn create_test_repo() -> PathBuf {
     let repo_dir = unique_temp_dir();
     std::fs::create_dir_all(&repo_dir).unwrap();
     let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
+        let status = crate::git_include::git_for_tests()
             .arg("-C")
             .arg(&repo_dir)
             .args(args)
@@ -231,7 +231,7 @@ async fn system_git_client_does_not_fetch_a_file_url_submodule() {
     let repo_dir = unique_temp_dir();
     std::fs::create_dir_all(&repo_dir).unwrap();
     let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
+        let status = crate::git_include::git_for_tests()
             .arg("-C")
             .arg(&repo_dir)
             .args(args)
@@ -279,6 +279,251 @@ async fn system_git_client_does_not_fetch_a_file_url_submodule() {
     std::fs::remove_dir_all(&repo_dir).ok();
     std::fs::remove_dir_all(&sibling).ok();
     std::fs::remove_dir_all(destination.parent().unwrap()).ok();
+}
+
+/// Runs `git` in `repo`, returning its stdout.
+fn git_output(repo: &Path, args: &[&str]) -> String {
+    let output = crate::git_include::git_for_tests()
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git must be installed to run this test");
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// A repository standing in for one of the user's own: [`create_test_repo`]'s,
+/// on its default branch, plus a branch `other` that changes `file.txt`,
+/// and ignoring `.ratect`.
+fn a_users_repository() -> PathBuf {
+    let repo = create_test_repo();
+    git_output(&repo, &["checkout", "--quiet", "-b", "other"]);
+    std::fs::write(repo.join("file.txt"), "changed on other").unwrap();
+    git_output(&repo, &["commit", "--quiet", "-am", "change file.txt"]);
+    git_output(&repo, &["checkout", "--quiet", "-"]);
+    // Where the tests put the cache, so its clones don't show in `status`.
+    std::fs::write(repo.join(".git").join("info").join("exclude"), ".ratect\n").unwrap();
+    repo
+}
+
+/// What a checkout in `repo` would change: its branch, its commit, and its
+/// index and working tree.
+fn repository_state(repo: &Path) -> (String, String, String) {
+    (
+        git_output(repo, &["symbolic-ref", "HEAD"]),
+        git_output(repo, &["rev-parse", "HEAD"]),
+        git_output(repo, &["status", "--porcelain"]),
+    )
+}
+
+/// A staging directory whose `.git` has gone sits in `~/.ratect/incl`,
+/// which can be inside a repository of the user's own — `~` itself, for
+/// some. The checkout must fail there, not find that repository by walking
+/// up and check the ref out in it (#885).
+#[tokio::test]
+async fn a_checkout_in_a_staging_directory_without_a_git_directory_leaves_an_outer_repository_alone(
+) {
+    let outer = a_users_repository();
+    let staging = outer.join(".ratect").join("incl").join("key.tmp-x");
+    std::fs::create_dir_all(&staging).unwrap();
+    let before = repository_state(&outer);
+
+    let error = check_out(
+        &Remote::from("https://example.com/repo.git"),
+        "other",
+        &staging,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .starts_with("Could not check out reference 'other'"),
+        "{error}"
+    );
+    assert_eq!(repository_state(&outer), before);
+    assert_eq!(
+        std::fs::read_to_string(outer.join("file.txt")).unwrap(),
+        "hello"
+    );
+    std::fs::remove_dir_all(&outer).ok();
+}
+
+/// Set to a remote to clone, makes [`a_cloning_process`] clone it at
+/// `v1.0.0` into [`CLONE_DESTINATION_ENV`].
+#[cfg(unix)]
+const CLONE_REMOTE_ENV: &str = "RATECT_TEST_CLONE_REMOTE";
+
+/// Where [`a_cloning_process`] clones to.
+#[cfg(unix)]
+const CLONE_DESTINATION_ENV: &str = "RATECT_TEST_CLONE_DESTINATION";
+
+/// Not a test on its own: does nothing unless [`CLONE_REMOTE_ENV`] is set, as
+/// it is when the test below runs this binary again to clone in an
+/// environment of its own.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cloning_process() {
+    let Some(remote) = std::env::var_os(CLONE_REMOTE_ENV) else {
+        return;
+    };
+    let destination = PathBuf::from(std::env::var_os(CLONE_DESTINATION_ENV).unwrap());
+    SystemGitClient
+        .clone_repo(
+            &Remote::from(&*remote.to_string_lossy()),
+            "v1.0.0",
+            &destination,
+        )
+        .await
+        .unwrap();
+}
+
+/// Runs [`a_cloning_process`] in a process of its own with `environment`
+/// added to this one's, cloning `remote` into `destination`, and fails if
+/// the clone does.
+#[cfg(unix)]
+fn clone_in_a_process_with(
+    remote: &std::ffi::OsStr,
+    destination: &Path,
+    environment: &[(&str, &std::ffi::OsStr)],
+) {
+    let mut command = this_test_binary_running("git_include::tests::a_cloning_process");
+    command
+        .env(CLONE_REMOTE_ENV, remote)
+        .env(CLONE_DESTINATION_ENV, destination);
+    for (variable, value) in environment {
+        command.env(variable, value);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Ratect can inherit variables naming another repository: from a shell
+/// that exports `GIT_DIR` and `GIT_WORK_TREE` for a dotfiles repository,
+/// or from a hook of `git commit -a`, which gets an absolute
+/// `GIT_INDEX_FILE`. The clone and checkout must still act on the staging
+/// directory alone (#885): once, `GIT_WORK_TREE` made the clone fail,
+/// `GIT_OBJECT_DIRECTORY` put its objects in the other repository, and
+/// `GIT_INDEX_FILE` made the checkout exit 0 with no files, and
+/// `GIT_COMMON_DIR` wrote the clone's remote into the other repository's
+/// configuration.
+#[cfg(unix)]
+#[test]
+fn a_clone_under_another_repositorys_variables_acts_on_the_clone_alone() {
+    let remote = create_test_repo();
+    let outer = a_users_repository();
+    let outer_git = outer.join(".git");
+    let destination = outer.join(".ratect").join("incl").join("key.tmp-x");
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    let state_before = repository_state(&outer);
+    let objects_before = git_output(&outer, &["count-objects", "-v"]);
+    let config_before = std::fs::read(outer_git.join("config")).unwrap();
+
+    // A `file://` URL, not a path: a local clone copies the object store
+    // directly, past `GIT_OBJECT_DIRECTORY`.
+    clone_in_a_process_with(
+        format!("file://{}", remote.display()).as_ref(),
+        &destination,
+        &[
+            ("GIT_DIR", outer_git.as_os_str()),
+            ("GIT_WORK_TREE", outer.as_os_str()),
+            ("GIT_COMMON_DIR", outer_git.as_os_str()),
+            ("GIT_INDEX_FILE", outer_git.join("index").as_os_str()),
+            (
+                "GIT_OBJECT_DIRECTORY",
+                outer_git.join("objects").as_os_str(),
+            ),
+        ],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(destination.join("file.txt")).unwrap(),
+        "hello"
+    );
+    assert_eq!(repository_state(&outer), state_before);
+    assert_eq!(
+        git_output(&outer, &["count-objects", "-v"]),
+        objects_before,
+        "the clone's objects must not go to the other repository"
+    );
+    assert_eq!(
+        std::fs::read(outer_git.join("config")).unwrap(),
+        config_before,
+        "the clone's configuration must not go to the other repository"
+    );
+    std::fs::remove_dir_all(&outer).ok();
+    std::fs::remove_dir_all(&remote).ok();
+}
+
+/// The user's Git configuration doesn't reach the checkout (#885): not
+/// `core.autocrlf`, whether set globally or in the `config` of an
+/// `init.templateDir`, nor a hook, whether the template's or one the bundle
+/// ships that `core.hooksPath` names. The files are as committed, and no
+/// hook runs.
+#[cfg(unix)]
+#[test]
+fn a_checkout_takes_nothing_from_the_users_git_configuration() {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = std::fs::Permissions::from_mode(0o755);
+
+    let remote = create_test_repo();
+    std::fs::write(remote.join("lines.txt"), "a\nb\n").unwrap();
+    let bundle_hook = remote.join(".githooks").join("post-checkout");
+    std::fs::create_dir_all(bundle_hook.parent().unwrap()).unwrap();
+    std::fs::write(&bundle_hook, "#!/bin/sh\ntouch bundle-hook-ran\n").unwrap();
+    std::fs::set_permissions(&bundle_hook, executable.clone()).unwrap();
+    git_output(&remote, &["add", "."]);
+    git_output(&remote, &["commit", "--quiet", "-m", "lines and a hook"]);
+    git_output(&remote, &["tag", "--force", "v1.0.0"]);
+    let home = unique_temp_dir();
+    let template = home.join("template");
+    std::fs::create_dir_all(template.join("hooks")).unwrap();
+    std::fs::write(
+        template.join("hooks").join("post-checkout"),
+        "#!/bin/sh\ntouch template-hook-ran\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(template.join("hooks").join("post-checkout"), executable).unwrap();
+    std::fs::write(template.join("config"), "[core]\n\tautocrlf = true\n").unwrap();
+    let user_config = home.join("gitconfig");
+    std::fs::write(
+        &user_config,
+        format!(
+            "[core]\n\tautocrlf = true\n\thooksPath = .githooks\n[init]\n\ttemplateDir = {}\n",
+            template.display()
+        ),
+    )
+    .unwrap();
+    let destination = home.join("key.tmp-x");
+
+    clone_in_a_process_with(
+        remote.as_os_str(),
+        &destination,
+        &[("GIT_CONFIG_GLOBAL", user_config.as_os_str())],
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(destination.join("lines.txt")).unwrap(),
+        "a\nb\n",
+        "core.autocrlf must not rewrite the files"
+    );
+    assert!(
+        !destination.join("template-hook-ran").exists(),
+        "the template's hook must not run"
+    );
+    assert!(
+        !destination.join("bundle-hook-ran").exists(),
+        "the bundle's own hook must not run"
+    );
+    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(&remote).ok();
 }
 
 #[tokio::test]
