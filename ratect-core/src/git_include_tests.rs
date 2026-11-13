@@ -43,7 +43,7 @@ fn create_test_repo() -> PathBuf {
     let repo_dir = unique_temp_dir();
     std::fs::create_dir_all(&repo_dir).unwrap();
     let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
+        let status = crate::git_include::git_for_tests()
             .arg("-C")
             .arg(&repo_dir)
             .args(args)
@@ -231,7 +231,7 @@ async fn system_git_client_does_not_fetch_a_file_url_submodule() {
     let repo_dir = unique_temp_dir();
     std::fs::create_dir_all(&repo_dir).unwrap();
     let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
+        let status = crate::git_include::git_for_tests()
             .arg("-C")
             .arg(&repo_dir)
             .args(args)
@@ -283,7 +283,7 @@ async fn system_git_client_does_not_fetch_a_file_url_submodule() {
 
 /// Runs `git` in `repo`, returning its stdout.
 fn git_output(repo: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
+    let output = crate::git_include::git_for_tests()
         .arg("-C")
         .arg(repo)
         .args(args)

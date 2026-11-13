@@ -286,6 +286,24 @@ const REPOSITORY_VARIABLES: [&str; 13] = [
     "GIT_COMMON_DIR",
 ];
 
+/// A `git` command for a test's own scratch repository, free of every
+/// variable `git rev-parse --local-env-vars` lists that the test process
+/// inherited: [`REPOSITORY_VARIABLES`], which would point it at another
+/// repository (the developer's own, when the suite runs from a Git hook
+/// or a shell exporting `GIT_DIR`), and the `-c` configuration a hook
+/// inherits, which would outrank the scratch repository's own.
+#[cfg(test)]
+pub(crate) fn git_for_tests() -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    for variable in REPOSITORY_VARIABLES
+        .into_iter()
+        .chain(["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"])
+    {
+        command.env_remove(variable);
+    }
+    command
+}
+
 /// `SystemGitClient::clone_repo`'s second step: checks `git_ref` out in
 /// `destination`, the clone the first step made. Its own function so a
 /// test can reach it with a `destination` the clone step never made.

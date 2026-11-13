@@ -11256,7 +11256,7 @@ tasks:
 /// key, hooks, or a template) and with a fixed identity, so the result is
 /// deterministic wherever it runs.
 fn run_git(repo: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
+    let output = crate::git_include::git_for_tests()
         .args(args)
         .current_dir(repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -13013,7 +13013,7 @@ async fn a_symlink_inside_a_git_bundle_escaping_the_clone_is_rejected() {
     // is a symlink pointing outside the clone entirely.
     let repo_dir = unique_temp_dir();
     let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
+        let status = crate::git_include::git_for_tests()
             .arg("-C")
             .arg(&repo_dir)
             .args(args)
