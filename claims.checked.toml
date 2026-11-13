@@ -16287,15 +16287,6 @@ subjects = {}
 
 [[mark]]
 file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "d33363a7aee55bcd"
-copies = 1
-note = "include row's lock sentences (takeover of an abandoned lock, older Ratect's lock waited on, stderr notice, two-holder duplicate clone) are unaffected by how a stat error is classified"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "4e6e0f27a1fdac1b", "decisions/0027-git-include-staging-survives-two-holders.md" = "fc029df3723755f4" }
-
-[[mark]]
-file = "docs/differences-from-batect.md"
 mode = "claim-words-totalising"
 unit = "78c56924b8a97f2f"
 copies = 1
@@ -16509,16 +16500,6 @@ extent = "partial"
 subjects = { ".cargo/audit.toml" = "109a49049f151f6a", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0006-code-and-documentation-locality.md" = "e7b4208194cad1ff" }
 
 [[mark]]
-file = "TODO.md"
-mode = "stale-claims"
-unit = "da6d38ffc884cb42"
-copies = 1
-note = "read item 20 only: the Git include lock-takeover tests are still not cfg(unix), and its reason (gating leaves shared helpers such as this_test_binary_running unused off Unix) still holds; ratect#885 gated its own clone-process helpers for that reason and left the lock tests alone"
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "2ba0b9f9b6ccc566" }
-
-[[mark]]
 file = "decisions/0027-git-include-staging-survives-two-holders.md"
 mode = "claim-words-counts"
 unit = "e5aeac3bc7296f90"
@@ -16537,10 +16518,19 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "d33363a7aee55bcd"
+copies = 1
+note = "include row's lock sentences (takeover of an abandoned lock, older Ratect's lock waited on, stderr notice, two-holder duplicate clone) still hold: a lock that can't be statted, or that looks released on every look, is waited on, which the row doesn't contradict"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "4e6e0f27a1fdac1b", "decisions/0027-git-include-staging-survives-two-holders.md" = "dbfcb65dd1180ea1" }
+
+[[mark]]
 file = "TODO.md"
 mode = "stale-claims"
 unit = "da6d38ffc884cb42"
 copies = 1
-note = "the Test coverage section's entries are about ratect-compat/tests/cli.rs's task_output helper and other e2e tests; nothing in git_include_tests.rs changes what they say"
+note = "the Test coverage section's entries are about ratect-compat/tests/cli.rs's task_output helper and other e2e tests; the entry-lock tests added in git_include_tests.rs change nothing they say"
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "daae1461964122bb" }
+subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "bb0078fca41aeea4" }
