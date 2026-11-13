@@ -203,7 +203,9 @@ creating, mounting and removing alike. Someone who links it to storage shared
 with something else accepts that a clean removes what it finds there.
 
 **Entry lock** — what guards cloning one Git include into the Git include
-cache, so that only one process at a time writes that entry.
+cache, so that ordinarily only one process at a time clones that entry. Only
+ordinarily: where its OS lock doesn't reach every process, two can hold it,
+so nothing done under it may rely on being alone.
 
 **Holder** — the process that took an entry lock. A `git` it started is not
 part of it: a clone that outlives its holder can't be mistaken for a finished
@@ -214,7 +216,9 @@ by the holder, never by the lock's age: an old lock can still have a holder.
 "Stale" means something else — an entry nobody has used for 30 days, which
 the sweep removes — and is never said of a lock.
 
-The entry lock is [0023](decisions/0023-git-include-entry-lock.md)'s.
+The entry lock is [0023](decisions/0023-git-include-entry-lock.md)'s, with
+its release, and what happens to a clone's leftovers, as
+[0027](decisions/0027-git-include-staging-survives-two-holders.md) amends them.
 
 ## Built images
 

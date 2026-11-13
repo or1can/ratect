@@ -649,24 +649,6 @@ subjects = {}
 [[mark]]
 file = "CONTEXT.md"
 mode = "claim-words-totalising"
-unit = "6148282bc2f75f6f"
-copies = 1
-note = "git_include.rs:51-56 and 520-528: <key>.lock, an existence lock plus an OS lock, stops two processes cloning the same entry at once. Clones are staged in unique tmp dirs and renamed into place, so only the holder writes the entry."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "claim-words-counts"
-unit = "6148282bc2f75f6f"
-copies = 1
-note = "One lock per entry key (git_include.rs:603 lock_path = root.join(\"{key}.lock\")), held by one process at a time (acquire_lock, lines 676-745)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "claim-words-totalising"
 unit = "0689e80d225eed8d"
 copies = 1
 note = "git_include/entry_lock.rs has no mtime, age or elapsed logic (grep). Takeover depends on whether the holder is running (git_include.rs:526-528, 702-724). lock_timeout bounds the wait, not the lock's age."
@@ -15766,3 +15748,507 @@ copies = 1
 note = "The include row's entry-lock sentences (takeover of a lock whose holder exited, wait notice) make no cross-kernel claim and still hold"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0023-git-include-entry-lock.md" = "92a9696ba74f0116" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "c84ff0812042158c"
+copies = 1
+note = "entry_lock::attempt plus #877's OrbStack flock result: the lock normally excludes, two holders possible across kernels"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "c84ff0812042158c"
+copies = 1
+note = "entry_lock::attempt plus #877's OrbStack flock result: the lock normally excludes, two holders possible across kernels"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "c6fa915283ae7b28"
+copies = 1
+note = "#877 (host and container each held flock); 0027 Decision 1 is the rule that nothing under the lock relies on exclusivity"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "c6fa915283ae7b28"
+copies = 1
+note = "#877 (host and container each held flock); 0027 Decision 1 is the rule that nothing under the lock relies on exclusivity"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-totalising"
+unit = "a34e82dacf3184e3"
+copies = 1
+note = "0027 Status names Decisions 5 and 7; its Consequences limit the bound to holders of a version with 0027"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "a34e82dacf3184e3"
+copies = 1
+note = "0027 Status names Decisions 5 and 7; its Consequences limit the bound to holders of a version with 0027"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "509826f39e65f45d"
+copies = 1
+note = "clone_if_missing removes only its own staging dir; rename loss (destination.is_dir) returns Ok, so a second holder only duplicates the clone"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "509826f39e65f45d"
+copies = 1
+note = "clone_if_missing removes only its own staging dir; rename loss (destination.is_dir) returns Ok, so a second holder only duplicates the clone"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "8c6d7a69782cbdaf"
+copies = 1
+note = "0023 Decision 5 (release) and 7 (staging cleanup) are the two replaced here; Decisions 1-4, 6, 8, 9 untouched by the diff"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "69da5d24baf7bc34"
+copies = 1
+note = "0023's Decision lead: correctness from staging, lock only prevents duplicate work"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "163823b43372b28e"
+copies = 1
+note = "Quoted from 0023 Consequences, \"An OS lock that works per host only\""
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "163823b43372b28e"
+copies = 1
+note = "Quoted from 0023 Consequences, \"An OS lock that works per host only\""
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "70f28d58aeb80a2b"
+copies = 1
+note = "0023's #877 correction note: host and OrbStack container each took the other's flock"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "70f28d58aeb80a2b"
+copies = 1
+note = "0023's #877 correction note: host and OrbStack container each took the other's flock"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "abf7fd738a5a9d77"
+copies = 1
+note = "0023 Decision 5 (release by path) and Decision 7 (cleanup under the lock) at HEAD; Decisions 1-4, 6 don't assume exclusivity"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "b6e0afe65cfdb5c2"
+copies = 1
+note = "remove_staging_directories at HEAD f00ace35: removes every <key>.tmp-* entry before clone_if_missing makes its own"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "9e53c2714116229f"
+copies = 1
+note = "Follows from #877 takeover: the other holder's clone can still be writing its staging dir"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "d8de137f6f73d443"
+copies = 1
+note = "ensure_cached only checks working_copy.exists() before skipping the clone"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "d3a9504ff0c71dae"
+copies = 1
+note = "EntryLock::release at HEAD removed by path; a_second_holders_release_leaves_a_third_holders_new_lock_alone failed before the fix"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "f011c73de0dffeb4"
+copies = 1
+note = "entry_lock: a cross-kernel holder's flock looks free, so no marker proves liveness; boot identity declined in 0023's note"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "8e369463673a93cc"
+copies = 1
+note = "clone_if_missing writes only its own <key>.tmp-<uuid>; nothing under the lock removes another's"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "5232afa2817095e7"
+copies = 1
+note = "clone_if_missing and ensure_cached call no staging removal except on their own dir; sweep/clean are not holders"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "e6152794c7af42f9"
+copies = 1
+note = "clone_if_missing: remove_staging_directory only in clone_repo Err arm and the rename-failure arms for its own staging path"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "e6152794c7af42f9"
+copies = 1
+note = "clone_if_missing: remove_staging_directory only in clone_repo Err arm and the rename-failure arms for its own staging path"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "59d7e38c5a72d4d9"
+copies = 1
+note = "a_holder_leaves_other_staging_directories_alone: same-key and other-key staging dirs survive ensure_cached"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "c1050c63292ffaab"
+copies = 1
+note = "entry_lock::replaced compares dev and ino, as still_at does for take_over_if_abandoned; called before remove_file while file is held"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "416d3fb91a022ffc"
+copies = 1
+note = "EntryLock::release: replaced() true returns Ok without remove_file, then drops the file"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "c0a80c25aed27520"
+copies = 1
+note = "clone_if_missing rename arm Err(_) if destination.is_dir() removes own staging and returns Ok; a_clone_that_loses_the_rename_uses_the_winners_working_copy"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "4bc03f4d84ac0e67"
+copies = 1
+note = "Describes the rejected first design of this branch (move-aside to <key>.del-*), as implemented and reviewed in this session"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "3193d9d1f9d8c558"
+copies = 1
+note = "SystemGitClient: git clone gets an absolute destination; three bug-review passes on that design reported git<2.17 cleanup, Windows share, retry ping-pong"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "9efd3cf0efafbc48"
+copies = 1
+note = "Each listed case arose from the cleanup deleting a directory whose owner may be live; Decision 1 removes that cleanup"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "2720c386f5968cc7"
+copies = 1
+note = "Reasons restated from 0023's status note on boot identity (#877)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "dc3a9b40bf6c8db6"
+copies = 1
+note = "0023 title: correctness doesn't depend on the lock"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "c9a37f4f6d08e574"
+copies = 1
+note = "Rejected alternative; clean() applies the 30-day rule for every minimum_age, refresh calls no staging removal (refresh_leaves_a_staging_directory_alone)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "ff2e80340f781ad8"
+copies = 1
+note = "remove_dir_all on a live clone is Context's hazard; 0023 Decision 7 says nothing outside the lock deletes one"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "22b5dea683bd817b"
+copies = 1
+note = "Consequences name exactly the clock-jump and suspension cases"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "aac3d63df47bc19f"
+copies = 1
+note = "Rename loss returns Ok; no holder deletes another's staging; exceptions for pre-0027 binaries, non-Unix and the age-rule cases are stated"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "aac3d63df47bc19f"
+copies = 1
+note = "Rename loss returns Ok; no holder deletes another's staging; exceptions for pre-0027 binaries, non-Unix and the age-rule cases are stated"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-about-elsewhere"
+unit = "c46b336ad3143ff3"
+copies = 1
+note = "Only ratect-compat main.rs calls cleanup_stale (on a task run); ratect calls clean() via includes clean, verified by grep and a temp-HOME run"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "36725abe28c8a9b0"
+copies = 1
+note = "Judgement: leftovers cost disk only, at most one per interrupted clone"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "b436c6150830f6c6"
+copies = 1
+note = "0023 Context on age-based staleness; STALE_AFTER is 30 days"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "c931117083c8af8d"
+copies = 1
+note = "POSIX directory mtime semantics; SystemGitClient runs clone (creates .git) then checkout (writes top-level files)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "1e36f617f6a34caf"
+copies = 1
+note = "mtime comes from the writing kernel; remove_abandoned_staging_directories compares it to self.clock"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "6b38fd0c2e651578"
+copies = 1
+note = "EntryLock::release: replaced() stat, then remove_file"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "16ea9ea4af2b1003"
+copies = 1
+note = "Shared file: first release's replaced() sees its own inode and deletes it; a third attempt then creates a new lock"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-about-elsewhere"
+unit = "bbe9cee701564db5"
+copies = 1
+note = "dist-workspace.toml targets list has no Windows target; non-Unix replaced() returns false"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "638dbd2a9e93b0b7"
+copies = 1
+note = "Tests ran on macOS temp dir; the_sweep_and_clean test sets mtimes; config_tests use SystemGitClient sequentially"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "2f349e5592ca240d"
+copies = 1
+note = "None of the listed setups was run in this change"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/README.md"
+mode = "claim-words-counts"
+unit = "1646203ed5d7907b"
+copies = 1
+note = "Matches 0023's new status line and 0027 Status"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/README.md"
+mode = "claim-words-totalising"
+unit = "6ee8b93e2fb32590"
+copies = 1
+note = "Same as 0027 title, checked against clone_if_missing"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/README.md"
+mode = "claim-words-counts"
+unit = "6ee8b93e2fb32590"
+copies = 1
+note = "Same as 0027 title, checked against clone_if_missing"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "claim-words-totalising"
+unit = "d103b68cf0b569f4"
+copies = 1
+note = "#877 host/container; clone_if_missing rename loss uses the winner's working copy"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "claim-words-counts"
+unit = "d103b68cf0b569f4"
+copies = 1
+note = "#877 host/container; clone_if_missing rename loss uses the winner's working copy"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "06c47998006dde33"
+copies = 1
+note = "GitIncludeCache::clean calls remove_abandoned_staging_directories for any minimum_age; test covers None and Some; temp-HOME run of includes clean --all"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "06c47998006dde33"
+copies = 1
+note = "GitIncludeCache::clean calls remove_abandoned_staging_directories for any minimum_age; test covers None and Some; temp-HOME run of includes clean --all"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-totalising"
+unit = "835ba0d64a89d305"
+copies = 1
+note = "cleanup_stale calls remove_abandoned_staging_directories with STALE_AFTER; the_sweep_and_clean test"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

@@ -1093,7 +1093,8 @@ fn with_unknown_task_hint(error: anyhow::Error) -> anyhow::Error {
 /// The background work [`run`] starts on a task run and never awaits.
 type Sweep = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
-/// The real sweep: removes every `~/.ratect/incl` entry unused for 30 days.
+/// The real sweep: removes every `~/.ratect/incl` entry unused for 30 days,
+/// and every clone's temporary directory unchanged for more than 30 days.
 fn sweep_git_include_cache() -> Sweep {
     Box::pin(async { GitIncludeCache::new().cleanup_stale().await })
 }
