@@ -704,6 +704,10 @@ async fn cleanup_stale_removes_an_entry_beside_a_stale_lock_without_waiting_on_i
 /// A lock file at `root`'s entry for `https://example.com/repo.git`@`v1.0.0`
 /// carrying the current marker, as a holder that has since exited leaves it:
 /// its OS lock released with the process.
+///
+/// A lock test whose holder releases or drops its lock and then expects the
+/// OS lock to be free needs that holder in another process: see
+/// [`this_test_binary_running`].
 async fn abandoned_lock(root: &Path) -> PathBuf {
     let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     tokio::fs::create_dir_all(root).await.unwrap();
@@ -1008,6 +1012,9 @@ async fn only_one_of_two_looks_at_an_abandoned_lock_takes_it_over() {
 
 /// A waiter that opened the lock file just before its holder released it
 /// would otherwise hold an OS lock on a file nobody else can see.
+///
+/// The holder runs in a process of its own, so that its release frees its OS
+/// lock at once (see [`this_test_binary_running`]).
 #[tokio::test]
 async fn a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it_over() {
     let root = unique_temp_dir();
@@ -1017,10 +1024,14 @@ async fn a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it
         .write(true)
         .open(&lock_path)
         .unwrap();
-    let entry_lock::Attempt::Acquired(holder) = entry_lock::attempt(&lock_path).unwrap() else {
-        panic!("the abandoned lock should be taken over");
-    };
-    holder.release().unwrap();
+    let holder = this_test_binary_running("git_include::tests::a_lock_releasing_process")
+        .env(LOCK_RELEASER_ENV, &lock_path)
+        .output()
+        .unwrap();
+    assert!(
+        holder.status.success() && String::from_utf8_lossy(&holder.stdout).contains(LOCK_RELEASED),
+        "the holder process should take over the abandoned lock and release it: {holder:?}"
+    );
 
     let gone = entry_lock::take_over_if_abandoned(opened, &lock_path);
     assert!(matches!(gone, entry_lock::TakeOver::Replaced), "{gone:?}");
@@ -1906,6 +1917,61 @@ async fn a_directory_without_a_sidecar_is_neither_listed_nor_swept() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+/// A command running only the test named `test`, from this test binary, in a
+/// process of its own.
+///
+/// **A test that expects an OS lock to be free as soon as its holder closes
+/// the lock file keeps that holder in such a process** (ratect#886). In this
+/// one, any test on another thread that starts a process (`git`, a
+/// credential helper, this binary) creates a child that shares every open
+/// file, the holder's included, until its `exec` closes them: for that moment
+/// the OS lock outlives the close, and a waiter finds it held. A process
+/// running one test starts nothing, so its locks go when it closes them. An
+/// explicit `unlock` isn't affected: it frees the lock for every process
+/// sharing the file.
+fn this_test_binary_running(test: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args([test, "--exact", "--nocapture", "--test-threads=1"]);
+    command
+}
+
+/// Set to a lock path, makes [`a_lock_releasing_process`] take that lock and
+/// release it.
+const LOCK_RELEASER_ENV: &str = "RATECT_TEST_ENTRY_LOCK_RELEASER";
+
+/// What [`a_lock_releasing_process`] prints once it has released the lock and
+/// found its OS lock free.
+const LOCK_RELEASED: &str = "entry-lock-released";
+
+/// Not a test on its own: does nothing unless [`LOCK_RELEASER_ENV`] is set, as
+/// it is when
+/// [`a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it_over`]
+/// runs this binary again to get a holder in a process of its own, where its
+/// release can be checked to free the OS lock (see
+/// [`this_test_binary_running`]).
+#[test]
+fn a_lock_releasing_process() {
+    let Some(path) = std::env::var_os(LOCK_RELEASER_ENV) else {
+        return;
+    };
+    let lock = match entry_lock::attempt(Path::new(&path)).unwrap() {
+        entry_lock::Attempt::Acquired(lock) => lock,
+        other => panic!("the abandoned lock should be taken over: {other:?}"),
+    };
+    // Opened before the release deletes the path; an OS lock the release
+    // left held would still be found on it. Only this process can check: by
+    // the time the waiter looks, this process has exited, which frees the OS
+    // lock whether or not the release did.
+    let same_file = std::fs::File::open(&path).unwrap();
+    lock.release().unwrap();
+    same_file
+        .try_lock()
+        .expect("a released lock's OS lock should be free");
+    let mut stdout = std::io::stdout();
+    std::io::Write::write_all(&mut stdout, format!("{LOCK_RELEASED}\n").as_bytes()).unwrap();
+    std::io::Write::flush(&mut stdout).unwrap();
+}
+
 /// Set to a lock path, makes [`a_lock_holder_process`] take that lock and
 /// hold it until killed.
 const LOCK_HOLDER_ENV: &str = "RATECT_TEST_ENTRY_LOCK_HOLDER";
@@ -1941,13 +2007,7 @@ fn a_lock_whose_holder_process_was_killed_is_taken_over() {
     let root = unique_temp_dir();
     std::fs::create_dir_all(&root).unwrap();
     let lock_path = root.join("entry.lock");
-    let mut holder = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "git_include::tests::a_lock_holder_process",
-            "--exact",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+    let mut holder = this_test_binary_running("git_include::tests::a_lock_holder_process")
         .env(LOCK_HOLDER_ENV, &lock_path)
         .stdout(std::process::Stdio::piped())
         .spawn()

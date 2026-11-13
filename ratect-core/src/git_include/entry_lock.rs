@@ -97,7 +97,10 @@ pub(super) enum Attempt {
 pub(super) fn attempt(path: &Path) -> std::io::Result<Attempt> {
     loop {
         // `std` opens every file close-on-exec, so the `git` a holder starts
-        // doesn't inherit its OS lock (Decision 2) — pinned by a test.
+        // doesn't keep its OS lock (Decision 2) — pinned by a test. Until that
+        // `git` execs it shares the file, and with it the OS lock: a holder
+        // releasing then keeps the lock that moment longer, and a waiter
+        // waits (ratect#886).
         match OpenOptions::new()
             .read(true)
             .write(true)
