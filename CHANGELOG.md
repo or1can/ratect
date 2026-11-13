@@ -37,6 +37,8 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A container in a `.yml` that sets a native-only field to `false` or to nothing, such as `run_to_completion: false` or `stop_signal: ~`, is refused, as other values of those fields already were.
+- A native-only field in a `.yml` with a malformed value, such as `stop_grace_period: bogus`, is reported as a field that file may not use, rather than as an invalid value. Of several such fields, the first one the file declares is reported.
 - The shell installer installs the `x86_64-unknown-linux-gnu` build on any host with glibc 2.34 or later.
 
 ## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-11-10

@@ -133,7 +133,7 @@ fn every_config_ratect_accepts_validates_against_the_schema() {
         // config file (which decides whether this fixture is one Ratect
         // accepts at all), and once into plain JSON (which is what the
         // schema describes — the same document an editor sees).
-        if crate::config::parse_yaml_config_file(&path, &format!("{path:?}")).is_err() {
+        if crate::config::parse_yaml_config_file(&path, &format!("{path:?}"), None).is_err() {
             continue;
         }
         let document: serde_json::Value =
@@ -695,4 +695,56 @@ fn the_native_schema_accepts_the_additional_user_names_the_loader_does() {
             "the schema on {name:?}"
         );
     }
+}
+
+/// The fields a YAML file is refused for using are exactly the ones the
+/// native schema has and the compat schema hasn't (ratect#216): a native
+/// field added to one but not the other would either load from a `.yml`
+/// unrefused or be refused while the compat schema still offers it. A
+/// container's own are [`crate::config::NATIVE_CONTAINER_FIELDS`]; a setup
+/// command's `run_in` and a cache's `scope` are the two nested ones
+/// `native_field_use` reads.
+#[test]
+fn the_native_fields_a_yml_is_refused_for_are_the_ones_only_the_native_schema_has() {
+    type Names = std::collections::BTreeSet<String>;
+    fn names(properties: &serde_json::Value) -> Names {
+        properties
+            .as_object()
+            .expect("an object's properties")
+            .keys()
+            .cloned()
+            .collect()
+    }
+    fn native_only(properties: fn(&serde_json::Value) -> &serde_json::Value) -> Names {
+        let native = native_config_file_schema();
+        let compat = config_file_schema();
+        names(properties(&native["definitions"]))
+            .difference(&names(properties(&compat["definitions"])))
+            .cloned()
+            .collect()
+    }
+    fn container(definitions: &serde_json::Value) -> &serde_json::Value {
+        &definitions["Container"]["properties"]
+    }
+    fn setup_command(definitions: &serde_json::Value) -> &serde_json::Value {
+        &definitions["SetupCommand"]["properties"]
+    }
+    fn cache(definitions: &serde_json::Value) -> &serde_json::Value {
+        &definitions["VolumeMount"]["oneOf"]
+            .as_array()
+            .expect("VolumeMount's forms")
+            .iter()
+            .find(|form| form["properties"]["type"]["const"] == "cache")
+            .expect("a cache form")["properties"]
+    }
+    fn owned(fields: &[&str]) -> Names {
+        fields.iter().map(|field| (*field).to_owned()).collect()
+    }
+
+    assert_eq!(
+        native_only(container),
+        owned(crate::config::NATIVE_CONTAINER_FIELDS)
+    );
+    assert_eq!(native_only(setup_command), owned(&["run_in"]));
+    assert_eq!(native_only(cache), owned(&["scope"]));
 }

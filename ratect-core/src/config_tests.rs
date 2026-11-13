@@ -487,7 +487,10 @@ fn a_null_plain_string_value_is_refused_or_unset_as_before() {
             "containers.app.additional_hosts.db: ",
         ),
         ("dependencies: [~]", "containers.app.dependencies[0]: "),
-        ("dns: ['', ~]", "containers.app.dns[1]: "),
+        (
+            "additional_hostnames: ['', ~]",
+            "containers.app.additional_hostnames[1]: ",
+        ),
     ] {
         let message = yaml_config_file_error(&format!(
             "project_name: demo\n\
@@ -1304,7 +1307,7 @@ tasks: {}
     )
     .unwrap();
 
-    let file = parse_yaml_config_file(&path, &format!("{path:?}"))
+    let file = parse_yaml_config_file(&path, &format!("{path:?}"), None)
         .expect("extensions should be ignored, not rejected");
     let environment = file.containers["terraform"].environment.as_ref().unwrap();
     assert_eq!(environment.get("AWS_REGION").unwrap(), "eu-west-2");
@@ -1328,7 +1331,7 @@ fn a_dot_prefixed_key_below_the_top_level_is_still_rejected() {
     .unwrap();
     let message = format!(
         "{:#}",
-        parse_yaml_config_file(&path, &format!("{path:?}")).unwrap_err()
+        parse_yaml_config_file(&path, &format!("{path:?}"), None).unwrap_err()
     );
     assert!(
         message.contains("unknown field: .oops") && message.contains("line 5, column"),
@@ -1347,7 +1350,7 @@ fn yaml_config_file_error(yaml: &str) -> String {
     std::fs::write(&path, yaml).unwrap();
     let message = format!(
         "{:#}",
-        parse_yaml_config_file(&path, &format!("{path:?}")).unwrap_err()
+        parse_yaml_config_file(&path, &format!("{path:?}"), None).unwrap_err()
     );
     std::fs::remove_dir_all(&dir).ok();
     message
@@ -6577,6 +6580,31 @@ fn task_names_for_completion_follows_local_includes_without_looping() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Completion still offers a `.yml`'s tasks when the loader refuses it for
+/// using a native field (ratect#216): that refusal fails the load but stops
+/// no file being read, and completion mirrors only the second (see
+/// `task_names_for_completion`).
+#[test]
+fn completion_offers_the_tasks_of_a_yml_that_uses_a_native_field() {
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"demo\"\ninclude = [{ path = \"frag.yml\" }]\n\
+         [tasks.build]\nrun = { container = \"a\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("frag.yml"),
+        "containers:\n  a:\n    image: alpine\n    stop_signal: SIGINT\n\
+         tasks:\n  deploy:\n    run:\n      container: a\n",
+    )
+    .unwrap();
+
+    let names = task_names_for_completion(&dir.join("ratect.toml"));
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(names, vec!["build".to_string(), "deploy".to_string()]);
+}
+
 /// Completion resolves a `~/...` local include where the loader does — the
 /// home directory — so a project directory that happens to be named `~` is
 /// not where it reads tasks from.
@@ -6984,7 +7012,6 @@ fn batect_shaped_for_test(containers: &IndexMap<String, Container>) -> Vec<Batec
             name: name.as_str(),
             container,
             origin: None,
-            way_out: None,
         })
         .collect()
 }
@@ -16845,7 +16872,9 @@ async fn a_project_using_only_file_includes_never_consults_git() {
 
 /// The native-field rejection already named a Git-included container's
 /// file by its bundle; it shares the load errors' describer now, so the two
-/// cannot drift apart.
+/// cannot drift apart. Refused while the bundle file is parsed (ratect#216),
+/// so a malformed value is refused as the field too, and still named within
+/// its bundle (ratect#215).
 #[tokio::test]
 async fn a_native_only_field_in_a_bundle_file_names_it_within_the_bundle() {
     let dir = unique_temp_dir();
@@ -16856,26 +16885,24 @@ async fn a_native_only_field_in_a_bundle_file_names_it_within_the_bundle() {
     .unwrap();
     let files = HashMap::from([(
         "sig.yml".to_string(),
-        "containers:\n  app:\n    image: alpine\n    stop_signal: SIGINT\n".to_string(),
+        "containers:\n  app:\n    image: alpine\n    stop_grace_period: bogus\n".to_string(),
     )]);
     let git = FakeGitClient::new().with_files(BUNDLE_REMOTE, BUNDLE_REF, files);
     let cache_root = unique_temp_dir();
     let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
 
-    let loaded = Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
-        .await
-        .unwrap();
-    let error = ConfigFormat::Compat
-        .reject_incompatible_fields(
-            &dir.join("batect.yml"),
-            &loaded.config,
-            &loaded.container_origins,
-            &loaded.container_boundaries,
-        )
-        .unwrap_err()
-        .to_string();
+    let error = format!(
+        "{:#}",
+        Config::load_from_file_with_git_cache(&dir.join("batect.yml"), &git_cache)
+            .await
+            .expect_err("refused")
+    );
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&cache_root).ok();
+    assert!(
+        error.contains("The container 'app' uses 'stop_grace_period'"),
+        "{error}"
+    );
     assert!(
         error.contains(&format!(
             "It is declared in {}, and a container declared in a Batect-format (YAML) file \
@@ -18983,18 +19010,12 @@ async fn a_native_field_in_a_bundle_says_what_its_author_and_this_project_must_d
         let cache_root = unique_temp_dir();
         let git_cache = GitIncludeCache::for_test(cache_root.clone(), git, 1000);
 
-        let loaded = Config::load_from_file_native_with_git_cache(&path, &git_cache)
-            .await
-            .unwrap();
-        let error = ConfigFormat::Native
-            .reject_incompatible_fields(
-                &path,
-                &loaded.config,
-                &loaded.container_origins,
-                &loaded.container_boundaries,
-            )
-            .unwrap_err()
-            .to_string();
+        let error = format!(
+            "{:#}",
+            Config::load_from_file_native_with_git_cache(&path, &git_cache)
+                .await
+                .expect_err("refused")
+        );
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&cache_root).ok();
         assert!(error.ends_with(way_out), "{root_file}: {error}");
@@ -19374,4 +19395,133 @@ fn with_no_home_a_leading_tilde_is_refused_naming_the_path() {
         "{error}"
     );
     assert_eq!(expand_home_directory("a/~").unwrap(), None);
+}
+
+/// A native-only field in a `.yml` is refused for being there, before its
+/// value is read (ratect#216): a malformed value would otherwise fail on the
+/// value, and the reader fixes the value only to be told the field doesn't
+/// belong in the file at all.
+#[tokio::test]
+async fn a_malformed_native_field_in_a_batect_yml_is_refused_as_the_field() {
+    for (field, declaration, value_error) in [
+        (
+            "stop_grace_period",
+            "    stop_grace_period: bogus\n",
+            "duration",
+        ),
+        ("ulimits", "    ulimits: nope\n", "sequence"),
+    ] {
+        let error = load_compat_yaml(&format!(
+            "project_name: demo\ncontainers:\n  app:\n    image: alpine\n{declaration}"
+        ))
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("'{field}' is native-only"));
+        let error = format!("{error:#}");
+        assert!(
+            error.contains(&format!(
+                "The container 'app' uses '{field}', which is a ratect-native field not \
+                 supported in Batect-compatible configuration. It is declared in "
+            )),
+            "{error}"
+        );
+        assert!(!error.contains(value_error), "{error}");
+        assert!(!error.contains("To use it"), "{error}");
+    }
+}
+
+/// The same under `ratect`, from a `.yml` a `ratect.toml` includes — with the
+/// way out that file has.
+#[tokio::test]
+async fn a_malformed_native_field_in_a_yaml_include_of_a_toml_root_is_refused_as_the_field() {
+    let (path, result) = load_native_including(
+        "frag.yml",
+        "containers:\n  app:\n    image: alpine\n    stop_grace_period: bogus\n",
+    )
+    .await;
+    let error = format!("{:#}", result.expect_err("refused"));
+    assert!(
+        error.contains("The container 'app' uses 'stop_grace_period'"),
+        "{error}"
+    );
+    assert!(error.contains(&format!("{path:?}")), "{error}");
+    assert!(!error.contains("duration"), "{error}");
+    assert!(
+        error.ends_with("To use it, move that container into a TOML file."),
+        "{error}"
+    );
+}
+
+/// Presence, not value: Batect refuses a key it doesn't know whatever it is
+/// set to, so a `run_to_completion` turned off is as unloadable there as one
+/// turned on — under either binary.
+#[tokio::test]
+async fn run_to_completion_false_is_refused_in_a_yml() {
+    const CONTAINER: &str =
+        "containers:\n  app:\n    image: alpine\n    run_to_completion: false\n";
+    let compat = load_compat_yaml(&format!("project_name: demo\n{CONTAINER}")).await;
+    let (_, native) = load_native_including("frag.yml", CONTAINER).await;
+    for result in [compat, native] {
+        let error = format!("{:#}", result.expect_err("refused"));
+        assert!(error.contains("uses 'run_to_completion'"), "{error}");
+    }
+}
+
+/// The scan reads only a container's own fields and its volume and
+/// setup-command entries: `labels`, `environment` and `build_args` are the
+/// user's own names, so one spelled like a native field is no such field.
+#[tokio::test]
+async fn a_free_form_key_named_like_a_native_field_still_loads() {
+    let keys = ["extends", "scope", "run_in", "identity", "user"];
+    let entries = |indent: &str| {
+        keys.iter()
+            .map(|key| format!("{indent}{key}: x\n"))
+            .collect::<String>()
+    };
+    let yaml = format!(
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    labels:\n{labels}    \
+         environment:\n{environment}  built:\n    build_directory: .\n    build_args:\n\
+         {build_args}tasks: {{}}\n",
+        labels = entries("      "),
+        environment = entries("      "),
+        build_args = entries("      "),
+    );
+    let project = load_compat_yaml(&yaml)
+        .await
+        .expect("a free-form key is not a field");
+    assert!(project.config.containers.contains_key("built"));
+}
+
+/// Of several offenders, the first the file declares is reported — not the
+/// first in some fixed list of fields — which is what the reader meets
+/// first reading down the file (decisions/0014).
+#[tokio::test]
+async fn of_several_native_fields_the_first_declared_is_reported() {
+    let error = load_compat_yaml(
+        "project_name: demo\ncontainers:\n  first:\n    image: alpine\n    network_mode: host\n  \
+         second:\n    image: alpine\n    extends: first\n",
+    )
+    .await
+    .expect_err("refused");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains("The container 'first' uses 'network_mode'"),
+        "{error}"
+    );
+}
+
+/// A merge key copies its mapping's entries into the container before the
+/// scan reads it, so a native field supplied through one is refused too.
+#[tokio::test]
+async fn a_native_field_supplied_through_a_merge_key_is_refused() {
+    let error = load_compat_yaml(
+        "project_name: demo\n.base: &base\n  stop_signal: SIGINT\ncontainers:\n  app:\n    \
+         <<: *base\n    image: alpine\n",
+    )
+    .await
+    .expect_err("refused");
+    assert!(
+        format!("{error:#}").contains("The container 'app' uses 'stop_signal'"),
+        "{error:#}"
+    );
 }

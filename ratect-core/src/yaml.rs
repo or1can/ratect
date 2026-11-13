@@ -15,9 +15,11 @@
 //! Reading Batect-format YAML text — the one `noyalib` configuration every
 //! read into the config model goes through (a config file, `project_name_of`'s
 //! YAML branch, a config vars file, and the unit tests that parse one), so
-//! none of them can drift from the others. A test reading YAML into a
-//! `noyalib::Value` instead doesn't need it: the option only changes what a
-//! string target receives.
+//! none of them can drift from the others. A read into `noyalib::Value`s
+//! goes through it too where its view has to match the config model's —
+//! [`load_all`], which a config file's native-field scan reads — though
+//! `plain_scalar_strings` changes nothing there: it only changes what a
+//! string target receives, so a test reading a `Value` doesn't need it.
 //!
 //! **A string is the scalar as written.** Batect reads every text field
 //! with kaml's `decodeString`, which returns a scalar's source text whatever
@@ -96,14 +98,25 @@ thread_local! {
 /// Deserializes `text` as Batect-format YAML — see the module notes.
 pub(crate) fn from_str<T: DeserializeOwned + 'static>(text: &str) -> noyalib::Result<T> {
     let _reading = Reading::start();
-    let Document(value) = noyalib::from_str_with_config(
-        text,
-        &noyalib::ParserConfig::new()
-            .plain_scalar_strings(true)
-            .duplicate_key_policy(noyalib::DuplicateKeyPolicy::Error),
-    )
-    .map_err(|error| noyalib::Error::Custom(printable(&error.to_string())))?;
+    let Document(value) = noyalib::from_str_with_config(text, &parser_config())
+        .map_err(|error| noyalib::Error::Custom(printable(&error.to_string())))?;
     Ok(value)
+}
+
+/// Every document in `text`, read as [`noyalib::Value`]s under the same
+/// configuration as [`from_str`], so a key given twice is refused here too
+/// rather than read as its last value.
+pub(crate) fn load_all(text: &str) -> noyalib::Result<Vec<noyalib::Value>> {
+    noyalib::load_all_with_config(text, &parser_config())
+        .and_then(|documents| documents.collect())
+        .map_err(|error| noyalib::Error::Custom(printable(&error.to_string())))
+}
+
+/// The one `noyalib` configuration — see the module notes.
+fn parser_config() -> noyalib::ParserConfig {
+    noyalib::ParserConfig::new()
+        .plain_scalar_strings(true)
+        .duplicate_key_policy(noyalib::DuplicateKeyPolicy::Error)
 }
 
 /// Whether the text being read is Batect-format YAML. See the module notes.

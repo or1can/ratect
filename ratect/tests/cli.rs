@@ -1195,6 +1195,40 @@ fn config_convert_to_stdout_writes_no_file() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// A `.yml` using a native field is refused with "convert the project to
+/// TOML (ratect config convert)" as its way out, so `config convert` has to
+/// read that field rather than refuse it too (ratect#216): it carries the
+/// field into the TOML file, where it is legal.
+#[test]
+fn config_convert_carries_a_native_field_a_yml_is_refused_for() {
+    let dir = unique_project_dir();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine:3.18\n    \
+         stop_signal: SIGINT\ntasks:\n  t:\n    run:\n      container: app\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .arg("-f")
+        .arg(dir.join("batect.yml"))
+        .args(["config", "convert", "--stdout"])
+        .output()
+        .expect("failed to run ratect");
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("stop_signal = \"SIGINT\""),
+        "expected the field in the converted document:\n{stdout}"
+    );
+}
+
 /// One `batect.yml` converted both ways — written to a file and `--stdout`.
 struct Conversion {
     /// The converted file's path, as the heading names it.

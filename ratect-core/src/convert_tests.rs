@@ -57,8 +57,10 @@ fn version() -> crate::written_for::Version {
     VERSION.parse().unwrap()
 }
 
+/// Converts through the loader `ratect config convert` uses.
 async fn convert(root: &Path) -> Result<ConvertedProject> {
-    let loaded = Config::load_from_file(root).await?;
+    let git_cache = GitIncludeCache::new();
+    let loaded = Config::load_from_file_for_conversion(root, &git_cache).await?;
     convert_project(&loaded, version())
 }
 
@@ -341,7 +343,7 @@ async fn convert_with_git(
     root: &Path,
     cache: &GitIncludeCache<FakeGitClient>,
 ) -> Result<ConvertedProject> {
-    let loaded = Config::load_from_file_with_git_cache(root, cache).await?;
+    let loaded = Config::load_from_file_for_conversion(root, cache).await?;
     convert_project(&loaded, version())
 }
 
