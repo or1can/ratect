@@ -1,7 +1,12 @@
 # 0027 — No holder touches another clone's staging directory, so two holders of an entry lock cost only a duplicate clone
 
 **Status:** Accepted — planned (ratect-compat 0.35.0 · ratect 0.14.0):
-[#880](https://github.com/or1can/ratect/issues/880). Supersedes
+[#880](https://github.com/or1can/ratect/issues/880). Refined on 2026-11-13,
+before that release shipped, by
+[#888](https://github.com/or1can/ratect/issues/888): Decision 3's release now
+unlocks the OS lock before dropping its handle, and so does a waiter's look
+that takes the OS lock without taking the lock over. Before, each freed the
+OS lock only by dropping the handle. Supersedes
 [0023](0023-git-include-entry-lock.md)'s Decisions 5 and 7; the rest of 0023
 stands.
 
@@ -64,11 +69,25 @@ lock still only prevents duplicate work.**
 3. **Release deletes the lock file unless it is known to be another file**
    (replacing 0023's Decision 5). It makes the device-and-inode comparison
    Decision 4 makes on a takeover, still while holding the OS lock. When the
-   path names another file, or none, it leaves it alone and only drops its
-   handle. When it can't look, it tries the delete as before, so whatever
-   stopped it is reported. Off Unix, where that comparison can't be made,
-   this version takes nothing over (0023's Decision 3), so release deletes
-   by path as before.
+   path names another file, or none, it leaves it alone. When it can't look,
+   it tries the delete as before, so whatever stopped it is reported. Off
+   Unix, where that comparison can't be made, this version takes nothing
+   over (0023's Decision 3), so release deletes by path as before. Either
+   way, release then unlocks the OS lock explicitly before dropping its
+   handle. A process that another thread of the holder's process is
+   starting shares that handle until it execs, so dropping it alone would
+   leave the OS lock held for that moment, and a waiter would wait on a
+   holder that has finished. An unlock frees the lock for every process
+   sharing the handle. No run reaches that window today, since nothing else
+   starts a process while an entry lock is held, but the test binary does
+   (#886), and the release no longer depends on it. A waiter's look that
+   takes the OS lock but doesn't take the lock over (0023's Decisions 3 and
+   4), whatever stopped it, unlocks it the same way before dropping its
+   handle: the file was replaced, it can't be read, it carries no marker
+   this version recognises, or, off Unix, its identity can't be checked.
+   No run reaches that window for a look either, since a run looks at one
+   include's lock at a time, and starts nothing else while it does.
+   Dropping a lock without releasing it, as dying does, is unchanged.
 
 With two holders, each clones into its own staging directory; the first
 rename into `<key>` wins, and the other discards its copy and uses the
@@ -149,4 +168,13 @@ winner's, as 0023's Decision 1 already has it.
   `~/.ratect/incl`), a real interrupted clone's leftover being swept, clocks
   that disagree, Linux filesystems, and a network filesystem, where a
   directory's modification time and rename atomicity between clients may
-  differ.
+  differ. For #888's unlock: run locally on macOS APFS, and by CI on Linux,
+  for a release and for a look that finds the file replaced or unmarked,
+  with the sharing process a child given the lock file as its standard
+  input, which shares the same open file as a child that hasn't exec'd yet
+  does; for a release the child starts after the OS lock is taken, for a
+  look before. Not run: a look that can't read the file, or (off Unix) can't
+  compare its identity, an unlock that fails and leaves the lock to the
+  drop, a child caught before its exec, a network filesystem
+  (where Linux emulates `flock` with `fcntl` locks, which a child doesn't
+  share), and Windows, where the unlock is compiled but never run.

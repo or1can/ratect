@@ -118,7 +118,7 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   `refresh`/load tests that take over `abandoned_lock`. CLAUDE.md puts
   Unix-only tests behind `cfg(unix)`. Left because gating them can leave
   helpers they share (`abandoned_lock`, `this_test_binary_running`, the
-  holder processes' constants) unused off Unix, which a Windows `cargo
+  holder process's constants) unused off Unix, which a Windows `cargo
   check` would report, and that check didn't build here (`ring`'s C code
   needs Windows headers); CI's Windows Check runs it. Found reviewing
   ratect#886.
