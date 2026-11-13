@@ -16,7 +16,11 @@ Before, it took the file for replaced and started again at once, and an
 error that lasted kept it doing so past the lock timeout. Decision 3's
 release reads each error as a look does. That changes one case for it: a
 lock path under a directory that has become a file, which it now leaves
-alone as naming no file, where before it tried the delete. Supersedes
+alone as naming no file, where before it tried the delete. Also under
+#891: a look that finds the file it opened released starts again at once
+a few times at most, then reports its holder unknown, so a path that
+always looks released, such as a broken symbolic link, is waited on and
+timed out rather than looked at without end. Supersedes
 [0023](0023-git-include-entry-lock.md)'s Decisions 5 and 7, and refines its
 Decision 4 as #891 above says; the rest of 0023 stands.
 

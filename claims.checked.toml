@@ -16526,3 +16526,21 @@ copies = 1
 note = "replaced() before vs still_at(..)==Some(false) now, case by case: NotFound, other stat error, fstat error, dev/ino match or mismatch agree; only stat NotADirectory changed, from trying remove_file to skipping it"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "f1b34c94bdc3cb5e"
+copies = 1
+note = "attempt loops for _ in 0..LOOKS (3), each Replaced or second-open NotFound/NotADirectory starting again, then returns HeldByUnknownHolder; the dangling-symlink test pins that it returns"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "TODO.md"
+mode = "stale-claims"
+unit = "da6d38ffc884cb42"
+copies = 1
+note = "the Test coverage section's entries are about ratect-compat/tests/cli.rs's task_output helper and other e2e tests; nothing in git_include_tests.rs changes what they say"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "daae1461964122bb" }

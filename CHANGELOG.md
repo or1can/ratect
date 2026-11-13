@@ -48,6 +48,7 @@ history, from when it was the only binary.
 - A Git include whose clone has lost its `.git` while being made fails to load, rather than checking its ref out in a repository holding `~/.ratect/incl`, such as one at `~`.
 - Cloning a Git include ignores the variables naming a repository that `git rev-parse --local-env-vars` lists, such as `GIT_DIR` and `GIT_WORK_TREE` exported for a dotfiles repository, or the absolute `GIT_INDEX_FILE` a hook of `git commit -a` gets, so the include loads with all its files and writes nothing to that repository.
 - A Git include lock that can't be checked because of a filesystem error is waited on like any other held lock, rather than hanging the load.
+- A Git include lock file that is a broken symbolic link is waited on like any other held lock, rather than hanging the load.
 
 ## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-11-10
 

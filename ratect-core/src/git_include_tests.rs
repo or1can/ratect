@@ -1533,6 +1533,33 @@ async fn a_look_that_cant_stat_its_lock_file_reports_the_holder_unknown() {
     assert!(matches!(look, entry_lock::TakeOver::Unknown), "{look:?}");
 }
 
+/// A lock path that exists to an exclusive create but not to an open, as a
+/// broken symbolic link does, looks released every time: a look gives up
+/// looking again after a few tries and reports the holder unknown, so its
+/// waiter waits and times out rather than looping without end.
+#[cfg(unix)]
+#[test]
+fn a_lock_path_that_is_always_released_is_reported_unknown_rather_than_looped_on() {
+    let root = unique_temp_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    let lock_path = root.join("dangling.lock");
+    std::os::unix::fs::symlink(root.join("nowhere"), &lock_path).unwrap();
+
+    // On a thread of its own, so a look that never returns fails the test
+    // rather than hanging it.
+    let (sent, received) = std::sync::mpsc::channel();
+    let path = lock_path.clone();
+    std::thread::spawn(move || sent.send(entry_lock::attempt(&path).map_err(|e| e.kind())));
+    let found = received.recv_timeout(Duration::from_secs(5));
+
+    std::fs::remove_dir_all(&root).ok();
+    let found = found.expect("a look should return").unwrap();
+    assert!(
+        matches!(found, entry_lock::Attempt::HeldByUnknownHolder),
+        "{found:?}"
+    );
+}
+
 #[cfg(unix)]
 fn is_close_on_exec(file: &std::fs::File) -> bool {
     let flags = nix::fcntl::fcntl(file, nix::fcntl::FcntlArg::F_GETFD).unwrap();

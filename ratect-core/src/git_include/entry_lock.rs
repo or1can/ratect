@@ -20,7 +20,8 @@
 //! the kernel releases it when the holder does, however it exits. Off Unix
 //! that proof is never complete (see [`still_at`]), so nothing is taken over
 //! there. Waiting, the notice and the timeout are
-//! `GitIncludeCache::acquire_lock`'s; this module only looks, once.
+//! `GitIncludeCache::acquire_lock`'s; this module only looks, and never
+//! waits.
 //!
 //! Every call here is synchronous filesystem work measured in microseconds,
 //! except the blocking OS lock a new holder takes on its own new file, which
@@ -90,16 +91,23 @@ pub(super) enum Attempt {
     HeldByRunningHolder,
     /// Its holder can't be proved to have exited: the lock carries no marker
     /// this version recognises, the OS lock itself returned an error, as
-    /// it can on a network filesystem, or the file's identity can't be
-    /// checked, which off Unix it never can.
+    /// it can on a network filesystem, the file's identity can't be
+    /// checked, which off Unix it never can, or the path looked released
+    /// every time [`attempt`] looked.
     HeldByUnknownHolder,
 }
 
 /// Takes the entry lock at `path` if it's free or abandoned; otherwise says
 /// who holds it. Never deletes a lock it doesn't hold, and never waits on
 /// one.
+///
+/// A file released while it was being looked at is looked at again at once,
+/// up to [`LOOKS`] times in all. A path that looks released every time, as a
+/// broken symbolic link does to an exclusive create and then an open, is
+/// reported [`Attempt::HeldByUnknownHolder`], so the caller waits and times
+/// out rather than this looping without end.
 pub(super) fn attempt(path: &Path) -> std::io::Result<Attempt> {
-    loop {
+    for _ in 0..LOOKS {
         // `std` opens every file close-on-exec, so the `git` a holder starts
         // doesn't keep its OS lock (Decision 2) — pinned by a test. Until a
         // process the holder's process is starting execs, it shares the file,
@@ -133,7 +141,14 @@ pub(super) fn attempt(path: &Path) -> std::io::Result<Attempt> {
             TakeOver::Replaced => continue,
         }
     }
+    Ok(Attempt::HeldByUnknownHolder)
 }
+
+/// How many times [`attempt`] looks before giving up on a lock file that is
+/// released each time. For a real lock to look released three times in a
+/// row, three other processes would each have to take it and release it
+/// within the few system calls one look takes, so a few is plenty.
+const LOOKS: usize = 3;
 
 /// A lock file this process has just created: take its OS lock, then write
 /// the marker, in that order, so that a marker is only ever seen beside an OS
