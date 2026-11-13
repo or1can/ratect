@@ -15485,3 +15485,138 @@ note = "Read only the passages about ownership labels (lines 290-293 and 331-334
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "decisions/0002-runtime-ownership-labels.md" = "f46fc6d7d5f77262", "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0016-exit-codes.md" = "631e121fcc6998b5", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da" }
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "restatement-ngram"
+unit = "6bbc3a40faa0eb4b-70be7dd3528f7e58"
+copies = 1
+note = "A container's file still decides its fields and semantics; ratect#216 only moved the field refusal to parse time (reject_native_fields in parse_yaml_config_file)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "restatement-ngram"
+unit = "7283c23e4c9a753d-77ea9bc0fdd6ade8"
+copies = 1
+note = "Same sentence as line 123: the file decides; the native-field refusal now runs while a YAML file is parsed (reject_native_fields)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "d926d79a1499c55d-b8d58ad2840600da"
+copies = 1
+note = "a_shared_cache_is_rejected_in_a_batect_yml still asserts the refusal, now by native_field_use's volumes arm."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "a66ec4329fde5907-ee4a8d5d1f040eb0"
+copies = 1
+note = "Presence, not value: native_field_use refuses a cache mount's scope key whatever it is set to, so scope: project is refused."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "1b8dc755f4cb6ab9-39dcb7c4b7579bfc"
+copies = 1
+note = "Image-expression refusal is unchanged on the typed path (reject_image_expressions_in_compat)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "696b1e951b25a924-4ff9941337f83bcf"
+copies = 1
+note = "extends_is_rejected_in_compat_mode passes; extends is in NATIVE_CONTAINER_FIELDS."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "3dc6ae954a915082-a2758568ef8ba73c"
+copies = 1
+note = "run_in still refused in a .yml by native_field_use's setup_commands arm; batect#286 still open upstream."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "d50746f52f50dcee-b39b0828afd5e098"
+copies = 1
+note = "Same doc comment as 7683; the test still passes against the parse-time scan."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "18c0ce02976884c5-03c37b24fd3d6c61"
+copies = 2
+note = "run_to_completion is in NATIVE_CONTAINER_FIELDS and refused by presence; test passes."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "079eddf88b504d00-672c5fd601785f25"
+copies = 1
+note = "Same doc comment as 7708; Batect has no run_to_completion."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "e75573526cb346ff-f90beaeaebf4a237"
+copies = 1
+note = "stop_signal is in NATIVE_CONTAINER_FIELDS; stop_signal_is_rejected_in_compat_mode passes."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/config_tests.rs"
+mode = "restatement-ngram"
+unit = "456d1e7f280296b2-0bfea4efdace2bb6"
+copies = 1
+note = "network_mode is in NATIVE_CONTAINER_FIELDS; network_mode_is_rejected_in_compat_mode passes."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/schema.rs"
+mode = "restatement-ngram"
+unit = "bfdf856bc90c418d-63308887eea9777b"
+copies = 1
+note = "Schema comment: dns fields are added natively and skipped from compat, as stop_signal's comment explains; unchanged by ratect#216."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/schema.rs"
+mode = "restatement-ngram"
+unit = "3ac6dc035549042e-700e6a2266802bed"
+copies = 1
+note = "Schema comment for network_mode, same reasoning as stop_signal's, which is in the same function; still true."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/schema.rs"
+mode = "restatement-ngram"
+unit = "036f051964c12d04-3717016342e8736e"
+copies = 1
+note = "Schema comment for user/group/groups, same reasoning as stop_signal's; still true."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}

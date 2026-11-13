@@ -27,7 +27,7 @@
 //! itself stays string-tolerant, which is what lets one set of hand-written
 //! `Deserialize` impls serve both formats). **`extends`** (native only; a
 //! container declared in a YAML file using it is *rejected*, not ignored — see
-//! `ConfigFormat::batect_shaped_containers`) is a load-time pass over
+//! `reject_native_fields`) is a load-time pass over
 //! unevaluated containers — mechanically `child.or(parent)` over the
 //! already-`Option` fields, so a set field replaces and an unset one inherits,
 //! single-parent, transitive, cycle-checked. `inherit_container_fields`
@@ -53,8 +53,10 @@
 //! [Includes](https://github.com/or1can/ratect/blob/main/docs/includes.md)), merging every loaded
 //! file's `containers`/`tasks`/`config_variables` into one `Config`, returned inside a
 //! `LoadedConfig` alongside a `container_base_paths` map (each container name → its
-//! own origin file's directory). `load_project` wraps the load — existence
-//! check, `load_from_file`, the format's field rejections, `check_values`,
+//! own origin file's directory). `load_from_file` itself refuses a
+//! `ratect`-native field in a YAML file, while that file is parsed
+//! (`reject_native_fields`). `load_project` wraps the load — existence
+//! check, `load_from_file`, the format's remaining field rejections, `check_values`,
 //! `extends`, and the rules that need inheritance applied — into the one call a
 //! binary actually wants, returning a `LoadedProject`; it exists so `ratect` and
 //! `ratect-compat` can't get the ordering or the missing-file error wording out
@@ -172,7 +174,7 @@ pub struct Container {
     /// the *parent's* own file.
     /// `ratect`-native only — a YAML-declared container may not use it,
     /// whichever project includes it (ratect#214; see
-    /// `ConfigFormat::batect_shaped_containers`) — and skipped from the
+    /// `reject_native_fields`) — and skipped from the
     /// committed schema, which is `batect.yml`'s. See
     /// [decisions/0003](../../decisions/0003-ratect-native-config-format.md).
     #[cfg_attr(feature = "schema", schemars(skip))]
@@ -324,7 +326,7 @@ pub struct Container {
     /// `health_check`/`setup_commands` — neither concept applies once a
     /// dependency runs to completion. `ratect`-native only, like `extends` — a
     /// YAML-declared container may not use it, whichever project includes it
-    /// (ratect#214; see `ConfigFormat::batect_shaped_containers`) — and,
+    /// (ratect#214; see `reject_native_fields`) — and,
     /// unlike `extends`, meaningless on a task's own `run` block, which has no
     /// `dependencies` of its own to place this on in the first place. Inert,
     /// not rejected, on a container a task names as its `run.container` —
@@ -345,7 +347,7 @@ pub struct Container {
     /// Docker still runs, isn't waited on (ratect#269).
     /// `ratect`-native only, like `run_to_completion` — a YAML-declared
     /// container may not use it, whichever project includes it (ratect#214;
-    /// see `ConfigFormat::batect_shaped_containers`).
+    /// see `reject_native_fields`).
     ///
     /// Inert on a task's own `run.container`, exactly as `health_check` is:
     /// nothing waits on a task's own container becoming ready, since
@@ -469,7 +471,7 @@ pub struct Container {
     /// unchanged from today's behavior. `ratect`-native only, like
     /// `run_to_completion` — a YAML-declared container may not use it,
     /// whichever project includes it (ratect#214; see
-    /// `ConfigFormat::batect_shaped_containers`).
+    /// `reject_native_fields`).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub stop_signal: Option<String>,
     /// How long to wait, after the stop signal, before Docker escalates to
@@ -493,7 +495,7 @@ pub struct Container {
     /// override). `ratect`-native only, like `stop_signal` above — a container
     /// declared in a Batect-format (YAML) file may not use it, whichever
     /// project includes it (ratect#214,
-    /// `ConfigFormat::batect_shaped_containers`).
+    /// `reject_native_fields`).
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub ulimits: Option<Vec<Ulimit>>,
     /// Nameservers for this container — Docker's `--dns`. Each must be an IP
@@ -965,7 +967,7 @@ impl UlimitResource {
 ///
 /// `ratect`-native only, like [`Container::stop_signal`] — a YAML-declared
 /// container may not use it, whichever project includes it (ratect#214; see
-/// `ConfigFormat::batect_shaped_containers`).
+/// `reject_native_fields`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Ulimit {
     pub name: UlimitResource,
@@ -1099,13 +1101,12 @@ pub struct CacheVolumeMount {
     /// Whether this cache belongs to one project or is shared across every
     /// project on the machine — see [`CacheScope`]. `ratect`-native only; a
     /// YAML-declared container may not use it, whichever project includes it
-    /// (ratect#214; see `ConfigFormat::batect_shaped_containers`).
+    /// (ratect#214; see `reject_native_fields`).
     ///
     /// `None` means the field was absent, which is not the same as
-    /// `Some(Project)`: `ratect-compat` has to reject the *field*, since
-    /// real `batect` rejects any unknown property — writing `scope: project`
-    /// in a `batect.yml` is still a config that only Ratect will load. Use
-    /// [`CacheVolumeMount::scope`] for the effective value.
+    /// `Some(Project)`: a mount is written back with `scope` only where it
+    /// was written, so `config convert` carries across what the file said.
+    /// Use [`CacheVolumeMount::scope`] for the effective value.
     pub scope: Option<CacheScope>,
 }
 
@@ -1999,7 +2000,7 @@ pub fn external_health_check_container_name(container: &str) -> String {
 ///
 /// `ratect`-native only: a YAML-declared container may not use it, whichever
 /// project includes it (ratect#214; see
-/// `ConfigFormat::batect_shaped_containers`).
+/// `reject_native_fields`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     try_from = "ExternalHealthCheckFields",
@@ -2268,7 +2269,7 @@ pub struct SetupCommand {
     /// container's own `dependencies`, or the declaring container itself
     /// (which is what omitting it means). `ratect`-native only — a
     /// YAML-declared container may not use it, whichever project includes it
-    /// (ratect#214; see `ConfigFormat::batect_shaped_containers`).
+    /// (ratect#214; see `reject_native_fields`).
     ///
     /// The dependency restriction is what makes the ordering safe, and it is
     /// load-bearing rather than merely tidy: a dependency has already been
@@ -3519,28 +3520,58 @@ impl ConfigFormat {
     /// Both feed the same [`ConfigFile`], so nothing downstream depends on
     /// which format a file was written in. `boundary` is the bundle the file
     /// was reached through, if any, so an error names it within that bundle
-    /// (see [`describe_origin`]).
-    fn parse(&self, path: &Path, boundary: Option<&Boundary>) -> Result<ConfigFile> {
+    /// (see [`describe_origin`]). `native_fields` is what a YAML file's
+    /// `ratect`-native fields meet.
+    fn parse(
+        &self,
+        path: &Path,
+        boundary: Option<&Boundary>,
+        native_fields: NativeFields<'_>,
+    ) -> Result<ConfigFile> {
         let name = describe_origin(path, boundary);
+        let refusal = match native_fields {
+            NativeFields::Refused { root } => Some(NativeFieldRefusal {
+                // Absolute, as the loader records the file a container was
+                // declared in, however `-f` spelled the root.
+                origin: describe_origin(&absolute_path(path)?, boundary),
+                // Converting is no way out under `ratect-compat`: only
+                // `ratect` reads TOML (decisions/0021).
+                way_out: matches!(self, ConfigFormat::Native)
+                    .then(|| self.batect_file(boundary, root)),
+            }),
+            NativeFields::Read => None,
+        };
         match self {
-            ConfigFormat::Compat => parse_yaml_config_file(path, &name),
+            ConfigFormat::Compat => parse_yaml_config_file(path, &name, refusal.as_ref()),
             ConfigFormat::Native => match named_config_file_format(path, &name)? {
                 FileFormat::Toml => parse_toml_config_file(path, &name),
-                FileFormat::Yaml => parse_yaml_config_file(path, &name),
+                FileFormat::Yaml => parse_yaml_config_file(path, &name, refusal.as_ref()),
             },
         }
     }
 
     /// Whether this policy reads `path` as a Batect-format (YAML) file —
-    /// the one answer to "which fields may this file set", whatever the
+    /// the answer to "which rules does this file load under", whatever the
     /// file declares: a container ([`batect_shaped_containers`](Self::batect_shaped_containers))
-    /// or an include entry ([`include_trust::check_dialect`]).
+    /// or an include entry ([`include_trust::check_dialect`]). Which
+    /// container fields it may set is decided by [`parse`](Self::parse)
+    /// itself, whose YAML branch is the one this answers true for: a YAML
+    /// file is read by [`parse_yaml_config_file`], which refuses them where
+    /// its caller asks it to ([`NativeFields`]): every load but
+    /// `config convert`'s.
     /// `Compat` reads every file as YAML, whatever it is named.
     fn reads_as_batect(&self, path: &Path) -> bool {
         match self {
             ConfigFormat::Compat => true,
             ConfigFormat::Native => matches!(config_file_format(path), Ok(FileFormat::Yaml)),
         }
+    }
+
+    /// Which kind of Batect-format file one reached through `boundary` is, in
+    /// a project whose root file is `root` — what decides the way out of a
+    /// field it may not set.
+    fn batect_file(&self, boundary: Option<&Boundary>, root: &Path) -> include_trust::BatectFile {
+        include_trust::BatectFile::of(boundary.is_some(), self.reads_as_batect(root))
     }
 
     /// The project dialect this loading policy is.
@@ -3571,7 +3602,8 @@ impl ConfigFormat {
     /// Which of a project's containers must be judged by Batect's own
     /// rules: the ones declared in a **YAML file**, whichever project
     /// included it (ratect#214). A `.yml` is Batect's format, so a
-    /// container written in one may use no `ratect`-native field and gets
+    /// container written in one may use no `ratect`-native field (refused
+    /// while the file is parsed, by [`reject_native_fields`]) and gets
     /// Batect's own semantics — even when a `ratect.toml` project is what
     /// pulled the file in. To use a native field, convert that container to
     /// TOML; incremental migration exists so a project needn't be
@@ -3584,8 +3616,8 @@ impl ConfigFormat {
     /// whose "`extends` flows one way — never the reverse" is this same
     /// rule stated of one field.
     ///
-    /// Derived **once**, here, rather than re-decided at each of the ten
-    /// checks below — the same reasoning as `include_trust::restricting`:
+    /// Derived **once**, here, rather than re-decided at each check that
+    /// takes it — the same reasoning as `include_trust::restricting`:
     /// a rule that depends on which format you are in needs one derived
     /// value, or the next check added is unguarded by default.
     ///
@@ -3597,7 +3629,6 @@ impl ConfigFormat {
     /// itself.
     fn batect_shaped_containers<'a>(
         &self,
-        config_file: &Path,
         config: &'a Config,
         origins: &'a HashMap<String, PathBuf>,
         boundaries: &HashMap<String, Boundary>,
@@ -3611,50 +3642,30 @@ impl ConfigFormat {
                     name: name.as_str(),
                     container,
                     origin: origin.map(|origin| describe_origin(origin, boundaries.get(name))),
-                    way_out: matches!(self, ConfigFormat::Native).then(|| {
-                        include_trust::BatectFile::of(
-                            boundaries.contains_key(name),
-                            self.reads_as_batect(config_file),
-                        )
-                    }),
                 })
             })
             .collect()
     }
 
-    /// The full set of fields a Batect-format file may not use — every
-    /// `ratect`-native addition Batect itself has no equivalent for — plus
-    /// the two places its *semantics* differ. Called unconditionally from
+    /// The two places a Batect-format file's *semantics* differ from a
+    /// native one's, judged over the merged `Config` — the fields such a
+    /// file may not use at all are refused earlier, while it is parsed
+    /// ([`reject_native_fields`]). Called unconditionally from
     /// [`load_project_impl`], before expression resolution — load-bearing
     /// for [`reject_image_expressions_in_compat`], which inspects an
     /// `image`'s literal text and must judge what was written rather than
-    /// what an expression resolved to; the others check presence/shape of
-    /// fields expression resolution never touches, so the ordering is inert
-    /// for them but still correct.
+    /// what an expression resolved to.
     ///
-    /// Every check takes the same [`batect_shaped_containers`](Self::batect_shaped_containers)
+    /// Both checks take the same [`batect_shaped_containers`](Self::batect_shaped_containers)
     /// slice, so a `Native` project runs them too — against its YAML-declared
     /// containers only, and against nothing at all when it has none.
     fn reject_incompatible_fields(
         &self,
-        config_file: &Path,
         config: &Config,
         origins: &HashMap<String, PathBuf>,
         boundaries: &HashMap<String, Boundary>,
     ) -> Result<()> {
-        let shaped = self.batect_shaped_containers(config_file, config, origins, boundaries);
-        reject_extends_in_compat(&shaped)?;
-        reject_run_to_completion_in_compat(&shaped)?;
-        reject_external_health_check_in_compat(&shaped)?;
-        reject_setup_command_run_in_compat(&shaped)?;
-        reject_shared_caches_in_compat(&shaped)?;
-        reject_stop_signal_in_compat(&shaped)?;
-        reject_stop_grace_period_in_compat(&shaped)?;
-        reject_ulimits_in_compat(&shaped)?;
-        reject_dns_in_compat(&shaped)?;
-        reject_network_mode_in_compat(&shaped)?;
-        reject_passthrough_identity_in_compat(&shaped)?;
-        reject_identity_in_compat(&shaped)?;
+        let shaped = self.batect_shaped_containers(config, origins, boundaries);
         validate_image_sources_in_compat(&shaped)?;
         reject_image_expressions_in_compat(&shaped)?;
         self.reject_run_as_current_user_in_toml(config, origins, boundaries)
@@ -3708,10 +3719,6 @@ struct BatectShaped<'a> {
     /// going through the loader (tests, and `expand_external_health_checks`'
     /// generated companions, which are added after these checks have run).
     origin: Option<String>,
-    /// Which kind of file that is, for the way out of a native-only field.
-    /// `None` under `ratect-compat`, where converting isn't one: only `ratect`
-    /// reads TOML (decisions/0021).
-    way_out: Option<include_trust::BatectFile>,
 }
 
 /// How to name a loaded file, for a message the reader has to act on. A
@@ -3737,11 +3744,12 @@ fn describe_file(path: &Path, boundary: Option<&Boundary>) -> String {
     }
 }
 
-/// The rejection a native-only field raises: [`batect_rule_rejection`], plus
-/// the way out its file has (decisions/0021).
-fn native_field_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::Error {
-    let rejection = batect_rule_rejection(entry, message);
-    match entry.way_out {
+/// The rejection a native-only field raises: [`batect_rule_rejection`]'s
+/// message for the file `refusal` names, plus the way out that file has
+/// (decisions/0021).
+fn native_field_rejection(refusal: &NativeFieldRefusal, message: String) -> anyhow::Error {
+    let rejection = declared_under_batect_rules(message, Some(&refusal.origin));
+    match refusal.way_out {
         Some(file) => anyhow::anyhow!("{rejection} To use it, {}.", file.remedy("that container")),
         None => rejection,
     }
@@ -3752,7 +3760,12 @@ fn native_field_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::
 /// and edit, and why a native project is talking about Batect compatibility
 /// at all (ratect#214).
 fn batect_rule_rejection(entry: &BatectShaped<'_>, message: String) -> anyhow::Error {
-    match &entry.origin {
+    declared_under_batect_rules(message, entry.origin.as_deref())
+}
+
+/// [`batect_rule_rejection`]'s message, for the file `origin` names if any.
+fn declared_under_batect_rules(message: String, origin: Option<&str>) -> anyhow::Error {
+    match origin {
         Some(origin) => anyhow::anyhow!(
             "{message} It is declared in {origin}, and a container declared in a \
              Batect-format (YAML) file follows Batect's rules wherever it is included."
@@ -3981,19 +3994,185 @@ const EXTENSION_KEY_PREFIX: char = '.';
 /// deserialized `ConfigFile` can't tell; the text has to be asked. A
 /// document that sets nothing, such as `{}`, still loads.
 ///
+/// Where `refusal` is given, a container declared in it may use no
+/// `ratect`-native field ([`reject_native_fields`]), refused before the typed
+/// read so that a malformed value is refused for the field rather than for
+/// the value.
+///
 /// `name` is how its errors name the file — see [`describe_origin`].
-pub(crate) fn parse_yaml_config_file(path: &Path, name: &str) -> Result<ConfigFile> {
+pub(crate) fn parse_yaml_config_file(
+    path: &Path,
+    name: &str,
+    refusal: Option<&NativeFieldRefusal>,
+) -> Result<ConfigFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to open config file {name}"))?;
-    let no_configuration = noyalib::load_all(&text).is_ok_and(|mut documents| {
-        documents.all(|document| document.is_ok_and(|value| value.is_null()))
-    });
-    if no_configuration {
-        anyhow::bail!("Configuration file {name} contains no configuration.");
+    // An error here is the typed read's to report, with its location.
+    let documents = crate::yaml::load_all(&text);
+    if let Ok(documents) = &documents {
+        if documents.iter().all(noyalib::Value::is_null) {
+            anyhow::bail!("Configuration file {name} contains no configuration.");
+        }
+        if let Some(refusal) = refusal {
+            // The first document only: the typed read refuses a second.
+            reject_native_fields(documents.first(), refusal)?;
+        }
     }
     let ExtensibleConfigFile(file) = crate::yaml::from_str(&text)
         .with_context(|| format!("Failed to parse config file {name}"))?;
+    // Refused, not loaded unscanned, if only the untyped read failed:
+    // nothing after this refuses a native field.
+    if refusal.is_some() {
+        documents.with_context(|| format!("Failed to parse config file {name}"))?;
+    }
     Ok(file)
+}
+
+/// What a load does with a `ratect`-native field in a YAML file.
+#[derive(Clone, Copy)]
+enum NativeFields<'a> {
+    /// Refuses it ([`reject_native_fields`]), with the way out a project
+    /// whose root file is `root` has.
+    Refused { root: &'a Path },
+    /// Reads it like any other field: `config convert`, which carries a
+    /// container's into a TOML file, where it is legal, and shell
+    /// completion, which mirrors which files the loader reads but not
+    /// whether it fails (see [`task_names_for_completion`]).
+    Read,
+}
+
+/// How [`reject_native_fields`] refuses a field: naming the file `origin`
+/// ([`describe_origin`]), with the way out `way_out` gives — `None` under
+/// `ratect-compat`, where converting isn't one.
+pub(crate) struct NativeFieldRefusal {
+    origin: String,
+    way_out: Option<include_trust::BatectFile>,
+}
+
+/// The `ratect`-native fields a container may set directly, each refused in
+/// a YAML file by [`reject_native_fields`] — the native schema's container
+/// properties beyond the compat schema's, which `schema`'s tests hold it to.
+/// With the issue or record that added each, where one is known: `extends`
+/// (decisions/0003), `run_to_completion`, `external_health_check` (#98), `stop_signal` and
+/// `stop_grace_period` (#112), `ulimits` (#95), `dns`/`dns_search`/
+/// `dns_options` (#105), `network_mode` (#106), `user`/`group`/`groups`
+/// (#234) and `identity` (#235).
+pub(crate) const NATIVE_CONTAINER_FIELDS: &[&str] = &[
+    "extends",
+    "run_to_completion",
+    "external_health_check",
+    "stop_signal",
+    "stop_grace_period",
+    "ulimits",
+    "dns",
+    "dns_search",
+    "dns_options",
+    "network_mode",
+    "user",
+    "group",
+    "groups",
+    "identity",
+];
+
+/// Refuses a container in a YAML file's `document` that uses a
+/// `ratect`-native field, by the field's **presence**: Batect refuses a key
+/// it doesn't know whatever it is set to, so `run_to_completion: false` or
+/// `scope: project` is as unloadable there as any other value, and refusing
+/// one rather than silently ignoring it is what keeps every `.yml` Ratect
+/// accepts a valid Batect file (decisions/0021). Ignoring would be worse than
+/// unfaithful for some: a dropped `external_health_check` leaves its
+/// dependents starting against nothing, and a dropped `run_in` runs a setup
+/// command in the declaring container, which looks like it worked.
+///
+/// Read from the untyped documents, before the typed read, so a malformed
+/// value is refused for the field rather than for the value (ratect#216).
+/// Merge keys are already applied, so a field a `<<:` supplies is caught
+/// too. Path-aware: only a container's own fields
+/// ([`NATIVE_CONTAINER_FIELDS`]), a cache mount's `scope` and a setup
+/// command's `run_in` count — never a key in `labels`, `environment` or
+/// `build_args`, which are the user's own names. Anything not shaped as
+/// expected is left for the typed read to report. Of several offenders the
+/// first in document order is reported (decisions/0014).
+///
+/// `refusal` says how — see [`native_field_rejection`].
+fn reject_native_fields(
+    document: Option<&noyalib::Value>,
+    refusal: &NativeFieldRefusal,
+) -> Result<()> {
+    let containers = document.and_then(|document| {
+        document
+            .untag_ref()
+            .get("containers")?
+            .untag_ref()
+            .as_mapping()
+    });
+    for (container, fields) in containers.into_iter().flatten() {
+        let Some(fields) = fields.untag_ref().as_mapping() else {
+            continue;
+        };
+        for (field, value) in fields {
+            if let Some(message) = native_field_use(container, field, value) {
+                return Err(native_field_rejection(refusal, message));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What a container's `field`, set to `value`, uses that is `ratect`-native,
+/// as the sentence [`reject_native_fields`] refuses it with — `None` if
+/// nothing.
+fn native_field_use(container: &str, field: &str, value: &noyalib::Value) -> Option<String> {
+    const NOT_SUPPORTED: &str =
+        "which is a ratect-native field not supported in Batect-compatible configuration.";
+    let entries = || {
+        value
+            .untag_ref()
+            .as_sequence()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.untag_ref().as_mapping())
+    };
+    match field {
+        _ if NATIVE_CONTAINER_FIELDS.contains(&field) => Some(format!(
+            "The container '{container}' uses '{field}', {NOT_SUPPORTED}"
+        )),
+        "setup_commands" => entries()
+            .any(|entry| entry.contains_key("run_in"))
+            .then(|| {
+                format!(
+                    "The container '{container}' has a setup command using 'run_in', \
+                     {NOT_SUPPORTED}"
+                )
+            }),
+        // A cache's default scope, `project`, is Batect's only behaviour, so
+        // refusing the field loses nothing. A `scope` on any other mount is
+        // the typed read's to refuse, as one only a cache may have; so is a
+        // cache with no name.
+        "volumes" => entries().find_map(|entry| {
+            let is_cache =
+                entry.get("type").and_then(|kind| kind.untag_ref().as_str()) == Some("cache");
+            let cache = scalar_text(entry.get("name")?)?;
+            (is_cache && entry.contains_key("scope")).then(|| {
+                format!(
+                    "The container '{container}' declares the cache '{}' with a 'scope', \
+                     {NOT_SUPPORTED}",
+                    printable(&cache)
+                )
+            })
+        }),
+        _ => None,
+    }
+}
+
+/// A scalar's text, for naming it in a message; `None` for anything else.
+fn scalar_text(value: &noyalib::Value) -> Option<String> {
+    match value.untag_ref() {
+        noyalib::Value::String(text) => Some(text.clone()),
+        noyalib::Value::Number(number) => Some(number.to_string()),
+        noyalib::Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
 }
 
 /// A [`ConfigFile`] read from a mapping whose top-level extension entries
@@ -4257,8 +4436,9 @@ pub struct LoadedConfig {
     container_boundaries: HashMap<String, Boundary>,
     /// The file each container was declared in. Retained — rather than
     /// dropped once the merge's own duplicate-definition check is done —
-    /// because a container's *file* is what decides which fields and which
-    /// semantics apply to it (ratect#214): a container declared in a YAML
+    /// because a container's *file* is what decides which semantics apply to
+    /// it (ratect#214; the fields it may use are refused while that file is
+    /// parsed, by [`reject_native_fields`]): a container declared in a YAML
     /// file follows Batect's rules wherever it is included, so
     /// [`ConfigFormat::batect_shaped_containers`] needs to know where each
     /// one came from. Also what lets a rejection name the offending file,
@@ -4381,7 +4561,9 @@ impl Config {
     /// resolution or expression interpolation: that is
     /// [`LoadedProject::evaluate`]'s, once the caller knows which containers
     /// it needs and with which `--config-var`/`--config-vars-file` overrides.
-    /// [`load_project`] is what follows this up with the load-time checks.
+    /// [`load_project`] is what follows this up with the load-time checks;
+    /// the one this does itself is refusing a `ratect`-native field in a
+    /// YAML file, while the file is parsed (`reject_native_fields`).
     ///
     /// A local file `include` entry is resolved relative to the directory of
     /// the file that declares it (not necessarily the root file's
@@ -4423,7 +4605,20 @@ impl Config {
         path: &Path,
         git_cache: &crate::git_include::GitIncludeCache<G>,
     ) -> Result<LoadedConfig> {
-        Self::load_from_file_impl(path, git_cache, ConfigFormat::Compat, None).await
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Compat, None, true).await
+    }
+
+    /// [`load_from_file_with_git_cache`](Self::load_from_file_with_git_cache)
+    /// for `ratect config convert`, which reads a `ratect`-native container
+    /// field in a YAML file rather than refusing it (an include entry's are
+    /// refused as before, by `include_trust::check_dialect`): converting the project is that
+    /// refusal's own way out under `ratect` (decisions/0021), and the field
+    /// is legal in the TOML file it is carried into.
+    pub async fn load_from_file_for_conversion<G: crate::git_include::GitClient>(
+        path: &Path,
+        git_cache: &crate::git_include::GitIncludeCache<G>,
+    ) -> Result<LoadedConfig> {
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Compat, None, false).await
     }
 
     /// Native-mode counterpart of
@@ -4434,7 +4629,7 @@ impl Config {
         path: &Path,
         git_cache: &crate::git_include::GitIncludeCache<G>,
     ) -> Result<LoadedConfig> {
-        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native, None).await
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native, None, true).await
     }
 
     /// [`load_from_file_native_with_git_cache`](Self::load_from_file_native_with_git_cache),
@@ -4449,7 +4644,7 @@ impl Config {
         git_cache: &crate::git_include::GitIncludeCache<G>,
         running: crate::written_for::Version,
     ) -> Result<LoadedConfig> {
-        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native, Some(running)).await
+        Self::load_from_file_impl(path, git_cache, ConfigFormat::Native, Some(running), true).await
     }
 
     async fn load_from_file_impl<G: crate::git_include::GitClient>(
@@ -4457,11 +4652,17 @@ impl Config {
         git_cache: &crate::git_include::GitIncludeCache<G>,
         format: ConfigFormat,
         running: Option<crate::written_for::Version>,
+        refuse_native_fields: bool,
     ) -> Result<LoadedConfig> {
         let root_path = absolute_path(path)?;
         // Kept to tell whether the root is YAML ([`include_trust::BatectFile`]).
         let root = root_path.clone();
-        let root_file = format.parse(path, None)?;
+        let native_fields = if refuse_native_fields {
+            NativeFields::Refused { root: &root }
+        } else {
+            NativeFields::Read
+        };
+        let root_file = format.parse(path, None, native_fields)?;
         reject_misplaced_ratect_version(path, None, &root_file, format, true)?;
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -4499,9 +4700,9 @@ impl Config {
             let containing_dir = declaring_file.parent().unwrap_or(Path::new(""));
             // Before `boundary` becomes a Git include's own, below.
             let declared_in = describe_origin(&declaring_file, boundary.as_ref());
-            let declared_in_batect = format.reads_as_batect(&declaring_file).then(|| {
-                include_trust::BatectFile::of(boundary.is_some(), format.reads_as_batect(&root))
-            });
+            let declared_in_batect = format
+                .reads_as_batect(&declaring_file)
+                .then(|| format.batect_file(boundary.as_ref(), &root));
             let (resolved, boundary) = match &include {
                 IncludeEntry::File { path } => {
                     let resolved = resolve_file_include(containing_dir, path, boundary.as_ref())?;
@@ -4643,7 +4844,7 @@ impl Config {
             }
             effective_grants.record(resolved.clone(), effective);
 
-            let file = format.parse(&resolved, boundary.as_ref())?;
+            let file = format.parse(&resolved, boundary.as_ref(), native_fields)?;
             reject_misplaced_ratect_version(
                 &resolved,
                 boundary.as_ref(),
@@ -5943,7 +6144,9 @@ fn collect_completion_task_names(
     if !visited.insert(absolute.clone()) {
         return;
     }
-    let Ok(file) = ConfigFormat::Native.parse(&absolute, None) else {
+    // A native field in a `.yml` fails the load, but stops no file being
+    // read — see `task_names_for_completion` for why that is not refused here.
+    let Ok(file) = ConfigFormat::Native.parse(&absolute, None, NativeFields::Read) else {
         return;
     };
     names.extend(file.tasks.into_keys());
@@ -6165,7 +6368,6 @@ fn load_project_impl(
     // Before `check_values` below — see
     // `ConfigFormat::reject_incompatible_fields`'s own doc comment for why.
     format.reject_incompatible_fields(
-        config_file,
         &loaded.config,
         &loaded.container_origins,
         &loaded.container_boundaries,
@@ -6349,132 +6551,6 @@ fn validate_image_sources_in_compat(containers: &[BatectShaped<'_>]) -> Result<(
     Ok(())
 }
 
-/// `extends` is a `ratect`-native field; a `batect.yml` that uses it is
-/// rejected rather than silently ignored, keeping `ratect-compat` a faithful
-/// Batect replacement (Batect has no such field).
-fn reject_extends_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers
-        .iter()
-        .find(|entry| entry.container.extends.is_some())
-    {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses 'extends', which is a ratect-native field \
-                 not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// `run_to_completion` is a `ratect`-native field (init-container behavior);
-/// a `batect.yml` that uses it is rejected rather than silently ignored,
-/// same reasoning as [`reject_extends_in_compat`] — Batect has no such
-/// concept.
-fn reject_run_to_completion_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers
-        .iter()
-        .find(|entry| entry.container.run_to_completion.unwrap_or(false))
-    {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses 'run_to_completion', which is a ratect-native \
-                 field not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// `stop_signal` is a `ratect`-native field (ratect#112); a `batect.yml`
-/// that uses it is rejected rather than silently ignored, same reasoning as
-/// [`reject_extends_in_compat`] — Batect has no such field.
-fn reject_stop_signal_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers
-        .iter()
-        .find(|entry| entry.container.stop_signal.is_some())
-    {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses 'stop_signal', which is a ratect-native field \
-             not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// `stop_grace_period` is a `ratect`-native field (ratect#112), same
-/// reasoning as [`reject_stop_signal_in_compat`].
-fn reject_stop_grace_period_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers
-        .iter()
-        .find(|entry| entry.container.stop_grace_period.is_some())
-    {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses 'stop_grace_period', which is a ratect-native \
-             field not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// `ulimits` is a `ratect`-native field (ratect#95), same reasoning as
-/// [`reject_stop_signal_in_compat`] — Batect has no such field.
-fn reject_ulimits_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers
-        .iter()
-        .find(|entry| entry.container.ulimits.is_some())
-    {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses 'ulimits', which is a ratect-native field \
-             not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// `dns`/`dns_search`/`dns_options` are `ratect`-native fields (ratect#105),
-/// same reasoning as [`reject_stop_signal_in_compat`] — Batect has no such
-/// fields.
-fn reject_dns_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    for entry in containers {
-        let container = entry.container;
-        let field = if container.dns.is_some() {
-            "dns"
-        } else if container.dns_search.is_some() {
-            "dns_search"
-        } else if container.dns_options.is_some() {
-            "dns_options"
-        } else {
-            continue;
-        };
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses '{field}', which is a ratect-native field \
-             not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
 /// The container whose network namespace `target` ends up in, following
 /// `container:` targets that share another container's in turn — the one a
 /// field refused under `container:` has to be set on instead. Paired with
@@ -6541,70 +6617,6 @@ fn shared_network_description(owner: &str, target: &str) -> String {
     } else {
         format!("it shares the network of '{owner}' (through '{target}')")
     }
-}
-
-/// `network_mode` is a `ratect`-native field (ratect#106), same reasoning
-/// as [`reject_stop_signal_in_compat`] — Batect has no network-mode concept.
-fn reject_network_mode_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers
-        .iter()
-        .find(|entry| entry.container.network_mode.is_some())
-    {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses 'network_mode', which is a ratect-native field \
-             not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// `user`/`group`/`groups` are `ratect`-native fields (ratect#234), same
-/// reasoning as [`reject_stop_signal_in_compat`] — Batect's only way to name
-/// a container's user is `run_as_current_user`.
-fn reject_passthrough_identity_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    for entry in containers {
-        let container = entry.container;
-        let field = if container.user.is_some() {
-            "user"
-        } else if container.group.is_some() {
-            "group"
-        } else if container.groups.is_some() {
-            "groups"
-        } else {
-            continue;
-        };
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses '{field}', which is a ratect-native field \
-             not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// `identity` is a `ratect`-native field (ratect#235), same reasoning as
-/// [`reject_passthrough_identity_in_compat`].
-fn reject_identity_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    for entry in containers {
-        if entry.container.identity.is_some() {
-            let name = entry.name;
-            return Err(native_field_rejection(
-                entry,
-                format!(
-                    "The container '{name}' uses 'identity', which is a ratect-native field \
-                 not supported in Batect-compatible configuration."
-                ),
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// What a container's [`Container::user`], [`group`](Container::group) and
@@ -6816,56 +6828,6 @@ fn validate_dns_servers(config: &Config) -> Result<()> {
                 );
             }
         }
-    }
-    Ok(())
-}
-
-/// `external_health_check` is a `ratect`-native field (ratect#98); a
-/// `batect.yml` that uses it is rejected rather than silently ignored, same
-/// reasoning as [`reject_run_to_completion_in_compat`] — and with more at
-/// stake, since silently ignoring it would leave the dependents of a
-/// container that cannot health-check itself starting against nothing.
-fn reject_external_health_check_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers
-        .iter()
-        .find(|entry| entry.container.external_health_check.is_some())
-    {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' uses 'external_health_check', which is a \
-                 ratect-native field not supported in Batect-compatible configuration."
-            ),
-        ));
-    }
-    Ok(())
-}
-
-/// Rejects a `setup_commands` entry using `run_in`, which names another
-/// container to exec into — `ratect`-native only, same reasoning as
-/// [`reject_run_to_completion_in_compat`]: Batect has no equivalent
-/// ([batect#286](https://github.com/batect/batect/issues/286) is still
-/// unbuilt), so a container declared in a YAML file using it is rejected
-/// rather than silently running the command in the declaring container
-/// instead, which would look like it worked.
-fn reject_setup_command_run_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    if let Some(entry) = containers.iter().find(|entry| {
-        entry
-            .container
-            .setup_commands
-            .iter()
-            .flatten()
-            .any(|setup_command| setup_command.run_in.is_some())
-    }) {
-        let name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{name}' has a setup command using 'run_in', which is a \
-                 ratect-native field not supported in Batect-compatible configuration."
-            ),
-        ));
     }
     Ok(())
 }
@@ -7189,43 +7151,6 @@ fn reject_image_expressions_in_compat(containers: &[BatectShaped<'_>]) -> Result
     Ok(())
 }
 
-/// Rejects `scope` on a cache mount in a `batect.yml`, for the same reason
-/// as [`reject_extends_in_compat`]: Batect has no such field, so accepting
-/// it would let a config be written here that real `batect` refuses. The
-/// default (`Project`) is Batect's only behaviour, so nothing is lost —
-/// this only rejects a file that asked for the native one.
-fn reject_shared_caches_in_compat(containers: &[BatectShaped<'_>]) -> Result<()> {
-    let offender = containers.iter().find_map(|entry| {
-        entry
-            .container
-            .volumes
-            .iter()
-            .flatten()
-            .find_map(|volume| match volume {
-                // Presence, not value: real `batect` rejects any unknown
-                // property, so `scope: project` is just as unloadable
-                // there as `scope: shared`.
-                VolumeMount::Cache(cache) if cache.scope.is_some() => {
-                    Some((entry, cache.name.as_str()))
-                }
-                _ => None,
-            })
-    });
-    if let Some((entry, cache_name)) = offender {
-        let container_name = entry.name;
-        return Err(native_field_rejection(
-            entry,
-            format!(
-                "The container '{container_name}' declares the cache '{}' with a \
-                 'scope', which is a ratect-native field not supported in \
-                 Batect-compatible configuration.",
-                printable(cache_name)
-            ),
-        ));
-    }
-    Ok(())
-}
-
 /// Rejects a project that gives one cache name two different scopes.
 ///
 /// The name maps to storage — a project-scoped `cargo` and a shared `cargo`
@@ -7237,7 +7162,7 @@ fn reject_shared_caches_in_compat(containers: &[BatectShaped<'_>]) -> Result<()>
 /// Unconditional — a cross-dialect invariant, not a per-dialect rule that
 /// happens to sit outside [`ConfigFormat::reject_incompatible_fields`]'s
 /// `Compat` arm. It is also provably inert for `Compat` today, since
-/// `reject_shared_caches_in_compat` already rejects the only field
+/// [`reject_native_fields`] already rejects the only field
 /// (`scope`) that could ever produce a conflict there.
 fn reject_conflicting_cache_scopes(config: &Config) -> Result<()> {
     let mut seen: std::collections::BTreeMap<&str, CacheScope> = std::collections::BTreeMap::new();

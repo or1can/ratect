@@ -92,6 +92,10 @@ gets Batect's own semantics: no expressions resolved in `image`, and exactly
 one of `image`/`build_directory`. That holds even when a `ratect.toml`
 project is what pulled the file in, and it holds for a YAML *root* file too
 — `ratect -f batect.yml` reads a Batect file, and reads it as one.
+A native field fails the load whatever its value, as an unknown field does
+in Batect: `run_to_completion: false` is refused like `true`, and a
+malformed value is reported as the field that doesn't belong, not as a bad
+value.
 
 The same goes for a Git include entry's native-only fields,
 [`allow_nested_git_includes`](#nested-git-includes) and

@@ -363,6 +363,46 @@ fn list_tasks_shows_an_unquoted_number_as_written() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A native-only field in the root file is refused naming the file by its
+/// absolute path, as for any other file the project loads, however `-f`
+/// spelled it — here, not at all (ratect#216).
+#[test]
+fn a_native_field_in_the_root_file_names_it_by_its_absolute_path() {
+    let dir = std::env::temp_dir().join(format!(
+        "ratect-compat-native-root-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("batect.yml"),
+        "project_name: demo\ncontainers:\n  app:\n    image: alpine\n    ulimits: nope\n",
+    )
+    .unwrap();
+
+    let output = ratect_command()
+        .current_dir(&dir)
+        .arg("--list-tasks")
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let absolute = dir.canonicalize().unwrap().join("batect.yml");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert!(!output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "The container 'app' uses 'ulimits', which is a ratect-native field not supported \
+             in Batect-compatible configuration. It is declared in {:?}",
+            absolute
+        )),
+        "{stderr}"
+    );
+}
+
 /// #751: a Git include's credentials appear in nothing the load prints — its
 /// clone line, its error, or `RUST_LOG=debug` — in any style. The port is
 /// closed, so the clone fails at once and leaves nothing in the cache.

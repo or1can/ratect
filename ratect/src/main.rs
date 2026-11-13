@@ -1821,7 +1821,7 @@ async fn convert_config(
     ratect_core::config::check_config_file(source)?;
     let git_cache =
         ratect_core::git_include::GitIncludeCache::new().with_output(load_output.clone());
-    let loaded = Config::load_from_file_with_git_cache(source, &git_cache)
+    let loaded = Config::load_from_file_for_conversion(source, &git_cache)
         .await
         .with_context(|| format!("Failed to load {} for conversion", source.display()))?;
     let converted = ratect_core::convert::convert_project(&loaded, running_version())
