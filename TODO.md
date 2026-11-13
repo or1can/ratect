@@ -106,6 +106,23 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   asserts presence/order only, and the exact-stdout tests still pin
   `quiet` mode specifically.
 
+- **20.** **The Git include tests that expect an entry lock taken over aren't
+  behind `cfg(unix)`** (`ratect-core/src/git_include_tests.rs`). Off Unix
+  `entry_lock::still_at` returns `None`, which `attempt` reports as
+  `HeldByUnknownHolder` rather than taking the lock over, so these would fail
+  there if run: `a_lock_whose_holder_process_was_killed_is_taken_over`,
+  `a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it_over`,
+  `only_one_of_two_looks_at_an_abandoned_lock_takes_it_over`,
+  `a_takeover_rewrites_the_marker_without_emptying_the_file_first`,
+  `two_waiters_on_one_abandoned_lock_clone_once`, and the `ensure_cached`/
+  `refresh`/load tests that take over `abandoned_lock`. CLAUDE.md puts
+  Unix-only tests behind `cfg(unix)`. Left because gating them can leave
+  helpers they share (`abandoned_lock`, `this_test_binary_running`, the
+  holder processes' constants) unused off Unix, which a Windows `cargo
+  check` would report, and that check didn't build here (`ring`'s C code
+  needs Windows headers); CI's Windows Check runs it. Found reviewing
+  ratect#886.
+
 ## Efficiency
 
 - **6.** **`Console`'s `std::sync::Mutex` can block tokio worker threads on a
