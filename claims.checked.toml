@@ -13067,15 +13067,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "e245434933571536"
-copies = 1
-note = "\"Where these meet Ratect's own rules\" and \"Constant gardening\" are process guidance; guideline 13 (commit packaging) and guideline 16 (fix the class) exist as cited, and nothing here concerns noyalib or TODO.md item 18."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "TODO.md" = "c2a680921ef48d01", "decisions/0006-code-and-documentation-locality.md" = "b18987300e14cf76" }
-
-[[mark]]
 file = "docs/ratect-compat-config-reference.md"
 mode = "stale-claims"
 unit = "ba33232f9d5197f8"
@@ -13932,24 +13923,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read against ci.yml's tools job (runs every tools/test_*.py plus check-readme-docs-list.py, not only changelog-section.py's tests), .claude/settings.json's claims marketplace/enabledPlugins, claims.toml's restatement extensions and claim-words files, and tools/ (four retired scripts absent); the outdated Tools Tests sentence is already corrected in the ADR's Status line."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "c2a680921ef48d01", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read against .pre-commit-config.yaml (claims v0.28.1 as pre-commit and pre-push hooks), ci.yml's claims job, TODO.md and ci.yml's tools job; the PreToolUse-hook, no-CI-job, TODO-item and changelog-only-tests sentences are superseded as the Status line records; the check-citations Markdown/Swift gap matches agents/claims.md and the deny-by-default grant matches AGENTS.md."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", "TODO.md" = "c2a680921ef48d01", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
 file = "docs/how-it-works.md"
 mode = "stale-claims"
 unit = "db26194905776a79"
@@ -14155,16 +14128,6 @@ copies = 1
 note = "Read against classify_ssh_agent_paths in docker.rs (a socket must be the entry's only path, one socket per id) and the root Cargo.toml's bollard patch tag; this branch's non-Unix is_socket and Keyring::start refusal are outside the Unix-socket case it describes."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad" }
-
-[[mark]]
-file = "agents/claims.md"
-mode = "stale-claims"
-unit = "24d9d9ee602a12ed"
-copies = 1
-note = "Read every per-repo setting against claims.toml (claim-words and temporal-words file lists, restatement extensions, stale-claims scoping and excluded sections, the executable-claims timeout, no check-config-defaults table or .env.example); the plugin's own check registry and gate/advisory split were not checked, being outside this repo."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "c2a680921ef48d01" }
 
 [[mark]]
 file = "docs/installation.md"
@@ -16257,3 +16220,57 @@ note = "Read the Captured-so-far paragraph: docs/ratect-cli.md still includes th
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "book.toml" = "5be1237a684817bc", "docs/demo.cast" = "dea031efbde9ac70", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/ratect-cli.md" = "acacb86f97e6e9e4", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "90b2416bf81dab8d", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "044487bde4ba7725" }
+
+[[mark]]
+file = "TODO.md"
+mode = "claim-words-about-elsewhere"
+unit = "153b9933bb501e9d"
+copies = 1
+note = "Checked against ratect-core/src/git_include/entry_lock.rs: still_at is None under cfg(not(unix)), take_over_if_abandoned maps None to Unknown and attempt maps that to HeldByUnknownHolder; each named test asserts a takeover and none is behind cfg(unix) (reviewer read, ratect#886)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "TODO.md"
+mode = "claim-words-about-elsewhere"
+unit = "69dca1b12e06f8f6"
+copies = 1
+note = "Checked by running cargo check --target x86_64-pc-windows-msvc -p ratect-core --tests on this Mac: ring's build script failed on a missing assert.h; the helpers named are used by the ungated tests listed (ratect#886)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Read the Decision section against claims.toml: claim-words still opts in TODO.md; ratect#886's branch only adds TODO.md item 20, which changes nothing the section says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "9f48cfa3448d7cdf", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read the Consequences section: its one TODO.md mention (\"tracked in TODO.md rather than solved here\") records the state at adoption in a shipped ADR; adding TODO.md item 20 (ratect#886) doesn't bear on it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", "TODO.md" = "9f48cfa3448d7cdf", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "e245434933571536"
+copies = 1
+note = "Read the section: \"note that in TODO.md instead\" for out-of-scope work is what ratect#886's TODO.md item 20 does; nothing else in it names TODO.md."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "TODO.md" = "9f48cfa3448d7cdf", "decisions/0006-code-and-documentation-locality.md" = "b18987300e14cf76" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "stale-claims"
+unit = "24d9d9ee602a12ed"
+copies = 1
+note = "Read the section against claims.toml: TODO.md is in claim-words' files and left out of temporal-words, as stated; adding TODO.md item 20 (ratect#886) changes neither."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "9f48cfa3448d7cdf" }
