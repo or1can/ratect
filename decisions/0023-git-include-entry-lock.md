@@ -4,6 +4,66 @@
 ([#733](https://github.com/or1can/ratect/issues/733), ratect-compat 0.33.0 ·
 ratect 0.12.0).
 
+Corrected since (found 2026-11-12 by the spike in
+[#875](https://github.com/or1can/ratect/issues/875), corrected under
+[#877](https://github.com/or1can/ratect/issues/877)), left in place below as
+written: Decision 3's claim that the kernel releases a holder's OS lock "for
+every process on the machine, whatever PID namespace or bind mount it sees the
+file through" is false wherever the lock doesn't reach every process that sees
+the file, and an OrbStack bind mount is such a place. On one kernel it should
+reach them: `flock(2)` ties the lock to the open file in the kernel rather
+than to a process ID, so another PID namespace makes no difference, though
+that was not run, and a VM's file share leaves even one kernel open (below).
+On macOS with OrbStack (Docker 29.8.2), with a directory bind-mounted into a
+container, #875 reports that a container took an exclusive `flock` the host
+was holding without waiting, that the host took one a container was holding,
+and that a second host process was correctly refused. #877's triage repeated
+the first and third with a bare `flock` and an Alpine container. This record's
+own entry-lock code, and the takeover Decision 4 would then make, were not
+run.
+
+Not run at all: a native Linux daemon, where the claim should hold; Docker
+Desktop, on macOS (the case Consequences names) or on Linux; any other
+VM-based daemon on a Linux host; two containers on one VM reaching the file
+through the VM's share of a host directory, which is one kernel but not
+necessarily one lock ([0025](0025-task-run-lock.md) leaves this open too); and
+a network filesystem, which may or may not carry the lock between machines.
+
+So where the lock doesn't reach, a free OS lock does not prove its holder
+dead, and the Context's "a death ratect can't observe is not proof" is not
+met. The same unscoped claim stands in this record's title, the Decision
+section's lead ("so a holder's death can be proved"), Decision 3's heading and
+the record's row in the [index](README.md). The Alternatives' remark that the
+OS lock closes a process ID's gap holds for the PID namespace it names, but
+not for a container on another kernel. Consequences anticipated the case,
+under "An OS lock that works per host only", but its bound on the cost, a
+duplicate clone and never a corrupt entry, is not verified: with two holders,
+Decision 7's cleanup of other temporary directories, and release deleting the
+lock by path (`EntryLock::release`, with no check that the file is still the
+one it locked), look able to exceed it. The first can fail the live clone, as
+Consequences says, but if its `git` keeps writing into directories that
+survive, it can instead leave the clone incomplete, to be renamed into place;
+the second can delete the lock of a third process that took it between the two
+releases. [#880](https://github.com/or1can/ratect/issues/880) tracks both. If
+they can, the title's "correctness doesn't depend on it" and the Context's
+"fully correct on a local filesystem" don't hold in this case either, since
+the host's cache is on its local filesystem.
+
+Recording the holder's boot identity in the lock, as the task run lock plans
+to (0025), was considered and declined. Released binaries would ignore it only
+if it followed the unchanged marker, and even then one that took a lock over
+would rewrite the marker and leave the previous holder's identity behind,
+which is another boot's if the two differ; a new marker version would instead
+make them treat every new lock as one they can't prove abandoned. A lock left
+by an older holder carries none. And after a reboot a new binary would read
+every lock left before it as unprovable, bringing back #733's 5-minute wait
+and failure for every such load that needs to clone that entry, until the lock
+is deleted, by hand or, since the lock is marked, by a released binary that
+takes it over and releases it. For the task run lock, "unknown" only means a
+leftover isn't removed by default; here it means that wait.
+
+
+
 ## Context
 
 A Git include is cloned once into `~/.ratect/incl/<key>/` and reused. Both

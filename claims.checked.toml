@@ -9631,15 +9631,6 @@ subjects = {}
 [[mark]]
 file = "CONTEXT.md"
 mode = "stale-claims"
-unit = "efbe9d5743db5752"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Caches re-read against cache.rs:36-39 (the cache root is followed through a symlink for every operation), git_include.rs module doc (a clone is staged in <key>.tmp-<unique> then renamed, the lock is taken over once its holder exits, and the sweep removes entries unused for over 30 days) and decisions/0023, whose only fix-commit change is a comment link."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "663cf0e7493b4f00" }
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
 unit = "86830e3a7a67995f"
 copies = 1
 note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Built images re-read: the automatic tag is format!(\"{}-{}\", project_name, name) at engine.rs:2804 and is dropped when an image override exists (:2803); the component rule at image_reference.rs:53 is [a-z0-9]+((?:[._]|__|[-]+)[a-z0-9]+)* and is enforced for project and container names at config.rs:3155/3176/3955; 0018's fix-commit changes touch only the Compose/Dagger survey."
@@ -9681,15 +9672,6 @@ copies = 1
 note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Exit codes section run against ratect-compat: an -o quiet run of 'exit 42' exits 42; SIGINT/SIGTERM/SIGHUP give 130/143/129 with their notices; yes | head -n1 exits 141 with \"Stdout closed; cleaning up.\"; no task name (even with a missing -f) exits 125 and names --list-tasks/--help; \"-- x\" with no task exits 125; --bogus build exits 125 and --bogus --clean exits 2; bad YAML under -T exits 1; --log-file in a missing dir exits 125 on a run and 2 under -T; \"Did you mean 'test' or 'yes'?\" lists every tie, and a prerequisite gets no list hint. | prior note holds (0016 changed only its survey paragraph): re-run against ratect-compat: no task name gives 125, \"-- x\" gives 125, \"--bogus build\" gives 125 and \"--bogus --clean\" gives 2, and SIGINT gives 130 with its notice (scratch r2-docs/ex, sig)."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
-
-[[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "d33363a7aee55bcd"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: 'Top-level fields' re-read at HEAD: the 0023 change is only a comment link; the include row's new host-path clause checked against config.rs:4709-4761 (HostPathField::Volumes, BuildDirectory, BuildSecrets, BuildSsh containment) and include_trust.rs:73 (allow_host_paths enforced in both dialects) and :435-443 (refusal names allow_host_paths); the nested-Git gate is native-only via include_trust.rs:535-540 restricting."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "663cf0e7493b4f00" }
 
 [[mark]]
 file = "decisions/0011-container-identity.md"
@@ -15631,3 +15613,156 @@ note = "Read the native-field and cache-scope mentions (lines 210, 480); still t
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "ratect-core/src/config.rs" = "28158cda74320221" }
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-totalising"
+unit = "4973b5711780d8b1"
+copies = 1
+note = "Quote checked verbatim against Decision 3; \"false wherever the lock doesn't reach\" checked against #875's findings comment point 3 (OrbStack bind mount)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "4973b5711780d8b1"
+copies = 1
+note = "Quote checked verbatim against Decision 3; issue numbers checked: #875 findings comment, #877"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "e9272334aa0c5177"
+copies = 1
+note = "flock(2) associates locks with the open file description; the not-run statement matches #875's \"Not varied\" list"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "e9272334aa0c5177"
+copies = 1
+note = "The \"(below)\" reference resolves to the not-run paragraph's VM-share item, which cites 0025's open question at decisions/0025-task-run-lock.md:161"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "2f05fbb1163f445a"
+copies = 1
+note = "Three observations and Docker 29.8.2 checked against #875's findings comment, point 3 and the What was run section"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-about-elsewhere"
+unit = "2f05fbb1163f445a"
+copies = 1
+note = "The #875 attribution checked against its findings comment (issuecomment-6830134077), point 3"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "9bf7b8502408e8ca"
+copies = 1
+note = "#875 ran a throwaway engine.rs run-lock patch; #877's triage ran a bare flock; neither ran entry_lock.rs or Decision 4's takeover"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "f6d8c6edef4c0bcf"
+copies = 1
+note = "Not-run list checked against #875's Not varied section, #877's body, and decisions/0025-task-run-lock.md:161-165"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-totalising"
+unit = "20ec8bbba844550b"
+copies = 1
+note = "Consequences bullet quoted verbatim; release's path-only remove_file checked at ratect-core/src/git_include/entry_lock.rs:58-61; Decision 7 remove_dir_all checked at ratect-core/src/git_include.rs:359-372"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "20ec8bbba844550b"
+copies = 1
+note = "Two holders and two paths match #880's body"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "e47b9eaa02656fe7"
+copies = 1
+note = "Both paths checked against #880 and git_include.rs (remove_staging_directory logs and ignores a failed remove_dir_all) and entry_lock.rs release"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-totalising"
+unit = "7c407afe32bc9c61"
+copies = 1
+note = "take_over_if_abandoned matches only the first line against MARKER and rewrites it from offset 0 without truncating (entry_lock.rs:165-171)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "7c407afe32bc9c61"
+copies = 1
+note = "Same reading of entry_lock.rs:165-171; one marker line, one identity line in the hypothetical design"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-totalising"
+unit = "1cd8ebb96b4c62a0"
+copies = 1
+note = "5-minute lock_timeout from Decision 9; since #389 only a load that needs to clone the entry takes its lock; a released binary takes over a marked free lock (Decision 3/4) and deletes it on release (Decision 5)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-totalising"
+unit = "c9ed97ededf569f9"
+copies = 1
+note = "decisions/0025-task-run-lock.md:101-103: an Unknown run lock is removed only with --all"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "efbe9d5743db5752"
+copies = 1
+note = "Caches section re-read after the 0023 Status note: Entry lock, Holder and Abandoned lock entries make no cross-kernel claim; Entry lock states the lock's purpose, which the 0023 note's scope correction and #880 qualify"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "92a9696ba74f0116" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "d33363a7aee55bcd"
+copies = 1
+note = "The include row's entry-lock sentences (takeover of a lock whose holder exited, wait notice) make no cross-kernel claim and still hold"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "92a9696ba74f0116" }
