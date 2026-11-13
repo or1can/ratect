@@ -782,11 +782,11 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
     }
 
-    /// Best-effort: a failure here just leaves a lock file behind, which the
-    /// next waiter takes over once this process has exited (its OS lock goes
-    /// with it). Only cloning takes the lock — not a load once the working
-    /// copy exists, nor `remove_entry` — so that only times out a caller that
-    /// still needs to clone, as Batect's would.
+    /// Best-effort: a failure here just leaves a lock file behind, whose OS
+    /// lock the release or the drop still frees, so on Unix the next waiter
+    /// takes it over. Only cloning takes the lock — not a load once the
+    /// working copy exists, nor `remove_entry` — so that only times out a
+    /// caller that still needs to clone, as Batect's would.
     async fn release_lock(&self, lock: entry_lock::EntryLock, lock_path: &Path) {
         match tokio::task::spawn_blocking(move || lock.release()).await {
             Ok(Ok(())) => {}

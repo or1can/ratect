@@ -15500,24 +15500,6 @@ subjects = {}
 
 [[mark]]
 file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "efbe9d5743db5752"
-copies = 1
-note = "Caches section re-read after the 0023 Status note: Entry lock, Holder and Abandoned lock entries make no cross-kernel claim; Entry lock states the lock's purpose, which the 0023 note's scope correction and #880 qualify"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "92a9696ba74f0116" }
-
-[[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "d33363a7aee55bcd"
-copies = 1
-note = "The include row's entry-lock sentences (takeover of a lock whose holder exited, wait notice) make no cross-kernel claim and still hold"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "92a9696ba74f0116" }
-
-[[mark]]
-file = "CONTEXT.md"
 mode = "claim-words-totalising"
 unit = "c84ff0812042158c"
 copies = 1
@@ -15747,15 +15729,6 @@ mode = "claim-words-counts"
 unit = "c1050c63292ffaab"
 copies = 1
 note = "entry_lock::replaced compares dev and ino, as still_at does for take_over_if_abandoned; called before remove_file while file is held"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0027-git-include-staging-survives-two-holders.md"
-mode = "claim-words-totalising"
-unit = "416d3fb91a022ffc"
-copies = 1
-note = "EntryLock::release: replaced() true returns Ok without remove_file, then drops the file"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -16048,15 +16021,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/src/main.rs" = "5e38e9b2257889a2", "ratect/src/main.rs" = "f4265a4d2d9e5ce6" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "4ca303a3bf7ddf7b"
-copies = 1
-note = "Module table vs lib.rs mods and each //! doc; yaml/daemon_class/identity/user/include_trust symbols exist; ratect Command order matches"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "f46fc6d7d5f77262", "decisions/0003-ratect-native-config-format.md" = "4e46cecd5f4321e2", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0011-container-identity.md" = "cca22d618942f0f6", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "7327593788ec3ba8", "docs/ratect-cli.md" = "acacb86f97e6e9e4", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "92e119568c654aa4", "docs/ratect-config-reference.md" = "19aaf620598872f5", "ratect-compat/src/main.rs" = "5e38e9b2257889a2", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "a96c947250c390c2", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "2584cc267720f139", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/exit_code.rs" = "780d6e93214b0a5c", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "0f7ad25cc02fc1f0", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "50c5ced25f3b1a90", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "b4f35ec291651338", "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b", "ratect-core/src/yaml.rs" = "4051e9b0303db9d9", "ratect/src/main.rs" = "f4265a4d2d9e5ce6" }
-
-[[mark]]
 file = "decisions/0004-git-include-host-path-trust.md"
 mode = "stale-claims"
 unit = "0222d94d199feaee"
@@ -16064,24 +16028,6 @@ copies = 1
 note = "Compat reference documents allow_host_paths; includes.md#containment anchor resolves"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/includes.md" = "7327593788ec3ba8", "docs/includes.md#containment" = "5e9932f8ba94d3e8", "docs/ratect-compat-config-reference.md" = "92e119568c654aa4" }
-
-[[mark]]
-file = "research/shared-cache-concurrency.md"
-mode = "stale-claims"
-unit = "2225a27f38179de6"
-copies = 1
-note = "Snapshot pinned to 0b98f81f per research/README; acquire_lock still create_new via entry_lock::attempt, 100ms poll, 5-min timeout"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/git_include.rs" = "0f7ad25cc02fc1f0" }
-
-[[mark]]
-file = "research/shared-cache-concurrency.md"
-mode = "stale-claims"
-unit = "eeab689af04a4c4b"
-copies = 1
-note = "Snapshot pinned to ratect 0b98f81f (header); at that commit a person deleted locks and SystemGitClient reused fixed <key>.tmp"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/git_include.rs" = "0f7ad25cc02fc1f0" }
 
 [[mark]]
 file = "CONTEXT.md"
@@ -16109,15 +16055,6 @@ copies = 1
 note = "CONTEXT.md and decisions/README.md exist and state the convention; agents/docs.md explains why ADRs aren't under docs/adr"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "276f5db2eaa9a6a1d7d4f2d9e677f118cb128d29", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "a4ec70ae28e03ccf" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "stale-claims"
-unit = "073c1634c496cdb6"
-copies = 1
-note = "derive_spec/derive_build_spec in container_spec.rs; //! docs in config/docker; line counts 4.4k-7.8k, git_include ~1.2k; cache.rs from 378c8ce7"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "0f7ad25cc02fc1f0", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
 
 [[mark]]
 file = "README.md"
@@ -16163,24 +16100,6 @@ copies = 1
 note = "user-mapping/taskrun anchors exist; enabled=false default, literal home_directory, literal string volume host path still hold"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/ratect-compat-config-reference.md" = "92e119568c654aa4" }
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "stale-claims"
-unit = "a79f54158176959a"
-copies = 1
-note = "Load fns and LoadedProject::evaluate exist in config.rs; git includes clone to ~/.ratect/incl; cache mounts resolved via engine.rs to cache.rs"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0014-config-checked-at-load-evaluated-per-task.md" = "186e0b75044a03f2", "ratect-core/src/cache.rs" = "139da432ed9c8f74", "ratect-core/src/config.rs" = "28158cda74320221", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "0f7ad25cc02fc1f0" }
-
-[[mark]]
-file = "decisions/0003-ratect-native-config-format.md"
-mode = "stale-claims"
-unit = "013af8aeb0018e02"
-copies = 1
-note = "TOML sidecar is the Git include cache's info file, read and written with toml in git_include.rs"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md#future-vision" = "de51e3239425bbce", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "0f7ad25cc02fc1f0" }
 
 [[mark]]
 file = "decisions/0025-task-run-lock.md"
@@ -16231,46 +16150,289 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "TODO.md"
-mode = "claim-words-about-elsewhere"
-unit = "69dca1b12e06f8f6"
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "dcf67c842b18382a"
 copies = 1
-note = "Checked by running cargo check --target x86_64-pc-windows-msvc -p ratect-core --tests on this Mac: ring's build script failed on a missing assert.h; the helpers named are used by the ungated tests listed (ratect#886)."
+note = "flock LOCK_UN acts on the open file description; a_release_frees_the_os_lock_while_a_child_still_shares_the_file shows a fresh open's try_lock succeeds while a child holds a dup, WouldBlock without the unlock"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "cdecaee437711865"
+copies = 1
+note = "only ensure_cached takes the lock, one include at a time (config.rs include loop, refresh loop), its own git clone/checkout awaited before release_lock; the sweep is tokio::spawned after load (ratect-compat main.rs), registry_auth runs after load"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "61cd318dc9cfb518"
+copies = 1
+note = "EntryLock has no Drop impl; the diff changes only release(), so dropping still closes the file without deleting it"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "TODO.md"
+mode = "restatement-ngram"
+unit = "e2764efd9a1ccd5a-bb395a62988f7d53"
+copies = 1
+note = "item 20: a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it_over still exists, still takes over abandoned_lock, and is still not cfg(unix)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "TODO.md"
+mode = "restatement-whole-line"
+unit = "e2764efd9a1ccd5a-b3a7790c9c4c6e2d"
+copies = 1
+note = "item 20: the named test still exists with that name and is still an ungated takeover test"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/git_include_tests.rs"
+mode = "restatement-ngram"
+unit = "9fbd00876fd4491b-ebc35c8886a7e785"
+copies = 1
+note = "abandoned_lock's doc points at this_test_binary_running, which still exists and states the drop/close rule"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/git_include_tests.rs"
+mode = "restatement-ngram"
+unit = "1d434c057cad100e-fd59883866f2b4a4"
+copies = 1
+note = "this_test_binary_running still runs one test of this binary in its own process (current_exe, --exact, --test-threads=1)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/git_include_tests.rs"
+mode = "restatement-ngram"
+unit = "27df6cae51addbc4-4a690c4c34f5dfdb"
+copies = 1
+note = "LOCK_HOLDER_ENV doc: a_lock_holder_process still takes the lock at that path and sleeps until killed"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/git_include_tests.rs"
+mode = "restatement-ngram"
+unit = "a4bac4c7bca0cc53-2cdbe57962691039"
+copies = 1
+note = "a_lock_holder_process still returns at once unless LOCK_HOLDER_ENV is set"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/git_include_tests.rs"
+mode = "restatement-ngram"
+unit = "1746ca4c8a9d2ad2-ba3b24fc74752111"
+copies = 1
+note = "a_lock_whose_holder_process_was_killed_is_taken_over still runs this binary again via this_test_binary_running with LOCK_HOLDER_ENV"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "TODO.md"
+mode = "claim-words-about-elsewhere"
+unit = "3adc0765f0e278fb"
+copies = 1
+note = "abandoned_lock, this_test_binary_running and LOCK_HOLDER_ENV/LOCK_HELD are used only by the ungated takeover tests and a_lock_holder_process; gating those tests would leave them unused off Unix. Only edit: one holder process remains after ratect#888 removed a_lock_releasing_process"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "stale-claims"
+unit = "073c1634c496cdb6"
+copies = 1
+note = "Status line counts: git_include.rs 1248 lines (about 1,200), config.rs 7838, docker.rs 4396, engine.rs 4359 (about 4,400-7,900)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "ad5144cd7ad0a249", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
+
+[[mark]]
+file = "research/shared-cache-concurrency.md"
+mode = "stale-claims"
+unit = "2225a27f38179de6"
+copies = 1
+note = "research pinned to ratect 0b98f81f; its ratect claim (acquire_lock: create_new, 100 ms poll, 5-minute lock_timeout) still holds in git_include.rs; the rest cites other tools at pinned tags"
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "ratect-core/src/git_include.rs" = "ad5144cd7ad0a249" }
+
+[[mark]]
+file = "research/shared-cache-concurrency.md"
+mode = "stale-claims"
+unit = "eeab689af04a4c4b"
+copies = 1
+note = "'ratect today' is relative to the research's pinned commit; nothing in the section describes ratect's release, so ratect#888 doesn't change it"
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "ratect-core/src/git_include.rs" = "ad5144cd7ad0a249" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "stale-claims"
+unit = "a79f54158176959a"
+copies = 1
+note = "git include sentences: a type: git entry clones into ~/.ratect/incl via git_include.rs and is confined to its clone; nothing here on the lock, which ratect#888 changed"
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "decisions/0014-config-checked-at-load-evaluated-per-task.md" = "186e0b75044a03f2", "ratect-core/src/cache.rs" = "139da432ed9c8f74", "ratect-core/src/config.rs" = "28158cda74320221", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "ad5144cd7ad0a249" }
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "stale-claims"
+unit = "013af8aeb0018e02"
+copies = 1
+note = "only git_include.rs moved; 0003's claim about it (the include cache's TOML info file read in git_include.rs) still holds"
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "ROADMAP.md#future-vision" = "de51e3239425bbce", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "ad5144cd7ad0a249" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "4ca303a3bf7ddf7b"
+copies = 1
+note = "git_include.rs row (type: git includes, the ~/.ratect/incl clone cache and its staleness sweep) still true; the branch touches no other module the section names"
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "f46fc6d7d5f77262", "decisions/0003-ratect-native-config-format.md" = "4e46cecd5f4321e2", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0011-container-identity.md" = "cca22d618942f0f6", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "444f64c1b648e3e7", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "7327593788ec3ba8", "docs/ratect-cli.md" = "acacb86f97e6e9e4", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "92e119568c654aa4", "docs/ratect-config-reference.md" = "19aaf620598872f5", "ratect-compat/src/main.rs" = "5e38e9b2257889a2", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "a96c947250c390c2", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "2584cc267720f139", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/exit_code.rs" = "780d6e93214b0a5c", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "ad5144cd7ad0a249", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "50c5ced25f3b1a90", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "b4f35ec291651338", "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b", "ratect-core/src/yaml.rs" = "4051e9b0303db9d9", "ratect/src/main.rs" = "f4265a4d2d9e5ce6" }
 
 [[mark]]
 file = "decisions/0009-adopt-claims-plugin.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
-note = "Read the Decision section against claims.toml: claim-words still opts in TODO.md; ratect#886's branch only adds TODO.md item 20, which changes nothing the section says."
+note = "read the TODO.md mention only: claim-words opt-in list includes TODO.md, as claims.toml [claim-words] files still does; the branch's TODO.md edit (one word in item 20) changes nothing here"
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "9f48cfa3448d7cdf", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+extent = "partial"
+subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "40de914d2922d033", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
 file = "decisions/0009-adopt-claims-plugin.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read the Consequences section: its one TODO.md mention (\"tracked in TODO.md rather than solved here\") records the state at adoption in a shipped ADR; adding TODO.md item 20 (ratect#886) doesn't bear on it."
+note = "read the TODO.md mention only: a record of tracking the CI gap in TODO.md at adoption time; ratect#888's one-word TODO.md edit doesn't bear on it"
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", "TODO.md" = "9f48cfa3448d7cdf", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+extent = "partial"
+subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", "TODO.md" = "40de914d2922d033", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "e245434933571536"
 copies = 1
-note = "Read the section: \"note that in TODO.md instead\" for out-of-scope work is what ratect#886's TODO.md item 20 does; nothing else in it names TODO.md."
+note = "read the TODO.md mention only: the instruction to note unfinishable gardening in TODO.md; unaffected by a one-word edit to TODO item 20"
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "TODO.md" = "9f48cfa3448d7cdf", "decisions/0006-code-and-documentation-locality.md" = "b18987300e14cf76" }
+extent = "partial"
+subjects = { "TODO.md" = "40de914d2922d033", "decisions/0006-code-and-documentation-locality.md" = "b18987300e14cf76" }
 
 [[mark]]
 file = "agents/claims.md"
 mode = "stale-claims"
 unit = "24d9d9ee602a12ed"
 copies = 1
-note = "Read the section against claims.toml: TODO.md is in claim-words' files and left out of temporal-words, as stated; adding TODO.md item 20 (ratect#886) changes neither."
+note = "read the TODO.md mentions only: claim-words opts in TODO.md and temporal-words leaves it out, matching claims.toml's [claim-words] and [temporal-words] files"
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "9f48cfa3448d7cdf" }
+extent = "partial"
+subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "40de914d2922d033" }
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "d84f94e56c0e8284"
+copies = 1
+note = "at origin/main, EntryLock::release dropped self.file with no unlock, and take_over_if_abandoned returned Replaced/Unknown dropping the file with no unlock"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "f96141e5e4b11601"
+copies = 1
+note = "claim_if_abandoned's Err arms: still_at Some(false) Replaced, None (off Unix) Unknown, read_to_string error or marker mismatch Unknown; take_over_if_abandoned unlocks on each"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "0c634a6f8a45a310"
+copies = 1
+note = "looks happen only in acquire_lock, called from ensure_cached, which config.rs and refresh await one include at a time; acquire_lock only sleeps between looks and spawns nothing"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "0c634a6f8a45a310"
+copies = 1
+note = "one include at a time: config.rs include loop and refresh both await ensure_cached sequentially"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "52e88c28c2ef42f7"
+copies = 1
+note = "no test drives a read error, still_at None, or a failing file.unlock(); a_child_sharing's child has exec'd; nothing runs on NFS; Windows CI only compiles"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "restatement-ngram"
+unit = "e3332ea6f44e87e9-94eb0c0569dd7642"
+copies = 1
+note = "release case: after the holder released, a waiter seeing the child-held lock waits on a holder that has finished; still true of release"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "restatement-ngram"
+unit = "58835ec8adeb19f7-beacd6cecec2706f"
+copies = 1
+note = "same sentence as line 79: release case, still true; the unlock doc reworded it only to cover a look as well"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/git_include_tests.rs"
+mode = "restatement-ngram"
+unit = "e8d58193ede54b8f-a3536f14df619a34"
+copies = 1
+note = "a_waiter_looks_again_after_a_release_while_a_child_still_shares_the_file: the holder released, so the waiter would wait on a holder that has finished; still true"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "efbe9d5743db5752"
+copies = 1
+note = "Caches re-read after 0027 also records a look's unlock: entry lock, holder, abandoned lock definitions unchanged; a look that gives up isn't a holder, and 0027 is still where release is deferred to"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "40ce98662c3f402d", "decisions/0027-git-include-staging-survives-two-holders.md" = "a0eaec0160247117" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "d33363a7aee55bcd"
+copies = 1
+note = "include row's lock sentences re-read: takeover, waiting on an older Ratect's lock, the wait notice, two holders across kernels; a look unlocking before it drops changes none of them"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "40ce98662c3f402d", "decisions/0027-git-include-staging-survives-two-holders.md" = "a0eaec0160247117" }
