@@ -90,7 +90,8 @@ record refined this way.
 | [0020](0020-bundle-records-its-written-for-version.md) | A bundle records the Ratect version it was written for | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0021](0021-native-field-follows-its-file.md) | A native field follows its file, on include entries as on containers | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
 | [0022](0022-written-for-refusal-says-what-applies.md) | A written-for refusal says which changes touch the project | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
-| [0023](0023-git-include-entry-lock.md) | A Git include's entry lock proves its holder dead, and correctness doesn't depend on it | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0) |
+| [0023](0023-git-include-entry-lock.md) | A Git include's entry lock proves its holder dead, and correctness doesn't depend on it | Accepted — shipped (ratect-compat 0.33.0 · ratect 0.12.0); Decisions 5 and 7 superseded by [0027](0027-git-include-staging-survives-two-holders.md) |
 | [0024](0024-host-identity.md) | Host identity: what Ratect needs from the host user | Accepted — shipped (ratect-compat 0.34.0 · ratect 0.13.0) |
 | [0025](0025-task-run-lock.md) | A task run holds a lock, and `resources` removes what the lock proves dead | Accepted — planned (ratect-compat 0.35.0 · ratect 0.14.0) |
 | [0026](0026-service-instances.md) | A service instance belongs to no process | Accepted — planned (ratect 0.14.0) |
+| [0027](0027-git-include-staging-survives-two-holders.md) | No holder touches another clone's staging directory, so two holders of an entry lock cost only a duplicate clone | Accepted — planned (ratect-compat 0.35.0 · ratect 0.14.0) |

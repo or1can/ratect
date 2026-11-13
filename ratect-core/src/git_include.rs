@@ -50,14 +50,17 @@
 //!
 //! A clone is staged in a `<key>.tmp-<unique>` directory of its own and
 //! renamed into place once complete, so no lock is needed for a working copy
-//! to be whole. The **entry lock** (CONTEXT.md's **Caches**) only stops two
+//! to be whole; no process of this version touches another's staging
+//! directory, except the sweep and `ratect includes clean`, once one is 30
+//! days old. The **entry lock** (CONTEXT.md's **Caches**) only stops two
 //! processes cloning the same entry at once: [`GitIncludeCache`] describes
 //! it, and the `entry_lock` submodule takes it. A lock whose **holder** has
 //! exited — killed during a first clone, say — is taken over by the next
 //! load that needs the entry, rather than blocking it until someone deletes
 //! the file, which Batect's would; a wait on a lock says so on stderr, and
 //! a clone, once under the lock and still needed, is announced as progress.
-//! See [decisions/0023](https://github.com/or1can/ratect/blob/main/decisions/0023-git-include-entry-lock.md).
+//! See [decisions/0023](https://github.com/or1can/ratect/blob/main/decisions/0023-git-include-entry-lock.md)
+//! and [decisions/0027](https://github.com/or1can/ratect/blob/main/decisions/0027-git-include-staging-survives-two-holders.md).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -353,16 +356,41 @@ async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> Result<()>
 /// it is made in: `<key>.tmp-<unique>`.
 const STAGING_INFIX: &str = ".tmp-";
 
-/// Removes every staging directory of the entry `key` in `root`. Only ever
-/// called under that entry's lock. Best-effort: one left behind is removed by
-/// the next holder.
-async fn remove_staging_directories(root: &Path, key: &str) {
-    let prefix = format!("{key}{STAGING_INFIX}");
+/// Removes every staging directory in `root` (`<key>.tmp-*`, `<key>` being a
+/// [`cache_key`]), of any entry, last changed more
+/// than [`STALE_AFTER`] before `now` (decisions/0027): no clone runs that
+/// long, so it was left by one that was interrupted. No other process of
+/// this version removes one, since a younger one may be a clone still in
+/// progress, by a process whose lock this one can't see. Best-effort: one
+/// left behind is tried again, but removing part of one changes its
+/// modification time, so that can be 30 days later.
+async fn remove_abandoned_staging_directories(root: &Path, now: u64) {
     let Ok(mut entries) = tokio::fs::read_dir(root).await else {
         return;
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
-        if entry.file_name().to_string_lossy().starts_with(&prefix) {
+        let name = entry.file_name();
+        let is_staging = name
+            .to_string_lossy()
+            .split_once(STAGING_INFIX)
+            .is_some_and(|(key, _)| is_cache_key(key));
+        if !is_staging {
+            continue;
+        }
+        // Not following a symlink: only a directory of that name is one.
+        let modified = entry
+            .metadata()
+            .await
+            .ok()
+            .filter(|metadata| metadata.is_dir())
+            .and_then(|metadata| metadata.modified().ok());
+        let Some(modified) = modified else {
+            continue;
+        };
+        let Ok(modified) = modified.duration_since(std::time::UNIX_EPOCH) else {
+            continue;
+        };
+        if now.saturating_sub(modified.as_secs()) > STALE_AFTER.as_secs() {
             remove_staging_directory(&entry.path()).await;
         }
     }
@@ -426,6 +454,12 @@ fn real_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Whether `name` has the shape [`cache_key`] gives a key: 64 lowercase hex
+/// digits.
+fn is_cache_key(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// A cache key stable for a given `(remote, ref)` pair — deliberately
@@ -630,12 +664,13 @@ impl<G: GitClient> GitIncludeCache<G> {
         Ok(working_copy)
     }
 
-    /// Under the entry lock. Removes every `<key>.tmp-*` first: under the
-    /// lock, any of them was left by an interrupted clone (decisions/0023's
-    /// Decision 7) — nothing else removes one, and nothing judges one by its
-    /// age. Then clones into a fresh one and renames it into place, announcing
-    /// the clone as progress before it starts and following a successful one
-    /// with a blank line, as Batect does — though only once the re-check has
+    /// Under the entry lock. Clones into a fresh `<key>.tmp-*` and renames it
+    /// into place, leaving every other `<key>.tmp-*` alone: under the lock
+    /// one may still be another process's clone in progress, where its OS
+    /// lock doesn't reach this one, and the sweep removes one an interrupted
+    /// clone left (decisions/0027). Announces the clone as progress before
+    /// it starts and follows a successful one with a blank line, as Batect
+    /// does — though only once the re-check has
     /// found it still needed, so a load that waited out another process's
     /// clone doesn't announce one it then skips, as Batect's would. Losing
     /// that rename to a clone that finished first — one by a holder whose lock
@@ -653,7 +688,6 @@ impl<G: GitClient> GitIncludeCache<G> {
         if destination.exists() {
             return Ok(());
         }
-        remove_staging_directories(root, key).await;
 
         let staging = root.join(format!(
             "{key}{STAGING_INFIX}{}",
@@ -880,12 +914,16 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// which is what both the automatic sweep and a bare `includes clean`
     /// do. Nothing here is unrecoverable — the worst case of removing too
     /// much is a re-clone — which is why this has no confirmation of any
-    /// kind, unlike removing containers.
+    /// kind, unlike removing containers. Whatever `minimum_age`, it also
+    /// removes what interrupted clones left only once it is 30 days old, as
+    /// the sweep does: a younger one may be a clone still in progress
+    /// (decisions/0027).
     pub async fn clean(&self, minimum_age: Option<Duration>) -> Result<Outcome> {
         let Some(root) = self.root.resolve()? else {
             return Ok(Outcome::default());
         };
         let now = (self.clock)();
+        remove_abandoned_staging_directories(&root, now).await;
         let entries = self.read_entries(&root).await?;
 
         let mut outcome = Outcome::default();
@@ -1016,8 +1054,9 @@ impl<G: GitClient> GitIncludeCache<G> {
         remove_entry_files(&root.join(key), &root.join(format!("{key}.toml"))).await
     }
 
-    /// Removes any cached repo whose `last_used` is more than
-    /// `STALE_AFTER` old — matching Batect's own
+    /// Removes any staging directory an interrupted clone left (see
+    /// `remove_abandoned_staging_directories`), and any cached repo whose
+    /// `last_used` is more than `STALE_AFTER` old — matching Batect's own
     /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete`, except
     /// for a bad sidecar (below) and in how the window is measured (see
     /// `STALE_AFTER`).
@@ -1034,20 +1073,22 @@ impl<G: GitClient> GitIncludeCache<G> {
             return Ok(());
         };
         let now = (self.clock)();
-        let mut stale_keys = Vec::new();
-        for entry in self.read_entries(&root).await? {
-            if now.saturating_sub(entry.last_used) > STALE_AFTER.as_secs() {
-                stale_keys.push(entry.key);
+        let entries = self.read_entries(&root).await;
+        if let Ok(entries) = &entries {
+            for entry in entries {
+                if now.saturating_sub(entry.last_used) > STALE_AFTER.as_secs() {
+                    if let Err(e) = self.remove_entry(&root, &entry.key).await {
+                        tracing::warn!("{e:#}");
+                    }
+                }
             }
         }
+        // After the entries, which are what a load reads, since the sweep is
+        // cut short when its process exits; and even when they can't be
+        // listed.
+        remove_abandoned_staging_directories(&root, now).await;
 
-        for key in stale_keys {
-            if let Err(e) = self.remove_entry(&root, &key).await {
-                tracing::warn!("{e:#}");
-            }
-        }
-
-        Ok(())
+        entries.map(|_| ())
     }
 }
 

@@ -247,6 +247,10 @@ succeeded, in every style but `quiet`; `includes refresh` prints neither.
 | `includes clean --all` | Everything, regardless of age. |
 | `includes refresh` | Discards every cached clone and fetches it again. |
 
+Every form of `clean` also removes the temporary directories left by clones that were
+interrupted, once unchanged for 30 days: a more recent one may be a clone still in
+progress.
+
 `clean` and `refresh` carry on past an include they can't remove, or clone again, and
 then print an `Error:` on stderr for each, naming it and why, in every style, and
 exit `1`. A refresh whose clone fails leaves that include removed: the next command

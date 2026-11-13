@@ -1041,6 +1041,68 @@ async fn a_waiter_holding_a_released_lock_file_looks_again_rather_than_taking_it
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+/// Two holders of one lock file, as a waiter that sees a live holder's OS
+/// lock as free can make (ratect#877): the first release deletes the file, a
+/// third process creates and takes a new one, and the second release must
+/// leave that one alone (ratect#880).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_second_holders_release_leaves_a_third_holders_new_lock_alone() {
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let lock_path = root.join("shared.lock");
+    let entry_lock::Attempt::Acquired(first) = entry_lock::attempt(&lock_path).unwrap() else {
+        panic!("a free lock should be taken");
+    };
+    // What a waiter the first holder's OS lock doesn't reach sees.
+    first.file().unlock().unwrap();
+    let entry_lock::Attempt::Acquired(second) = entry_lock::attempt(&lock_path).unwrap() else {
+        panic!("a lock whose OS lock is free should be taken over");
+    };
+
+    first.release().unwrap();
+    let entry_lock::Attempt::Acquired(third) = entry_lock::attempt(&lock_path).unwrap() else {
+        panic!("a released lock should be taken");
+    };
+    second.release().unwrap();
+
+    assert!(lock_path.exists());
+    let look = entry_lock::attempt(&lock_path).unwrap();
+    assert!(
+        matches!(look, entry_lock::Attempt::HeldByRunningHolder),
+        "{look:?}"
+    );
+
+    third.release().unwrap();
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// A release that can't tell whether the path is still its own file, here
+/// because the directory can't be searched, tries to delete it as before and
+/// reports what stopped it, rather than leaving the lock without a word.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_release_that_cant_look_at_its_lock_file_reports_why() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = unique_temp_dir();
+    tokio::fs::create_dir_all(&root).await.unwrap();
+    let lock_path = root.join("held.lock");
+    let entry_lock::Attempt::Acquired(lock) = entry_lock::attempt(&lock_path).unwrap() else {
+        panic!("a free lock should be taken");
+    };
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o600)).unwrap();
+    // Root searches through any mode, so there is nothing to test as root.
+    let sees_through = std::fs::metadata(&lock_path).is_ok();
+
+    let released = lock.release();
+
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !sees_through {
+        released.unwrap_err();
+    }
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
 #[cfg(unix)]
 fn is_close_on_exec(file: &std::fs::File) -> bool {
     let flags = nix::fcntl::fcntl(file, nix::fcntl::FcntlArg::F_GETFD).unwrap();
@@ -1127,18 +1189,15 @@ async fn a_failed_clone_leaves_no_staging_directory() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
-/// Decision 7: under the lock, a leftover staging directory belongs to an
-/// interrupted clone, so the next holder removes it — but only its own
-/// entry's, and nothing outside the lock does.
+/// decisions/0027's Decision 1: a staging directory a holder didn't make may
+/// be another holder's clone in progress, which no holder can tell from one
+/// an interrupted clone left, so a holder leaves every other one alone.
 #[tokio::test]
-async fn the_next_holder_removes_its_entrys_leftover_staging_directories() {
+async fn a_holder_leaves_other_staging_directories_alone() {
     let root = unique_temp_dir();
     let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
     let other = cache_key(&Remote::from("https://example.com/other.git"), "v1.0.0");
-    for name in [
-        format!("{key}.tmp-leftover"),
-        format!("{other}.tmp-leftover"),
-    ] {
+    for name in [format!("{key}.tmp-another"), format!("{other}.tmp-another")] {
         tokio::fs::create_dir_all(root.join(name).join(".git"))
             .await
             .unwrap();
@@ -1150,25 +1209,104 @@ async fn the_next_holder_removes_its_entrys_leftover_staging_directories() {
         .await
         .unwrap();
 
-    assert_eq!(staging_directories(&root, &key), Vec::<String>::new());
-    assert!(root.join(format!("{other}.tmp-leftover")).exists());
+    assert!(root
+        .join(format!("{key}.tmp-another"))
+        .join(".git")
+        .exists());
+    assert!(root
+        .join(format!("{other}.tmp-another"))
+        .join(".git")
+        .exists());
+    assert_eq!(
+        staging_directories(&root, &key),
+        vec![format!("{key}.tmp-another")]
+    );
 
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+/// decisions/0027's Decision 2: `includes refresh` leaves staging
+/// directories alone, however old.
+#[cfg(unix)]
 #[tokio::test]
-async fn removal_and_the_sweep_leave_a_staging_directory_alone() {
-    let (root, key, mut cache) = cloned_entry_with_a_stale_lock(FakeGitClient::new()).await;
-    let staging = root.join(format!("{key}.tmp-leftover"));
+async fn refresh_leaves_a_staging_directory_alone() {
+    let (root, key, mut cache) = cloned_entry_with_a_stale_lock(fake_with_the_entry()).await;
+    let now = std::time::SystemTime::now();
+    cache.clock = Box::new(move || now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+    let staging = root.join(format!("{key}.tmp-old"));
     tokio::fs::create_dir_all(&staging).await.unwrap();
+    std::fs::File::open(&staging)
+        .unwrap()
+        .set_modified(now - STALE_AFTER - Duration::from_secs(60))
+        .unwrap();
 
-    cache.clean(None).await.unwrap();
-    cache.clock = Box::new(|| 500 + STALE_AFTER.as_secs() + 1);
-    cache.cleanup_stale().await.unwrap();
+    cache.refresh().await.unwrap();
 
     assert!(staging.exists());
 
     tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// decisions/0027's Decision 2: what an interrupted clone left is removed by
+/// the sweep, and by `includes clean` whatever age it is given, once its last
+/// change is more than `STALE_AFTER` old — longer than any clone runs — of
+/// any entry's, whether or not the entry is still cached; a file with such a
+/// name isn't one, nor is a directory whose name doesn't start with a key.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_sweep_and_clean_remove_a_staging_directory_unchanged_for_30_days() {
+    for clean in [None, Some(None), Some(Some(Duration::from_secs(60)))] {
+        let root = unique_temp_dir();
+        let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
+        let other = cache_key(&Remote::from("https://example.com/other.git"), "v1.0.0");
+        let now = std::time::SystemTime::now();
+        let old = now - STALE_AFTER - Duration::from_secs(60);
+        let recent = now - STALE_AFTER + Duration::from_secs(60);
+        for (name, modified) in [
+            (format!("{key}.tmp-old"), old),
+            (format!("{other}.tmp-old"), old),
+            (format!("{key}.tmp-recent"), recent),
+            ("backup.tmp-old".to_string(), old),
+        ] {
+            let staging = root.join(name);
+            tokio::fs::create_dir_all(staging.join("sub"))
+                .await
+                .unwrap();
+            std::fs::File::open(&staging)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+        }
+        let file = root.join(format!("{other}.tmp-file"));
+        tokio::fs::write(&file, "").await.unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let seconds = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), seconds);
+
+        match clean {
+            Some(minimum_age) => drop(cache.clean(minimum_age).await.unwrap()),
+            None => cache.cleanup_stale().await.unwrap(),
+        }
+
+        assert_eq!(
+            staging_directories(&root, &key),
+            vec![format!("{key}.tmp-recent")],
+            "clean: {clean:?}"
+        );
+        assert_eq!(
+            staging_directories(&root, &other),
+            vec![format!("{other}.tmp-file")],
+            "clean: {clean:?}"
+        );
+        assert!(root.join("backup.tmp-old").exists(), "clean: {clean:?}");
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
 }
 
 /// A load whose `exists()` check passed just before a concurrent removal

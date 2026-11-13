@@ -172,6 +172,9 @@ its `ref` pointed to when first cloned. If you need to pick up a change made to 
 bundle, choose a new `ref` (e.g. bump the tag) or delete the corresponding directory
 under `~/.ratect/incl` by hand.
 
+The same sweep removes a temporary directory a clone left in `~/.ratect/incl` when it
+was interrupted, once that directory has been unchanged for 30 days.
+
 Everything reached through a Git include is treated as untrusted input: the
 file it names must stay inside the clone, a container it defines may mount
 only inside the clone or your project directory unless `allow_host_paths`

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 //! One attempt at a Git include's **entry lock** (CONTEXT.md's **Caches**),
-//! as decisions/0023's Decisions 2–5 define it: an existence lock,
-//! `<key>.lock` created exclusively — which is all an older binary takes, and
-//! all it checks for — carrying, through the same open file, an OS lock (`flock`) and a format
+//! as decisions/0023's Decisions 2–4 and decisions/0027's release define
+//! it: an existence lock, `<key>.lock` created exclusively — which is all an
+//! older binary takes, and all it checks for — carrying, through the same open file, an OS lock (`flock`) and a format
 //! marker. The OS lock is what lets a waiter prove the **holder** has exited:
 //! the kernel releases it when the holder does, however it exits. Off Unix
 //! that proof is never complete (see [`still_at`]), so nothing is taken over
@@ -51,12 +51,22 @@ pub(super) struct EntryLock {
 }
 
 impl EntryLock {
-    /// Deletes the lock file while still holding its OS lock (Decision 5):
-    /// older binaries take the file's absence to mean the lock is free, and a
-    /// waiter that opened the file before it went fails [`attempt`]'s
-    /// device-and-inode check and looks again.
+    /// Deletes the lock file while still holding its OS lock (decisions/0027's
+    /// Decision 3, restating 0023's Decision 5): older binaries take the
+    /// file's absence to mean the lock is free, and a waiter that opened the
+    /// file before it went fails [`attempt`]'s device-and-inode check and
+    /// looks again. Not once a comparison like that one shows the path names
+    /// another file, or none: where the OS lock doesn't reach every process,
+    /// another holder of the same file may have released it already, and a
+    /// third taken a new lock at that path, which isn't this one's to
+    /// delete. Off Unix this version takes nothing over, so the file is
+    /// taken to be this one's.
     pub(super) fn release(self) -> std::io::Result<()> {
-        let removed = std::fs::remove_file(&self.path);
+        let removed = if replaced(&self.file, &self.path) {
+            Ok(())
+        } else {
+            std::fs::remove_file(&self.path)
+        };
         drop(self.file);
         removed
     }
@@ -178,6 +188,26 @@ pub(super) fn take_over_if_abandoned(mut file: File, path: &Path) -> TakeOver {
         file,
         path: path.to_path_buf(),
     })
+}
+
+/// Whether `path` is known to name no file, or one other than `file`: only
+/// then is the lock file not [`EntryLock::release`]'s to delete. Anything
+/// else that stops it looking is left to the delete to report.
+#[cfg(unix)]
+fn replaced(file: &File, path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Err(e) => e.kind() == ErrorKind::NotFound,
+        Ok(current) => file
+            .metadata()
+            .is_ok_and(|opened| opened.dev() != current.dev() || opened.ino() != current.ino()),
+    }
+}
+
+/// See the Unix form: this version takes nothing over here, so the file is
+/// taken to be the releasing holder's own.
+#[cfg(not(unix))]
+fn replaced(_file: &File, _path: &Path) -> bool {
+    false
 }
 
 /// Whether `path` still names the file `file` was opened from, by device and

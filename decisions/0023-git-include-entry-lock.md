@@ -2,7 +2,11 @@
 
 **Status:** Accepted — shipped
 ([#733](https://github.com/or1can/ratect/issues/733), ratect-compat 0.33.0 ·
-ratect 0.12.0).
+ratect 0.12.0). Decisions 5 and 7 are superseded by
+[0027](0027-git-include-staging-survives-two-holders.md), which answers the
+open point the correction below leaves with #880: both paths it names could
+exceed the bound under "An OS lock that works per host only", and 0027
+restores it where every holder runs a version with 0027.
 
 Corrected since (found 2026-11-12 by the spike in
 [#875](https://github.com/or1can/ratect/issues/875), corrected under

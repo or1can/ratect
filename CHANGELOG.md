@@ -37,6 +37,7 @@ history, from when it was the only binary.
 
 ### Fixed
 
+- A Git include cloned by two processes at once, such as a host and a container sharing `~/.ratect/incl`, is no longer left incomplete in the cache when both run this version or later. A clone's temporary directory is removed once unchanged for 30 days, by `ratect-compat`'s automatic sweep or by `ratect includes clean`. Releasing an include's lock no longer deletes a newer lock that has replaced it.
 - A container in a `.yml` that sets a native-only field to `false` or to nothing, such as `run_to_completion: false` or `stop_signal: ~`, is refused, as other values of those fields already were.
 - A native-only field in a `.yml` with a malformed value, such as `stop_grace_period: bogus`, is reported as a field that file may not use, rather than as an invalid value. Of several such fields, the first one the file declares is reported.
 - The shell installer installs the `x86_64-unknown-linux-gnu` build on any host with glibc 2.34 or later.
