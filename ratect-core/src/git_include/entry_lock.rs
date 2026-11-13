@@ -90,8 +90,8 @@ pub(super) enum Attempt {
     HeldByRunningHolder,
     /// Its holder can't be proved to have exited: the lock carries no marker
     /// this version recognises, the OS lock itself returned an error, as
-    /// it can on a network filesystem, or, off Unix, the file's identity
-    /// can't be checked.
+    /// it can on a network filesystem, or the file's identity can't be
+    /// checked, which off Unix it never can.
     HeldByUnknownHolder,
 }
 
@@ -121,7 +121,7 @@ pub(super) fn attempt(path: &Path) -> std::io::Result<Attempt> {
         let file = match OpenOptions::new().read(true).write(true).open(path) {
             Ok(file) => file,
             // Released between the two opens: try to create it again.
-            Err(e) if e.kind() == ErrorKind::NotFound => continue,
+            Err(e) if names_no_file(&e) => continue,
             // One this process can't open for writing can't be taken over,
             // but may still be released by its holder, so it's waited on.
             Err(_) => return Ok(Attempt::HeldByUnknownHolder),
@@ -236,32 +236,44 @@ fn unlock(file: &File, path: &Path) {
 
 /// Whether `path` is known to name no file, or one other than `file`: only
 /// then is the lock file not [`EntryLock::release`]'s to delete. Anything
-/// else that stops it looking is left to the delete to report.
-#[cfg(unix)]
+/// else that stops it looking is left to the delete. It is [`still_at`]'s
+/// answer, so a release and a look read every error the same way.
 fn replaced(file: &File, path: &Path) -> bool {
-    match std::fs::metadata(path) {
-        Err(e) => e.kind() == ErrorKind::NotFound,
-        Ok(current) => file
-            .metadata()
-            .is_ok_and(|opened| opened.dev() != current.dev() || opened.ino() != current.ino()),
-    }
-}
-
-/// See the Unix form: this version takes nothing over here, so the file is
-/// taken to be the releasing holder's own.
-#[cfg(not(unix))]
-fn replaced(_file: &File, _path: &Path) -> bool {
-    false
+    still_at(file, path) == Some(false)
 }
 
 /// Whether `path` still names the file `file` was opened from, by device and
-/// inode, or `None` where that can't be told.
+/// inode, or `None` where that can't be told. Only an error saying the path
+/// names no file, because it or one of its directories is gone, shows the
+/// file replaced. Any other is `None`, which a waiter waits on, as for a
+/// lock with no marker, until it can tell or times out, where `Some(false)`
+/// would have it look again at once, for as long as the error lasted
+/// (ratect#891). That includes a stale NFS handle on the opened file, which
+/// can outlive a file that is still there.
 #[cfg(unix)]
-fn still_at(file: &File, path: &Path) -> Option<bool> {
-    Some(match (file.metadata(), std::fs::metadata(path)) {
-        (Ok(opened), Ok(current)) => opened.dev() == current.dev() && opened.ino() == current.ino(),
-        _ => false,
-    })
+pub(super) fn still_at(file: &File, path: &Path) -> Option<bool> {
+    let current = match std::fs::metadata(path) {
+        Ok(current) => current,
+        Err(e) if names_no_file(&e) => return Some(false),
+        Err(e) => {
+            tracing::debug!("Failed to look at Git include lock file {path:?}: {e}");
+            return None;
+        }
+    };
+    let opened = match file.metadata() {
+        Ok(opened) => opened,
+        Err(e) => {
+            tracing::debug!("Failed to look at opened Git include lock file {path:?}: {e}");
+            return None;
+        }
+    };
+    Some(opened.dev() == current.dev() && opened.ino() == current.ino())
+}
+
+/// Whether `e`, from opening or looking at the lock path, says the path names
+/// no file: it, or one of its directories, is gone.
+fn names_no_file(e: &std::io::Error) -> bool {
+    matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory)
 }
 
 /// See the Unix form. `None`: `std` has no stable way to compare file
@@ -269,6 +281,6 @@ fn still_at(file: &File, path: &Path) -> Option<bool> {
 /// it as one with no marker: it waits until the holder releases it, or until
 /// it times out if the holder died holding it (ratect#868).
 #[cfg(not(unix))]
-fn still_at(_file: &File, _path: &Path) -> Option<bool> {
+pub(super) fn still_at(_file: &File, _path: &Path) -> Option<bool> {
     None
 }

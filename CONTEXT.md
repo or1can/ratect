@@ -217,7 +217,8 @@ by the holder, never by the lock's age: an old lock can still have a holder.
 the sweep removes — and is never said of a lock.
 
 The entry lock is [0023](decisions/0023-git-include-entry-lock.md)'s, with
-its release, and what happens to a clone's leftovers, as
+its release, what happens to a clone's leftovers, and a takeover check that
+can't be made, as
 [0027](decisions/0027-git-include-staging-survives-two-holders.md) amends them.
 
 ## Built images

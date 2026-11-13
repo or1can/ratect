@@ -6,9 +6,19 @@ before that release shipped, by
 [#888](https://github.com/or1can/ratect/issues/888): Decision 3's release now
 unlocks the OS lock before dropping its handle, and so does a waiter's look
 that takes the OS lock without taking the lock over. Before, each freed the
-OS lock only by dropping the handle. Supersedes
-[0023](0023-git-include-entry-lock.md)'s Decisions 5 and 7; the rest of 0023
-stands.
+OS lock only by dropping the handle. Refined again the same day by
+[#891](https://github.com/or1can/ratect/issues/891): a look whose identity
+check can't be made, because `stat` or `fstat` returns an error other than
+one saying the path names no file, can't tell, so its waiter waits as for
+a lock with no marker. That extends 0023's Decision 3, under which a death
+ratect can't observe is not proof, to the check its Decision 4 makes.
+Before, it took the file for replaced and started again at once, and an
+error that lasted kept it doing so past the lock timeout. Decision 3's
+release reads each error as a look does. That changes one case for it: a
+lock path under a directory that has become a file, which it now leaves
+alone as naming no file, where before it tried the delete. Supersedes
+[0023](0023-git-include-entry-lock.md)'s Decisions 5 and 7, and refines its
+Decision 4 as #891 above says; the rest of 0023 stands.
 
 ## Context
 
@@ -84,7 +94,8 @@ lock still only prevents duplicate work.**
    takes the OS lock but doesn't take the lock over (0023's Decisions 3 and
    4), whatever stopped it, unlocks it the same way before dropping its
    handle: the file was replaced, it can't be read, it carries no marker
-   this version recognises, or, off Unix, its identity can't be checked.
+   this version recognises, or its identity can't be checked, which off
+   Unix it never can.
    No run reaches that window for a look either, since a run looks at one
    include's lock at a time, and starts nothing else while it does.
    Dropping a lock without releasing it, as dying does, is unchanged.
