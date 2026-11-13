@@ -196,13 +196,17 @@ pub trait GitClient: Send + Sync {
 
 /// The real `GitClient`: `git clone --quiet --no-checkout` into
 /// `destination`, then `git checkout --recurse-submodules <ref>` — the same
-/// argv sequence as Batect's own `GitClient` (no embedded Git library, kept
+/// two commands as Batect's own `GitClient` (no embedded Git library, kept
 /// dependency-light), and like Batect's into a directory fresh to each
-/// attempt, renamed into place only once both have finished, with
+/// attempt, renamed into place only once both have finished. The clone has
 /// no transport restriction of its own, so git's protocol defaults and the
-/// user's own Git configuration apply as they do under Batect. It differs
-/// in refusing a `remote` or `ref` that starts with `-`, and in capturing
-/// the clone's own output into its error rather than printing it.
+/// user's own Git configuration apply to it as they do under Batect. It
+/// differs in refusing a `remote` or `ref` that starts with `-`, in
+/// capturing the clone's own output into its error rather than printing it,
+/// in keeping the clone from variables naming another repository (see
+/// `REPOSITORY_VARIABLES`), and in keeping the checkout from Ratect's
+/// environment and the user's Git configuration, which Batect's uses (see
+/// `check_out`).
 /// `--recurse-submodules` fetches nothing here, in either tool: it only
 /// updates *active* submodules, and a fresh `--no-checkout` clone has none.
 pub struct SystemGitClient;
@@ -226,11 +230,19 @@ impl GitClient for SystemGitClient {
             );
         }
 
-        let clone_output = Command::new("git")
+        let mut clone = Command::new("git");
+        for variable in REPOSITORY_VARIABLES {
+            clone.env_remove(variable);
+        }
+        let clone_output = clone
             .args([
                 "clone",
                 "--quiet",
                 "--no-checkout",
+                // No template: a user's `init.templateDir` would put its
+                // hooks and its `config` in the clone, where the checkout
+                // would run and read them.
+                "--template=",
                 "--",
                 remote.unredacted(),
             ])
@@ -246,29 +258,100 @@ impl GitClient for SystemGitClient {
             );
         }
 
-        let checkout_output = Command::new("git")
-            .args(["-c", "advice.detachedHead=false", "-C"])
-            .arg(destination)
-            // No `--` here: unlike `clone`, `checkout`'s `--` means "the
-            // rest are pathspecs, not a ref" — adding one would break every
-            // checkout (verified: `git checkout <ref> --` errors with
-            // "pathspec did not match any files"). The `git_ref.starts_with('-')`
-            // check above is what protects this call instead.
-            .args(["checkout", "--quiet", "--recurse-submodules", git_ref])
-            .output()
-            .await
-            .context("Failed to run 'git checkout'")?;
-        if !checkout_output.status.success() {
-            anyhow::bail!(
-                "Could not check out reference '{}' for repository '{remote}': git exited with {}: {}",
-                printable(git_ref),
-                checkout_output.status,
-                String::from_utf8_lossy(&checkout_output.stderr).trim()
-            );
-        }
-
-        Ok(())
+        check_out(remote, git_ref, destination).await
     }
+}
+
+/// The variables naming a repository for git to work in, which the clone
+/// mustn't inherit (#885): from a shell exporting `GIT_DIR` and
+/// `GIT_WORK_TREE` for a dotfiles repository, say, or from a Git hook.
+/// They are the variables `git rev-parse --local-env-vars` prints, less the
+/// two git itself keeps when it runs git in a submodule:
+/// `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` carry configuration, such
+/// as the credentials CI passes, which the clone uses. The checkout
+/// inherits nothing at all (see `check_out`).
+const REPOSITORY_VARIABLES: [&str; 13] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// `SystemGitClient::clone_repo`'s second step: checks `git_ref` out in
+/// `destination`, the clone the first step made. Its own function so a
+/// test can reach it with a `destination` the clone step never made.
+/// `git_ref` must not start with `-`, which `clone_repo` checks.
+///
+/// The checkout is local — it fetches nothing — so unlike the clone it
+/// takes nothing from Ratect's environment or the user's Git configuration
+/// (#885). Its repository is named, not discovered: git would otherwise
+/// walk up from `destination`, so were the clone's `.git` missing it would
+/// check `git_ref` out in whichever repository holds the cache, such as one
+/// at `~`. Named, the checkout fails instead. Nor can an inherited variable
+/// name another repository's index or object store: the absolute
+/// `GIT_INDEX_FILE` a hook of `git commit -a` gets made it check out no
+/// files at all. And the user's
+/// configuration can't change the files: `core.autocrlf` can't rewrite line
+/// endings (the bundle's own `.gitattributes` still applies), no hook runs,
+/// and Git LFS's filter doesn't run, leaving its pointer files. The clone,
+/// made without a template, holds none of the user's configuration either.
+async fn check_out(remote: &Remote, git_ref: &str, destination: &Path) -> Result<()> {
+    let mut command = Command::new("git");
+    command.env_clear();
+    // What finding `git` and running it need, `SystemRoot` being Windows',
+    // and the locale, so a failure reads in the clone's language.
+    for variable in [
+        "PATH",
+        "SystemRoot",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+    ] {
+        if let Some(value) = std::env::var_os(variable) {
+            command.env(variable, value);
+        }
+    }
+    let checkout_output = command
+        .env("GIT_DIR", destination.join(".git"))
+        .env("GIT_WORK_TREE", destination)
+        // Clearing the environment doesn't reach the system configuration,
+        // at a path compiled into git (Git for Windows' sets
+        // `core.autocrlf`; `git lfs install --system` writes its filter
+        // there). It leaves no `HOME` to find a global one from on Unix,
+        // but Git for Windows looks for a home in more places.
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .args(["-c", "advice.detachedHead=false"])
+        // No `--` here: unlike `clone`, `checkout`'s `--` means "the
+        // rest are pathspecs, not a ref" — adding one would break every
+        // checkout (verified: `git checkout <ref> --` errors with
+        // "pathspec did not match any files"). The `git_ref.starts_with('-')`
+        // check in `clone_repo` is what protects this call instead.
+        .args(["checkout", "--quiet", "--recurse-submodules", git_ref])
+        .output()
+        .await
+        .context("Failed to run 'git checkout'")?;
+    if !checkout_output.status.success() {
+        anyhow::bail!(
+            "Could not check out reference '{}' for repository '{remote}': git exited with {}: {}",
+            printable(git_ref),
+            checkout_output.status,
+            String::from_utf8_lossy(&checkout_output.stderr).trim()
+        );
+    }
+
+    Ok(())
 }
 
 /// The `<hash>.toml` sidecar written alongside each cached clone — see

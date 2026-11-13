@@ -184,10 +184,16 @@ Git includes, which `batect.yml` always allows — are on [What a bundle may
 do](includes.md#what-a-bundle-may-do).
 
 Cloning requires the system `git` binary to be installed and on `PATH` — Ratect shells
-out to it (`git clone --quiet --no-checkout` followed by
-`git checkout --recurse-submodules <ref>`, as Batect does) rather than embedding a Git
-library, so any Git configuration (credentials, `.gitconfig` rewrites, protocol
-policy, etc.) that your normal `git clone` already relies on works the same way here.
+out to it (`git clone --quiet --no-checkout --template=` followed by
+`git checkout --recurse-submodules <ref>`, Batect's two commands with no template)
+rather than embedding a Git library, so any Git configuration (credentials,
+`.gitconfig` rewrites, protocol policy, etc.) that your normal `git clone` already
+relies on works the same way for the clone, except a template (`init.templateDir`),
+which it doesn't use. The checkout, which
+fetches nothing, uses none of your Git configuration: `core.autocrlf` doesn't change its
+line endings, no hook runs during it, and a file stored in Git LFS is left as its
+pointer file. The repository's own `.gitattributes` still applies, so a bundle that
+needs particular line endings sets them there.
 A load that clones prints `Cloning <repo> <ref>...` on stdout first, and a blank line
 once the clone has succeeded, in every output style but `quiet`. `git`'s own output is
 shown only if the clone fails, as part of the error; a prompt for credentials still

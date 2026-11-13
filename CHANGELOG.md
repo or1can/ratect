@@ -24,6 +24,10 @@ history, from when it was the only binary.
 
 ## [Unreleased]
 
+### Breaking
+
+- A Git include's checkout uses none of your Git configuration: `core.autocrlf` no longer changes its line endings, no hook runs, and a file stored in Git LFS is left as its pointer file. The include's own `.gitattributes` still applies. The clone still uses your configuration, except `init.templateDir` and `GIT_TEMPLATE_DIR`.
+
 ### Added
 
 - `tools/check-doc-links.py` rebuilds the workspace's documentation and fails on a doc link that renders as literal brackets; CI's Rustdoc job runs it. No effect on the released binaries; contributor-tooling only.
@@ -41,6 +45,8 @@ history, from when it was the only binary.
 - A container in a `.yml` that sets a native-only field to `false` or to nothing, such as `run_to_completion: false` or `stop_signal: ~`, is refused, as other values of those fields already were.
 - A native-only field in a `.yml` with a malformed value, such as `stop_grace_period: bogus`, is reported as a field that file may not use, rather than as an invalid value. Of several such fields, the first one the file declares is reported.
 - The shell installer installs the `x86_64-unknown-linux-gnu` build on any host with glibc 2.34 or later.
+- A Git include whose clone has lost its `.git` while being made fails to load, rather than checking its ref out in a repository holding `~/.ratect/incl`, such as one at `~`.
+- Cloning a Git include ignores the variables naming a repository that `git rev-parse --local-env-vars` lists, such as `GIT_DIR` and `GIT_WORK_TREE` exported for a dotfiles repository, or the absolute `GIT_INDEX_FILE` a hook of `git commit -a` gets, so the include loads with all its files and writes nothing to that repository.
 
 ## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-11-10
 

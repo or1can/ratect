@@ -5868,15 +5868,6 @@ subjects = {}
 
 [[mark]]
 file = "docs/ratect-compat-config-reference.md"
-mode = "claim-words-about-elsewhere"
-unit = "455f4a8f16ece460"
-copies = 1
-note = "git_include.rs:225-256 runs `git clone --quiet --no-checkout` then `checkout --quiet --recurse-submodules <ref>`. Batect GitClient.kt:35,41 does the same"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-compat-config-reference.md"
 mode = "claim-words-totalising"
 unit = "1af7c112c52c4d60"
 copies = 1
@@ -16436,3 +16427,39 @@ copies = 1
 note = "include row's lock sentences re-read: takeover, waiting on an older Ratect's lock, the wait notice, two holders across kernels; a look unlocking before it drops changes none of them"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0023-git-include-entry-lock.md" = "40ce98662c3f402d", "decisions/0027-git-include-staging-survives-two-holders.md" = "a0eaec0160247117" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "claim-words-totalising"
+unit = "78c56924b8a97f2f"
+copies = 1
+note = "git_include.rs check_out clears the environment and sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=/dev/null; clone_repo passes --template=, so the clone's .git/config holds only keys the clone writes. a_checkout_takes_nothing_from_the_users_git_configuration covers global and template autocrlf, a hooksPath hook and a template hook, red under each mutation. Batect GitClient.kt:41 runs its checkout with the inherited environment."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-counts"
+unit = "0d75f1855f2a992c"
+copies = 1
+note = "clone_repo runs `clone --quiet --no-checkout --template= -- <remote> <dest>` and check_out runs `checkout --quiet --recurse-submodules <ref>`; Batect GitClient.kt:35,41 runs the same two commands without --template=."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-about-elsewhere"
+unit = "0d75f1855f2a992c"
+copies = 1
+note = "clone_repo runs `clone --quiet --no-checkout --template= -- <remote> <dest>` and check_out runs `checkout --quiet --recurse-submodules <ref>`; Batect GitClient.kt:35,41 runs the same two commands without --template=."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-totalising"
+unit = "167cb434d44af5dc"
+copies = 1
+note = "git_include.rs check_out clears the environment and sets GIT_CONFIG_NOSYSTEM=1 and GIT_CONFIG_GLOBAL=/dev/null; clone_repo passes --template=, so the clone's .git/config holds only keys the clone writes; LFS's filter.lfs.* lives in global or system config, which the checkout doesn't read. Covered by a_checkout_takes_nothing_from_the_users_git_configuration, red under each mutation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
