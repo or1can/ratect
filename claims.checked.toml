@@ -15858,15 +15858,6 @@ subjects = {}
 
 [[mark]]
 file = "decisions/README.md"
-mode = "claim-words-counts"
-unit = "1646203ed5d7907b"
-copies = 1
-note = "Matches 0023's new status line and 0027 Status"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/README.md"
 mode = "claim-words-totalising"
 unit = "6ee8b93e2fb32590"
 copies = 1
@@ -15916,15 +15907,6 @@ mode = "claim-words-counts"
 unit = "06c47998006dde33"
 copies = 1
 note = "GitIncludeCache::clean calls remove_abandoned_staging_directories for any minimum_age; test covers None and Some; temp-HOME run of includes clean --all"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-compat-config-reference.md"
-mode = "claim-words-totalising"
-unit = "835ba0d64a89d305"
-copies = 1
-note = "cleanup_stale calls remove_abandoned_staging_directories with STALE_AFTER; the_sweep_and_clean test"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -16223,29 +16205,11 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0023-git-include-entry-lock.md" = "40ce98662c3f402d", "decisions/0027-git-include-staging-survives-two-holders.md" = "a0eaec0160247117" }
 
 [[mark]]
-file = "decisions/0023-git-include-entry-lock.md"
-mode = "claim-words-counts"
-unit = "77797c79e67279a4"
-copies = 1
-note = "0027's Status carries the #891 refinement of Decision 4's identity check (stat/fstat error other than NotFound waits); 0023 itself unchanged otherwise"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "decisions/0027-git-include-staging-survives-two-holders.md"
 mode = "claim-words-counts"
 unit = "25ecde3c748e90fd"
 copies = 1
 note = "0023 Decision 3 says a death ratect can't observe is not proof; Decision 4 is the device-and-inode check still_at makes; #891 maps its non-NotFound errors to None (Unknown)"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0027-git-include-staging-survives-two-holders.md"
-mode = "claim-words-counts"
-unit = "4daebadaa045fa2d"
-copies = 1
-note = "0027 Decisions 1-3 replace 0023's 5 (release) and 7 (staging); #891 changes only how Decision 4's check reads an error; 0023 Decisions 1-3, 6, 8, 9 untouched"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -16452,24 +16416,6 @@ extent = "partial"
 subjects = { "docs/ratect-compat-config-reference.md" = "335e652e6d7b5755" }
 
 [[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "claim-words-totalising"
-unit = "be3c18614203d1b1"
-copies = 1
-note = "wc -l of config.rs 7,838, docker.rs 4,396, engine.rs 4,359 (about 4,400-7,900) and git_include.rs 1,349 (about 1,350, raised from 1,200 by ratect#885), each with a //! comment; the 800-line observation is stated as measured at 0.25.0-dev"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "bc8a36abff188d86" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "claim-words-counts"
-unit = "be3c18614203d1b1"
-copies = 1
-note = "wc -l of config.rs 7,838, docker.rs 4,396, engine.rs 4,359 (about 4,400-7,900) and git_include.rs 1,349 (about 1,350, raised from 1,200 by ratect#885), each with a //! comment; the 800-line observation is stated as measured at 0.25.0-dev"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "bc8a36abff188d86" }
-
-[[mark]]
 file = "TODO.md"
 mode = "stale-claims"
 unit = "602fae580f5863ab"
@@ -16534,3 +16480,237 @@ copies = 1
 note = "the Test coverage section's entries are about ratect-compat/tests/cli.rs's task_output helper and other e2e tests; the entry-lock tests added in git_include_tests.rs change nothing they say"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "bb0078fca41aeea4" }
+
+[[mark]]
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "309c9ff9d1324f1a"
+copies = 1
+note = "Decision numbers checked against 0023's Decision list (4 identity check, 6 removal) and 0027's Decision 4 as added."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "0592c1d6188b54cc"
+copies = 1
+note = "Decision 4 is the one this change adds to 0027's Decision list; matches remove_entry_files/move_entry_aside in git_include.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "8316da54d4a7b14a"
+copies = 1
+note = "Pre-change remove_entry_files ran remove_dir_all on <key> in place; ensure_cached clones only when <key> doesn't exist, so every later load used the partial tree."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "8316da54d4a7b14a"
+copies = 1
+note = "Single removal path, remove_entry_files, read in origin/main's git_include.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "7e01ea64e24e258f"
+copies = 1
+note = "Checked against 0027's Decisions 3 and 4 and 0023's Decisions 4, 5, 6, 7."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "060f840cda1320eb"
+copies = 1
+note = "move_entry_aside: rename is atomic, so only one rename of <key> succeeds; the other gets NotFound, mapped to None, then removes the sidecar tolerating NotFound."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "060f840cda1320eb"
+copies = 1
+note = "Same reading: two removers, one rename."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "910b3c63724cf5e1"
+copies = 1
+note = "No Ratect code path writes under a .del- name: only move_entry_aside creates one, and remove_leftovers removes any type via remove_set_aside for clean (both minimum_age forms) and cleanup_stale; tested by the_sweep_and_clean_remove_a_removal_directory_of_any_age."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "16d14533a6d861c0"
+copies = 1
+note = "refresh calls no remove_leftovers, read in git_include.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-about-elsewhere"
+unit = "f84d7fa5b66f7d40"
+copies = 1
+note = "ensure_cached decides to clone on working_copy.exists() only; list/clean find entries by sidecar in read_entries."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "2aa20c93b55d6033"
+copies = 1
+note = "Leftover removed by cleanup_stale (ratect-compat run) or clean; ensure_cached uses only <key>."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-about-elsewhere"
+unit = "2aa20c93b55d6033"
+copies = 1
+note = "ratect-compat starts the sweep per task run (sweep_git_include_cache); ratect has no sweep, only includes clean."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "0e9fe4fb039cdab5"
+copies = 1
+note = "ratect-compat 0.34.0's remove_entry_files (origin/main before this change) deletes <key> in place."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "75d9665028b52567"
+copies = 1
+note = "clean/refresh return the error in Outcome.failed, printed by the binaries; cleanup_stale only tracing::warn!s; sidecar removed before the delete, so read_entries no longer lists it; remove_leftovers only warns."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "58321cfdcf72329a"
+copies = 1
+note = "Each listed case matches a test in git_include_tests.rs: a_removal_cut_short_after_its_rename..., a_removal_renames_the_working_copy_before_it_removes_the_sidecar, a_sidecar_left_by_a_removal_cut_short..., clean_returns_an_entry_it_could_not_remove_as_failed and cleanup_stale_still_removes..., the_sweep_and_clean_remove_a_removal_directory_of_any_age."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "58321cfdcf72329a"
+copies = 1
+note = "Same test list."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "a09ee5c71c7bcade"
+copies = 1
+note = "None of the listed cases has a test; checked against git_include_tests.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/README.md"
+mode = "claim-words-counts"
+unit = "709bfcfdfc16e17f"
+copies = 1
+note = "Matches 0023's Status line and 0027's Status: 5 and 7 superseded, 4 (#891) and 6 (#883) refined."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "cdba40e0532ae065"
+copies = 1
+note = "clean, refresh and cleanup_stale all remove through remove_entry_files, which renames before anything else; clean's remove_leftovers removes .del- leftovers at any age."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "cdba40e0532ae065"
+copies = 1
+note = "Same three callers of remove_entry."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-totalising"
+unit = "7aa1bad31a40145b"
+copies = 1
+note = "cleanup_stale calls remove_leftovers, which removes .del- leftovers regardless of age and staging directories over STALE_AFTER."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-totalising"
+unit = "3495bf44f4f01f86"
+copies = 1
+note = "remove_entry_files renames before deleting; ensure_cached clones a missing <key>; tested by a_removal_cut_short_after_its_rename_leaves_nothing_a_load_uses."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-counts"
+unit = "3495bf44f4f01f86"
+copies = 1
+note = "Same reading."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "restatement-ngram"
+unit = "44934d6542e443fe-76952226fe31d5a9"
+copies = 1
+note = "Line 62 is 0027's Context on 0023's Decision 7 staging cleanup, still true of that decision; the phrase removed was the old remove_abandoned_staging_directories doc comment, now rewritten for remove_leftovers."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "claim-words-totalising"
+unit = "4c1c11297bd2378d"
+copies = 1
+note = "wc -l of config.rs 7,838, docker.rs 4,396, engine.rs 4,359 (about 4,400-7,900) and git_include.rs 1,416 (about 1,400, raised from 1,350 by ratect#883), each with a //! comment; the 800-line observation is stated as measured at 0.25.0-dev"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "dfc3c71ba6f26f95" }
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "claim-words-counts"
+unit = "4c1c11297bd2378d"
+copies = 1
+note = "wc -l of config.rs 7,838, docker.rs 4,396, engine.rs 4,359 (about 4,400-7,900) and git_include.rs 1,416 (about 1,400, raised from 1,350 by ratect#883), each with a //! comment; the 800-line observation is stated as measured at 0.25.0-dev"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "dfc3c71ba6f26f95" }

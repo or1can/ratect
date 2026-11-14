@@ -20,9 +20,14 @@ alone as naming no file, where before it tried the delete. Also under
 #891: a look that finds the file it opened released starts again at once
 a few times at most, then reports its holder unknown, so a path that
 always looks released, such as a broken symbolic link, is waited on and
-timed out rather than looked at without end. Supersedes
-[0023](0023-git-include-entry-lock.md)'s Decisions 5 and 7, and refines its
-Decision 4 as #891 above says; the rest of 0023 stands.
+timed out rather than looked at without end. Refined again on 2026-11-14
+by [#883](https://github.com/or1can/ratect/issues/883), which adds
+Decision 4: removing an entry renames its working copy aside before
+deleting it. Before, removal deleted it in place, so one cut short left
+part of it for every later load to use. Supersedes
+[0023](0023-git-include-entry-lock.md)'s Decisions 5 and 7, refines its
+Decision 4 as #891 above says, and refines its Decision 6 as Decision 4
+below says; the rest of 0023 stands.
 
 ## Context
 
@@ -103,6 +108,23 @@ lock still only prevents duplicate work.**
    No run reaches that window for a look either, since a run looks at one
    include's lock at a time, and starts nothing else while it does.
    Dropping a lock without releasing it, as dying does, is unchanged.
+4. **Removal renames the working copy aside before it deletes anything**
+   (refining 0023's Decision 6, which still takes no lock). `clean`,
+   `refresh` and the sweep all remove an entry the same way: they rename
+   `<key>` to `<key>.del-<unique>`, then remove the sidecar, then delete
+   the renamed directory. The rename is atomic, so a load finds either the
+   whole working copy at `<key>` or nothing there, which it clones again. A
+   removal cut short after the rename leaves a sidecar with no working copy,
+   or no sidecar at all. `includes list` still reports the first, and the
+   next load clones the entry again, as it does after a load races a
+   removal. Of two removals racing, only one renames `<key>`: the other
+   finds it gone and goes on to the sidecar. Ratect writes nothing into a
+   `<key>.del-*` directory, so the sweep and every form of `includes clean`
+   remove what has that name at any age, of whatever type, unlike a
+   staging directory. `includes refresh`
+   leaves one alone, as it does staging directories. The removal name
+   doesn't match `<key>.tmp-*`, and an entry is still found by its sidecar
+   alone.
 
 With two holders, each clones into its own staging directory; the first
 rename into `<key>` wins, and the other discards its copy and uses the
@@ -136,6 +158,11 @@ winner's, as 0023's Decision 1 already has it.
   that long.
 - **Delete the lock file through its handle rather than its path.** Unix has
   no call that unlinks an open file by descriptor.
+- **Remove the sidecar first, then delete the working copy in place**
+  (Decision 4's alternative). A load doesn't read the sidecar to decide
+  whether to clone, so this would still leave part of a working copy at
+  `<key>`, now with no entry for `includes list` to show or `includes
+  clean` to find.
 
 ## Consequences
 
@@ -193,3 +220,23 @@ winner's, as 0023's Decision 1 already has it.
   drop, a child caught before its exec, a network filesystem
   (where Linux emulates `flock` with `fcntl` locks, which a child doesn't
   share), and Windows, where the unlock is compiled but never run.
+- **A removal cut short leaves a `<key>.del-*` directory taking disk space**
+  until the next `ratect-compat` run or `ratect includes clean`, rather than
+  a partial working copy that every load uses (Decision 4). Only where the
+  removal ran this version or later: an older binary sharing the cache, such
+  as a `ratect-compat` 0.34.x sweep in a container, still deletes `<key>` in
+  place. A delete that fails after the rename is reported by the `includes
+  clean` or `includes refresh` that made it, and only logged by a sweep;
+  the entry is then gone from `includes list`, and later runs retry the
+  leftover with only a log record of a failure
+  ([#884](https://github.com/or1can/ratect/issues/884) is to report them).
+- **What was run for Decision 4.** Unit tests with a fake `git`, run on a
+  local APFS volume (CI runs them on Linux): a removal stopped after its rename and its sidecar's
+  removal, one stopped by a sidecar it can't remove, a cut-short state with
+  the sidecar left (made by hand, not by stopping a removal), a delete that
+  fails on a read-only directory, and leftovers of every age swept. Not
+  run: a removal killed mid-delete, two removals racing
+  each other, a load racing the rename, a sweep deleting a leftover another
+  process is still deleting, an older binary's removal sharing the cache,
+  Windows, where renaming a directory something holds open fails, and a
+  network filesystem, where a rename may not be atomic between clients.

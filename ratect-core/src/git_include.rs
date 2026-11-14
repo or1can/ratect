@@ -52,7 +52,11 @@
 //! renamed into place once complete, so no lock is needed for a working copy
 //! to be whole; no process of this version touches another's staging
 //! directory, except the sweep and `ratect includes clean`, once one is 30
-//! days old. The **entry lock** (CONTEXT.md's **Caches**) only stops two
+//! days old. Removing an entry renames its working copy to
+//! `<key>.del-<unique>` before anything else, and deletes it there, so a
+//! removal cut short leaves nothing at `<key>` for a load to use; the sweep
+//! and `ratect includes clean` remove what has that name at any age. The
+//! **entry lock** (CONTEXT.md's **Caches**) only stops two
 //! processes cloning the same entry at once: [`GitIncludeCache`] describes
 //! it, and the `entry_lock` submodule takes it. A lock whose **holder** has
 //! exited — killed during a first clone, say — is taken over by the next
@@ -433,16 +437,62 @@ pub struct Failure {
 
 /// Removes an entry's working copy and sidecar, tolerating either being
 /// absent already — including when another process removes the same entry
-/// at the same time, since removal takes no lock. An error if something is
-/// left behind.
+/// at the same time, since removal takes no lock. The working copy is
+/// renamed aside before anything else changes (see [`move_entry_aside`]),
+/// so a removal cut short never leaves part of one at `<key>` for a load to
+/// use (#883). An error if something is left behind, under its removal name
+/// if it got that far, which the sweep and `includes clean` remove.
 async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> Result<()> {
-    if let Err(e) = tokio::fs::remove_dir_all(working_copy).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
+    let Some(set_aside) = move_entry_aside(working_copy, info_path).await? else {
+        return Ok(());
+    };
+    remove_set_aside(&set_aside)
+        .await
+        .with_context(|| format!("Failed to remove Git include cache clone {set_aside:?}"))
+}
+
+/// Deletes what a removal renamed to `path`, whatever it is — a working copy,
+/// or a file or symlink something else put at `<key>` — without following a
+/// symlink. Tolerates its being gone already, as when a sweep in another
+/// process removes it first.
+async fn remove_set_aside(path: &Path) -> std::io::Result<()> {
+    let removed = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(path).await,
+        Ok(_) => tokio::fs::remove_file(path).await,
+        Err(e) => Err(e),
+    };
+    match removed {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        removed => removed,
+    }
+}
+
+/// What follows an entry's key in the name a removal gives its working copy
+/// before deleting it: `<key>.del-<unique>`. Unlike [`STAGING_INFIX`],
+/// Ratect writes nothing into what has this name, so the sweep and `includes
+/// clean` remove it at any age (decisions/0027's Decision 4).
+const REMOVAL_INFIX: &str = ".del-";
+
+/// [`remove_entry_files`]'s first two steps, each tolerating its file being
+/// absent: renames the working copy to a removal name, atomically, so a
+/// load sees either the whole of it at `<key>` or nothing there, and then
+/// removes the sidecar. Returns the removal-named path left to delete,
+/// or `None` if there was no working copy — as when a concurrent removal's
+/// rename got there first. Its own function so a test can stop a removal
+/// where an interrupted one would.
+async fn move_entry_aside(working_copy: &Path, info_path: &Path) -> Result<Option<PathBuf>> {
+    let mut name = working_copy.as_os_str().to_owned();
+    name.push(format!("{REMOVAL_INFIX}{}", uuid::Uuid::new_v4().simple()));
+    let set_aside = PathBuf::from(name);
+    let set_aside = match tokio::fs::rename(working_copy, &set_aside).await {
+        Ok(()) => Some(set_aside),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
             return Err(e).with_context(|| {
                 format!("Failed to remove Git include cache clone {working_copy:?}")
-            });
+            })
         }
-    }
+    };
     if let Err(e) = tokio::fs::remove_file(info_path).await {
         if e.kind() != std::io::ErrorKind::NotFound {
             return Err(e).with_context(|| {
@@ -450,32 +500,47 @@ async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> Result<()>
             });
         }
     }
-    Ok(())
+    Ok(set_aside)
 }
 
 /// What follows an entry's key in the name of a staging directory a clone of
 /// it is made in: `<key>.tmp-<unique>`.
 const STAGING_INFIX: &str = ".tmp-";
 
-/// Removes every staging directory in `root` (`<key>.tmp-*`, `<key>` being a
-/// [`cache_key`]), of any entry, last changed more
-/// than [`STALE_AFTER`] before `now` (decisions/0027): no clone runs that
-/// long, so it was left by one that was interrupted. No other process of
-/// this version removes one, since a younger one may be a clone still in
-/// progress, by a process whose lock this one can't see. Best-effort: one
-/// left behind is tried again, but removing part of one changes its
-/// modification time, so that can be 30 days later.
-async fn remove_abandoned_staging_directories(root: &Path, now: u64) {
+/// Removes what interrupted clones and removals left in `root`, of any entry
+/// (`<key>` being a [`cache_key`]):
+///
+/// - everything under a removal name (`<key>.del-*`), whatever its age,
+///   since a removal renames a working copy to one only to delete it, and
+///   Ratect writes nothing into one (#883);
+/// - every staging directory (`<key>.tmp-*`) last changed more than
+///   [`STALE_AFTER`] before `now` (decisions/0027): no clone runs that long,
+///   so it was left by one that was interrupted. No other process of this
+///   version removes one, since a younger one may be a clone still in
+///   progress, by a process whose lock this one can't see.
+///
+/// Best-effort: one left behind is tried again, but removing part of a
+/// staging directory changes its modification time, so that can be 30 days
+/// later.
+async fn remove_leftovers(root: &Path, now: u64) {
     let Ok(mut entries) = tokio::fs::read_dir(root).await else {
         return;
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name();
-        let is_staging = name
-            .to_string_lossy()
-            .split_once(STAGING_INFIX)
-            .is_some_and(|(key, _)| is_cache_key(key));
-        if !is_staging {
+        let name = name.to_string_lossy();
+        let named_for = |infix| {
+            name.split_once(infix)
+                .is_some_and(|(key, _)| is_cache_key(key))
+        };
+        if named_for(REMOVAL_INFIX) {
+            let path = entry.path();
+            if let Err(e) = remove_set_aside(&path).await {
+                tracing::warn!("Failed to remove Git include cache clone {path:?}: {e}");
+            }
+            continue;
+        }
+        if !named_for(STAGING_INFIX) {
             continue;
         }
         // Not following a symlink: only a directory of that name is one.
@@ -1016,15 +1081,15 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// do. Nothing here is unrecoverable — the worst case of removing too
     /// much is a re-clone — which is why this has no confirmation of any
     /// kind, unlike removing containers. Whatever `minimum_age`, it also
-    /// removes what interrupted clones left only once it is 30 days old, as
-    /// the sweep does: a younger one may be a clone still in progress
-    /// (decisions/0027).
+    /// removes what interrupted removals left, at once, and what interrupted
+    /// clones left only once it is 30 days old, as the sweep does: a younger
+    /// one may be a clone still in progress (decisions/0027).
     pub async fn clean(&self, minimum_age: Option<Duration>) -> Result<Outcome> {
         let Some(root) = self.root.resolve()? else {
             return Ok(Outcome::default());
         };
         let now = (self.clock)();
-        remove_abandoned_staging_directories(&root, now).await;
+        remove_leftovers(&root, now).await;
         let entries = self.read_entries(&root).await?;
 
         let mut outcome = Outcome::default();
@@ -1148,15 +1213,17 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// removal of that entry for the whole lock timeout. A load racing
     /// this can still return the removed path and write a sidecar for it,
     /// with or without the lock: the next load re-clones it, or once stale
-    /// the sweep removes the sidecar.
+    /// the sweep removes the sidecar. A removal cut short after renaming the
+    /// working copy aside leaves that same state, or no sidecar at all, but
+    /// never part of a working copy at `<key>` (see `remove_entry_files`).
     /// An error if anything was left behind, for the caller to report or log;
     /// a single unremovable entry shouldn't abandon the rest.
     async fn remove_entry(&self, root: &Path, key: &str) -> Result<()> {
         remove_entry_files(&root.join(key), &root.join(format!("{key}.toml"))).await
     }
 
-    /// Removes any staging directory an interrupted clone left (see
-    /// `remove_abandoned_staging_directories`), and any cached repo whose
+    /// Removes what interrupted clones and removals left (see
+    /// `remove_leftovers`), and any cached repo whose
     /// `last_used` is more than `STALE_AFTER` old — matching Batect's own
     /// `GitRepositoryCacheCleanupTask`/`GitRepositoryCache.delete`, except
     /// for a bad sidecar (below) and in how the window is measured (see
@@ -1187,7 +1254,7 @@ impl<G: GitClient> GitIncludeCache<G> {
         // After the entries, which are what a load reads, since the sweep is
         // cut short when its process exits; and even when they can't be
         // listed.
-        remove_abandoned_staging_directories(&root, now).await;
+        remove_leftovers(&root, now).await;
 
         entries.map(|_| ())
     }

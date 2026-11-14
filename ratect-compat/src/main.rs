@@ -1094,7 +1094,8 @@ fn with_unknown_task_hint(error: anyhow::Error) -> anyhow::Error {
 type Sweep = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
 
 /// The real sweep: removes every `~/.ratect/incl` entry unused for 30 days,
-/// and every clone's temporary directory unchanged for more than 30 days.
+/// every clone's temporary directory unchanged for more than 30 days, and
+/// whatever an interrupted removal left, at once.
 fn sweep_git_include_cache() -> Sweep {
     Box::pin(async { GitIncludeCache::new().cleanup_stale().await })
 }

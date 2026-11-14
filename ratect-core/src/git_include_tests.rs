@@ -1766,6 +1766,181 @@ async fn the_sweep_and_clean_remove_a_staging_directory_unchanged_for_30_days() 
     }
 }
 
+fn removal_directories(root: &Path, key: &str) -> Vec<String> {
+    std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(&format!("{key}{REMOVAL_INFIX}")))
+        .collect()
+}
+
+/// #883: a removal's first change is to rename the working copy to a name no
+/// load reads, so one cut short after it — here, stopped before deleting the
+/// renamed directory — leaves no `<key>` for the next load to use, and that
+/// load clones the entry afresh.
+#[tokio::test]
+async fn a_removal_cut_short_after_its_rename_leaves_nothing_a_load_uses() {
+    let root = unique_temp_dir();
+    let git = fake_with_the_entry();
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1_000);
+    let remote = Remote::from("https://example.com/repo.git");
+    let working_copy = cache.ensure_cached(&remote, "v1.0.0").await.unwrap();
+    let key = cache_key(&remote, "v1.0.0");
+    let info_path = root.join(format!("{key}.toml"));
+
+    let set_aside = move_entry_aside(&working_copy, &info_path)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(!working_copy.exists());
+    assert!(!info_path.exists());
+    assert_eq!(
+        removal_directories(&root, &key),
+        vec![set_aside
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()]
+    );
+    assert!(set_aside.join("bundle.yml").exists());
+
+    let reloaded = cache.ensure_cached(&remote, "v1.0.0").await.unwrap();
+
+    assert_eq!(git.clone_count(), 2);
+    assert_eq!(reloaded, working_copy);
+    assert!(reloaded.join("bundle.yml").exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// #883: the rename comes before the sidecar's removal, so a removal that
+/// stops at the sidecar — here because it can't be removed, a directory in
+/// its place — has already taken the working copy away from `<key>`.
+#[tokio::test]
+async fn a_removal_renames_the_working_copy_before_it_removes_the_sidecar() {
+    let root = unique_temp_dir();
+    let cache = GitIncludeCache::for_test(root.clone(), fake_with_the_entry(), 1_000);
+    let remote = Remote::from("https://example.com/repo.git");
+    let working_copy = cache.ensure_cached(&remote, "v1.0.0").await.unwrap();
+    let key = cache_key(&remote, "v1.0.0");
+    let info_path = root.join(format!("{key}.toml"));
+    tokio::fs::remove_file(&info_path).await.unwrap();
+    tokio::fs::create_dir_all(info_path.join("unremovable"))
+        .await
+        .unwrap();
+
+    let error = move_entry_aside(&working_copy, &info_path)
+        .await
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").starts_with("Failed to remove Git include cache info file"),
+        "{error:#}"
+    );
+    assert!(!working_copy.exists());
+    assert_eq!(removal_directories(&root, &key).len(), 1);
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// #883: a removal cut short between its rename and its sidecar's removal
+/// leaves a sidecar with no working copy. `list` still reports the entry, and
+/// the next load clones it again.
+#[tokio::test]
+async fn a_sidecar_left_by_a_removal_cut_short_is_listed_and_its_entry_cloned_again() {
+    let root = unique_temp_dir();
+    let git = fake_with_the_entry();
+    let cache = GitIncludeCache::for_test(root.clone(), git.clone(), 1_000);
+    let remote = Remote::from("https://example.com/repo.git");
+    let working_copy = cache.ensure_cached(&remote, "v1.0.0").await.unwrap();
+    let key = cache_key(&remote, "v1.0.0");
+    tokio::fs::rename(
+        &working_copy,
+        root.join(format!("{key}{REMOVAL_INFIX}cut-short")),
+    )
+    .await
+    .unwrap();
+
+    let listed = cache.list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].key, key);
+    assert_eq!(listed[0].path, working_copy);
+    assert_eq!(listed[0].size_bytes, 0);
+
+    cache.ensure_cached(&remote, "v1.0.0").await.unwrap();
+
+    assert_eq!(git.clone_count(), 2);
+    assert!(working_copy.join("bundle.yml").exists());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
+}
+
+/// #883: what a removal cut short left under a removal name is removed by
+/// the sweep and by every form of `includes clean`, however recently it last
+/// changed, since Ratect writes nothing into one; a staging directory
+/// younger than `STALE_AFTER` still isn't, nor is a directory whose name
+/// doesn't start with a key. A file of a removal name is removed too: a removal renames
+/// whatever is at `<key>`.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_sweep_and_clean_remove_a_removal_directory_of_any_age() {
+    for clean in [None, Some(None), Some(Some(Duration::from_secs(60)))] {
+        let root = unique_temp_dir();
+        let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
+        let other = cache_key(&Remote::from("https://example.com/other.git"), "v1.0.0");
+        let now = std::time::SystemTime::now();
+        let old = now - STALE_AFTER - Duration::from_secs(60);
+        let recent = now - STALE_AFTER + Duration::from_secs(60);
+        for (name, modified) in [
+            (format!("{key}{REMOVAL_INFIX}recent"), now),
+            (format!("{other}{REMOVAL_INFIX}old"), old),
+            (format!("{key}.tmp-recent"), recent),
+            (format!("backup{REMOVAL_INFIX}old"), now),
+        ] {
+            let directory = root.join(name);
+            tokio::fs::create_dir_all(directory.join("sub"))
+                .await
+                .unwrap();
+            std::fs::File::open(&directory)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+        }
+        let file = root.join(format!("{other}{REMOVAL_INFIX}file"));
+        tokio::fs::write(&file, "").await.unwrap();
+        let seconds = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), seconds);
+
+        match clean {
+            Some(minimum_age) => drop(cache.clean(minimum_age).await.unwrap()),
+            None => cache.cleanup_stale().await.unwrap(),
+        }
+
+        assert_eq!(
+            removal_directories(&root, &key),
+            Vec::<String>::new(),
+            "clean: {clean:?}"
+        );
+        assert_eq!(
+            removal_directories(&root, &other),
+            Vec::<String>::new(),
+            "clean: {clean:?}"
+        );
+        assert_eq!(
+            staging_directories(&root, &key),
+            vec![format!("{key}.tmp-recent")],
+            "clean: {clean:?}"
+        );
+        assert!(
+            root.join(format!("backup{REMOVAL_INFIX}old")).exists(),
+            "clean: {clean:?}"
+        );
+
+        tokio::fs::remove_dir_all(&root).await.ok();
+    }
+}
+
 /// A load whose `exists()` check passed just before a concurrent removal
 /// returns the removed path, then writes its sidecar after the removal —
 /// leaving a sidecar with no working copy. No lock prevents that (#631);
@@ -2104,9 +2279,23 @@ async fn clean_returns_an_entry_it_could_not_remove_as_failed() {
     std::fs::write(sealed.join("file"), "").unwrap();
     std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).unwrap();
 
+    let old_key = cache_key(&Remote::from("https://example.com/old.git"), "v1.0.0");
+
     let outcome = cache.clean(None).await;
-    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // The removal renamed the working copy before failing to delete it
+    // (#883), so what's left is under a removal name, not `<key>`.
+    let set_aside = removal_directories(&root, &old_key);
+    for name in &set_aside {
+        std::fs::set_permissions(
+            root.join(name).join("sealed"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
     let outcome = outcome.unwrap();
+    assert_eq!(set_aside.len(), 1);
+    assert!(!root.join(&old_key).exists());
+    assert!(!root.join(format!("{old_key}.toml")).exists());
 
     let succeeded: Vec<_> = outcome
         .succeeded
@@ -2255,37 +2444,69 @@ async fn cleanup_stale_removes_only_the_stale_entries_among_several() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
-/// A regular file where the working copy should be is the forced failure:
-/// `remove_dir_all` refuses a non-directory, even when the tests run as
-/// root, which an unwritable directory doesn't. The sweep visits entries in
-/// `read_dir` order, which the test can't choose, so each entry takes a turn as
-/// the failing one: unless that order differs between the two runs, one of
-/// them puts the failure first, which is the order that matters.
+/// A read-only directory in the working copy is the forced failure: the
+/// removal renames the working copy aside and removes its sidecar, then
+/// can't delete it (#883), so the failing entry is gone too, but for what is
+/// left under its removal name, which the sweep's own pass over leftovers
+/// can't delete either. The sweep visits entries in `read_dir` order, which
+/// the test can't choose, so each entry takes a turn as the failing one:
+/// unless that order differs between the two runs, one of them puts the
+/// failure first, which is the order that matters.
+#[cfg(unix)]
 #[tokio::test]
 async fn cleanup_stale_still_removes_other_stale_entries_when_one_removal_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root deletes through any mode, so there is nothing to test as root.
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let seal = |working_copy: &Path| {
+        let sealed = working_copy.join("sealed");
+        std::fs::create_dir(&sealed).unwrap();
+        std::fs::write(sealed.join("file"), "").unwrap();
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).unwrap();
+    };
+    let unseal = |root: &Path, key: &str| {
+        for name in removal_directories(root, key) {
+            std::fs::set_permissions(
+                root.join(name).join("sealed"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+    };
     let remotes = ["https://example.com/a.git", "https://example.com/b.git"];
     for (failing, other) in [(remotes[0], remotes[1]), (remotes[1], remotes[0])] {
         let root = unique_temp_dir();
         let (failing_key, failing_copy, failing_info) =
             cached_entry_used_at(&root, failing, 1_000).await;
         let (other_key, other_copy, other_info) = cached_entry_used_at(&root, other, 1_000).await;
-        tokio::fs::remove_dir_all(&failing_copy).await.unwrap();
-        tokio::fs::write(&failing_copy, b"not a directory")
-            .await
-            .unwrap();
+        seal(&failing_copy);
 
         let now = 1_000 + STALE_AFTER.as_secs() + 1;
         let sweeper = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), now);
-        sweeper.cleanup_stale().await.unwrap();
+        let swept = sweeper.cleanup_stale().await;
+        let left = removal_directories(&root, &failing_key);
+        unseal(&root, &failing_key);
+        swept.unwrap();
 
-        assert!(failing_copy.exists(), "{failing} should be left in place");
-        assert!(failing_info.exists(), "{failing} should be left in place");
+        assert!(!failing_copy.exists(), "{failing} should be renamed aside");
+        assert!(!failing_info.exists(), "{failing} should be removed");
+        assert_eq!(
+            left.len(),
+            1,
+            "{failing} should be left under a removal name"
+        );
         assert!(!other_copy.exists(), "{other} should be removed");
         assert!(!other_info.exists(), "{other} should be removed");
 
         // The per-entry results the sweep ignores.
+        cached_entry_used_at(&root, failing, 1_000).await;
         cached_entry_used_at(&root, other, 1_000).await;
-        assert!(sweeper.remove_entry(&root, &failing_key).await.is_err());
+        seal(&failing_copy);
+        let failed = sweeper.remove_entry(&root, &failing_key).await;
+        unseal(&root, &failing_key);
+        assert!(failed.is_err());
         sweeper.remove_entry(&root, &other_key).await.unwrap();
 
         tokio::fs::remove_dir_all(&root).await.ok();

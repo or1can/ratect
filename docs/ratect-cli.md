@@ -249,7 +249,11 @@ succeeded, in every style but `quiet`; `includes refresh` prints neither.
 
 Every form of `clean` also removes the temporary directories left by clones that were
 interrupted, once unchanged for 30 days: a more recent one may be a clone still in
-progress.
+progress. It removes what an interrupted `clean`, `refresh` or `ratect-compat` sweep
+left at once: each moves a clone aside before deleting it, so one cut short never leaves
+part of a clone for a later command to use. The next command that needs the include, or
+`includes refresh`, clones it again; until then `includes list` may still show it, at 0
+bytes.
 
 `clean` and `refresh` carry on past an include they can't remove, or clone again, and
 then print an `Error:` on stderr for each, naming it and why, in every style, and
