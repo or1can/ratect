@@ -17,6 +17,7 @@
 //! subcommands actually reach `ratect-core` and do the thing — which no
 //! amount of `try_parse_from` can.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -3381,7 +3382,14 @@ fn all_projects_never_reaches_containers_ratect_did_not_create() {
     let listed = ratect_command()
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml"))
-        .args(["resources", "list", "--all-projects", "-o", "quiet"])
+        .args([
+            "resources",
+            "list",
+            "--all-projects",
+            "--all",
+            "-o",
+            "quiet",
+        ])
         .output()
         .expect("failed to run ratect");
     let ids = String::from_utf8_lossy(&listed.stdout).to_string();
@@ -3389,7 +3397,7 @@ fn all_projects_never_reaches_containers_ratect_did_not_create() {
     let cleaned = ratect_command()
         .arg("-f")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/resources.yml"))
-        .args(["resources", "clean", "--all-projects"])
+        .args(["resources", "clean", "--all-projects", "--all"])
         .output()
         .expect("failed to run ratect");
 
@@ -3553,8 +3561,7 @@ fn resources_finds_and_removes_what_a_previous_run_left_behind() {
     let ids = String::from_utf8_lossy(&quiet.stdout);
     assert_eq!(ids.lines().count(), 2, "expected two ids:\n{ids}");
 
-    // Nothing is minutes old yet, so an age filter excludes it all — this
-    // is what stops a sweep taking an in-flight run with it.
+    // Nothing is minutes old yet, so an age filter excludes it all.
     let too_new = ratect(&["resources", "list", "--older-than", "1h"]);
     assert!(
         String::from_utf8_lossy(&too_new.stdout).contains("Nothing left over that old."),
@@ -5626,4 +5633,435 @@ fn config_validate_says_nothing_about_user_or_identity() {
     assert!(output.status.success(), "{stdout}");
     assert!(!stdout.contains("'with-user'"), "{stdout}");
     assert!(!stdout.contains("'with-identity'"), "{stdout}");
+}
+
+/// One test at a time on `run-lock.yml`'s project: each removes all of it
+/// with Docker at its start and end, and most run `resources clean` on it.
+static RUN_LOCK_PROJECT: Mutex<()> = Mutex::new(());
+
+const RUN_LOCK_PROJECT_NAME: &str = "ratect-cli-run-lock-test";
+
+fn run_lock_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-lock.yml")
+}
+
+/// One container of `run-lock.yml`'s project, as `docker ps -a` shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RunLockContainer {
+    run: String,
+    container: String,
+    state: String,
+}
+
+fn run_lock_containers() -> Vec<RunLockContainer> {
+    let output = Command::new("docker")
+        .args(["ps", "-a", "--filter"])
+        .arg(format!("label=eu.orican.ratect.project={RUN_LOCK_PROJECT_NAME}"))
+        .args([
+            "--format",
+            "{{.Label \"eu.orican.ratect.run\"}}\t{{.Label \"eu.orican.ratect.container\"}}\t{{.State}}",
+        ])
+        .output()
+        .expect("failed to run docker ps");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            Some(RunLockContainer {
+                run: fields.next()?.to_string(),
+                container: fields.next()?.to_string(),
+                state: fields.next()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// The `run` label of every network of `run-lock.yml`'s project.
+fn run_lock_networks() -> Vec<String> {
+    let output = Command::new("docker")
+        .args(["network", "ls", "--filter"])
+        .arg(format!(
+            "label=eu.orican.ratect.project={RUN_LOCK_PROJECT_NAME}"
+        ))
+        .args(["--format", "{{.Label \"eu.orican.ratect.run\"}}"])
+        .output()
+        .expect("failed to run docker network ls");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Removes everything of `run-lock.yml`'s project with Docker itself, so a
+/// test starts and ends with none of it, whatever its locks read.
+fn remove_run_lock_project() {
+    let ids = Command::new("docker")
+        .args(["ps", "-aq", "--filter"])
+        .arg(format!(
+            "label=eu.orican.ratect.project={RUN_LOCK_PROJECT_NAME}"
+        ))
+        .output()
+        .expect("failed to run docker ps");
+    for id in String::from_utf8_lossy(&ids.stdout).lines() {
+        let _ = Command::new("docker").args(["rm", "-f", id]).output();
+    }
+    let networks = Command::new("docker")
+        .args(["network", "ls", "-q", "--filter"])
+        .arg(format!(
+            "label=eu.orican.ratect.project={RUN_LOCK_PROJECT_NAME}"
+        ))
+        .output()
+        .expect("failed to run docker network ls");
+    for id in String::from_utf8_lossy(&networks.stdout).lines() {
+        let _ = Command::new("docker").args(["network", "rm", id]).output();
+    }
+}
+
+/// Polls `condition` every 200 ms for up to a minute, failing naming `what`.
+fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !condition() {
+        assert!(Instant::now() < deadline, "timed out waiting until {what}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// Task runs started by a test, killed with `SIGKILL` however it ends, and
+/// the `run` label of each.
+#[derive(Default)]
+struct RunLockRuns(Vec<std::process::Child>, Vec<String>);
+
+impl RunLockRuns {
+    /// Starts `binary` running `arguments` against `run-lock.yml`, its output
+    /// discarded, and returns the `run` label of the task run it starts, once
+    /// one of its containers exists.
+    fn start(&mut self, binary: &Path, arguments: &[&str]) -> String {
+        let before: HashSet<String> = run_lock_containers().into_iter().map(|c| c.run).collect();
+        let child = Command::new(binary)
+            .arg("-f")
+            .arg(run_lock_fixture_path())
+            .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to start a task run");
+        self.0.push(child);
+        let mut run = None;
+        wait_until("the task run created a container", || {
+            run = run_lock_containers()
+                .into_iter()
+                .map(|c| c.run)
+                .find(|r| !before.contains(r));
+            run.is_some()
+        });
+        let run = run.unwrap();
+        self.1.push(run.clone());
+        run
+    }
+
+    /// Kills the run started `index`th with `SIGKILL`, and reaps it.
+    fn kill(&mut self, index: usize) {
+        let child = &mut self.0[index];
+        child.kill().expect("failed to kill a task run");
+        child.wait().expect("failed to reap a task run");
+    }
+
+    /// Stops task run `index`'s process with `SIGSTOP`, so it holds its lock
+    /// and does nothing more until [`Self::resume`].
+    #[cfg(unix)]
+    fn pause(&self, index: usize) {
+        self.signal(index, "STOP");
+    }
+
+    #[cfg(unix)]
+    fn resume(&self, index: usize) {
+        self.signal(index, "CONT");
+    }
+
+    #[cfg(unix)]
+    fn signal(&self, index: usize, signal: &str) {
+        let status = Command::new("kill")
+            .arg(format!("-{signal}"))
+            .arg(self.0[index].id().to_string())
+            .status()
+            .expect("failed to run kill");
+        assert!(status.success(), "kill -{signal} failed");
+    }
+}
+
+impl Drop for RunLockRuns {
+    fn drop(&mut self) {
+        for child in &mut self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        remove_run_lock_project();
+        // Removed with `docker` rather than `resources clean`, so their lock
+        // files, which only `clean` and their own runs delete, go here.
+        let locks = ratect_core::run_lock::RunLocks::at_home();
+        for run in &self.1 {
+            let _ = locks.forget(run);
+        }
+    }
+}
+
+fn ratect_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_ratect"))
+}
+
+/// Whether `run` has `container` in `state` (`None`: in any state).
+fn has(run: &str, container: &str, state: Option<&str>) -> bool {
+    run_lock_containers().iter().any(|c| {
+        c.run == run && c.container == container && state.is_none_or(|state| c.state == state)
+    })
+}
+
+/// A bare `resources clean`, which must succeed.
+fn clean_run_lock_project() -> String {
+    let cleaned = ratect_command()
+        .arg("-f")
+        .arg(run_lock_fixture_path())
+        .args(["resources", "clean"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&cleaned.stderr).to_string();
+    assert!(
+        cleaned.status.success(),
+        "stdout:\n{}\nstderr:\n{stderr}",
+        String::from_utf8_lossy(&cleaned.stdout)
+    );
+    stderr
+}
+
+/// The rest of each `SIGKILL` case: a bare `resources clean` removes every
+/// container and the network of `killed`, and nothing of `live`, which is
+/// counted as still going.
+fn assert_clean_removes_only(killed: &str, live: &str) {
+    assert!(
+        run_lock_containers().iter().any(|c| c.run == killed),
+        "the killed run should still have something to remove"
+    );
+    let live_before: HashSet<RunLockContainer> = run_lock_containers()
+        .into_iter()
+        .filter(|c| c.run == live)
+        .map(|c| RunLockContainer {
+            state: String::new(),
+            ..c
+        })
+        .collect();
+    assert!(!live_before.is_empty());
+
+    let stderr = clean_run_lock_project();
+
+    let after = run_lock_containers();
+    assert!(
+        after.iter().all(|c| c.run != killed),
+        "the killed run's containers should be gone: {after:?}"
+    );
+    assert!(
+        !run_lock_networks().iter().any(|run| run == killed),
+        "the killed run's network should be gone"
+    );
+    let live_after: HashSet<RunLockContainer> = after
+        .into_iter()
+        .filter(|c| c.run == live)
+        .map(|c| RunLockContainer {
+            state: String::new(),
+            ..c
+        })
+        .collect();
+    assert_eq!(live_after, live_before, "the live run should be untouched");
+    assert!(
+        run_lock_networks().iter().any(|run| run == live),
+        "the live run's network should remain"
+    );
+    assert!(
+        stderr.contains("Left out 1 task run still going."),
+        "{stderr}"
+    );
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// decisions/0025's control case: a task run killed mid-task, its task
+/// container and its dependency both still running, reads dead, and a
+/// bare `resources clean` removes it, leaving a live run of the same task.
+#[test]
+#[ignore]
+fn resources_clean_removes_a_task_run_killed_mid_task_and_not_a_live_one() {
+    let _guard = shared_docker();
+    let _project = project_lock(&RUN_LOCK_PROJECT);
+    remove_run_lock_project();
+    let mut runs = RunLockRuns::default();
+
+    let live = runs.start(&ratect_binary(), &["run", "hold", "--", "300"]);
+    wait_until("the live run's task runs", || {
+        has(&live, "app", Some("running"))
+    });
+    let killed = runs.start(&ratect_binary(), &["run", "hold", "--", "300"]);
+    wait_until("the killed run's task runs", || {
+        has(&killed, "app", Some("running"))
+    });
+    runs.kill(1);
+    assert!(has(&killed, "slow-stop", Some("running")));
+
+    assert_clean_removes_only(&killed, &live);
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A task run killed during cleanup, which has removed its task container
+/// and is waiting on its dependency's stop: no container state rule selects
+/// this, and the lock reads it dead.
+#[test]
+#[ignore]
+fn resources_clean_removes_a_task_run_killed_during_cleanup_and_not_a_live_one() {
+    let _guard = shared_docker();
+    let _project = project_lock(&RUN_LOCK_PROJECT);
+    remove_run_lock_project();
+    let mut runs = RunLockRuns::default();
+
+    let live = runs.start(&ratect_binary(), &["run", "hold", "--", "300"]);
+    wait_until("the live run's task runs", || {
+        has(&live, "app", Some("running"))
+    });
+    let killed = runs.start(&ratect_binary(), &["run", "hold", "--", "1"]);
+    wait_until("the killed run's task container exists", || {
+        has(&killed, "app", None)
+    });
+    wait_until(
+        "the killed run's cleanup removed its task container",
+        || !has(&killed, "app", None),
+    );
+    assert!(
+        has(&killed, "slow-stop", Some("running")),
+        "the dependency is still running while cleanup stops it"
+    );
+    runs.kill(1);
+
+    assert_clean_removes_only(&killed, &live);
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A task run killed while its dependency's setup command runs: its task
+/// container is `created`, never started, which a "not running" rule would
+/// also select of a run still starting. The lock tells the two apart.
+#[test]
+#[ignore]
+fn resources_clean_removes_a_task_run_killed_while_starting_and_not_a_live_one() {
+    let _guard = shared_docker();
+    let _project = project_lock(&RUN_LOCK_PROJECT);
+    remove_run_lock_project();
+    let mut runs = RunLockRuns::default();
+
+    let live = runs.start(&ratect_binary(), &["run", "starting"]);
+    wait_until("the live run's dependency runs", || {
+        has(&live, "slow-start", Some("running")) && has(&live, "app", Some("created"))
+    });
+    let killed = runs.start(&ratect_binary(), &["run", "starting"]);
+    wait_until("the killed run's dependency runs", || {
+        has(&killed, "slow-start", Some("running")) && has(&killed, "app", Some("created"))
+    });
+    runs.kill(1);
+
+    assert_clean_removes_only(&killed, &live);
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`, and `ratect-compat` built beside `ratect`, as `cargo test
+/// --workspace` builds it. Run explicitly with `cargo test -- --ignored`.
+///
+/// Both binaries share the engine, so a `ratect-compat` task run takes the
+/// lock too, and `ratect resources clean` removes one killed with `SIGKILL`.
+#[test]
+#[ignore]
+fn resources_clean_removes_a_killed_ratect_compat_task_run() {
+    let _guard = shared_docker();
+    let _project = project_lock(&RUN_LOCK_PROJECT);
+    remove_run_lock_project();
+    let compat =
+        ratect_binary().with_file_name(format!("ratect-compat{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        compat.exists(),
+        "{compat:?} not built: run with --workspace"
+    );
+    let mut runs = RunLockRuns::default();
+
+    let live = runs.start(&compat, &["hold", "--", "300"]);
+    wait_until("the live run's task runs", || {
+        has(&live, "app", Some("running"))
+    });
+    let killed = runs.start(&compat, &["hold", "--", "300"]);
+    wait_until("the killed run's task runs", || {
+        has(&killed, "app", Some("running"))
+    });
+    runs.kill(1);
+
+    assert_clean_removes_only(&killed, &live);
+}
+
+/// Requires a running Docker daemon with network access to pull
+/// `alpine:3.18.2`. Run explicitly with `cargo test -- --ignored`.
+///
+/// A live task run whose task container has exited, as one can have while
+/// its output drains into a slow reader (`ratect run build | less`): an
+/// "exited" rule selects it, and the lock reads it alive, so `resources list`
+/// leaves it out. The run is held with `SIGSTOP`, not a pipe nobody reads,
+/// since how much unread output still lets its task container exit depends on
+/// the daemon's buffering (decisions/0025). That the lock is still held after
+/// the task container's run returns, through cleanup, is `ratect-core`'s
+/// `a_task_runs_lock_is_held_after_its_task_container_exits_and_through_cleanup`.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn a_live_task_run_whose_task_container_has_exited_is_not_selected() {
+    let _guard = shared_docker();
+    let _project = project_lock(&RUN_LOCK_PROJECT);
+    remove_run_lock_project();
+    let mut runs = RunLockRuns::default();
+
+    let run = runs.start(&ratect_binary(), &["run", "pausable", "--", "20"]);
+    wait_until("the task container runs", || {
+        has(&run, "app", Some("running"))
+    });
+    runs.pause(0);
+    wait_until("the task container exited", || {
+        has(&run, "app", Some("exited"))
+    });
+
+    let listed = ratect_command()
+        .arg("-f")
+        .arg(run_lock_fixture_path())
+        .args(["resources", "list", "--all", "-o", "quiet"])
+        .output()
+        .expect("failed to run ratect");
+    let stderr = String::from_utf8_lossy(&listed.stderr).to_string();
+    runs.resume(0);
+    let mut finished = None;
+    wait_until("the resumed run ended", || {
+        finished = runs.0[0].try_wait().unwrap();
+        finished.is_some()
+    });
+    let finished = finished.unwrap();
+
+    assert!(listed.status.success(), "{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&listed.stdout),
+        "",
+        "nothing selected"
+    );
+    assert!(
+        stderr.contains("Left out 1 task run still going."),
+        "{stderr}"
+    );
+    assert!(finished.success(), "the run ended normally once resumed");
+    assert!(
+        !run_lock_containers().iter().any(|c| c.run == run),
+        "and cleaned up after itself"
+    );
 }

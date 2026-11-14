@@ -16,24 +16,36 @@
 //! removal behind `ratect resources list` / `ratect resources clean`, found by
 //! the ownership labels in [`crate::labels`].
 //!
-//! Leftovers happen after a crash, a `docker kill`, a run that used
-//! `--no-cleanup`, or a cleanup that itself failed. The one thing labels can't
-//! settle: a task running *right now* carries exactly the same labels as a
-//! leftover, because until it finishes it is one. That is what `older_than`
-//! exists for, and why nothing here claims to detect liveness — the daemon
-//! can't say whether some other `ratect` process still cares about a
-//! container.
+//! Leftovers happen after a crash, a `kill -9`, a run that used
+//! `--no-cleanup`, or a cleanup that itself failed. Labels alone can't tell
+//! one from a task run still going: until it finishes, it carries exactly the
+//! same labels. What tells them apart is the **task run lock**
+//! ([`crate::run_lock`], decisions/0025): each task run that can take one
+//! holds it for as long as its process drives it, and [`find`] reads it as a
+//! [`RunState`] — **dead**, selected by default; **alive**, never selected;
+//! **unknown**, selected only when asked for all of them. Container state was
+//! tried first and fails both ways (0025's Context): a task run that is
+//! starting has a task container that isn't running, and one draining its
+//! output into a slow reader can have one that has exited.
+//!
+//! **A task run is the unit.** The containers and network sharing one `run`
+//! label value are selected or skipped together, and `older_than` measures
+//! the task run's age, its oldest resource's. What carries the project label
+//! and no `run` label is not a task run (a service instance, decisions/0026):
+//! it is never selected, and counted nowhere.
 //!
 //! **This module is where the rules live; it prints nothing.** It was in
 //! `ratect/src/main.rs` until 0.6.0, bound to the concrete `DockerClient`
 //! even though every call it makes is a [`ResourceInventory`] method — so
 //! leftover selection, the containers-before-networks ordering rule and
 //! partial-failure behaviour were provable only against a live daemon. The
-//! seam existed and was simply not used. Three things follow from that
+//! seam existed and was simply not used. Four things follow from that
 //! history and should survive:
 //!
 //! - **Selection takes `now` rather than reading the clock**, so an age test
 //!   is a table, not a sleep.
+//! - **Selection takes the lock read as a [`RunStates`]**, so the three
+//!   states are a table too, with no real lock.
 //! - **Removal reports through a callback**, so `clean` still prints as each
 //!   resource goes rather than falling silent on a slow daemon, without this
 //!   module owning any wording. Errors are handed back rather than logged
@@ -43,7 +55,9 @@
 //!   see [`find`].
 
 use crate::docker::LabelledResource;
+pub use crate::run_lock::RunState;
 use anyhow::Result;
+use std::collections::BTreeMap;
 
 /// The container/network inventory operations `find`/`remove` need — a
 /// narrower contract than [`crate::docker::ContainerRuntime`]'s full 16
@@ -164,10 +178,65 @@ impl Leftover {
     }
 }
 
-/// Every container and network this project (or every project, with `project`
-/// `None`) left behind, narrowed by `older_than`. In the daemon's own listing
-/// order — grouping and sorting are the caller's, since they're decisions
-/// about how a report reads.
+/// The task run lock, read: what [`find`] asks of each task run, and what
+/// [`remove`] tells once one is gone. [`crate::run_lock::RunLocks`] is the
+/// real one; a test fakes it.
+pub trait RunStates {
+    /// What task run `run`'s lock says about its process.
+    fn state(&self, run: &str) -> RunState;
+    /// Deletes task run `run`'s lock file, once its resources are removed.
+    fn forget(&self, run: &str) -> std::io::Result<()>;
+}
+
+impl RunStates for crate::run_lock::RunLocks {
+    fn state(&self, run: &str) -> RunState {
+        crate::run_lock::RunLocks::state(self, run)
+    }
+
+    fn forget(&self, run: &str) -> std::io::Result<()> {
+        crate::run_lock::RunLocks::forget(self, run)
+    }
+}
+
+/// Everything one task run left on the daemon, with what its lock says.
+pub struct TaskRun {
+    /// Its `run` label value.
+    pub run: String,
+    /// The task it ran, from its first resource's label.
+    pub task: String,
+    /// What its lock read: dead, or with `all` unknown — never alive.
+    pub state: RunState,
+    /// Its oldest resource's age.
+    pub age_seconds: i64,
+    /// In the daemon's listing order: containers, then its network.
+    pub resources: Vec<Leftover>,
+}
+
+/// What [`find`] selected, and how many task runs old enough to be selected
+/// it left out for their state: the caller's notice says so.
+#[derive(Default)]
+pub struct Selection {
+    pub selected: Vec<TaskRun>,
+    /// Left out because their lock is held.
+    pub alive: usize,
+    /// Left out because their state is unknown; always 0 with `all`.
+    pub unknown: usize,
+}
+
+impl Selection {
+    /// Every resource selected, task run by task run: each one's containers,
+    /// then its network. Not the order [`remove`] reports in, which is
+    /// every container first.
+    pub fn resources(&self) -> impl Iterator<Item = &Leftover> {
+        self.selected.iter().flat_map(|run| &run.resources)
+    }
+}
+
+/// The task runs this project (or every project, with `project` `None`) left
+/// behind, in `run` label order: those `locks` reads dead, and with `all`
+/// those it reads unknown too — never one it reads alive — each no younger
+/// than `older_than`. `older_than` is applied first, so a task run too young
+/// is neither selected nor counted as left out.
 ///
 /// `project` `None` still filters on *having* the project label, never on
 /// nothing: an unfiltered listing is every container on the machine, which for
@@ -180,31 +249,78 @@ impl Leftover {
 /// nothing without Ratect's own project label is ever a leftover of ours —
 /// however the listing was filtered, and whatever a future caller passes.
 ///
+/// The daemon is listed before any lock is read. A task run that starts in
+/// between isn't listed; one that ends in between reads dead or unknown, and
+/// whatever of it is gone by then is no failure to remove.
+///
 /// `now` is seconds since the Unix epoch; `older_than` is compared against it,
 /// so a caller that wants "everything" passes `None` rather than a zero age.
-pub async fn find<D: ResourceInventory + Send + Sync>(
+pub async fn find<D, L>(
     docker: &D,
     project: Option<&str>,
+    locks: &L,
     older_than: Option<std::time::Duration>,
+    all: bool,
     now: i64,
-) -> Result<Vec<Leftover>> {
+) -> Result<Selection>
+where
+    D: ResourceInventory + Send + Sync,
+    L: RunStates + ?Sized,
+{
     let filters = [(crate::labels::PROJECT, project)];
     let mut found = docker.list_containers(&filters).await?;
     found.extend(docker.list_networks(&filters).await?);
 
-    Ok(found
-        .into_iter()
-        .filter(|resource| resource.labels.contains_key(crate::labels::PROJECT))
-        .map(|resource| Leftover::new(resource, now))
-        .filter(|leftover| match older_than {
-            Some(older_than) => leftover.age_seconds >= older_than.as_secs() as i64,
-            None => true,
-        })
-        .collect())
+    let mut runs: BTreeMap<String, Vec<Leftover>> = BTreeMap::new();
+    for resource in found {
+        if !resource.labels.contains_key(crate::labels::PROJECT) {
+            continue;
+        }
+        let Some(run) = resource.labels.get(crate::labels::RUN).cloned() else {
+            continue;
+        };
+        runs.entry(run)
+            .or_default()
+            .push(Leftover::new(resource, now));
+    }
+
+    let mut selection = Selection::default();
+    for (run, mut resources) in runs {
+        let age_seconds = resources.iter().map(|l| l.age_seconds).max().unwrap_or(0);
+        if older_than.is_some_and(|older_than| age_seconds < older_than.as_secs() as i64) {
+            continue;
+        }
+        let state = locks.state(&run);
+        match state {
+            RunState::Alive => {
+                selection.alive += 1;
+                continue;
+            }
+            RunState::Unknown if !all => {
+                selection.unknown += 1;
+                continue;
+            }
+            RunState::Dead | RunState::Unknown => {}
+        }
+        resources.sort_by_key(|leftover| leftover.is_network);
+        selection.selected.push(TaskRun {
+            task: resources[0].task.clone(),
+            run,
+            state,
+            age_seconds,
+            resources,
+        });
+    }
+    Ok(selection)
 }
 
-/// Removes every leftover in `leftovers`, reporting each one to `progress` as
-/// it is attempted, and returns how many were actually removed.
+/// Removes every resource of every task run in `runs`, reporting each one to
+/// `progress` as it is attempted, and returns how many were actually removed.
+/// A dead task run whose every resource went then has its lock file deleted
+/// through `locks` (decisions/0025's Decision 4); an unknown one's is left,
+/// since it may be another kernel's live task run's. Only a task run in
+/// `runs`, which this daemon listed, can have its file deleted: one whose
+/// resources are on another daemon is never named here.
 ///
 /// **Containers first, then networks.** A network still holding an endpoint
 /// can't be removed, so the reverse order fails on every task that had one.
@@ -215,17 +331,26 @@ pub async fn find<D: ResourceInventory + Send + Sync>(
 /// the meantime, or one still in use, shouldn't leave the remaining leftovers
 /// behind too. That is why there is no `Result` here at all — every outcome,
 /// success or error, goes to `progress`, which is what decides how it reads,
-/// and the count of what actually went is the only summary this can give.
-pub async fn remove<D, F>(docker: &D, leftovers: &[Leftover], mut progress: F) -> usize
+/// and the count of what actually went is the only summary this can give. A
+/// lock file that can't be deleted is said at debug level only: it reads
+/// dead, with nothing left to remove.
+pub async fn remove<D, L, F>(docker: &D, runs: &[TaskRun], locks: &L, mut progress: F) -> usize
 where
     D: ResourceInventory + Send + Sync,
+    L: RunStates + ?Sized,
     F: FnMut(&Leftover, &Result<()>),
 {
-    let (networks, containers): (Vec<&Leftover>, Vec<&Leftover>) =
-        leftovers.iter().partition(|leftover| leftover.is_network);
+    // Each resource with the index of the task run it belongs to.
+    type Indexed<'a> = Vec<(usize, &'a Leftover)>;
+    let (networks, containers): (Indexed<'_>, Indexed<'_>) = runs
+        .iter()
+        .enumerate()
+        .flat_map(|(index, run)| run.resources.iter().map(move |leftover| (index, leftover)))
+        .partition(|(_, leftover)| leftover.is_network);
 
     let mut removed = 0;
-    for leftover in containers.iter().chain(networks.iter()) {
+    let mut failed = vec![false; runs.len()];
+    for (index, leftover) in containers.iter().chain(networks.iter()) {
         let result = if leftover.is_network {
             docker.remove_network(&leftover.resource.id).await
         } else {
@@ -237,10 +362,18 @@ where
                 .stop_and_remove_container(&leftover.resource.id, None, None, None)
                 .await
         };
-        if result.is_ok() {
-            removed += 1;
+        match result {
+            Ok(()) => removed += 1,
+            Err(_) => failed[*index] = true,
         }
         progress(leftover, &result);
+    }
+    for (run, failed) in runs.iter().zip(failed) {
+        if run.state == RunState::Dead && !failed {
+            if let Err(e) = locks.forget(&run.run) {
+                tracing::debug!("Failed to delete task run {}'s lock file: {e}", run.run);
+            }
+        }
     }
     removed
 }

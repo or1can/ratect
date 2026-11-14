@@ -458,6 +458,9 @@ impl Args {
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            // Each task run's lock, which `ratect resources` reads to tell a
+            // leftover from a task run still going (decisions/0025).
+            run_locks: ratect_core::run_lock::RunLocks::at_home(),
             dialect,
             config_var_overrides,
         }

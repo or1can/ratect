@@ -253,6 +253,13 @@ signature = "2"
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.31.3", features = ["user"] }
 
+# **`libc`**: `sysctlbyname("kern.bootsessionuuid")`, macOS's kernel boot
+# identity, which a task run lock file records (`src/run_lock.rs`,
+# decisions/0025). `nix` has no binding for it. Adds no crates: `nix`, `tokio`
+# and others already compile it. Linux reads `/proc` instead, so macOS only.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [features]
 # Generates the JSON schema for `batect.yml` (`src/schema.rs`) — a tooling
 # concern, not a runtime one, so it's off by default and neither shipped

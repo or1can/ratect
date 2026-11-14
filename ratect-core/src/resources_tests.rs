@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::docker::LabelledResource;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 fn resource(
@@ -36,13 +36,15 @@ fn resource(
     }
 }
 
-/// A container of this project's, created at `created`.
-fn container(id: &str, created: i64) -> LabelledResource {
+/// A container of this project's task run `run`, created at `created`.
+fn container_of(run: &str, id: &str, created: i64) -> LabelledResource {
     resource(
         id,
         "nostalgic_hopper",
         &[
             (crate::labels::PROJECT, "demo"),
+            (crate::labels::RUN, run),
+            (crate::labels::TASK, "check"),
             (crate::labels::CONTAINER, id),
         ],
         created,
@@ -50,16 +52,95 @@ fn container(id: &str, created: i64) -> LabelledResource {
     )
 }
 
-/// A network of this project's, created at `created`. Networks are told
-/// apart from containers by having no state — see `LabelledResource`.
-fn network(id: &str, created: i64) -> LabelledResource {
+/// A network of this project's task run `run`, created at `created`.
+/// Networks are told apart from containers by having no state — see
+/// `LabelledResource`.
+fn network_of(run: &str, id: &str, created: i64) -> LabelledResource {
     resource(
         id,
         "ratect-xyz",
-        &[(crate::labels::PROJECT, "demo")],
+        &[(crate::labels::PROJECT, "demo"), (crate::labels::RUN, run)],
         created,
         None,
     )
+}
+
+/// A container that is the only resource of a task run of its own, named
+/// for it.
+fn container(id: &str, created: i64) -> LabelledResource {
+    container_of(id, id, created)
+}
+
+/// A network that is the only resource of a task run of its own.
+fn network(id: &str, created: i64) -> LabelledResource {
+    network_of(id, id, created)
+}
+
+/// A faked lock read: each task run's state, dead where unlisted, and every
+/// task run whose lock file was deleted.
+#[derive(Default)]
+struct FakeLocks {
+    states: HashMap<String, RunState>,
+    forgotten: Mutex<Vec<String>>,
+}
+
+impl FakeLocks {
+    fn with(states: &[(&str, RunState)]) -> Self {
+        Self {
+            states: states
+                .iter()
+                .map(|(run, state)| (run.to_string(), *state))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn forgotten(&self) -> Vec<String> {
+        self.forgotten.lock().unwrap().clone()
+    }
+}
+
+impl RunStates for FakeLocks {
+    fn state(&self, run: &str) -> RunState {
+        self.states.get(run).copied().unwrap_or(RunState::Dead)
+    }
+
+    fn forget(&self, run: &str) -> std::io::Result<()> {
+        self.forgotten.lock().unwrap().push(run.to_string());
+        Ok(())
+    }
+}
+
+/// Every selected resource's id, in order.
+fn ids(selection: &Selection) -> Vec<&str> {
+    selection
+        .resources()
+        .map(|leftover| leftover.resource.id.as_str())
+        .collect()
+}
+
+/// A selection of every dead task run, at any age.
+async fn find_dead(docker: &FakeRuntime, project: Option<&str>) -> Selection {
+    find(docker, project, &FakeLocks::default(), None, false, 1_000)
+        .await
+        .unwrap()
+}
+
+/// Each of `resources` as a task run of its own, read dead.
+fn dead_runs(resources: Vec<LabelledResource>) -> Vec<TaskRun> {
+    resources
+        .into_iter()
+        .map(|resource| {
+            let leftover = Leftover::new(resource, 1_000);
+            TaskRun {
+                run: leftover.run.clone(),
+                task: leftover.task.clone(),
+                state: RunState::Dead,
+                age_seconds: leftover.age_seconds,
+                resources: vec![leftover],
+            }
+        })
+        .collect()
 }
 
 /// One recorded label filter, in the owned form a test can compare against —
@@ -187,34 +268,157 @@ fn a_leftover_missing_labels_reads_as_unknown_rather_than_failing() {
     assert_eq!(leftover.describe(), "container some_name (running)");
 }
 
-/// `--older-than` is how a sweep avoids tearing down an in-flight run: a
-/// task running right now is indistinguishable from a leftover by label, so
-/// age is the only thing that tells them apart.
+/// `--older-than` measures a task run's age, its oldest resource's: a task
+/// run with one old resource and one young one is old, and is selected whole.
 #[tokio::test]
-async fn an_age_excludes_a_young_leftover_and_keeps_an_old_one() {
+async fn an_age_compares_a_task_runs_oldest_resource() {
     let docker = FakeRuntime {
-        containers: vec![container("young", 970), container("old", 100)],
+        containers: vec![
+            container("young", 970),
+            container_of("mixed", "mixed-young", 990),
+            container_of("mixed", "mixed-old", 100),
+        ],
         ..Default::default()
     };
 
-    let all = find(&docker, Some("demo"), None, 1_000).await.unwrap();
-    assert_eq!(all.len(), 2, "with no age, everything is a candidate");
+    let all = find_dead(&docker, Some("demo")).await;
+    assert_eq!(
+        all.selected.len(),
+        2,
+        "with no age, every dead run is selected"
+    );
 
     let old = find(
         &docker,
         Some("demo"),
+        &FakeLocks::default(),
         Some(std::time::Duration::from_secs(60)),
+        false,
         1_000,
     )
     .await
     .unwrap();
     assert_eq!(
-        old.iter()
-            .map(|l| l.resource.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["old"],
-        "30 seconds old is younger than the 60 asked for"
+        ids(&old),
+        vec!["mixed-young", "mixed-old"],
+        "30 seconds old is younger than the 60 asked for; the mixed run's oldest is 900"
     );
+    assert_eq!(old.selected[0].age_seconds, 900);
+    assert_eq!(
+        (old.alive, old.unknown),
+        (0, 0),
+        "too young is not left out for its state"
+    );
+}
+
+/// decisions/0025's table: dead is selected by default; alive never, with
+/// `all` or without; unknown only with `all`. Each run left out for its
+/// state is counted under that state.
+#[tokio::test]
+async fn each_state_is_selected_as_the_table_says() {
+    let docker = FakeRuntime {
+        containers: vec![
+            container("dead", 100),
+            container("alive", 100),
+            container("unknown", 100),
+        ],
+        ..Default::default()
+    };
+    let locks = FakeLocks::with(&[("alive", RunState::Alive), ("unknown", RunState::Unknown)]);
+
+    let default = find(&docker, Some("demo"), &locks, None, false, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(ids(&default), vec!["dead"]);
+    assert_eq!((default.alive, default.unknown), (1, 1));
+
+    let all = find(&docker, Some("demo"), &locks, None, true, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(ids(&all), vec!["dead", "unknown"]);
+    assert_eq!((all.alive, all.unknown), (1, 0));
+    assert_eq!(all.selected[1].state, RunState::Unknown);
+
+    let old_enough = find(
+        &docker,
+        Some("demo"),
+        &locks,
+        Some(std::time::Duration::from_secs(60)),
+        true,
+        1_000,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ids(&old_enough),
+        vec!["dead", "unknown"],
+        "--older-than composes with --all"
+    );
+}
+
+/// A task run is selected or skipped whole: its containers and its network
+/// share its state, and its network comes after its containers.
+#[tokio::test]
+async fn a_task_runs_containers_and_network_go_together() {
+    let docker = FakeRuntime {
+        containers: vec![
+            container_of("kept", "kept-task", 100),
+            container_of("kept", "kept-dependency", 100),
+            container_of("live", "live-task", 100),
+        ],
+        networks: vec![
+            network_of("kept", "kept-net", 100),
+            network_of("live", "live-net", 100),
+        ],
+        ..Default::default()
+    };
+    let locks = FakeLocks::with(&[("live", RunState::Alive)]);
+
+    let found = find(&docker, Some("demo"), &locks, None, true, 1_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(&found),
+        vec!["kept-task", "kept-dependency", "kept-net"]
+    );
+    assert_eq!(found.selected.len(), 1);
+    assert_eq!(found.selected[0].task, "check");
+    assert_eq!(
+        found.alive, 1,
+        "one task run, however many resources it has"
+    );
+}
+
+/// What has the project label and no `run` label is not a task run (a
+/// service instance, decisions/0026): never selected, and counted nowhere.
+#[tokio::test]
+async fn a_resource_with_no_run_label_is_never_selected_or_counted() {
+    let docker = FakeRuntime {
+        containers: vec![resource(
+            "service",
+            "demo-web",
+            &[(crate::labels::PROJECT, "demo")],
+            100,
+            Some("running"),
+        )],
+        networks: vec![resource(
+            "service-net",
+            "demo",
+            &[(crate::labels::PROJECT, "demo")],
+            100,
+            None,
+        )],
+        ..Default::default()
+    };
+    let locks = FakeLocks::with(&[]);
+
+    for all in [false, true] {
+        let found = find(&docker, Some("demo"), &locks, None, all, 1_000)
+            .await
+            .unwrap();
+        assert!(found.selected.is_empty());
+        assert_eq!((found.alive, found.unknown), (0, 0));
+    }
 }
 
 /// Everything `find` returns is a removal candidate, and the cost of a wrong
@@ -227,20 +431,20 @@ async fn a_resource_without_the_project_label_is_never_a_candidate() {
             container("ours", 100),
             // No `PROJECT` label at all: something else's, or a daemon-side
             // filter that didn't do what was asked.
-            resource("theirs", "some_other_tool", &[], 100, Some("running")),
+            resource(
+                "theirs",
+                "some_other_tool",
+                &[(crate::labels::RUN, "theirs")],
+                100,
+                Some("running"),
+            ),
         ],
         networks: vec![resource("their-net", "bridge", &[], 100, None)],
         ..Default::default()
     };
 
-    let found = find(&docker, None, None, 1_000).await.unwrap();
-    assert_eq!(
-        found
-            .iter()
-            .map(|l| l.resource.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["ours"]
-    );
+    let found = find_dead(&docker, None).await;
+    assert_eq!(ids(&found), vec!["ours"]);
 }
 
 /// "Every project" means every project *Ratect* created — so the all-projects
@@ -251,7 +455,7 @@ async fn a_resource_without_the_project_label_is_never_a_candidate() {
 async fn every_project_still_filters_on_having_the_project_label() {
     let docker = FakeRuntime::default();
 
-    find(&docker, None, None, 1_000).await.unwrap();
+    find_dead(&docker, None).await;
 
     for filter in docker.filters() {
         assert_eq!(
@@ -268,7 +472,7 @@ async fn every_project_still_filters_on_having_the_project_label() {
 async fn a_named_project_filters_on_its_own_label_value() {
     let docker = FakeRuntime::default();
 
-    find(&docker, Some("demo"), None, 1_000).await.unwrap();
+    find_dead(&docker, Some("demo")).await;
 
     for filter in docker.filters() {
         assert_eq!(
@@ -285,13 +489,13 @@ async fn a_named_project_filters_on_its_own_label_value() {
 #[tokio::test]
 async fn containers_are_removed_before_networks() {
     let docker = FakeRuntime::default();
-    let leftovers = vec![
-        Leftover::new(network("net", 100), 1_000),
-        Leftover::new(container("one", 100), 1_000),
-        Leftover::new(container("two", 100), 1_000),
-    ];
+    let runs = dead_runs(vec![
+        network("net", 100),
+        container("one", 100),
+        container("two", 100),
+    ]);
 
-    let removed = remove(&docker, &leftovers, |_, _| {}).await;
+    let removed = remove(&docker, &runs, &FakeLocks::default(), |_, _| {}).await;
 
     assert_eq!(removed, 3);
     let attempted = docker.removed();
@@ -311,14 +515,14 @@ async fn one_failure_does_not_abandon_the_rest() {
         failing: HashSet::from(["stuck".to_string()]),
         ..Default::default()
     };
-    let leftovers = vec![
-        Leftover::new(container("stuck", 100), 1_000),
-        Leftover::new(container("fine", 100), 1_000),
-        Leftover::new(network("net", 100), 1_000),
-    ];
+    let runs = dead_runs(vec![
+        container("stuck", 100),
+        container("fine", 100),
+        network("net", 100),
+    ]);
 
     let mut reported: Vec<(String, bool)> = Vec::new();
-    let removed = remove(&docker, &leftovers, |leftover, result| {
+    let removed = remove(&docker, &runs, &FakeLocks::default(), |leftover, result| {
         reported.push((leftover.resource.id.clone(), result.is_ok()));
     })
     .await;
@@ -338,4 +542,31 @@ async fn one_failure_does_not_abandon_the_rest() {
         ],
         "each outcome reaches the caller, which is what decides how it reads"
     );
+}
+
+/// Decision 4: a dead task run's lock file is deleted once every one of its
+/// resources is removed — not one with a refused removal, and not an unknown
+/// one's, which may be another kernel's live task run's.
+#[tokio::test]
+async fn a_dead_task_runs_lock_file_goes_only_once_all_of_it_has() {
+    let docker = FakeRuntime {
+        failing: HashSet::from(["stuck-net".to_string()]),
+        ..Default::default()
+    };
+    let mut runs = dead_runs(vec![container("gone", 100), container("unknown", 100)]);
+    runs[1].state = RunState::Unknown;
+    runs.extend(
+        dead_runs(vec![container_of("stuck", "stuck-task", 100)])
+            .into_iter()
+            .map(|mut run| {
+                run.resources
+                    .push(Leftover::new(network_of("stuck", "stuck-net", 100), 1_000));
+                run
+            }),
+    );
+    let locks = FakeLocks::default();
+
+    remove(&docker, &runs, &locks, |_, _| {}).await;
+
+    assert_eq!(locks.forgotten(), vec!["gone"]);
 }

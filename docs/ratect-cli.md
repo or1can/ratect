@@ -50,8 +50,8 @@ group headings there, so the order alone carries them.
 | `ratect includes list` | Lists the cached Git includes shared by every project on this machine. |
 | `ratect includes clean [--all]` | Removes cached Git includes. |
 | `ratect includes refresh` | Re-clones them, picking up a `ref` that has moved. |
-| `ratect resources list` | Lists containers and networks left over from previous runs. |
-| `ratect resources clean` | Removes them. |
+| `ratect resources list [--all]` | Lists containers and networks left over from task runs that have ended. |
+| `ratect resources clean [--all]` | Removes them. |
 
 ### Configuration & diagnostics
 
@@ -278,7 +278,7 @@ characters of its key: `https://***@host/repo.git at v1 (key 45de9a2d81c0)`.
 ## `resources` options
 
 Containers and networks outlive a run when something goes wrong — a crash, a
-`docker kill`, a `--no-cleanup` run, or a cleanup that failed. `resources` finds
+`kill -9`, a `--no-cleanup` run, or a cleanup that failed. `resources` finds
 them by the labels Ratect stamps on everything it creates, so they're identifiable
 however long ago they were made. `ratect resources list`, captured in
 `examples/full-stack` after `ratect run journey-test --no-cleanup-after-success`:
@@ -299,19 +299,54 @@ the `ratect-health-check-<container>` name Ratect gives it.
 
 | Option | Applies to | Description |
 | --- | --- | --- |
+| `--all` | `list`, `clean` | Task runs Ratect can't tell have ended, as well as those it can. Never a task run still going. |
 | `--all-projects` | `list`, `clean` | Every *Ratect* project's leftovers, not just this one's — never anything Ratect didn't create. Also the way to use `resources` from outside a project directory, since the project scope is read from the configuration. |
-| `--older-than <AGE>` | `list`, `clean` | Only leftovers older than `AGE` — `90s`, `30m`, `2h`, `7d`. |
+| `--older-than <AGE>` | `list`, `clean` | Only task runs older than `AGE` — `90s`, `30m`, `2h`, `7d`. A task run's age is its oldest container's or network's. |
 
 **`resources list` is `clean`'s dry run.** Both take the same options and select
 identically, so whatever `list` shows you is exactly what `clean` with those same
 options will remove — there's no separate `--dry-run` because there's nothing for it
 to do differently.
 
-**`--older-than` matters for `clean`.** A task running *right now* carries exactly the
-same labels as a leftover, because until it finishes it is one. Ratect can't tell the
-difference — the daemon can't say whether some other `ratect` process still cares
-about a container — so a bare `resources clean` on a shared machine can tear down an
-in-flight run. `--older-than 1h` is the safe form when anything else might be running.
+**A task run still going is never selected.** A task run carries the same labels
+whether it is going or left over, so each one holds a lock for as long as its process
+drives it, cleanup included — both binaries take it — and `resources` reads it. The
+kernel frees a lock when its process ends, however it ends, `kill -9` included. Each
+task run is one of three things:
+
+| A task run is | When | Selected |
+| --- | --- | --- |
+| **ended** | its lock is free, and was written on this machine since it last booted | by default |
+| **still going** | its lock is held | never |
+| **unknown** | Ratect can't tell: there is no lock, it was written before a reboot or by another kernel (Ratect in a container sharing your home), or the lock can't be read, as on some network filesystems | with `--all` |
+
+A task run's containers and network are selected or left out together, and one
+selected by `--all` is listed as one Ratect `can't tell it has ended`. A task run is
+unknown in particular when it was left by a Ratect too old to take the lock, so a
+leftover from before an upgrade needs `--all`.
+So does every leftover once the machine has rebooted, though it has certainly ended.
+`--older-than` is the guard for those: `resources clean --all --older-than 1d`. On
+any platform but Linux and macOS, Windows included, every task run is unknown.
+
+When the selection leaves task runs out for their state, both commands say so on
+stderr — `Left out 2 task runs still going, and 1 task run Ratect can't tell has
+ended (pass --all to include it).` A task run too young for `--older-than` isn't
+counted there. Containers and networks carrying Ratect's project label but no task
+run's (a service instance's) are neither selected nor counted.
+
+`--all` here composes with `--older-than`, where [`includes clean`](#includes-options)'
+`--all` conflicts with it: that one means every cached include, whatever its age,
+while this one means every *state* a leftover can be in short of still going. Neither
+is `--all-projects`, which widens the scope to every project, not the states.
+
+Each lock is a file, `~/.ratect/runs/<run>.lock`, named for the task run's id. A task
+run that cleaned up fully deletes its own, and `clean` deletes an ended task run's once
+it has removed everything of it. Nothing else does: one kept by a task run that, cut short, stopped waiting for
+the daemon to answer a create (it may have made something), one left by a task run whose
+leftovers went another way (`docker rm`, or `ratect-compat` alone), or from before a
+reboot, stays, a few dozen bytes each. Delete them by hand only when nothing is running
+and nothing is left over, on this daemon or any other the home directory is used with:
+deleting a leftover's file makes it unknown.
 
 Under `-o quiet`, `list` prints resource ids one per line and nothing else, ready to
 pipe into `docker rm`. Removal takes containers before networks, since a network
@@ -571,7 +606,10 @@ it works as a CI step. Under `-o quiet` it prints only warnings and problems.
 The environment checks run even when the configuration itself won't load —
 "your config is broken *and* your daemon isn't running" is more useful than fixing
 one to discover the other. It also reports leftovers unprompted, since the whole
-reason [`resources`](#resources-options) exists is that nobody thinks to look.
+reason [`resources`](#resources-options) exists is that nobody thinks to look: a
+warning counting the leftover task runs that have ended, which is what a bare `resources
+clean` removes, and another counting those Ratect can't tell have ended, pointing at
+`resources list --all`. A task run still going isn't reported.
 
 ## Shell completion
 

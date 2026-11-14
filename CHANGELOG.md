@@ -26,10 +26,13 @@ history, from when it was the only binary.
 
 ### Breaking
 
+- **ratect only:** `ratect resources list` and `ratect resources clean` select only task runs whose process has ended, and never one still going. A task run Ratect can't tell about, such as one left by an older version or from before a reboot, needs the new `--all`. A task run's containers and network are selected together, and `--older-than` compares the task run's oldest resource rather than each resource's own age. A notice on stderr counts the task runs left out. `ratect doctor` warns about ended task runs only, and counts the ones Ratect can't tell about on a line of its own.
+
 - A Git include's checkout uses none of your Git configuration: `core.autocrlf` no longer changes its line endings, no hook runs, and a file stored in Git LFS is left as its pointer file. The include's own `.gitattributes` still applies. The clone still uses your configuration, except `init.templateDir` and `GIT_TEMPLATE_DIR`.
 
 ### Added
 
+- Every task run holds a lock file, `~/.ratect/runs/<run>.lock`, while its process runs it, and deletes it if it cleaned up fully and no create was left unanswered. A run that can't take one still runs.
 - `tools/check-doc-links.py` rebuilds the workspace's documentation and fails on a doc link that renders as literal brackets; CI's Rustdoc job runs it. No effect on the released binaries; contributor-tooling only.
 - The installation page lists each prebuilt binary's minimum OS: glibc 2.34 for `x86_64-unknown-linux-gnu`, macOS 10.12 for `x86_64-apple-darwin`, macOS 11.0 for `aarch64-apple-darwin`, and no shared libc for the statically linked `musl` builds, which a distribution with an older glibc should use. Raising one of these is a breaking change, listed under `### Breaking`.
 - CI's Windows Check job compiles the workspace, tests included, for Windows; nothing is run there. `nix` is a dependency on Unix targets only. No effect on the released binaries, none of which targets Windows.

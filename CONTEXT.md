@@ -124,9 +124,24 @@ shares.
 after a kill, a crash, a `--no-cleanup*` flag or a cleanup failure. Often the
 whole task run, sometimes a fragment: a container the daemon refused to
 remove, dependencies whose task container is already gone, or the network
-alone. Ratect does not know whether the process behind a task run is alive
-([0002](decisions/0002-runtime-ownership-labels.md)), so one still going looks
-the same as a leftover.
+alone. Labels alone can't tell one from a task run still going
+([0002](decisions/0002-runtime-ownership-labels.md)); the task run lock can.
+
+**Task run lock** — the OS file lock a task run holds, from before it creates
+anything on the daemon until it ends, cleanup included, on a file named for
+its `run` label ([0025](decisions/0025-task-run-lock.md)). The kernel frees it
+when the process ends, however it ends. `ratect resources` reads it as one of
+three states:
+
+- **Dead** — the lock is free, and the file was written by the reader's own
+  kernel since it booted: the process is gone, and what it left is a
+  leftover. Selected by default. Said to a user as *ended*.
+- **Alive** — the lock is held: the process is still driving the task run.
+  Never selected. Said as *still going*.
+- **Unknown** — Ratect can't tell: no file, one from another boot or another
+  kernel, one in a format it doesn't recognise, an error from the lock, or a
+  platform that isn't Unix. Selected only with `--all`. Said as *can't tell
+  has ended*.
 
 ## Cancelling a run
 
