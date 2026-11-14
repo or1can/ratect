@@ -173,7 +173,10 @@ bundle, choose a new `ref` (e.g. bump the tag) or delete the corresponding direc
 under `~/.ratect/incl` by hand.
 
 The same sweep removes a temporary directory a clone left in `~/.ratect/incl` when it
-was interrupted, once that directory has been unchanged for 30 days.
+was interrupted, once that directory has been unchanged for 30 days, and whatever an
+interrupted removal left, at once. A removal moves a clone aside before deleting it, so
+one cut short never leaves part of a clone for a later run to use; the next run that
+needs the include clones it again.
 
 Everything reached through a Git include is treated as untrusted input: the
 file it names must stay inside the clone, a container it defines may mount

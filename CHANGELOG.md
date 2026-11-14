@@ -49,6 +49,7 @@ history, from when it was the only binary.
 - Cloning a Git include ignores the variables naming a repository that `git rev-parse --local-env-vars` lists, such as `GIT_DIR` and `GIT_WORK_TREE` exported for a dotfiles repository, or the absolute `GIT_INDEX_FILE` a hook of `git commit -a` gets, so the include loads with all its files and writes nothing to that repository.
 - A Git include lock that can't be checked because of a filesystem error is waited on like any other held lock, rather than hanging the load.
 - A Git include lock file that is a broken symbolic link is waited on like any other held lock, rather than hanging the load.
+- A removal of a cached Git include that is cut short, such as `ratect-compat`'s automatic sweep stopped when its run exits, no longer leaves part of the clone for every later load to use: the next load clones the include again. The clone it was removing is removed by the next sweep or `ratect includes clean`, whatever its age. A removal by an older version sharing `~/.ratect/incl` still can.
 
 ## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-11-10
 

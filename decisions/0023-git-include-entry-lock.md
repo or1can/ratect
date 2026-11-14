@@ -8,7 +8,10 @@ open point the correction below leaves with #880: both paths it names could
 exceed the bound under "An OS lock that works per host only", and 0027
 restores it where every holder runs a version with 0027. Decision 4 is
 refined by 0027's Status
-([#891](https://github.com/or1can/ratect/issues/891)).
+([#891](https://github.com/or1can/ratect/issues/891)), and Decision 6 by
+0027's Decision 4
+([#883](https://github.com/or1can/ratect/issues/883)): removal still takes
+no lock, but renames the working copy aside before deleting it.
 
 Corrected since (found 2026-11-12 by the spike in
 [#875](https://github.com/or1can/ratect/issues/875), corrected under
