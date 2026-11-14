@@ -57,6 +57,7 @@ pub mod proxy;
 pub mod registry_auth;
 pub mod resource_names;
 pub mod resources;
+pub mod run_lock;
 #[cfg(feature = "schema")]
 pub mod schema;
 pub mod ssh_agent;

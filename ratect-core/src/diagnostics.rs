@@ -696,29 +696,46 @@ fn repeated_entries(config: &Config) -> Vec<String> {
 /// that failure has its own finding, so this contributes nothing rather than
 /// repeating it.
 ///
-/// Goes through [`crate::resources::find`] — the same selection `ratect
-/// resources list` uses — rather than listing containers and networks
-/// itself, so the two can never disagree about what counts as a leftover.
-/// A listing failure reads as "no leftovers", matching this check's own
-/// unasked, best-effort nature: it should never be the reason `doctor`
-/// itself fails.
-pub async fn leftover_finding<D: crate::resources::ResourceInventory + Send + Sync>(
+/// Goes through [`crate::resources::find`] — the same selection a bare `ratect
+/// resources list` makes — rather than listing containers and networks
+/// itself, so the two can never disagree about what counts as a leftover
+/// (decisions/0025's Decision 6). So it warns about dead task runs only, adds
+/// a finding of its own counting the unknown ones and pointing at `--all`,
+/// and says nothing of alive ones. A listing failure reads as "no
+/// leftovers", matching this check's own unasked, best-effort nature: it
+/// should never be the reason `doctor` itself fails.
+pub async fn leftover_finding<D, L>(
     docker: Option<&D>,
     project: &str,
+    locks: &L,
     now: i64,
-) -> Option<Finding> {
-    let docker = docker?;
-    let leftovers = crate::resources::find(docker, Some(project), None, now)
+) -> Vec<Finding>
+where
+    D: crate::resources::ResourceInventory + Send + Sync,
+    L: crate::resources::RunStates + ?Sized,
+{
+    let Some(docker) = docker else {
+        return Vec::new();
+    };
+    let selection = crate::resources::find(docker, Some(project), locks, None, false, now)
         .await
         .unwrap_or_default();
-    Some(if leftovers.is_empty() {
-        Finding::Fine("no leftovers from previous runs".to_string())
-    } else {
-        Finding::Warning(format!(
-            "{} resource(s) left over from previous runs — see `ratect resources list`",
-            leftovers.len()
-        ))
-    })
+    let dead = selection.selected.len();
+    let mut findings = Vec::new();
+    if dead > 0 {
+        findings.push(Finding::Warning(format!(
+            "{dead} task run(s) left over from previous runs — see `ratect resources list`"
+        )));
+    } else if selection.unknown == 0 {
+        findings.push(Finding::Fine("no leftovers from previous runs".to_string()));
+    }
+    if selection.unknown > 0 {
+        findings.push(Finding::Warning(format!(
+            "{} task run(s) Ratect can't tell have ended — see `ratect resources list --all`",
+            selection.unknown
+        )));
+    }
+    findings
 }
 
 /// One thing `ratect config convert` asks the reader to check in the file it

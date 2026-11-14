@@ -41,6 +41,24 @@ fn settings_from(arguments: &[&str]) -> TaskEngineSettings {
     )
 }
 
+/// Every task run takes its lock under the home directory, as `ratect`'s do,
+/// so `ratect resources` can tell one still going from a leftover
+/// (decisions/0025).
+#[cfg(unix)]
+#[test]
+fn a_run_takes_its_task_run_locks_under_the_home_directory() {
+    let expected = ratect_core::user::home()
+        .unwrap()
+        .map(|home| home.join(".ratect").join("runs"));
+    assert_eq!(
+        settings_from(&["ratect-compat", "build"])
+            .run_locks
+            .directory()
+            .map(std::path::Path::to_path_buf),
+        expected
+    );
+}
+
 /// One flag (with any value it needs) against the single setting it is
 /// supposed to move. `--no-cleanup` is deliberately absent: it moves
 /// two, and has its own test.

@@ -1240,6 +1240,9 @@ pub struct TaskEngine<D: ContainerRuntime + Send + Sync + 'static> {
     /// `ratect-core`'s own version isn't what a user sees from
     /// `--version` (see `ROADMAP.md`'s versioning section).
     ratect_version: Option<String>,
+    /// Where each task run takes its lock — see
+    /// `TaskEngineSettings::run_locks`. Nowhere in tests unless one sets it.
+    run_locks: crate::run_lock::RunLocks,
     /// Memoizes `crate::cache::project_cache_key` for the life of this
     /// `TaskEngine` — computed at most once per invocation, and only when a
     /// project-scoped `cache` mount is resolved under `CacheType::Volume`
@@ -1324,6 +1327,10 @@ pub struct TaskEngineSettings {
     /// own, since the core's version isn't what a user sees from
     /// `--version`.
     pub ratect_version: Option<String>,
+    /// Where each task run takes its **task run lock** ([`crate::run_lock`],
+    /// decisions/0025) — [`RunLocks::at_home`](crate::run_lock::RunLocks::at_home)
+    /// in both binaries. The default is nowhere: no lock is taken.
+    pub run_locks: crate::run_lock::RunLocks,
     /// The project's dialect — [`crate::config::LoadedProject::dialect`].
     pub dialect: crate::config::Dialect,
     /// `--config-var`s merged over a `--config-vars-file`'s values, which
@@ -1346,6 +1353,7 @@ impl Default for TaskEngineSettings {
             max_parallelism: None,
             cache: None,
             ratect_version: None,
+            run_locks: crate::run_lock::RunLocks::default(),
             dialect: crate::config::Dialect::default(),
             config_var_overrides: HashMap::new(),
         }
@@ -1401,6 +1409,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             max_parallelism: None,
             cache_options: None,
             ratect_version: None,
+            run_locks: crate::run_lock::RunLocks::default(),
             cache_key: std::sync::Mutex::new(None),
             interrupt,
             task_container_readiness_gate: task_container_readiness_gate(
@@ -1438,6 +1447,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             max_parallelism,
             cache,
             ratect_version,
+            run_locks,
             dialect,
             config_var_overrides,
         } = settings;
@@ -1465,6 +1475,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 },
             );
         self.ratect_version = ratect_version;
+        self.run_locks = run_locks;
         self.task_container_readiness_gate = task_container_readiness_gate(dialect);
         Ok(self)
     }
@@ -2692,6 +2703,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // resolution failed) — the cleanup section below only ever removes
         // a network it can see was actually created.
         let network_name_cell: Mutex<Option<String>> = Mutex::new(None);
+        // Whether a `create_network` of this run's is with the daemon,
+        // unanswered — see the task run lock, below.
+        let network_unanswered = AtomicBool::new(false);
 
         // Every container Docker creates for this run, registered the
         // moment `create_container` hands its id back — see
@@ -2744,6 +2758,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             &run_id,
             self.ratect_version.as_deref(),
         );
+        // The task run lock (decisions/0025), named for `run_id` and taken
+        // before anything below creates a resource on the daemon, so that
+        // `ratect resources` reads this task run alive until it ends. Held to
+        // the end of this function, cleanup included, and deleted there only
+        // if the run left nothing behind. Synchronous: a few system calls on
+        // a local file, which never wait on a lock. A run that can take
+        // none runs regardless; `take` says why at debug level.
+        let run_lock = self.run_locks.take(&run_id);
         // The Docker names this run creates its network and containers
         // under — one suffix for the lot, as Batect draws one per task
         // (ratect#299). Names only: ownership is `run_labels`' job.
@@ -2789,9 +2811,15 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 }
                 None => {
                     let name = resource_names.network();
-                    self.docker
+                    // Set for as long as the daemon hasn't answered: a run
+                    // cut short meanwhile can't tell whether it made one.
+                    network_unanswered.store(true, Ordering::Relaxed);
+                    let created = self
+                        .docker
                         .create_network(&name, &run_labels.for_network())
-                        .await?;
+                        .await;
+                    network_unanswered.store(false, Ordering::Relaxed);
+                    created?;
                     name
                 }
             };
@@ -3375,6 +3403,14 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         let task_container_id = created.remove(&run.container);
         let created_sidecars = created;
 
+        // Whether this task run leaves anything on the daemon, which decides
+        // whether its lock file stays (decisions/0025's Decision 4). A create
+        // never answered may have made something, so it counts as left: the
+        // file then makes what it made read dead, where none would leave it
+        // unknown.
+        let may_have_made_more =
+            !unanswered.is_empty() || network_unanswered.load(Ordering::Relaxed);
+        let left_nothing;
         if should_cleanup {
             let narrates_cleanup =
                 !created_sidecars.is_empty() || owns_network || task_container_id.is_some();
@@ -3668,6 +3704,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
             if narrates_cleanup {
                 self.event_sink.post(TaskEvent::CleanupFinished);
             }
+            left_nothing = !may_have_made_more && !cleanup_failed.load(Ordering::Relaxed);
             if cleanup_failed.load(Ordering::Relaxed) {
                 let removed = removed.into_inner().unwrap();
                 let left = LeftBehind::new(
@@ -3714,6 +3751,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 ),
                 network_name.as_deref().filter(|_| owns_network),
             );
+            left_nothing = !may_have_made_more && left.is_empty();
             if !left.is_empty() {
                 self.post_notice(format!(
                     "Left in place (--no-cleanup): {}. Remove with: {}",
@@ -3757,6 +3795,12 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     self.post_notice(LeftBehind::investigation(name, id, running));
                 }
             }
+        }
+
+        // The task run is over: its lock goes, and its file with it if
+        // nothing is left for `resources clean` to find.
+        if let Some(run_lock) = run_lock {
+            run_lock.finish(left_nothing);
         }
 
         // A signal that arrived only during cleanup changes nothing here: the

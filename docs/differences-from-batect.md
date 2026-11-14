@@ -332,6 +332,13 @@ tables above:
   `eu.orican.ratect.*` labels; Batect labels nothing of its own. An additive
   divergence — changes no behavior. See
   [decisions/0002](../decisions/0002-runtime-ownership-labels.md).
+- **Task run locks**: every task run holds a lock file,
+  `~/.ratect/runs/<run>.lock`, for as long as its process drives it, so that
+  `ratect resources` can tell a leftover from a task run still going; Batect
+  writes nothing per run. A task run that cleans up fully deletes its file. A
+  run with no home directory, or one it can't write, takes none and runs as
+  before. See [`resources` options](ratect-cli.md#resources-options) and
+  [decisions/0025](../decisions/0025-task-run-lock.md).
 - **Interactive mode**: two known divergences. Batect's real-TTY gate checks only
   whether its output is a real terminal; Ratect's requires *both* stdin and stdout
   to be real terminals. Live terminal-resize tracking is also Unix-only — synced

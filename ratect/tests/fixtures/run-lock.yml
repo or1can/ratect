@@ -1,0 +1,44 @@
+# The task run lock's real-daemon tests (ratect#265, decisions/0025). Most
+# kill one task run with SIGKILL, mid-task as the control or where container
+# state reads it wrong, and prove a bare `resources clean` removes that run
+# and nothing of a second, live run of the same task; one proves a live run
+# whose task container has exited is left out. After the probes of
+# ratect#875.
+#
+# Its own project name, since most of its tests run `resources clean`, which
+# removes what it selects of this project.
+project_name: ratect-cli-run-lock-test
+containers:
+  # sh as PID 1 ignores SIGTERM, so stopping it takes Docker's full stop
+  # timeout: a wide window in which cleanup is under way.
+  slow-stop:
+    image: alpine:3.18.2
+    command: sh -c "while true; do sleep 1; done"
+  # A setup command that outlasts the test: a run that is starting.
+  slow-start:
+    image: alpine:3.18.2
+    command: sh -c "while true; do sleep 1; done"
+    setup_commands:
+      - command: sleep 300
+  app:
+    image: alpine:3.18.2
+tasks:
+  # `-- <seconds>` decides how long the task runs: briefly for the run
+  # killed during cleanup, for the length of the test for a live one.
+  hold:
+    run:
+      container: app
+      command: sleep
+    dependencies: [slow-stop]
+  starting:
+    run:
+      container: app
+      command: echo never-reached
+    dependencies: [slow-start]
+  # `hold` with nothing else in the task run, for one paused with SIGSTOP
+  # while its task container exits: `-- 20` outlasts the test's wait for the
+  # container to run by enough that the pause lands before the exit.
+  pausable:
+    run:
+      container: app
+      command: sleep

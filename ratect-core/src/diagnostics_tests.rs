@@ -646,13 +646,34 @@ impl ResourceInventory for FakeRuntime {
     }
 }
 
-fn resource(id: &str, project: &str) -> LabelledResource {
+/// A container of task run `run` in `project`.
+fn resource(id: &str, project: &str, run: &str) -> LabelledResource {
     LabelledResource {
         id: id.to_string(),
         name: id.to_string(),
-        labels: HashMap::from([(crate::labels::PROJECT.to_string(), project.to_string())]),
+        labels: HashMap::from([
+            (crate::labels::PROJECT.to_string(), project.to_string()),
+            (crate::labels::RUN.to_string(), run.to_string()),
+        ]),
         created: Some(0),
         state: Some("running".to_string()),
+    }
+}
+
+/// Task runs `dead`, `alive` and `unknown` read as named; any other, dead.
+struct NamedLocks;
+
+impl crate::resources::RunStates for NamedLocks {
+    fn state(&self, run: &str) -> crate::run_lock::RunState {
+        match run {
+            "alive" => crate::run_lock::RunState::Alive,
+            "unknown" => crate::run_lock::RunState::Unknown,
+            _ => crate::run_lock::RunState::Dead,
+        }
+    }
+
+    fn forget(&self, _run: &str) -> std::io::Result<()> {
+        unimplemented!("doctor never removes a task run")
     }
 }
 
@@ -661,44 +682,76 @@ fn resource(id: &str, project: &str) -> LabelledResource {
 #[tokio::test]
 async fn no_docker_connection_means_no_leftover_finding() {
     let docker: Option<&FakeRuntime> = None;
-    assert_eq!(leftover_finding(docker, "demo", 1_000).await, None);
+    assert_eq!(
+        leftover_finding(docker, "demo", &NamedLocks, 1_000).await,
+        vec![]
+    );
 }
 
-/// `doctor` reports the leftover count through the exact same selection
-/// `resources list` uses — the two must never be able to disagree about
-/// what counts as a leftover. Cross-project exclusion itself is
-/// `resources_tests.rs`'s to prove; this only proves the two callers agree
-/// on whatever `resources::find` returns.
+/// `doctor` reports through the exact same selection a bare `resources list`
+/// makes, so the two can never disagree about what counts as a leftover:
+/// dead task runs are warned about, counted as task runs, not resources;
+/// unknown ones get a line of their own pointing at `--all`; alive ones are
+/// not reported.
 #[tokio::test]
-async fn a_leftover_count_matches_what_resources_find_returns() {
+async fn dead_task_runs_are_warned_about_unknown_ones_counted_and_alive_ones_left_out() {
     let docker = FakeRuntime {
-        containers: vec![resource("c1", "demo"), resource("c2", "demo")],
-        networks: vec![resource("n1", "demo")],
+        containers: vec![
+            resource("c1", "demo", "dead"),
+            resource("c2", "demo", "dead"),
+            resource("c3", "demo", "unknown"),
+            resource("c4", "demo", "alive"),
+        ],
+        networks: vec![resource("n1", "demo", "dead")],
     };
 
-    let expected = crate::resources::find(&docker, Some("demo"), None, 1_000)
+    let expected = crate::resources::find(&docker, Some("demo"), &NamedLocks, None, false, 1_000)
         .await
         .unwrap();
-    assert_eq!(expected.len(), 3);
+    assert_eq!(expected.selected.len(), 1);
 
-    let finding = leftover_finding(Some(&docker), "demo", 1_000)
-        .await
-        .unwrap();
-    assert!(matches!(
-        &finding,
-        Finding::Warning(message) if message.contains("3 resource(s)")
-    ));
+    assert_eq!(
+        leftover_finding(Some(&docker), "demo", &NamedLocks, 1_000).await,
+        vec![
+            Finding::Warning(
+                "1 task run(s) left over from previous runs — see `ratect resources list`"
+                    .to_string()
+            ),
+            Finding::Warning(
+                "1 task run(s) Ratect can't tell have ended — see `ratect resources list --all`"
+                    .to_string()
+            ),
+        ]
+    );
 }
 
+/// Only unknown task runs: no "no leftovers", which may be false — the
+/// unknown line alone.
+#[tokio::test]
+async fn only_unknown_task_runs_claim_no_absence_of_leftovers() {
+    let docker = FakeRuntime {
+        containers: vec![resource("c1", "demo", "unknown")],
+        networks: vec![],
+    };
+    assert_eq!(
+        leftover_finding(Some(&docker), "demo", &NamedLocks, 1_000).await,
+        vec![Finding::Warning(
+            "1 task run(s) Ratect can't tell have ended — see `ratect resources list --all`"
+                .to_string()
+        )]
+    );
+}
+
+/// Only alive task runs: nothing to warn about.
 #[tokio::test]
 async fn no_leftovers_is_a_fine_finding() {
-    let docker = FakeRuntime::default();
-    let finding = leftover_finding(Some(&docker), "demo", 1_000)
-        .await
-        .unwrap();
+    let docker = FakeRuntime {
+        containers: vec![resource("c1", "demo", "alive")],
+        networks: vec![],
+    };
     assert_eq!(
-        finding,
-        Finding::Fine("no leftovers from previous runs".to_string())
+        leftover_finding(Some(&docker), "demo", &NamedLocks, 1_000).await,
+        vec![Finding::Fine("no leftovers from previous runs".to_string())]
     );
 }
 

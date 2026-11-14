@@ -362,6 +362,23 @@ fn settings_from(flags: &[&str]) -> TaskEngineSettings {
     run_args(&arguments).engine_settings(PathBuf::from("/p"), Dialect::Native, HashMap::new())
 }
 
+/// Every task run of `ratect run` takes its lock under the home directory,
+/// which `ratect resources` reads (decisions/0025).
+#[cfg(unix)]
+#[test]
+fn a_run_takes_its_task_run_locks_under_the_home_directory() {
+    let expected = ratect_core::user::home()
+        .unwrap()
+        .map(|home| home.join(".ratect").join("runs"));
+    assert_eq!(
+        settings_from(&[])
+            .run_locks
+            .directory()
+            .map(Path::to_path_buf),
+        expected
+    );
+}
+
 /// One flag (with any value it needs) against the single setting it is
 /// supposed to move. `--no-cleanup` is deliberately absent: it moves
 /// two, and has its own test.
@@ -952,17 +969,92 @@ impl ratect_core::resources::ResourceInventory for RefusingInventory {
     }
 }
 
-fn leftover(id: &str) -> Leftover {
-    Leftover::new(
+/// A task run of one container, `id`, read dead.
+fn task_run(id: &str) -> TaskRun {
+    let leftover = ratect_core::resources::Leftover::new(
         ratect_core::docker::LabelledResource {
             id: id.to_string(),
             name: id.to_string(),
             labels: HashMap::new(),
             created: Some(0),
-            state: None,
+            state: Some("exited".to_string()),
         },
         0,
-    )
+    );
+    TaskRun {
+        run: id.to_string(),
+        task: "check".to_string(),
+        state: RunState::Dead,
+        age_seconds: 0,
+        resources: vec![leftover],
+    }
+}
+
+/// A task run selected by `--all` says it is one Ratect can't tell has
+/// ended; a dead one says nothing of its state.
+#[test]
+fn a_listed_unknown_task_run_says_so() {
+    let mut unknown = task_run("b");
+    unknown.state = RunState::Unknown;
+    let stdout = Captured::default();
+
+    report_leftovers(
+        &[task_run("a"), unknown],
+        false,
+        &Console::new(Box::new(stdout.clone()), false),
+    );
+
+    let text = stdout.text();
+    assert!(text.contains("check (0 seconds ago, run a):"), "{text}");
+    assert!(
+        text.contains("check (0 seconds ago, run b, can't tell it has ended):"),
+        "{text}"
+    );
+}
+
+/// "Nothing left over" would be false with unknown task runs left out.
+#[test]
+fn an_empty_selection_claims_no_leftovers_only_when_none_is_unknown() {
+    assert_eq!(nothing_selected(false, 0), "Nothing left over.");
+    assert_eq!(nothing_selected(true, 0), "Nothing left over that old.");
+    assert_eq!(
+        nothing_selected(false, 1),
+        "Nothing left over that has ended."
+    );
+    assert_eq!(
+        nothing_selected(true, 2),
+        "Nothing that old left over that has ended."
+    );
+}
+
+/// decisions/0025's Decision 5: what a selection left out for its state,
+/// alive and unknown counted apart, `--all` named for the unknown only, and
+/// nothing said when nothing was left out.
+#[test]
+fn the_left_out_notice_counts_each_state_and_names_all_for_unknown() {
+    let notice = |alive, unknown| {
+        left_out_notice(&ratect_core::resources::Selection {
+            selected: Vec::new(),
+            alive,
+            unknown,
+        })
+    };
+    assert_eq!(notice(0, 0), None);
+    assert_eq!(
+        notice(1, 0).as_deref(),
+        Some("Left out 1 task run still going.")
+    );
+    assert_eq!(
+        notice(0, 2).as_deref(),
+        Some("Left out 2 task runs Ratect can't tell have ended (pass --all to include them).")
+    );
+    assert_eq!(
+        notice(2, 1).as_deref(),
+        Some(
+            "Left out 2 task runs still going, and 1 task run Ratect can't tell has ended \
+             (pass --all to include it)."
+        )
+    );
 }
 
 /// A refused removal doesn't stop the sweep, but it fails the verb once the
@@ -978,7 +1070,8 @@ async fn resources_clean_fails_after_trying_everything_when_a_removal_is_refused
 
     let error = remove_leftovers(
         &inventory,
-        &[leftover("a"), leftover("b"), leftover("c")],
+        &[task_run("a"), task_run("b"), task_run("c")],
+        &RunLocks::default(),
         true,
         &Console::new(Box::new(std::io::sink()), false),
     )
@@ -1003,7 +1096,8 @@ async fn resources_clean_fails_after_trying_everything_when_a_removal_is_refused
     };
     remove_leftovers(
         &clean,
-        &[leftover("a")],
+        &[task_run("a")],
+        &RunLocks::default(),
         true,
         &Console::new(Box::new(std::io::sink()), false),
     )

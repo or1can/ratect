@@ -2,7 +2,10 @@
 
 **Status:** Accepted — planned (ratect-compat 0.35.0 · ratect 0.14.0):
 [#265](https://github.com/or1can/ratect/issues/265). Both binaries take the
-lock; only `ratect` has the `resources` verbs that read it.
+lock; only `ratect` has the `resources` verbs that read it. Refined while
+implementing #265: the points this record left open are settled in
+[Settled while implementing](#settled-while-implementing), which replaces
+the list that stood there.
 
 ## Context
 
@@ -38,8 +41,8 @@ it. Three rules were drafted and each failed against the code:
   before its dependencies, so a kill during cleanup leaves running
   dependencies and no task container, which this never selects. And the exit
   code is read only after the output stream drains, so a live task run with a
-  slow consumer (`ratect run build | less`) has an exited task container,
-  which this does select.
+  slow consumer (`ratect run build | less`) can have an exited task
+  container, which this does select.
 
 Container state says what the daemon knows. The question is about a process
 the daemon has never heard of.
@@ -152,29 +155,95 @@ nothing for alive ones. It reads the same selection `resources list` does.
 Nothing removes a dead task run except `resources clean`. A sweep at the
 start of the next run would delete what `--no-cleanup` kept for inspection.
 
-### Open, for #265 to settle and fold back here
+### Settled while implementing
 
-This record decides the model. These need code and a real daemon, and
-[`decisions/README.md`](README.md) has a planned record take such
-refinements before its release ships:
+[`decisions/README.md`](README.md) has a planned record take refinements
+found while building it. #265 settled each point this record left open:
 
-- **Whether Decision 2 is enough.** #875 showed that two containers report
-  one boot identity. It did not show that two processes with one boot
-  identity, reaching the file through different mounts of a VM's file share,
-  see each other's lock. If they do not, the file must say more, or that
-  case must read unknown.
-- **What removes the files those two rules never do**: one from before a
-  reboot, one left by a `ratect-compat`-only user, one whose process died
-  while creating it. Whatever does must not turn an alive task run, or a
-  dead one whose resources remain, into an unknown one; age alone can't
-  tell, and nor can a free lock read from another kernel. If nothing safe
-  is found, the files stay and the documentation says so.
-- How the file is created so that one visible under its final name is
-  already locked. #875 designed it (a temporary name, lock, write, rename)
-  and did not build it. And the runs directory's name under `~/.ratect`.
-- **A native Linux daemon**, where a container and the host share a kernel
-  and a lock should be visible through a bind mount. #875 did not run one.
-- What the notice and `doctor` call the three states.
+- **Decision 2 holds where it was doubted.** On OrbStack (Docker 29.8.2,
+  2026-11-14), a container holding an exclusive `flock` on a file in a
+  directory bind-mounted from macOS, through the VM's file share, was seen
+  holding it by a second container mounting the same directory: the shared
+  probe was refused. Both reported one boot identity, so a free lock between
+  them is proof. The macOS host saw the same lock free, and its boot identity
+  differs, so it reads unknown, as Decision 2 intends. A named volume
+  behaved like the bind mount. Not varied: both containers mounted the
+  directory at the same path from the same host path, so a share reached
+  through two different mounts or paths was not run; nor was Docker
+  Desktop.
+- **A native Linux daemon** (Docker 29.1.3 in an OrbStack Ubuntu machine,
+  which shares a kernel with its containers): a process on the machine and
+  a container bind-mounting the machine's own directory each saw the
+  other's lock held, and a `docker kill` freed the container's. But the
+  machine and its containers reported different `boot_id`s, so each reads
+  the other's free lock unknown, not dead: safe, at the cost of `--all`
+  between them. On a Linux host that shares its `boot_id` with its
+  containers, a free lock between them is proof, since the kernel and the
+  inode are the same. This probe was not run on a Linux host outside
+  OrbStack.
+- **A slow consumer leaves an exited task container only while its unread
+  output fits the buffers between them.** On that native daemon, with
+  `docker run`'s output piped to a process that never read it, a container
+  writing 800 KB had exited when looked at 10 seconds on, and one writing
+  1.5 MB was still running then. A Ratect task run writing 4 MB to a reader
+  that never read still had its task container running 60 seconds on there,
+  as the real-daemon test first found on a GitHub-hosted runner. On
+  OrbStack's macOS-side daemon (Docker 29.8.2) the same 4 MB task container
+  had exited. Past the limit a live task run's task container is still
+  running, which container state reads correctly, and the lock reads alive
+  either way. So the real-daemon test holds its live task run with `SIGSTOP`
+  rather than a stalled pipe, and an engine test with a fake daemon reads
+  the lock held as cleanup removes the network, the last thing it removes,
+  after the task container's run has returned. None of this record's tests
+  drains output into a reader that has stalled, so that the lock is held
+  while `docker.rs` drains it rests on the lock being held across the task
+  container's whole run. Not varied: where Ratect's own limit lies, not
+  found (200 KB and 500 KB had exited on both daemons, 4 MB only on
+  OrbStack's); kernel socket buffer settings and page sizes; Docker versions
+  besides 29.1.3 and 29.8.2, the GitHub-hosted runner's not recorded; output
+  styles other than `-o simple`; a terminal as the reader; and a remote
+  daemon.
+- **Nothing removes the lock files the two deletion rules never do.** No
+  rule found is safe: age can't tell an old file of a live task run from
+  one of a dead leftover, a reader on another kernel sees a held lock as
+  free, and a file of a dead leftover on another daemon would turn unknown
+  if deleted. So a file from before a reboot, one left by a task run whose
+  leftovers went another way (`docker rm`, or `ratect-compat` alone), one
+  kept by a task run that stopped waiting for a create the daemon never
+  answered (which may have made something, and if it did nothing else
+  could make it read dead), and a `.tmp` whose process died before its
+  rename all stay, a few dozen bytes each. The CLI documentation says they
+  can be deleted by hand only when nothing is running and nothing is left
+  over, since deleting a leftover's file makes it unknown. `resources clean` also leaves an **unknown** task
+  run's file when it removes that task run under `--all`, since it may be a
+  live one's on another kernel.
+- **Creation**, as #875 designed it and `ratect_core::run_lock` builds it:
+  the file is created exclusively as `<run>.tmp`, locked with a
+  non-blocking exclusive lock, written (`ratect-run-lock 1`, then `boot`
+  and the boot identity), and renamed to `<run>.lock`. An `flock` belongs to
+  the open file, which a rename leaves alone, and a reader opens only final
+  names, so a file visible under its final name is always locked or its
+  holder is gone. A `run` value made of anything but a lower-case UUID's
+  characters (`0`–`9`, `a`–`f` and `-`) names no file and reads unknown,
+  since a label can be set by anyone with the daemon, and an upper-case one
+  would name another task run's file on a case-insensitive filesystem. The directory is **`~/.ratect/runs`**. A run lacking a
+  boot identity (a Unix other than Linux or macOS) takes no lock.
+- **Releasing** follows #888's order for the Git include entry lock: delete
+  the file while the lock is held, then unlock explicitly, then close. A
+  reader's probe unlocks explicitly too. A child process that another thread
+  is starting shares the file until it execs, and only an explicit unlock
+  frees the lock for it.
+- **What a task run that kept something is.** `--no-cleanup*` and a cleanup
+  that failed both leave the file, so the task run reads dead once its
+  process ends. So does a run that panics: the panic ends the process, which
+  frees the lock, and the file stays.
+- **What the notice and `doctor` call the states**: *ended* (dead), *still
+  going* (alive) and *can't tell has ended* (unknown). The notice reads
+  `Left out 2 task runs still going, and 1 task run Ratect can't tell has
+  ended (pass --all to include it).`, and is counted only among task runs
+  old enough for `--older-than`, since a task run it excludes for its age
+  was asked not to be considered at all. `doctor` counts task runs, where it
+  counted resources.
 
 ## Alternatives considered
 
@@ -230,12 +299,17 @@ would refuse each other, and the second would read a dead task run as alive.
   `includes clean --all` conflicts with it, and sits beside `--all-projects`,
   which widens the scope and not the states. The CLI documentation has to
   keep the three apart.
-- On a platform that isn't Unix every task run is unknown, so a bare `clean`
-  removes nothing there ([#876](https://github.com/or1can/ratect/issues/876)).
+- On a platform other than Linux and macOS every task run is unknown, since
+  none has a boot identity Ratect reads, so a bare `clean` removes nothing
+  there ([#876](https://github.com/or1can/ratect/issues/876)).
 - #875 did not vary: a native Linux daemon, where a container and the host
   share a kernel; Docker Desktop; a remote daemon, a second machine, another
   user's home, a home directory on a network filesystem; Windows; and the
   `ratect` binary, which shares the engine `ratect-compat` was run through.
-  The file's creation, removal and pruning were not built there.
+  The file's creation, removal and pruning were not built there. #265 then
+  ran the first, in an OrbStack machine, and both binaries, against
+  OrbStack; the rest remain unrun.
+- Lock files nothing deletes accumulate in `~/.ratect/runs`; see
+  [Settled while implementing](#settled-while-implementing).
 - #875 also found that 0023's Decision 3 overstates what a bind mount
   preserves ([#877](https://github.com/or1can/ratect/issues/877)).

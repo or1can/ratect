@@ -45,16 +45,6 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   the catastrophic version of the mistake. Worth revisiting on the first
   report of a near-miss.
 
-- **14.** **`resources` can't distinguish a concurrently-running task's containers
-  from an orphan** (`ratect-core/src/resources.rs`) — they're labelled
-  identically, because until the run ends they *are* the same thing, and
-  the daemon can't say whether some other `ratect` process still cares
-  about a container. `list` reporting age and `clean` taking
-  `--older-than` is the honest mitigation; claiming to detect liveness
-  would be a lie. If this bites in practice, the next step would be a
-  heartbeat (a running invocation touching its own resources
-  periodically) rather than any attempt to infer liveness after the fact.
-
 - **15.** **The generated JSON schemas' `description`s name private Rust items**
   (`ratect-core/src/config.rs` doc comments, rendered by
   `ratect-core/src/schema.rs`) — a description is what an editor shows a

@@ -42,7 +42,8 @@ use ratect_core::diagnostics::{
 use ratect_core::docker::{ContainerRuntime, DockerClient, DockerConnectionOptions};
 use ratect_core::engine::{TaskEngine, TaskEngineSettings};
 use ratect_core::exit_code::Word;
-use ratect_core::resources::Leftover;
+use ratect_core::resources::{RunState, TaskRun};
+use ratect_core::run_lock::RunLocks;
 use ratect_core::text;
 use ratect_core::ui::{
     create_event_sink, printable, resolve_color_mode, resolve_no_color, select_output_style,
@@ -158,8 +159,8 @@ enum Command {
         command: IncludesCommand,
     },
 
-    /// Inspect and remove containers and networks left over from previous
-    /// runs.
+    /// Inspect and remove containers and networks left over from task runs
+    /// that have ended.
     Resources {
         #[command(subcommand)]
         command: ResourcesCommand,
@@ -263,10 +264,12 @@ struct DoctorArgs {
 
 #[derive(Subcommand, Debug)]
 enum ResourcesCommand {
-    /// List containers and networks left over from previous runs.
+    /// List containers and networks left over from task runs that have
+    /// ended.
     List(ResourcesArgs),
 
-    /// Remove containers and networks left over from previous runs.
+    /// Remove containers and networks left over from task runs that have
+    /// ended.
     ///
     /// `resources list` with the same options is the dry run: it selects
     /// exactly what this removes.
@@ -287,12 +290,17 @@ struct ResourcesArgs {
     #[arg(long = "all-projects")]
     all_projects: bool,
 
-    /// Only leftovers older than this, as a duration ("30m", "2h", "7d").
-    /// A task running right now looks exactly like a leftover — it *is*
-    /// one, until it finishes — so this is how a sweep avoids tearing down
-    /// a colleague's (or your own) in-flight run.
+    /// Only task runs older than this, as a duration ("30m", "2h", "7d"):
+    /// a task run's age is its oldest container's or network's.
     #[arg(long = "older-than", value_parser = parse_age)]
     older_than: Option<std::time::Duration>,
+
+    /// Include task runs Ratect can't tell have ended, as well as those it
+    /// can — such as one left by an older Ratect, or from before a reboot.
+    /// Never a task run still going. Composes with --older-than, which is
+    /// the guard for these.
+    #[arg(long = "all")]
+    all: bool,
 
     #[command(flatten)]
     docker: DockerArgs,
@@ -1224,6 +1232,9 @@ impl RunArgs {
             // Stamped onto every resource this run creates, so it can be
             // identified later — see `ratect_core::labels`.
             ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            // Each task run's lock, which `ratect resources` reads to tell a
+            // leftover from a task run still going (decisions/0025).
+            run_locks: ratect_core::run_lock::RunLocks::at_home(),
             dialect,
             config_var_overrides,
         }
@@ -1412,21 +1423,20 @@ async fn remove_caches<D: ratect_core::cache::VolumeStore + Send + Sync>(
 }
 
 /// `ratect resources list` / `ratect resources clean` — the containers and
-/// networks previous runs left behind, found by the labels Ratect stamps on
-/// everything it creates (see [`ratect_core::labels`]).
+/// networks previous task runs left behind, found by the labels Ratect stamps
+/// on everything it creates (see [`ratect_core::labels`]).
 ///
-/// Leftovers happen after a crash, a `docker kill`, a run that used
+/// Leftovers happen after a crash, a `kill -9`, a run that used
 /// `--no-cleanup`, or a cleanup that itself failed. Before the labels
 /// existed, answering "what should I remove?" meant reading `docker ps -a`
 /// and guessing, because nothing Ratect created was identifiable
 /// afterwards.
 ///
-/// The one thing labels can't settle: a task running *right now* carries
-/// exactly the same labels as a leftover, because until it finishes it is
-/// one. `list` reports ages so that's visible, and `--older-than` is how a
-/// sweep avoids tearing down an in-flight run. Claiming to detect liveness
-/// would be a lie — the daemon can't say whether some other `ratect`
-/// process still cares about a container.
+/// Labels can't tell a leftover from a task run still going; the task run
+/// lock can ([`ratect_core::run_lock`], decisions/0025). So both verbs select
+/// the task runs it proves have ended, `--all` adds those it can't tell
+/// about, and nothing selects one still going. A notice on stderr counts what
+/// was left out for its state.
 ///
 /// There's deliberately no `--dry-run`: `list` and `clean` take the same
 /// [`ResourcesArgs`] and select through this same function, so `list` with
@@ -1471,25 +1481,76 @@ async fn manage_resources(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_secs() as i64)
         .unwrap_or_default();
-    let leftovers =
-        ratect_core::resources::find(&docker, project.as_deref(), args.older_than, now).await?;
+    let locks = RunLocks::at_home();
+    let selection = ratect_core::resources::find(
+        &docker,
+        project.as_deref(),
+        &locks,
+        args.older_than,
+        args.all,
+        now,
+    )
+    .await?;
 
-    if leftovers.is_empty() {
+    if let Some(notice) = left_out_notice(&selection) {
+        stderr.notice(notice);
+    }
+    if selection.selected.is_empty() {
         if !quiet {
-            stdout.println(match args.older_than {
-                Some(_) => "Nothing left over that old.",
-                None => "Nothing left over.",
-            });
+            stdout.println(nothing_selected(
+                args.older_than.is_some(),
+                selection.unknown,
+            ));
         }
         return Ok(());
     }
 
     if removing {
-        remove_leftovers(&docker, &leftovers, quiet, stdout).await?;
+        remove_leftovers(&docker, &selection.selected, &locks, quiet, stdout).await?;
     } else {
-        report_leftovers(&leftovers, quiet, stdout);
+        report_leftovers(&selection.selected, quiet, stdout);
     }
     Ok(())
+}
+
+/// What an empty selection says on stdout. With unknown task runs left out,
+/// there may be leftovers, so it says only that none has ended; the notice
+/// has already counted the rest. A task run still going is no leftover.
+fn nothing_selected(older_than: bool, unknown: usize) -> &'static str {
+    match (older_than, unknown > 0) {
+        (false, false) => "Nothing left over.",
+        (true, false) => "Nothing left over that old.",
+        (false, true) => "Nothing left over that has ended.",
+        (true, true) => "Nothing that old left over that has ended.",
+    }
+}
+
+/// What a selection left out for its state, if anything: the alive and the
+/// unknown counted apart, and `--all` named for the unknown, the only ones it
+/// would include (decisions/0025's Decision 5).
+fn left_out_notice(selection: &ratect_core::resources::Selection) -> Option<String> {
+    let runs = |count: usize| format!("{count} task run{}", if count == 1 { "" } else { "s" });
+    let still_going =
+        (selection.alive > 0).then(|| format!("{} still going", runs(selection.alive)));
+    let unknown = (selection.unknown > 0).then(|| {
+        format!(
+            "{} Ratect can't tell {} ended (pass --all to include {})",
+            runs(selection.unknown),
+            if selection.unknown == 1 {
+                "has"
+            } else {
+                "have"
+            },
+            if selection.unknown == 1 { "it" } else { "them" }
+        )
+    });
+    match (still_going, unknown) {
+        (None, None) => None,
+        (Some(one), None) | (None, Some(one)) => Some(format!("Left out {one}.")),
+        (Some(still_going), Some(unknown)) => {
+            Some(format!("Left out {still_going}, and {unknown}."))
+        }
+    }
 }
 
 /// Rounded to one unit — "3 days" is what makes a leftover recognizable as
@@ -1508,35 +1569,42 @@ fn format_age(seconds: i64) -> String {
     format!("{count} {unit}{}", if count == 1 { "" } else { "s" })
 }
 
-/// Grouped by run, because that's the unit a leftover actually belongs to:
-/// one interrupted task leaves a network and every container it started,
-/// and they're only meaningful together.
-fn report_leftovers(leftovers: &[Leftover], quiet: bool, stdout: &Console) {
+/// Grouped by task run, because that's the unit a leftover belongs to and
+/// is selected by: one interrupted task leaves a network and every container
+/// it started, and they're only meaningful together. A task run selected by
+/// `--all` says it is one Ratect can't tell has ended.
+fn report_leftovers(runs: &[TaskRun], quiet: bool, stdout: &Console) {
     if quiet {
         // Machine-readable, same contract as `tasks list`/`caches list`:
         // one id per line and nothing else, ready to pipe into `docker rm`.
-        for leftover in leftovers {
-            stdout.println(text!("{}", leftover.resource.id));
+        for run in runs {
+            for leftover in &run.resources {
+                stdout.println(text!("{}", leftover.resource.id));
+            }
         }
         return;
     }
 
-    let mut runs: Vec<&str> = leftovers.iter().map(|l| l.run.as_str()).collect();
-    runs.sort_unstable();
-    runs.dedup();
-
+    let resources: usize = runs.iter().map(|run| run.resources.len()).sum();
     stdout.println(text!(
         "{} left over from {} previous run{}:",
-        leftovers.len(),
+        resources,
         runs.len(),
         if runs.len() == 1 { "" } else { "s" }
     ));
     for run in runs {
-        let group: Vec<&Leftover> = leftovers.iter().filter(|l| l.run == run).collect();
-        let task = &group[0].task;
-        let age = format_age(group.iter().map(|l| l.age_seconds).max().unwrap_or(0));
-        stdout.println(text!("\n  {} ({} ago, run {}):", task, age, run));
-        for leftover in group {
+        let unknown = match run.state {
+            RunState::Unknown => ", can't tell it has ended",
+            RunState::Dead | RunState::Alive => "",
+        };
+        stdout.println(text!(
+            "\n  {} ({} ago, run {}{}):",
+            run.task,
+            format_age(run.age_seconds),
+            run.run,
+            unknown
+        ));
+        for leftover in &run.resources {
             stdout.println(text!("    - {}", leftover.describe()));
         }
     }
@@ -1544,25 +1612,27 @@ fn report_leftovers(leftovers: &[Leftover], quiet: bool, stdout: &Console) {
 }
 
 /// Reports each removal as it happens rather than after the sweep, so a slow
-/// daemon doesn't leave `resources clean` looking hung. The ordering rule and
-/// the don't-abandon-the-rest behaviour belong to
+/// daemon doesn't leave `resources clean` looking hung. The ordering rule,
+/// the don't-abandon-the-rest behaviour and which lock files go belong to
 /// [`ratect_core::resources::remove`]; what's here is only how the outcomes
 /// read. A refused removal doesn't stop the sweep, but it does fail the verb
 /// once the sweep is done — one `Error:` from `main` listing every refusal,
 /// and exit `1`, so CI sees a clean that didn't clean (decisions/0017:
 /// `Error:` is Ratect failing at what was asked).
-async fn remove_leftovers<D>(
+async fn remove_leftovers<D, L>(
     docker: &D,
-    leftovers: &[Leftover],
+    runs: &[TaskRun],
+    locks: &L,
     quiet: bool,
     stdout: &Console,
 ) -> Result<()>
 where
     D: ratect_core::resources::ResourceInventory + Send + Sync,
+    L: ratect_core::resources::RunStates + ?Sized,
 {
     let mut failures = Vec::new();
     let removed =
-        ratect_core::resources::remove(docker, leftovers, |leftover, result| match result {
+        ratect_core::resources::remove(docker, runs, locks, |leftover, result| match result {
             Ok(()) => {
                 if !quiet {
                     stdout.println(text!("Removed {}.", leftover.describe()));
@@ -1573,7 +1643,8 @@ where
         .await;
 
     if !quiet {
-        stdout.println(text!("Removed {} of {}.", removed, leftovers.len()));
+        let total: usize = runs.iter().map(|run| run.resources.len()).sum();
+        stdout.println(text!("Removed {} of {}.", removed, total));
     }
     anyhow::ensure!(
         failures.is_empty(),
@@ -1693,8 +1764,15 @@ async fn diagnose(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|since| since.as_secs() as i64)
                 .unwrap_or_default();
-            findings
-                .extend(leftover_finding(docker.as_ref(), &project.config.project_name, now).await);
+            findings.extend(
+                leftover_finding(
+                    docker.as_ref(),
+                    &project.config.project_name,
+                    &RunLocks::at_home(),
+                    now,
+                )
+                .await,
+            );
         }
         Err(error) => findings.extend(load_failure_findings(&global.config_file, &error)),
     }

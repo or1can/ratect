@@ -2388,6 +2388,7 @@ dependencies = [
  "hyper-util",
  "indexmap",
  "jsonschema",
+ "libc",
  "nix 0.31.3",
  "noyalib",
  "path-clean",

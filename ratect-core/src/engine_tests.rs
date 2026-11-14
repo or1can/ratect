@@ -91,6 +91,13 @@ struct FakeContainerRuntime {
     // The labels a prior `create_network` call was given (see
     // `network_labels`).
     network_labels: Arc<Mutex<Option<HashMap<String, String>>>>,
+    // Where task run locks are read, and what each read found for its run,
+    // with where it was read (see `probing_run_locks`).
+    run_lock_probe: Arc<Mutex<Option<crate::run_lock::RunLocks>>>,
+    run_lock_states: Arc<Mutex<Vec<(LockProbe, crate::run_lock::RunState)>>>,
+    // How long `create_network` takes to answer (see
+    // `with_network_create_delay`).
+    network_create_delay: Arc<Mutex<Option<std::time::Duration>>>,
     // The options a prior `exec_in_container` call for a given command
     // was given (see `exec_for`).
     execs: CapturedExecs,
@@ -330,6 +337,9 @@ impl Default for FakeContainerRuntime {
             build_specs: Default::default(),
             network_exists_result: Arc::new(Mutex::new(true)),
             network_labels: Default::default(),
+            run_lock_probe: Default::default(),
+            run_lock_states: Default::default(),
+            network_create_delay: Default::default(),
             execs: Default::default(),
             stop_options: Default::default(),
             unhealthy_container: Default::default(),
@@ -1156,6 +1166,49 @@ impl FakeContainerRuntime {
             .and_then(|spec| spec.shared.options.entrypoint)
     }
 
+    /// Makes the fake read the run's lock in `locks` at each [`LockProbe`]:
+    /// before every `create_network` and `create_container`, as
+    /// [`Self::run_lock_states`] returns, and as the network is removed, as
+    /// [`Self::run_lock_states_at`] returns.
+    #[cfg(unix)]
+    fn probing_run_locks(self, locks: crate::run_lock::RunLocks) -> Self {
+        *self.run_lock_probe.lock().unwrap() = Some(locks);
+        self
+    }
+
+    /// Makes `create_network` take `delay` to answer, as a slow daemon's
+    /// does; a run cut short meanwhile can't tell whether it made one.
+    #[cfg(unix)]
+    fn with_network_create_delay(self, delay: std::time::Duration) -> Self {
+        *self.network_create_delay.lock().unwrap() = Some(delay);
+        self
+    }
+
+    /// What each create read, in order.
+    #[cfg(unix)]
+    fn run_lock_states(&self) -> Vec<crate::run_lock::RunState> {
+        self.run_lock_states_at(LockProbe::Create)
+    }
+
+    /// What each read at `probe` found, in order.
+    #[cfg(unix)]
+    fn run_lock_states_at(&self, probe: LockProbe) -> Vec<crate::run_lock::RunState> {
+        self.run_lock_states
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(at, _)| *at == probe)
+            .map(|(_, state)| *state)
+            .collect()
+    }
+
+    fn probe_run_lock(&self, at: LockProbe, labels: &HashMap<String, String>) {
+        if let Some(locks) = self.run_lock_probe.lock().unwrap().as_ref() {
+            let state = locks.state(&labels[crate::labels::RUN]);
+            self.run_lock_states.lock().unwrap().push((at, state));
+        }
+    }
+
     /// The labels a prior `create_network` call was given.
     fn network_labels(&self) -> Option<HashMap<String, String>> {
         self.network_labels.lock().unwrap().clone()
@@ -1339,6 +1392,11 @@ impl ContainerRuntime for FakeContainerRuntime {
         if *self.fail_network_creation.lock().unwrap() {
             anyhow::bail!("could not find an available, non-overlapping IPv4 address pool");
         }
+        self.probe_run_lock(LockProbe::Create, labels);
+        let delay = *self.network_create_delay.lock().unwrap();
+        if let Some(delay) = delay {
+            tokio::time::sleep(delay).await;
+        }
         self.push(format!("network-create:{name}"));
         *self.network_labels.lock().unwrap() = Some(labels.clone());
         Ok(())
@@ -1371,6 +1429,7 @@ impl ContainerRuntime for FakeContainerRuntime {
                 anyhow::anyhow!("Docker responded with status code 400: create refused"),
             ));
         }
+        self.probe_run_lock(LockProbe::Create, &spec.labels);
         self.specs
             .lock()
             .unwrap()
@@ -1842,6 +1901,10 @@ impl ResourceInventory for FakeContainerRuntime {
     async fn remove_network(&self, name: &str) -> Result<()> {
         if *self.refuse_network_removal.lock().unwrap() {
             anyhow::bail!("error while removing network: network {name} has active endpoints");
+        }
+        let labels = self.network_labels.lock().unwrap().clone();
+        if let Some(labels) = labels {
+            self.probe_run_lock(LockProbe::NetworkRemoval, &labels);
         }
         self.push(format!("network-remove:{name}"));
         Ok(())
@@ -14161,6 +14224,7 @@ fn with_settings_applies_every_setting() {
             PathBuf::from("/projects/demo"),
         )),
         ratect_version: Some("1.2.3".to_string()),
+        run_locks: crate::run_lock::RunLocks::at(PathBuf::from("/runs")),
         dialect: Dialect::Native,
         config_var_overrides: HashMap::from([("flavour".to_string(), "spicy".to_string())]),
     };
@@ -14187,6 +14251,10 @@ fn with_settings_applies_every_setting() {
         Some(3)
     );
     assert_eq!(engine.ratect_version.as_deref(), Some("1.2.3"));
+    assert_eq!(
+        engine.run_locks.directory(),
+        Some(std::path::Path::new("/runs"))
+    );
     let cache = engine.cache_options.expect("cache options should be set");
     assert_eq!(cache.cache_type, crate::cache::CacheType::Directory);
     assert_eq!(cache.project_directory, PathBuf::from("/projects/demo"));
@@ -20618,4 +20686,303 @@ fn a_non_root_image_user_under_identity_is_a_hazard_on_both_remapped_daemons() {
     for class in [DaemonClass::Desktop, DaemonClass::RootfulLinux] {
         assert_eq!(image_user_warning("app", "node", class), None, "{class:?}");
     }
+}
+
+/// A task run with a dependency, for the task run lock's tests.
+#[cfg(unix)]
+fn config_with_one_dependency() -> Config {
+    let mut containers = IndexMap::new();
+    containers.insert("database".to_string(), container("postgres:16", None));
+    let mut app = container("alpine:3.18", None);
+    app.dependencies = Some(vec!["database".to_string()]);
+    containers.insert("app".to_string(), app);
+    let mut tasks = IndexMap::new();
+    tasks.insert("check".to_string(), task("app", "echo hi"));
+    Config {
+        project_name: "demo".to_string(),
+        containers,
+        tasks,
+        config_variables: None,
+        forbid_telemetry: None,
+    }
+}
+
+/// Where [`FakeContainerRuntime::probing_run_locks`] reads a task run's lock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LockProbe {
+    /// Before a `create_network` or `create_container`.
+    Create,
+    /// As cleanup removes the network, the last thing it removes: the run
+    /// read is the last network created's.
+    NetworkRemoval,
+}
+
+#[cfg(unix)]
+fn unique_run_lock_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("ratect-engine-run-lock-{}", Uuid::new_v4()))
+}
+
+/// The lock files in `directory`, by name.
+#[cfg(unix)]
+fn run_lock_files(directory: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(directory)
+        .map(|entries| {
+            entries
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// decisions/0025's Decision 1: a task run's lock is held, under its final
+/// name, before its network or any container is created, and a task run
+/// that cleaned up fully deletes its file.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_task_runs_lock_is_held_before_it_creates_anything_and_gone_once_it_cleaned_up() {
+    let directory = unique_run_lock_dir();
+    let locks = crate::run_lock::RunLocks::at(directory.clone());
+    let docker = FakeContainerRuntime::default().probing_run_locks(locks.clone());
+    let engine = engine(config_with_one_dependency(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_locks: locks,
+            ..TaskEngineSettings::default()
+        })
+        .unwrap();
+
+    engine.run_task("check", &[]).await.unwrap();
+
+    assert_eq!(
+        docker.run_lock_states(),
+        vec![crate::run_lock::RunState::Alive; 3],
+        "the network and both containers were created under a held lock"
+    );
+    assert_eq!(run_lock_files(&directory), Vec::<String>::new());
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// decisions/0025's Decision 1 past the task container's exit: the engine
+/// holds a task run's lock after its task container's run returns, through
+/// cleanup to the last thing it removes. Draining the output of a container
+/// that has exited is inside that run, docker.rs's, which the fake stands for
+/// whole.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_task_runs_lock_is_held_after_its_task_container_exits_and_through_cleanup() {
+    let directory = unique_run_lock_dir();
+    let locks = crate::run_lock::RunLocks::at(directory.clone());
+    let docker = FakeContainerRuntime::default().probing_run_locks(locks.clone());
+    let engine = engine(config_with_one_dependency(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_locks: locks,
+            ..TaskEngineSettings::default()
+        })
+        .unwrap();
+
+    engine.run_task("check", &[]).await.unwrap();
+
+    use crate::run_lock::RunState::Alive;
+    assert_eq!(
+        docker.run_lock_states_at(LockProbe::NetworkRemoval),
+        vec![Alive]
+    );
+    assert_eq!(run_lock_files(&directory), Vec::<String>::new());
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// Under `--use-network` the first thing created is a container, and the
+/// lock is held before it too.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_task_runs_lock_is_held_before_its_first_container_on_an_existing_network() {
+    let directory = unique_run_lock_dir();
+    let locks = crate::run_lock::RunLocks::at(directory.clone());
+    let docker = FakeContainerRuntime::default().probing_run_locks(locks.clone());
+    let engine = engine(config_with_one_dependency(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            existing_network: Some("someone-elses-network".to_string()),
+            run_locks: locks,
+            ..TaskEngineSettings::default()
+        })
+        .unwrap();
+
+    engine.run_task("check", &[]).await.unwrap();
+
+    assert_eq!(
+        docker.run_lock_states(),
+        vec![crate::run_lock::RunState::Alive; 2]
+    );
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A task run that keeps something under `--no-cleanup` leaves its lock
+/// file, and reads dead once it has ended.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_task_run_kept_by_no_cleanup_leaves_its_lock_file_reading_dead() {
+    for (after_success, after_failure, fails) in [(false, true, false), (true, false, true)] {
+        let directory = unique_run_lock_dir();
+        let locks = crate::run_lock::RunLocks::at(directory.clone());
+        // A dependency that never gets healthy is a failure; a non-zero exit
+        // code would be cleaned up as a success (`cleanup_after_success`).
+        let docker = if fails {
+            FakeContainerRuntime::default().with_unhealthy_container("database")
+        } else {
+            FakeContainerRuntime::default()
+        };
+        let engine = engine(config_with_one_dependency(), docker.clone())
+            .with_settings(TaskEngineSettings {
+                cleanup_after_success: after_success,
+                cleanup_after_failure: after_failure,
+                run_locks: locks.clone(),
+                ..TaskEngineSettings::default()
+            })
+            .unwrap();
+
+        let _ = engine.run_task("check", &[]).await;
+
+        let run = &docker.network_labels().unwrap()[crate::labels::RUN];
+        assert_eq!(run_lock_files(&directory), vec![format!("{run}.lock")]);
+        assert_eq!(locks.state(run), crate::run_lock::RunState::Dead);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+}
+
+/// A cleanup that left something behind leaves the lock file too, so that
+/// `resources clean` reads what it left dead.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_task_run_whose_cleanup_failed_leaves_its_lock_file_reading_dead() {
+    let directory = unique_run_lock_dir();
+    let locks = crate::run_lock::RunLocks::at(directory.clone());
+    let docker = FakeContainerRuntime::default().refusing_network_removal();
+    let engine = engine(config_with_one_dependency(), docker.clone())
+        .with_settings(TaskEngineSettings {
+            run_locks: locks.clone(),
+            ..TaskEngineSettings::default()
+        })
+        .unwrap();
+
+    let _ = engine.run_task("check", &[]).await;
+
+    let run = &docker.network_labels().unwrap()[crate::labels::RUN];
+    assert_eq!(locks.state(run), crate::run_lock::RunState::Dead);
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// One lock per task run, not per invocation: a prerequisite's task run
+/// takes its own, under its own run id.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_prerequisites_task_run_takes_a_lock_of_its_own() {
+    let directory = unique_run_lock_dir();
+    let locks = crate::run_lock::RunLocks::at(directory.clone());
+    let docker = FakeContainerRuntime::default().probing_run_locks(locks.clone());
+    let mut config = config_with_one_dependency();
+    config
+        .tasks
+        .insert("setup".to_string(), task("app", "echo setup"));
+    config.tasks.get_mut("check").unwrap().prerequisites = Some(vec!["setup".to_string()]);
+    let engine = engine(config, docker.clone())
+        .with_settings(TaskEngineSettings {
+            cleanup_after_success: false,
+            run_locks: locks,
+            ..TaskEngineSettings::default()
+        })
+        .unwrap();
+
+    engine.run_task("check", &[]).await.unwrap();
+
+    let runs: HashSet<String> = docker
+        .specs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, spec)| spec.labels[crate::labels::RUN].clone())
+        .collect();
+    assert_eq!(runs.len(), 2, "two task runs");
+    assert!(docker
+        .run_lock_states()
+        .iter()
+        .all(|state| *state == crate::run_lock::RunState::Alive));
+    assert_eq!(
+        run_lock_files(&directory).len(),
+        1,
+        "the prerequisite cleaned up fully; the task kept its containers"
+    );
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A create the run stopped waiting for may have made a container nothing
+/// else knows of, so the task run keeps its lock file: what it made then
+/// reads dead, where a deleted file would leave it unknown.
+#[cfg(unix)]
+#[tokio::test(start_paused = true)]
+async fn a_task_run_with_a_create_it_stopped_waiting_for_keeps_its_lock_file() {
+    let directory = unique_run_lock_dir();
+    let locks = crate::run_lock::RunLocks::at(directory.clone());
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_create_delay("bad", std::time::Duration::from_millis(500))
+        .failing_creation("bad")
+        .with_create_reply_delay("slow", std::time::Duration::from_secs(1_000_000));
+    let engine = TaskEngine::new(
+        project(config_with_containers(
+            &["slow", "bad"],
+            &[("slow", &[]), ("bad", &[])],
+        )),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    )
+    .with_settings(TaskEngineSettings {
+        run_locks: locks.clone(),
+        ..TaskEngineSettings::default()
+    })
+    .unwrap();
+    let signaller = signal_later(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+
+    engine.run_task("start", &[]).await.unwrap_err();
+    signaller.await.unwrap();
+
+    assert_eq!(run_lock_files(&directory).len(), 1, "the file stays");
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// The same for the network: a run signalled while its `create_network`
+/// is in flight can't tell whether the daemon made one.
+#[cfg(unix)]
+#[tokio::test(start_paused = true)]
+async fn a_task_run_signalled_while_creating_its_network_keeps_its_lock_file() {
+    let directory = unique_run_lock_dir();
+    let locks = crate::run_lock::RunLocks::at(directory.clone());
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_network_create_delay(std::time::Duration::from_secs(1_000_000));
+    let engine = TaskEngine::new(
+        project(config_with_one_dependency()),
+        docker.clone(),
+        Arc::new(NullEventSink),
+        Arc::clone(&interrupt),
+    )
+    .with_settings(TaskEngineSettings {
+        run_locks: locks.clone(),
+        ..TaskEngineSettings::default()
+    })
+    .unwrap();
+    let signaller = signal_later(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Terminate],
+    );
+
+    engine.run_task("check", &[]).await.unwrap_err();
+    signaller.await.unwrap();
+
+    assert_eq!(run_lock_files(&directory).len(), 1, "the file stays");
+    std::fs::remove_dir_all(&directory).ok();
 }

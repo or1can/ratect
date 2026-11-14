@@ -9,7 +9,7 @@ Checking ratect.toml...
   warning container 'app' gives 'cache' more than once in its 'dependencies' — it starts only once
   problem container 'app': build_directory '/private/tmp/ratect/ratect/tests/fixtures/doctor/missing-dir' doesn't exist
   warning container 'scratch' has identity.home '/work/me' under the writable bind mount at '/work' — a home that doesn't exist yet is created on the host, in that directory
-  warning 2 resource(s) left over from previous runs — see `ratect resources list`
+  warning 1 task run(s) left over from previous runs — see `ratect resources list`
 
 11 check(s): 1 problem(s), 7 warning(s).
 [1;31mError:[0m 1 problem(s) found.
