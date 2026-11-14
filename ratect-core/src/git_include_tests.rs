@@ -1476,6 +1476,90 @@ async fn a_release_that_cant_look_at_its_lock_file_reports_why() {
     tokio::fs::remove_dir_all(&root).await.ok();
 }
 
+/// A lock path is known to be replaced only once it names no file, or
+/// another file; until then it is the file that was opened. A path whose
+/// directory is now a file names no file either.
+#[cfg(unix)]
+#[test]
+fn a_lock_file_is_known_replaced_once_its_path_names_another_file_or_none() {
+    let root = unique_temp_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    let lock_path = root.join("replaced.lock");
+    std::fs::write(&lock_path, "").unwrap();
+    let opened = std::fs::File::open(&lock_path).unwrap();
+
+    let unchanged = entry_lock::still_at(&opened, &lock_path);
+    std::fs::remove_file(&lock_path).unwrap();
+    let removed = entry_lock::still_at(&opened, &lock_path);
+    std::fs::write(&lock_path, "").unwrap();
+    let recreated = entry_lock::still_at(&opened, &lock_path);
+    let under_a_file = entry_lock::still_at(&opened, &lock_path.join("nested.lock"));
+
+    assert_eq!(unchanged, Some(true));
+    assert_eq!(removed, Some(false));
+    assert_eq!(recreated, Some(false));
+    assert_eq!(under_a_file, Some(false));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A look that can't tell whether the lock path still names the file it
+/// opened, here because the directory can't be searched, reports the
+/// holder unknown, so its waiter waits, rather than taking the file for
+/// replaced and looking again at once for as long as the error lasts
+/// (ratect#891).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_look_that_cant_stat_its_lock_file_reports_the_holder_unknown() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root searches through any mode, so there is nothing to test as root.
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let root = unique_temp_dir();
+    let lock_path = abandoned_lock(&root).await;
+    let opened = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let told = entry_lock::still_at(&opened, &lock_path);
+    let look = entry_lock::take_over_if_abandoned(opened, &lock_path);
+
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    tokio::fs::remove_dir_all(&root).await.ok();
+    assert_eq!(told, None);
+    assert!(matches!(look, entry_lock::TakeOver::Unknown), "{look:?}");
+}
+
+/// A lock path that exists to an exclusive create but not to an open, as a
+/// broken symbolic link does, looks released every time: a look gives up
+/// looking again after a few tries and reports the holder unknown, so its
+/// waiter waits and times out rather than looping without end.
+#[cfg(unix)]
+#[test]
+fn a_lock_path_that_is_always_released_is_reported_unknown_rather_than_looped_on() {
+    let root = unique_temp_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    let lock_path = root.join("dangling.lock");
+    std::os::unix::fs::symlink(root.join("nowhere"), &lock_path).unwrap();
+
+    // On a thread of its own, so a look that never returns fails the test
+    // rather than hanging it.
+    let (sent, received) = std::sync::mpsc::channel();
+    let path = lock_path.clone();
+    std::thread::spawn(move || sent.send(entry_lock::attempt(&path).map_err(|e| e.kind())));
+    let found = received.recv_timeout(Duration::from_secs(5));
+
+    std::fs::remove_dir_all(&root).ok();
+    let found = found.expect("a look should return").unwrap();
+    assert!(
+        matches!(found, entry_lock::Attempt::HeldByUnknownHolder),
+        "{found:?}"
+    );
+}
+
 #[cfg(unix)]
 fn is_close_on_exec(file: &std::fs::File) -> bool {
     let flags = nix::fcntl::fcntl(file, nix::fcntl::FcntlArg::F_GETFD).unwrap();

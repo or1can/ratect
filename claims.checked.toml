@@ -15516,15 +15516,6 @@ subjects = {}
 
 [[mark]]
 file = "decisions/0027-git-include-staging-survives-two-holders.md"
-mode = "claim-words-counts"
-unit = "8c6d7a69782cbdaf"
-copies = 1
-note = "0023 Decision 5 (release) and 7 (staging cleanup) are the two replaced here; Decisions 1-4, 6, 8, 9 untouched by the diff"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0027-git-include-staging-survives-two-holders.md"
 mode = "claim-words-totalising"
 unit = "69da5d24baf7bc34"
 copies = 1
@@ -16170,15 +16161,6 @@ subjects = {}
 
 [[mark]]
 file = "decisions/0027-git-include-staging-survives-two-holders.md"
-mode = "claim-words-counts"
-unit = "f96141e5e4b11601"
-copies = 1
-note = "claim_if_abandoned's Err arms: still_at Some(false) Replaced, None (off Unix) Unknown, read_to_string error or marker mismatch Unknown; take_over_if_abandoned unlocks on each"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0027-git-include-staging-survives-two-holders.md"
 mode = "claim-words-totalising"
 unit = "0c634a6f8a45a310"
 copies = 1
@@ -16241,13 +16223,67 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0023-git-include-entry-lock.md" = "40ce98662c3f402d", "decisions/0027-git-include-staging-survives-two-holders.md" = "a0eaec0160247117" }
 
 [[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "d33363a7aee55bcd"
+file = "decisions/0023-git-include-entry-lock.md"
+mode = "claim-words-counts"
+unit = "77797c79e67279a4"
 copies = 1
-note = "include row's lock sentences re-read: takeover, waiting on an older Ratect's lock, the wait notice, two holders across kernels; a look unlocking before it drops changes none of them"
+note = "0027's Status carries the #891 refinement of Decision 4's identity check (stat/fstat error other than NotFound waits); 0023 itself unchanged otherwise"
 by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0023-git-include-entry-lock.md" = "40ce98662c3f402d", "decisions/0027-git-include-staging-survives-two-holders.md" = "a0eaec0160247117" }
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "25ecde3c748e90fd"
+copies = 1
+note = "0023 Decision 3 says a death ratect can't observe is not proof; Decision 4 is the device-and-inode check still_at makes; #891 maps its non-NotFound errors to None (Unknown)"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "4daebadaa045fa2d"
+copies = 1
+note = "0027 Decisions 1-3 replace 0023's 5 (release) and 7 (staging); #891 changes only how Decision 4's check reads an error; 0023 Decisions 1-3, 6, 8, 9 untouched"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "1782a3645266ff6d"
+copies = 1
+note = "claim_if_abandoned's Err arms: still_at Some(false) Replaced, None Unknown (any stat/fstat error but NotFound, always off Unix), read error or no marker Unknown; take_over_if_abandoned unlocks on each"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "1782a3645266ff6d"
+copies = 1
+note = "take_over_if_abandoned calls unlock on every Err from claim_if_abandoned, whatever the verdict; try_lock errors return before any lock is taken"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/git_include/entry_lock.rs"
+mode = "restatement-ngram"
+unit = "30aacce24b2f8360-798a1ca8a6cdea50"
+copies = 1
+note = "off Unix still_at is None, so replaced() is false and release deletes the path as its own; the removed non-Unix replaced() doc said the same"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "e1b80c619e8f2705"
+copies = 1
+note = "still_at: stat NotFound or NotADirectory (names_no_file) Some(false); any other stat or fstat error None, which claim_if_abandoned turns into TakeOver::Unknown and attempt into HeldByUnknownHolder"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
 
 [[mark]]
 file = "docs/differences-from-batect.md"
@@ -16464,11 +16500,37 @@ extent = "partial"
 subjects = { ".cargo/audit.toml" = "109a49049f151f6a", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0006-code-and-documentation-locality.md" = "e7b4208194cad1ff" }
 
 [[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-counts"
+unit = "e5aeac3bc7296f90"
+copies = 1
+note = "replaced() before vs still_at(..)==Some(false) now, case by case: NotFound, other stat error, fstat error, dev/ino match or mismatch agree; only stat NotADirectory changed, from trying remove_file to skipping it"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0027-git-include-staging-survives-two-holders.md"
+mode = "claim-words-totalising"
+unit = "f1b34c94bdc3cb5e"
+copies = 1
+note = "attempt loops for _ in 0..LOOKS (3), each Replaced or second-open NotFound/NotADirectory starting again, then returns HeldByUnknownHolder; the dangling-symlink test pins that it returns"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "d33363a7aee55bcd"
+copies = 1
+note = "include row's lock sentences (takeover of an abandoned lock, older Ratect's lock waited on, stderr notice, two-holder duplicate clone) still hold: a lock that can't be statted, or that looks released on every look, is waited on, which the row doesn't contradict"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0023-git-include-entry-lock.md" = "4e6e0f27a1fdac1b", "decisions/0027-git-include-staging-survives-two-holders.md" = "dbfcb65dd1180ea1" }
+
+[[mark]]
 file = "TODO.md"
 mode = "stale-claims"
 unit = "da6d38ffc884cb42"
 copies = 1
-note = "read item 20 only: the Git include lock-takeover tests are still not cfg(unix), and its reason (gating leaves shared helpers such as this_test_binary_running unused off Unix) still holds; ratect#885 gated its own clone-process helpers for that reason and left the lock tests alone"
+note = "the Test coverage section's entries are about ratect-compat/tests/cli.rs's task_output helper and other e2e tests; the entry-lock tests added in git_include_tests.rs change nothing they say"
 by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "2ba0b9f9b6ccc566" }
+subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "bb0078fca41aeea4" }
