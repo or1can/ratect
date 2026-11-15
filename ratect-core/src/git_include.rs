@@ -419,12 +419,56 @@ pub struct CachedInclude {
 }
 
 /// What [`GitIncludeCache::clean`]/[`refresh`](GitIncludeCache::refresh) did:
-/// the entries each acted on, and each one it couldn't, for the caller to
-/// report — this module prints nothing of its own (#755).
+/// the entries each acted on and each one it couldn't, plus `clean`'s
+/// [`Leftovers`], for the caller to report — this module prints nothing of
+/// its own (#755, #884).
 #[derive(Debug, Default)]
 pub struct Outcome {
     pub succeeded: Vec<CachedInclude>,
     pub failed: Vec<Failure>,
+    /// What interrupted clones and removals left that this removed, and
+    /// each it couldn't. Always empty from `refresh`, which leaves them to
+    /// `clean` and the sweep.
+    pub leftovers: Leftovers,
+}
+
+/// What a pass over what interrupted clones and removals left did: each one
+/// it removed, and each one it couldn't. In neither: a staging directory too
+/// young to be sure a clone isn't still writing it, or whose age can't be
+/// read; something with a staging name that isn't a directory; and one
+/// already gone when its removal reached it, as when another process
+/// removed it first (see `remove_leftovers`).
+#[derive(Debug, Default)]
+pub struct Leftovers {
+    pub removed: Vec<Leftover>,
+    pub failed: Vec<LeftoverFailure>,
+}
+
+/// Something an interrupted clone or removal left in `~/.ratect/incl`. No
+/// entry's, as far as a load or `includes list` is concerned: neither reads
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leftover {
+    pub path: PathBuf,
+    pub kind: LeftoverKind,
+}
+
+/// Which interrupted step left a [`Leftover`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LeftoverKind {
+    /// A clone's staging directory, `<key>.tmp-*`.
+    Clone,
+    /// A working copy, or whatever was at `<key>`, under a removal name,
+    /// `<key>.del-*`.
+    Removal,
+}
+
+/// A [`Leftover`] that couldn't be removed, and why. `error` doesn't name
+/// the path; `leftover` does.
+#[derive(Debug)]
+pub struct LeftoverFailure {
+    pub leftover: Leftover,
+    pub error: anyhow::Error,
 }
 
 /// An entry `clean` couldn't remove, or `refresh` couldn't remove or clone
@@ -448,22 +492,30 @@ async fn remove_entry_files(working_copy: &Path, info_path: &Path) -> Result<()>
     };
     remove_set_aside(&set_aside)
         .await
+        .map(|_| ())
         .with_context(|| format!("Failed to remove Git include cache clone {set_aside:?}"))
 }
 
 /// Deletes what a removal renamed to `path`, whatever it is — a working copy,
 /// or a file or symlink something else put at `<key>` — without following a
 /// symlink. Tolerates its being gone already, as when a sweep in another
-/// process removes it first.
-async fn remove_set_aside(path: &Path) -> std::io::Result<()> {
+/// process removes it first, returning whether this removed it.
+async fn remove_set_aside(path: &Path) -> std::io::Result<bool> {
     let removed = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.is_dir() => tokio::fs::remove_dir_all(path).await,
         Ok(_) => tokio::fs::remove_file(path).await,
         Err(e) => Err(e),
     };
+    tolerating_gone(removed)
+}
+
+/// `removed`, but `Ok(false)` where it failed because there was nothing
+/// there to remove, and `Ok(true)` where it succeeded.
+fn tolerating_gone(removed: std::io::Result<()>) -> std::io::Result<bool> {
     match removed {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        removed => removed,
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
     }
 }
 
@@ -519,12 +571,13 @@ const STAGING_INFIX: &str = ".tmp-";
 ///   version removes one, since a younger one may be a clone still in
 ///   progress, by a process whose lock this one can't see.
 ///
-/// Best-effort: one left behind is tried again, but removing part of a
-/// staging directory changes its modification time, so that can be 30 days
-/// later.
-async fn remove_leftovers(root: &Path, now: u64) {
+/// Returns each one it removed and each it couldn't, which doesn't stop the
+/// rest. One left behind is tried again, but removing part of a staging
+/// directory changes its modification time, so that can be 30 days later.
+async fn remove_leftovers(root: &Path, now: u64) -> Leftovers {
+    let mut leftovers = Leftovers::default();
     let Ok(mut entries) = tokio::fs::read_dir(root).await else {
-        return;
+        return leftovers;
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name();
@@ -533,39 +586,75 @@ async fn remove_leftovers(root: &Path, now: u64) {
             name.split_once(infix)
                 .is_some_and(|(key, _)| is_cache_key(key))
         };
-        if named_for(REMOVAL_INFIX) {
-            let path = entry.path();
-            if let Err(e) = remove_set_aside(&path).await {
-                tracing::warn!("Failed to remove Git include cache clone {path:?}: {e}");
+        let kind = if named_for(REMOVAL_INFIX) {
+            LeftoverKind::Removal
+        } else if named_for(STAGING_INFIX) {
+            LeftoverKind::Clone
+        } else {
+            continue;
+        };
+        let leftover = Leftover {
+            path: entry.path(),
+            kind,
+        };
+        let removed = match kind {
+            LeftoverKind::Removal => remove_set_aside(&leftover.path).await,
+            LeftoverKind::Clone if is_stale_staging(&entry, now).await => {
+                remove_staging_directory(&leftover.path).await
             }
-            continue;
-        }
-        if !named_for(STAGING_INFIX) {
-            continue;
-        }
-        // Not following a symlink: only a directory of that name is one.
-        let modified = entry
-            .metadata()
-            .await
-            .ok()
-            .filter(|metadata| metadata.is_dir())
-            .and_then(|metadata| metadata.modified().ok());
-        let Some(modified) = modified else {
-            continue;
+            LeftoverKind::Clone => continue,
         };
-        let Ok(modified) = modified.duration_since(std::time::UNIX_EPOCH) else {
-            continue;
-        };
-        if now.saturating_sub(modified.as_secs()) > STALE_AFTER.as_secs() {
-            remove_staging_directory(&entry.path()).await;
+        match removed {
+            Ok(true) => leftovers.removed.push(leftover),
+            Ok(false) => {}
+            Err(e) => leftovers.failed.push(LeftoverFailure {
+                leftover,
+                error: e.into(),
+            }),
         }
+    }
+    leftovers
+}
+
+/// Whether `entry`, named as a staging directory, is one — a directory, not
+/// followed if it is a symlink — last changed more than [`STALE_AFTER`]
+/// before `now`. One whose age can't be read isn't.
+async fn is_stale_staging(entry: &tokio::fs::DirEntry, now: u64) -> bool {
+    // `DirEntry::metadata` doesn't follow a symlink.
+    let modified = entry
+        .metadata()
+        .await
+        .ok()
+        .filter(|metadata| metadata.is_dir())
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok());
+    modified.is_some_and(|modified| now.saturating_sub(modified.as_secs()) > STALE_AFTER.as_secs())
+}
+
+/// Removes a staging directory, tolerating its being gone already and
+/// returning whether this removed it.
+async fn remove_staging_directory(staging: &Path) -> std::io::Result<bool> {
+    tolerating_gone(tokio::fs::remove_dir_all(staging).await)
+}
+
+/// Removes the staging directory a clone failed or lost a race in, logging a
+/// failure: the load reports its own outcome, and the sweep and `includes
+/// clean` remove what this leaves once it is 30 days old.
+async fn discard_staging_directory(staging: &Path) {
+    if let Err(error) = remove_staging_directory(staging).await {
+        warn_leftover_not_removed(LeftoverKind::Clone, staging, &error);
     }
 }
 
-async fn remove_staging_directory(staging: &Path) {
-    if let Err(e) = tokio::fs::remove_dir_all(staging).await {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!("Failed to remove Git include staging directory {staging:?}: {e}");
+/// The warning logged for a leftover that couldn't be removed where there
+/// is nobody to report it to: by a load, or by the sweep.
+fn warn_leftover_not_removed(kind: LeftoverKind, path: &Path, error: &dyn std::fmt::Display) {
+    match kind {
+        LeftoverKind::Clone => {
+            tracing::warn!("Failed to remove Git include staging directory {path:?}: {error}")
+        }
+        LeftoverKind::Removal => {
+            tracing::warn!("Failed to remove Git include cache clone {path:?}: {error}")
         }
     }
 }
@@ -865,14 +954,14 @@ impl<G: GitClient> GitIncludeCache<G> {
             self.output.progress_bold(git_ref)
         ));
         if let Err(e) = self.git.clone_repo(remote, git_ref, &staging).await {
-            remove_staging_directory(&staging).await;
+            discard_staging_directory(&staging).await;
             return Err(e);
         }
         match tokio::fs::rename(&staging, destination).await {
             Ok(()) => {}
-            Err(_) if destination.is_dir() => remove_staging_directory(&staging).await,
+            Err(_) if destination.is_dir() => discard_staging_directory(&staging).await,
             Err(e) => {
-                remove_staging_directory(&staging).await;
+                discard_staging_directory(&staging).await;
                 return Err(e).with_context(|| {
                     format!("Failed to move {staging:?} into place at {destination:?}")
                 });
@@ -1083,16 +1172,24 @@ impl<G: GitClient> GitIncludeCache<G> {
     /// kind, unlike removing containers. Whatever `minimum_age`, it also
     /// removes what interrupted removals left, at once, and what interrupted
     /// clones left only once it is 30 days old, as the sweep does: a younger
-    /// one may be a clone still in progress (decisions/0027).
+    /// one may be a clone still in progress (decisions/0027). Those it removed
+    /// and each it couldn't are in [`Outcome::leftovers`] (#884).
     pub async fn clean(&self, minimum_age: Option<Duration>) -> Result<Outcome> {
         let Some(root) = self.root.resolve()? else {
             return Ok(Outcome::default());
         };
         let now = (self.clock)();
-        remove_leftovers(&root, now).await;
+        // Listed before the leftovers are removed, so a listing that fails
+        // stops `clean` before it has removed anything it couldn't report.
+        // The entries are removed after them, so what one of those removals
+        // leaves isn't also reported as a leftover.
         let entries = self.read_entries(&root).await?;
+        let leftovers = remove_leftovers(&root, now).await;
 
-        let mut outcome = Outcome::default();
+        let mut outcome = Outcome {
+            leftovers,
+            ..Outcome::default()
+        };
         for entry in entries {
             let old_enough = match minimum_age {
                 Some(age) => now.saturating_sub(entry.last_used) > age.as_secs(),
@@ -1253,8 +1350,12 @@ impl<G: GitClient> GitIncludeCache<G> {
         }
         // After the entries, which are what a load reads, since the sweep is
         // cut short when its process exits; and even when they can't be
-        // listed.
-        remove_leftovers(&root, now).await;
+        // listed. Never awaited, so there is nobody to tell what it removed,
+        // and what it couldn't is only logged.
+        for failure in remove_leftovers(&root, now).await.failed {
+            let leftover = &failure.leftover;
+            warn_leftover_not_removed(leftover.kind, &leftover.path, &failure.error);
+        }
 
         entries.map(|_| ())
     }

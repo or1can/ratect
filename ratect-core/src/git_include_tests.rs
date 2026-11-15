@@ -1746,7 +1746,22 @@ async fn the_sweep_and_clean_remove_a_staging_directory_unchanged_for_30_days() 
         let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), seconds);
 
         match clean {
-            Some(minimum_age) => drop(cache.clean(minimum_age).await.unwrap()),
+            // #884: `clean` says what it removed; the sweep has nobody to
+            // tell.
+            Some(minimum_age) => {
+                let outcome = cache.clean(minimum_age).await.unwrap();
+                assert_eq!(
+                    removed_leftovers(&outcome),
+                    [
+                        (root.join(format!("{key}.tmp-old")), LeftoverKind::Clone),
+                        (root.join(format!("{other}.tmp-old")), LeftoverKind::Clone),
+                    ]
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                    "clean: {clean:?}"
+                );
+                assert!(outcome.leftovers.failed.is_empty(), "clean: {clean:?}");
+            }
             None => cache.cleanup_stale().await.unwrap(),
         }
 
@@ -1913,7 +1928,24 @@ async fn the_sweep_and_clean_remove_a_removal_directory_of_any_age() {
         let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), seconds);
 
         match clean {
-            Some(minimum_age) => drop(cache.clean(minimum_age).await.unwrap()),
+            // #884: `clean` says what it removed; the sweep has nobody to
+            // tell.
+            Some(minimum_age) => {
+                let outcome = cache.clean(minimum_age).await.unwrap();
+                assert_eq!(
+                    removed_leftovers(&outcome),
+                    [
+                        format!("{key}{REMOVAL_INFIX}recent"),
+                        format!("{other}{REMOVAL_INFIX}old"),
+                        format!("{other}{REMOVAL_INFIX}file"),
+                    ]
+                    .into_iter()
+                    .map(|name| (root.join(name), LeftoverKind::Removal))
+                    .collect::<std::collections::BTreeSet<_>>(),
+                    "clean: {clean:?}"
+                );
+                assert!(outcome.leftovers.failed.is_empty(), "clean: {clean:?}");
+            }
             None => cache.cleanup_stale().await.unwrap(),
         }
 
@@ -1939,6 +1971,89 @@ async fn the_sweep_and_clean_remove_a_removal_directory_of_any_age() {
 
         tokio::fs::remove_dir_all(&root).await.ok();
     }
+}
+
+/// #884: a leftover already gone when removal reaches it, as when another
+/// process's sweep removed it first, is one this removal didn't remove, so
+/// `clean` doesn't name it as removed.
+#[tokio::test]
+async fn removing_a_leftover_already_gone_removes_nothing() {
+    let root = unique_temp_dir();
+
+    assert!(!remove_set_aside(&root.join("absent")).await.unwrap());
+    assert!(!remove_staging_directory(&root.join("absent"))
+        .await
+        .unwrap());
+}
+
+/// What `clean` reports it removed of what interrupted clones and removals
+/// left, as `(path, kind)`, in an order `read_dir` can't change.
+#[cfg(unix)]
+fn removed_leftovers(outcome: &Outcome) -> std::collections::BTreeSet<(PathBuf, LeftoverKind)> {
+    outcome
+        .leftovers
+        .removed
+        .iter()
+        .map(|leftover| (leftover.path.clone(), leftover.kind))
+        .collect()
+}
+
+/// #884: a leftover `clean` can't remove is returned as failed, with its
+/// cause, beside the ones it removed, and doesn't stop the rest; nor does
+/// it fail `clean`, any more than an entry it can't remove does. A file in
+/// a read-only directory is the forced failure.
+#[cfg(unix)]
+#[tokio::test]
+async fn clean_returns_a_leftover_it_could_not_remove_as_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    // Root deletes through any mode, so there is nothing to test as root.
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let root = unique_temp_dir();
+    let key = cache_key(&Remote::from("https://example.com/repo.git"), "v1.0.0");
+    let now = std::time::SystemTime::now();
+    let old = now - STALE_AFTER - Duration::from_secs(60);
+    let removable = root.join(format!("{key}.tmp-removable"));
+    let unremovable = root.join(format!("{key}.tmp-unremovable"));
+    for staging in [&removable, &unremovable] {
+        tokio::fs::create_dir_all(staging.join("sealed"))
+            .await
+            .unwrap();
+        std::fs::write(staging.join("sealed").join("file"), "").unwrap();
+    }
+    let sealed = unremovable.join("sealed");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).unwrap();
+    for staging in [&removable, &unremovable] {
+        std::fs::File::open(staging)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+    }
+    let seconds = now.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let cache = GitIncludeCache::for_test(root.clone(), FakeGitClient::new(), seconds);
+
+    let outcome = cache.clean(None).await;
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let outcome = outcome.unwrap();
+
+    assert_eq!(
+        removed_leftovers(&outcome),
+        [(removable.clone(), LeftoverKind::Clone)]
+            .into_iter()
+            .collect()
+    );
+    assert!(!removable.exists());
+    assert_eq!(outcome.leftovers.failed.len(), 1);
+    let failure = &outcome.leftovers.failed[0];
+    assert_eq!(failure.leftover.path, unremovable);
+    assert_eq!(failure.leftover.kind, LeftoverKind::Clone);
+    let cause = format!("{:#}", failure.error);
+    assert!(cause.contains("Permission denied"), "{cause}");
+    assert!(outcome.succeeded.is_empty());
+    assert!(outcome.failed.is_empty());
+
+    tokio::fs::remove_dir_all(&root).await.ok();
 }
 
 /// A load whose `exists()` check passed just before a concurrent removal

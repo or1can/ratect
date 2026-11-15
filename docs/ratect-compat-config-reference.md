@@ -178,6 +178,12 @@ interrupted removal left, at once. A removal moves a clone aside before deleting
 one cut short never leaves part of a clone for a later run to use; the next run that
 needs the include clones it again.
 
+The sweep runs in the background and nothing waits for it, so there is no command to
+report to: an entry or leftover it can't remove is logged as a warning through
+`RUST_LOG`, if the sweep gets that far before the run exits, and never changes the exit
+code. The `ratect` binary's
+[`includes clean`](ratect-cli.md#includes-options) reports each one.
+
 Everything reached through a Git include is treated as untrusted input: the
 file it names must stay inside the clone, a container it defines may mount
 only inside the clone or your project directory unless `allow_host_paths`

@@ -2221,10 +2221,13 @@ enum IncludesVerb {
     Refresh,
 }
 
-/// Prints what `includes clean`/`refresh` did — each entry and the total on
-/// stdout, unless `quiet` — then each entry it couldn't clean or refresh as
-/// an `Error:` line on stderr, in every style, and fails if there was one
-/// (#755). Every failure is printed here, so the error returned is
+/// Prints what `includes clean`/`refresh` did — each entry, then each
+/// leftover of an interrupted clone or removal, and the total on stdout,
+/// unless `quiet` — then each entry it couldn't clean or refresh, and each
+/// leftover `clean` couldn't remove, as an `Error:` line on stderr, in every
+/// style, and fails if there was one (#755, #884). The total counts
+/// leftovers only if `clean` removed some. Every failure is printed
+/// here, so the error returned is
 /// [`VerbFailuresReported`](ratect_core::exit_code::VerbFailuresReported): `main`
 /// adds no line of its own and exits `1`.
 fn report_include_outcome(
@@ -2240,15 +2243,24 @@ fn report_include_outcome(
         IncludesVerb::Clean => ("Removed", "clean"),
         IncludesVerb::Refresh => ("Re-cloned", "refresh"),
     };
+    let leftovers = &outcome.leftovers;
     if !quiet {
         for entry in &outcome.succeeded {
             stdout.println(text!("{} {}.", done, named_include(entry)));
         }
-        stdout.println(text!(
-            "{} {} cached Git include(s).",
-            done,
-            outcome.succeeded.len()
-        ));
+        for leftover in &leftovers.removed {
+            stdout.println(text!("{} {}.", done, named_leftover(leftover)));
+        }
+        let total = text!("{} {} cached Git include(s)", done, outcome.succeeded.len());
+        if leftovers.removed.is_empty() {
+            stdout.println(text!("{}.", total));
+        } else {
+            stdout.println(text!(
+                "{} and {} leftover(s) of interrupted clones and removals.",
+                total,
+                leftovers.removed.len()
+            ));
+        }
     }
     for failure in &outcome.failed {
         stderr.error(text!(
@@ -2258,7 +2270,15 @@ fn report_include_outcome(
             Text::from(format!("{:#}", failure.error))
         ));
     }
-    if !outcome.failed.is_empty() {
+    for failure in &leftovers.failed {
+        stderr.error(text!(
+            "Could not {} {}: {}",
+            failed,
+            named_leftover(&failure.leftover),
+            Text::from(format!("{:#}", failure.error))
+        ));
+    }
+    if !outcome.failed.is_empty() || !leftovers.failed.is_empty() {
         return Err(ratect_core::exit_code::VerbFailuresReported.into());
     }
     Ok(())
@@ -2320,6 +2340,21 @@ fn named_include(entry: &ratect_core::git_include::CachedInclude) -> Text {
     }
     let key = entry.key.get(..12).unwrap_or(&entry.key);
     text!("{} (key {})", named, key)
+}
+
+/// A leftover of an interrupted clone or removal as `ratect includes clean`
+/// prints it: its path, which is all there is to know it by — no sidecar
+/// says whose it was — and what left it.
+fn named_leftover(leftover: &ratect_core::git_include::Leftover) -> Text {
+    let left_by = match leftover.kind {
+        ratect_core::git_include::LeftoverKind::Clone => "clone",
+        ratect_core::git_include::LeftoverKind::Removal => "removal",
+    };
+    text!(
+        "{}, left by an interrupted {}",
+        leftover.path.display().to_string(),
+        left_by
+    )
 }
 
 #[cfg(test)]

@@ -13032,15 +13032,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "schema/batect-config.schema.json" = "19c8a4ec25eef8cd" }
 
 [[mark]]
-file = "docs/ratect-compat-config-reference.md"
-mode = "stale-claims"
-unit = "b9c6b49c6ad301e3"
-copies = 1
-note = "Read from the yaml-language-server example to the end of Full example: the schema URL path exists. Full example \"mirrors\" ratect-compat/tests/fixtures/smoke.yml in a shortened form (it leaves out prerequisites-only-task, the header comment and the emoji), and its run-order sentence matches the fixture's prerequisites."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "schema/batect-config.schema.json" = "19c8a4ec25eef8cd" }
-
-[[mark]]
 file = "docs/ratect-config-reference.md"
 mode = "stale-claims"
 unit = "aa4f57e276df5494"
@@ -16320,24 +16311,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "claim-words-totalising"
-unit = "4c1c11297bd2378d"
-copies = 1
-note = "wc -l of config.rs 7,838, docker.rs 4,396, engine.rs 4,359 (about 4,400-7,900) and git_include.rs 1,416 (about 1,400, raised from 1,350 by ratect#883), each with a //! comment; the 800-line observation is stated as measured at 0.25.0-dev"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "dfc3c71ba6f26f95" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "claim-words-counts"
-unit = "4c1c11297bd2378d"
-copies = 1
-note = "wc -l of config.rs 7,838, docker.rs 4,396, engine.rs 4,359 (about 4,400-7,900) and git_include.rs 1,416 (about 1,400, raised from 1,350 by ratect#883), each with a //! comment; the 800-line observation is stated as measured at 0.25.0-dev"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "5654683ac1c7f6c4", "ratect-core/src/git_include.rs" = "dfc3c71ba6f26f95" }
-
-[[mark]]
 file = "agents/docs.md"
 mode = "stale-claims"
 unit = "25e8a1870e46a028"
@@ -17146,3 +17119,66 @@ copies = 1
 note = "Re-marked after the rebase: exit_code.rs (CleanupFailed 125), CONTEXT.md cleanup ladder, ConfigVarArgs verbs; main only added a Git-include CHANGELOG entry."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "1398408cdadf4250bcec240ed5968be4d184a1be", "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "af66e49684e9ca44"
+copies = 1
+note = "Checked against report_include_outcome in ratect/src/main.rs (each removed leftover printed by path after entries; leftover count added to the total only when leftovers.removed is non-empty) and the captured run."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "b53f29e3aaf2c4a4"
+copies = 1
+note = "Ran target/debug/ratect includes clean --all with an unremovable staging dir under a scratch HOME: Error: line naming it, exit 1, as for an entry (VerbFailuresReported)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "fd5238b0fc8f4c5c"
+copies = 1
+note = "The capture docs/captures/includes-clean-leftovers.ansi: scratch HOME with two removable leftovers and one with a read-only subdirectory; two Removed lines, one Error:, exit 1."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "dc2f3954779ca505"
+copies = 1
+note = "Ran the same scratch-HOME clean with -o quiet: stdout empty, only the Error: line on stderr, exit 1; refresh never calls remove_leftovers."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "claim-words-totalising"
+unit = "5d6d11b44c945305"
+copies = 1
+note = "Checked cleanup_stale in ratect-core/src/git_include.rs: entry and leftover failures go only to tracing::warn!, it returns no failure for them, and ratect-compat spawns it detached and never awaits it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "claim-words-totalising"
+unit = "c05fa53008dfabc5"
+copies = 1
+note = "Re-measured with wc -l: config.rs 7,838, docker.rs 4,396, engine.rs 4,403 (each with a //! comment), git_include.rs 1,517."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "claim-words-counts"
+unit = "c05fa53008dfabc5"
+copies = 1
+note = "Re-measured with wc -l: config.rs 7,838, docker.rs 4,396, engine.rs 4,403 (each with a //! comment), git_include.rs 1,517."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
