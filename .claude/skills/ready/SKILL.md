@@ -16,7 +16,7 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
 1. **Find what's unreviewed.** The change is the branch since
    `git merge-base origin/main HEAD`, plus anything uncommitted. For each
    review, find the last time it ran in this session, including inside
-   `mattpocock-skills:implement`: a run that ranked bugs was the bug review, one reporting
+   `mattpocock-skills:implement`: a run over the change that ranked bugs was the bug review, one reporting
    Standards and Spec was the two-axis review. A review **covers** the change
    only if nothing has changed since it ran. Otherwise its gap is the diff
    from the commit it reviewed to now, and an edit made in response to a
@@ -40,7 +40,14 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
    reviews. Run each over that diff alone, bug review first, and repeat
    until a pass changes nothing. If a pass finds more of the same kind of
    problem in the mechanism the last pass fixed, stop and put the design to
-   the user instead (guideline 16: the design is the finding).
+   the user (the **design stop**; guideline 16: the design is the finding)
+   as two options, recommending the first: rethink it with `settle-design`
+   on that mechanism, or keep fixing. Twice in 0.14.0 the recommendation
+   was to carry on, and both times the maintainer reversed it
+   (ratect#902). Rework the code to the design `settle-design` settles;
+   that rework is a new gap, so go back to step 2 with it. If it leaves
+   the part open, stop there: the design stays with the user and the code
+   stays as it is. A "keep fixing" answer holds for that mechanism.
 
    **Before every pass, sweep what the last fixes renamed.** If they
    renamed an identifier or term, or changed what one means, run
