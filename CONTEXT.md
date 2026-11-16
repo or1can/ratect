@@ -140,7 +140,7 @@ three states:
   Never selected. Said as *still going*.
 - **Unknown** — Ratect can't tell: no file, one from another boot or another
   kernel, one in a format it doesn't recognise, an error from the lock, or a
-  platform that isn't Unix. Selected only with `--all`. Said as *can't tell
+  platform other than Linux and macOS, which give no boot identity. Selected only with `--all`. Said as *can't tell
   has ended*.
 
 ## Service groups
