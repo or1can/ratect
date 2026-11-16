@@ -13573,15 +13573,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "b0d683678529b07e"
-copies = 1
-note = "Checked against the \"main branch protection\" ruleset via gh api: rules deletion, non_fast_forward, pull_request and required_status_checks, empty bypass_actors; required checks omit Claims, Worked Examples, Windows Check and Coverage Report and include Signed-off-by."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "SECURITY.md"
 mode = "stale-claims"
 unit = "f6a589cf70c5e404"
@@ -18529,3 +18520,102 @@ copies = 1
 note = "Read whole Consequences: one CHANGELOG.md, the anonymous-volume fix under ratect-compat 0.22.0, Status records the leading ratect-only marker change; the new unmarked contributor-tooling entry fits the applies-to-both rule"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "50701c83961db548f3eeed61264b7866a373638f", "CLAUDE.md" = "90707fa8bd9f3c16" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "1dd89e0c2eaec4c8"
+copies = 1
+note = "Checked against the \"main branch protection\" ruleset via gh api: rules deletion, non_fast_forward, pull_request and required_status_checks, empty bypass_actors; required checks are Format, Clippy, Rustdoc, Build & Test, Tools Tests, Docker Integration Test, Dev-env CLI smoke test, Security Audit, Signed-off-by, Release Pipeline Config, which omits Claims, Claims Marks, Worked Examples, Windows Check and Coverage Report."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "a9bf05ebb9dda27c"
+copies = 1
+note = "The rule this section sets (ratect#905 settle-design record); in the tooling, only check-pending-marks.py's approve() writes `approved by`, by substituting it into a pending mark's `by` line."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "1fe8f5c5f516f250"
+copies = 1
+note = "Checked against tools/check-pending-marks.py main(): --list reads `git show HEAD:./claims.checked.toml`, prints the HEAD SHA from rev-parse, then every mark pending() returns."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = { "tools/check-pending-marks.py" = "9b970ef77643b5ac" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "0a4f76bdd21f0e9e"
+copies = 1
+note = "The listing rule this section sets: approve() matches against the file at the SHA it is given, so a mark added later, or a commit a rebase replaced, needs a new SHA (test_leaves_a_mark_added_after_the_commit_pending)."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "bc9de30550fa7eaa"
+copies = 1
+note = "Checked against approve(): approvable = fingerprints of every mark pending at the SHA, and each current pending mark whose fingerprint (all keys) is in that set is approved, a rejected one included if still present."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = { "tools/check-pending-marks.py" = "9b970ef77643b5ac" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-about-elsewhere"
+unit = "bc9de30550fa7eaa"
+copies = 1
+note = "Same check against tools/check-pending-marks.py approve() and its tests in tools/test_check_pending_marks.py."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = { "tools/check-pending-marks.py" = "9b970ef77643b5ac" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "0f97b59d8b1915b6"
+copies = 1
+note = "approve() edits only the `by` line (test_approves_a_mark_pending_at_the_commit_by_editing_only_by); claims v0.28.1 docs/checked-marks.md says of `by`: \"Nothing reads this key; it is a record.\""
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "046f65ae13be463f"
+copies = 1
+note = "The ruleset's required checks (gh api, this commit's day) omit Claims Marks, so it blocks nothing until added there."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "e9636f5674df2e7d"
+copies = 1
+note = "The claims-marks job in .github/workflows/ci.yml has no `if:`, so it runs on every pull request, and check-pending-marks.py reads the whole claims.checked.toml rather than a diff."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-counts"
+unit = "e9636f5674df2e7d"
+copies = 1
+note = "Same: one job run per pull request over the whole file, with no diff scoping in check-pending-marks.py main()."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".github/workflows/ci.yml"
+mode = "restatement-ngram"
+unit = "fe2b7174446193ff-cea17bffdaed4707"
+copies = 1
+note = "The surviving \"this search is broken\" line is the worked-examples image search's own guard (sed over examples' configs), still accurate; the retracted line was the claims rev awk guard, which tools/claims.py --print-rev replaced."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}

@@ -167,16 +167,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The `rev` is read from `.pre-commit-config.yaml` rather than written
       # here a second time, so Renovate's bump of the hook moves this job too
-      # and the two never check against different releases.
+      # and the two never check against different releases. `tools/claims.py`
+      # reads it, the same parser the documented mark command uses.
       - name: Check out the pinned claims release
         shell: bash
         run: |
-          rev=$(awk '/repo: https:\/\/github.com\/or1can\/claims/ { found = 1 }
-                     found && $1 == "rev:" { print $2; exit }' .pre-commit-config.yaml)
-          if [ -z "$rev" ]; then
-            echo "No rev for or1can/claims in .pre-commit-config.yaml — this search is broken."
-            exit 1
-          fi
+          rev=$(python3 tools/claims.py --print-rev)
           echo "claims $rev"
           git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$rev" \
             https://github.com/or1can/claims "$RUNNER_TEMP/claims"
@@ -213,6 +209,18 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli --repo-root . --diff-range "origin/$BASE_REF" --fail-on-unmarked
+
+  # No mark in `claims.checked.toml` still pending the maintainer's review
+  # (`agents/claims.md`). The whole file, not the PR's change: `main` holds no
+  # pending mark, so one there is a merge that skipped the rewrite, and every
+  # PR showing it is how it gets noticed. Not a required status check unless
+  # the maintainer makes it one.
+  claims-marks:
+    name: Claims Marks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/check-pending-marks.py
 
   docker-integration:
     name: Docker Integration Test

@@ -91,19 +91,53 @@ as skipped, rather than asked about.
 **An advisory finding that was read and found true can be marked
 checked**, in the committed `claims.checked.toml` beside `claims.toml`,
 so the hook and CI stop reporting it until its sentence's wording, or
-the content of a file it names, changes (the plugin's
-[Checked marks](https://github.com/or1can/claims/blob/main/docs/checked-marks.md)
-page). Write marks with `python3 -m claims.cli mark-checked`, over the
-same `--diff-range` the findings were read over, with a note on each
-saying what was checked against what, and `--by` naming who did the
-reading: an agent's marks name the agent and whoever approved them, as
-`--by "Claude Code agent, approved by Kevin Rogers"`. Deleting an entry
-by hand lifts a mark early; `--prune` removes every orphaned one, as when
-a reworded sentence is marked again. A `stale-claims` section or
+the content of a file it names, changes (the plugin's [Checked
+marks](https://github.com/or1can/claims/blob/main/docs/checked-marks.md)
+page). Write marks from the repository's root with `uv run
+tools/claims.py mark-checked`, which runs the `claims` release
+`.pre-commit-config.yaml` pins (a plain `python3 -m claims.cli` fails
+outside the hook's own environment), over the same `--diff-range` the
+findings were read over, with a note on each saying what was checked
+against what, and `--by` naming who did the reading. Deleting an entry
+by hand lifts a mark early; `--prune` removes every orphaned one, as
+when a reworded sentence is marked again. A `stale-claims` section or
 `spliced-docs` doc comment read only in part is marked with `--partial`,
-which the summary counts apart. Mark a finding only
-after reading it against the code, file or section it names, never on
-the strength of its own wording, and never mark a batch nobody read: a
-mark records a reading, and one without a reading quiets a claim nobody
-checked. A finding that was wrong is fixed, not marked. The summary
-line's `quiet while checked` count says how many marks applied.
+which the summary counts apart. Mark a finding only after reading it
+against the code, file or section it names, never on the strength of its
+own wording, and never mark a batch nobody read: a mark records a
+reading, and one without a reading quiets a claim nobody checked. A
+finding that was wrong is fixed, not marked. The summary line's `quiet
+while checked` count says how many marks applied.
+
+## An agent's marks
+
+An agent doesn't wait for the maintainer before marking. It writes its
+marks as pending, `--by "Claude Code agent, pending review by Kevin
+Rogers"`, and carries on. It never writes `approved by` itself, even
+after an approval: only `--approve`, below, does. Its pull request's
+body lists them, as `uv run tools/check-pending-marks.py --list` prints
+them: every mark pending in the file committed at `HEAD`, under that
+commit's SHA. A mark written later goes in a new list, under its own
+SHA, and so does every mark when a rebase or amend replaces the listed
+commit.
+
+The maintainer approves the marks pending at a SHA. A mark they reject
+is removed in a new commit, which is the SHA they then approve: `uv run
+tools/check-pending-marks.py --approve <sha>` approves every mark
+pending at that SHA whose keys are unchanged since, so a rejected mark
+still there would be approved with the rest. Fixed or read again, it is
+marked anew and listed for a later approval. The script rewrites
+`pending review by` to `approved by`, and leaves any other pending mark
+as it is. It edits only `by`, which `claims` never reads, so the mark
+applies exactly as before. Approving by re-marking would record the
+subjects as they are on disk now, which nobody may have read. The
+rewrite is its own commit on the pull request's branch, before merge.
+Merging is not approval.
+
+CI's Claims Marks job runs `tools/check-pending-marks.py`, which fails
+while any mark in `claims.checked.toml` is pending, so a forgotten
+rewrite shows on the pull request. It blocks the merge only once the
+maintainer makes it a required status. It checks the whole file, not the
+pull request's change, so a pending mark that does reach `main` fails
+every pull request until one rewrites it, with the maintainer's
+approval.
