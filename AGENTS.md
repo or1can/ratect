@@ -464,6 +464,17 @@ GitHub Issues (via `gh`), on or1can/ratect. See `agents/issue-tracker.md`.
 
 Default canonical label strings, unchanged. See `agents/triage-labels.md`.
 
+### Settling design
+
+Run the `settle-design` skill on a ticket at the end of its triage, before
+it moves to `ready-for-agent` or `ready-for-human`, and again before writing
+its code, so an open mechanism is designed before the code, not by the
+review passes after it (ratect#902). `ready`'s design stop
+recommends it too. The `mattpocock-skills` plugin's `triage`, `implement`
+and `implement-spec` skills can't call it, so
+`.claude/hooks/settle-design-reminder.py` adds a reminder when a prompt
+starts one of them.
+
 ### Domain docs
 
 Single-context: `CONTEXT.md` at the repo root; ADRs in `decisions/` (this
