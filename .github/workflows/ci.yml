@@ -138,6 +138,11 @@ jobs:
               *) echo "$script: $out"; exit 1 ;;
             esac
           done
+      # Claude Code runs .claude/hooks/ under whichever `python3` is on the
+      # PATH, never through uv, so the hooks have to work on 3.9 itself.
+      - name: The .claude/hooks/ tests pass on Python 3.9
+        working-directory: tools
+        run: python3 -m unittest test_unfiltered_check_output -v
 
   # The `claims` documentation checks (decisions/0009, `claims.toml`) as a
   # backstop for the `pre-commit` hook, which only gates a commit made in a
