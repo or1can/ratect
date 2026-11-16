@@ -159,7 +159,7 @@ class PythonMinimumTest(unittest.TestCase):
         # minimum there are the refusal step's; newer ones are a minimum left
         # behind.
         ci = (workflows / "ci.yml").read_text()
-        tools_job = re.split(r"\n  [\w-]+:\n", ci.split("\n  tools:\n", 1)[1], 1)[0]
+        tools_job = re.split(r"\n  [\w-]+:\n", ci.split("\n  tools:\n", 1)[1], maxsplit=1)[0]
         pinned = [(int(a), int(b)) for a, b in re.findall(pins, tools_job)]
         self.assertIn(MINIMUM, pinned)
         self.assertEqual([v for v in pinned if v > MINIMUM], [])
