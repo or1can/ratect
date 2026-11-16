@@ -77,8 +77,6 @@ does in each state.
    more of the same kind of problem the last revision fixed, say so: the
    part is not yet understood.
 
-   This review is on trial (ratect#912) and is run all the same.
-
    *Done when* each open part has its design in the file, the user has
    declined another review pass, and has confirmed each decision in it,
    or the part is left open: the user deferred it, or no one was there to
