@@ -53,6 +53,7 @@ history, from when it was the only binary.
 - A Git include lock that can't be checked because of a filesystem error is waited on like any other held lock, rather than hanging the load.
 - A Git include lock file that is a broken symbolic link is waited on like any other held lock, rather than hanging the load.
 - A removal of a cached Git include that is cut short, such as `ratect-compat`'s automatic sweep stopped when its run exits, no longer leaves part of the clone for every later load to use: the next load clones the include again. The clone it was removing is removed by the next sweep or `ratect includes clean`, whatever its age. A removal by an older version sharing `~/.ratect/incl` still can.
+- **ratect only:** `ratect includes clean` names each leftover of an interrupted clone or removal it removes and counts them on its total line, and one it can't remove is an `Error:` on stderr with exit code `1`, as an include it can't remove is.
 
 ## [ratect-compat 0.34.0 · ratect 0.13.0] - 2026-11-10
 

@@ -1,0 +1,4 @@
+Removed /tmp/ratect-home/.ratect/incl/ec3564423a4b2c600611e288ce72ff419cc95541211b9381ce8b741e9aaad18b.tmp-736f329f71b94dbbb8b10d25461379b0, left by an interrupted clone.
+Removed /tmp/ratect-home/.ratect/incl/ec3564423a4b2c600611e288ce72ff419cc95541211b9381ce8b741e9aaad18b.del-bbb06d33962b4e77a2971e0d462b9a1c, left by an interrupted removal.
+Removed 0 cached Git include(s) and 2 leftover(s) of interrupted clones and removals.
+[1;31mError:[0m Could not clean /tmp/ratect-home/.ratect/incl/ec3564423a4b2c600611e288ce72ff419cc95541211b9381ce8b741e9aaad18b.tmp-fda60e700d77468b937c8fd7de2bc4cf, left by an interrupted clone: Permission denied (os error 13)

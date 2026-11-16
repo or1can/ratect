@@ -2155,6 +2155,102 @@ fn includes_succeeds_when_stdout_is_closed() {
     ]));
 }
 
+/// #884: `includes clean` reports what interrupted clones left that it
+/// removed, and one it couldn't remove as an `Error:` naming it, exiting `1`
+/// — with `RUST_LOG=off`, so not through a log line — and `-o quiet` keeps
+/// stdout silent but not that error. A file in a read-only directory is the
+/// forced failure; with it made removable, the same clean exits `0`. That
+/// leftover's only child is the read-only directory, so the failed removal
+/// changes nothing in it and it is still 30 days old for the second clean: a
+/// real one, removed in part, would not be until 30 days later.
+#[cfg(unix)]
+#[test]
+fn includes_clean_reports_the_leftovers_it_removes_and_fails_on_one_it_cannot() {
+    use std::os::unix::fs::PermissionsExt;
+    let key = "0".repeat(64);
+    let month_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 24 * 3600);
+    for style in ["simple", "quiet"] {
+        let home = std::env::temp_dir().join(format!(
+            "ratect-includes-leftovers-{}-{style}",
+            std::process::id()
+        ));
+        let incl = home.join(".ratect/incl");
+        let removable = incl.join(format!("{key}.tmp-removable"));
+        let unremovable = incl.join(format!("{key}.tmp-unremovable"));
+        let sealed = unremovable.join("sealed");
+        for directory in [&removable, &sealed] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("file"), "").unwrap();
+        }
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root deletes through any mode, so there is nothing to test as root.
+        if std::fs::write(sealed.join("probe"), "").is_ok() {
+            std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::remove_dir_all(&home).unwrap();
+            return;
+        }
+        for staging in [&removable, &unremovable] {
+            std::fs::File::open(staging)
+                .unwrap()
+                .set_modified(month_ago)
+                .unwrap();
+        }
+        let clean = || {
+            ratect_command()
+                .env("HOME", &home)
+                .env("RUST_LOG", "off")
+                .args(["includes", "clean", "--all", "-o", style])
+                .output()
+                .expect("failed to run ratect")
+        };
+
+        let failed = clean();
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let removed = clean();
+        std::fs::remove_dir_all(&home).unwrap();
+
+        let stdout = String::from_utf8_lossy(&failed.stdout);
+        let stderr = String::from_utf8_lossy(&failed.stderr);
+        assert_eq!(failed.status.code(), Some(1), "{style}: {stderr}");
+        let expected_stdout = if style == "quiet" {
+            String::new()
+        } else {
+            format!(
+                "Removed {}, left by an interrupted clone.\n\
+                 Removed 0 cached Git include(s) and 1 leftover(s) of interrupted clones \
+                 and removals.\n",
+                removable.display()
+            )
+        };
+        assert_eq!(stdout, expected_stdout, "{style}");
+        assert!(
+            stderr.starts_with(&format!(
+                "Error: Could not clean {}, left by an interrupted clone: ",
+                unremovable.display()
+            )),
+            "{style}: {stderr}"
+        );
+        assert!(stderr.contains("Permission denied"), "{style}: {stderr}");
+        assert_eq!(stderr.lines().count(), 1, "{style}: {stderr}");
+
+        let stdout = String::from_utf8_lossy(&removed.stdout);
+        let stderr = String::from_utf8_lossy(&removed.stderr);
+        assert_eq!(removed.status.code(), Some(0), "{style}: {stderr}");
+        assert_eq!(stderr, "", "{style}");
+        let expected_stdout = if style == "quiet" {
+            String::new()
+        } else {
+            format!(
+                "Removed {}, left by an interrupted clone.\n\
+                 Removed 0 cached Git include(s) and 1 leftover(s) of interrupted clones \
+                 and removals.\n",
+                unremovable.display()
+            )
+        };
+        assert_eq!(stdout, expected_stdout, "{style}");
+    }
+}
+
 /// #669: `config validate` carries on when stdout's reader has gone.
 #[test]
 fn config_validate_succeeds_when_stdout_is_closed() {

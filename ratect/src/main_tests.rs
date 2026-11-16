@@ -1331,6 +1331,7 @@ fn includes_reports_each_entry_it_could_not_refresh_as_an_error() {
                 entry: entry("https://u:s3cret@host/b.git", "v2"),
                 error: anyhow::anyhow!("Could not clone repository 'https://***@host/b.git'"),
             }],
+            leftovers: Default::default(),
         };
         let stdout = Captured::default();
         let stderr = Captured::default();
@@ -1384,6 +1385,7 @@ fn includes_clean_reports_an_entry_it_could_not_remove_and_succeeds_otherwise() 
             error: anyhow::anyhow!("Permission denied")
                 .context("Failed to remove Git include cache clone \"/k\""),
         }],
+        leftovers: Default::default(),
     };
     report_include_outcome(
         &failed,
@@ -1403,6 +1405,7 @@ fn includes_clean_reports_an_entry_it_could_not_remove_and_succeeds_otherwise() 
     let removed = ratect_core::git_include::Outcome {
         succeeded: vec![entry],
         failed: vec![],
+        leftovers: Default::default(),
     };
     report_include_outcome(
         &removed,
@@ -1415,6 +1418,101 @@ fn includes_clean_reports_an_entry_it_could_not_remove_and_succeeds_otherwise() 
     assert_eq!(
         stdout.text(),
         "Removed https://host/a.git at v1.\nRemoved 1 cached Git include(s).\n"
+    );
+}
+
+/// #884: `includes clean` names each leftover it removed, after the entries
+/// and before the total, which counts them apart from entries; each it
+/// couldn't remove is an `Error:` on stderr, in every style, and fails it as
+/// an entry it couldn't remove does. With none of either, its output is as
+/// before.
+#[test]
+fn includes_clean_reports_the_leftovers_it_removed_and_each_it_could_not() {
+    use ratect_core::git_include::{Leftover, LeftoverFailure, LeftoverKind, Leftovers, Outcome};
+    let entry = ratect_core::git_include::CachedInclude {
+        key: "k".to_string(),
+        remote: "https://host/a.git".into(),
+        git_ref: "v1".to_string(),
+        last_used: 0,
+        path: PathBuf::from("/k"),
+        size_bytes: 0,
+    };
+    let leftover = |path: &str, kind| Leftover {
+        path: PathBuf::from(path),
+        kind,
+    };
+    for quiet in [false, true] {
+        let outcome = Outcome {
+            succeeded: vec![entry.clone()],
+            failed: vec![],
+            leftovers: Leftovers {
+                removed: vec![
+                    leftover("/incl/k.tmp-a", LeftoverKind::Clone),
+                    leftover("/incl/k.del-b\x1b", LeftoverKind::Removal),
+                ],
+                failed: vec![LeftoverFailure {
+                    leftover: leftover("/incl/k.tmp-c", LeftoverKind::Clone),
+                    error: anyhow::anyhow!("Permission denied (os error 13)"),
+                }],
+            },
+        };
+        let stdout = Captured::default();
+        let stderr = Captured::default();
+
+        let error = report_include_outcome(
+            &outcome,
+            IncludesVerb::Clean,
+            quiet,
+            &Console::new(Box::new(stdout.clone()), false),
+            &Console::new(Box::new(stderr.clone()), false),
+        )
+        .unwrap_err();
+
+        let expected_stdout = if quiet {
+            ""
+        } else {
+            "Removed https://host/a.git at v1.\n\
+             Removed /incl/k.tmp-a, left by an interrupted clone.\n\
+             Removed /incl/k.del-b\\u{1b}, left by an interrupted removal.\n\
+             Removed 1 cached Git include(s) and 2 leftover(s) of interrupted clones and \
+             removals.\n"
+        };
+        assert_eq!(stdout.text(), expected_stdout, "quiet: {quiet}");
+        assert_eq!(
+            stderr.text(),
+            "Error: Could not clean /incl/k.tmp-c, left by an interrupted clone: \
+             Permission denied (os error 13)\n",
+            "quiet: {quiet}"
+        );
+        assert!(ratect_core::exit_code::already_reported(&error));
+        assert_eq!(
+            ratect_core::exit_code::for_failure(&error, false),
+            ratect_core::exit_code::VERB_FAILED
+        );
+    }
+
+    let stdout = Captured::default();
+    let removed = Outcome {
+        succeeded: vec![],
+        failed: vec![],
+        leftovers: Leftovers {
+            removed: vec![leftover("/incl/k.del-b", LeftoverKind::Removal)],
+            failed: vec![],
+        },
+    };
+    report_include_outcome(
+        &removed,
+        IncludesVerb::Clean,
+        false,
+        &Console::new(Box::new(stdout.clone()), false),
+        &Console::new(Box::new(std::io::sink()), false),
+    )
+    .unwrap();
+    assert_eq!(
+        stdout.text(),
+        "Removed /incl/k.del-b, left by an interrupted removal.\n\
+         Removed 0 cached Git include(s) and 1 leftover(s) of interrupted clones and \
+         removals.\n"
     );
 }
 

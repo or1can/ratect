@@ -260,6 +260,21 @@ then print an `Error:` on stderr for each, naming it and why, in every style, an
 exit `1`. A refresh whose clone fails leaves that include removed: the next command
 that needs it clones it again.
 
+`clean` names each leftover it removes by its path, after the includes, and counts the
+leftovers on the total line only when it removed some. One it can't remove is an
+`Error:` and exit `1`, as an include it can't remove is. Here
+`ratect includes clean --all`, run with `HOME` pointed at a scratch directory holding
+three leftovers and no includes, one of them made unremovable by a read-only
+subdirectory, removes two and prints an error for the third:
+
+```ansi
+{{#include captures/includes-clean-leftovers.ansi}}
+```
+
+Under `-o quiet` only the error is printed. `refresh` leaves leftovers to `clean`.
+Removing part of what an interrupted clone left counts as changing it, so once the cause
+of an error like this is fixed, `clean` leaves the rest for another 30 days.
+
 **`refresh` is how you pick up a moved `ref`.** A `(repo, ref)` pair is cloned once and
 then never re-fetched, so if `ref` is a branch — or a tag someone re-pushed — your
 project keeps using whatever it pointed at the first time, indefinitely. The automatic
