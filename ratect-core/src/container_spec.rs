@@ -24,10 +24,10 @@
 //! container, and `ensure_container_ready`'s recursive dependency start) with
 //! no shared code between them to keep the two in step. Since the create/start
 //! split (decisions/0019) one call site derives it —
-//! `ensure_container_created`, for a dependency and the task's own container
-//! alike — and hands it to `ContainerRuntime::create_container`, then to the
-//! start call. [`Overlay`] is
-//! matched exactly once, inside `derive_spec`, and each arm destructures its
+//! `ensure_container_created`, for a dependency, a service group's container
+//! and the task's own container alike — and hands it to
+//! `ContainerRuntime::create_container`, then to the start call. [`Overlay`]
+//! is matched exactly once, inside `derive_spec`, and each arm destructures its
 //! config struct exhaustively by name (no `..`) — a field added to `TaskRun`
 //! or `TaskContainerCustomisation` becomes a compiler error here rather than
 //! a silently-ignored new field.
@@ -38,10 +38,10 @@
 //! equivalence test checks. `role`/`labels`/`interactive`/`additional_args`
 //! sit outside it for exactly that reason: a dependency is never interactive
 //! and never receives `additional_args`, and `role` is baked into `labels`'
-//! own values (see [`crate::labels::RunLabels::for_container`]), so nesting
+//! own values (see [`crate::labels::OwnershipLabels::for_container`]), so nesting
 //! any of the four inside `shared` would make the equivalence property false
 //! by construction, for every real pair of specs, regardless of whether the
-//! two call sites actually agree on everything else.
+//! task's and a dependency's paths actually agree on everything else.
 //!
 //! [`BuildSpec`] is the same idea for `ContainerRuntime::build_image`'s own
 //! call, one owned value [`derive_build_spec`] assembles instead of the 8
@@ -65,7 +65,7 @@ use crate::ui::printable;
 
 use crate::config::{BuildSecret, Container, NetworkMode, TaskContainerCustomisation, TaskRun};
 use crate::docker::UserMapping;
-use crate::labels::{ContainerRole, RunLabels};
+use crate::labels::{ContainerRole, OwnershipLabels};
 use crate::proxy::ProxyEnvironment;
 use crate::user::{AdditionalUser, CurrentUser};
 
@@ -408,11 +408,11 @@ pub struct ContainerSpec {
     pub shared: SharedContainerSpec,
     /// Whether this is the task's own container or a dependency — baked
     /// into `labels`' own values (see
-    /// [`crate::labels::RunLabels::for_container`]), which is why a fake
+    /// [`crate::labels::OwnershipLabels::for_container`]), which is why a fake
     /// `ContainerRuntime` can recover it from `labels` alone if needed.
     pub role: ContainerRole,
     /// This container's Ratect ownership labels, merged over its own
-    /// configured `labels` — see `RunLabels::for_container`. Always
+    /// configured `labels` — see `OwnershipLabels::for_container`. Always
     /// present (possibly containing nothing beyond Ratect's own keys),
     /// unlike `shared.options`' other fields, which are `None` when unset.
     pub labels: HashMap<String, String>,
@@ -529,7 +529,7 @@ pub struct ContainerSpecInputs<'a> {
     /// at all, regardless of what `ports` config exists.
     pub publish_ports: bool,
     pub role: ContainerRole,
-    pub run_labels: &'a RunLabels,
+    pub owner_labels: &'a OwnershipLabels,
 }
 
 /// Assembles one container's [`ContainerSpec`] from its own config plus
@@ -555,7 +555,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         proxy,
         publish_ports,
         role,
-        run_labels,
+        owner_labels,
     } = inputs;
 
     // Exhaustive by name (no `..`): a field added to either struct must be
@@ -662,7 +662,7 @@ pub fn derive_spec(inputs: ContainerSpecInputs<'_>) -> ContainerSpec {
         dns_search: container_config.dns_search.clone(),
         dns_options: container_config.dns_options.clone(),
     };
-    let labels = run_labels.for_container(name, role, container_config.labels.as_ref());
+    let labels = owner_labels.for_container(name, role, container_config.labels.as_ref());
     // From the plan rather than the input, so only a container with an
     // `identity` can get one this way.
     let host_ids = user_mapping

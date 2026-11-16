@@ -757,6 +757,49 @@
       ],
       "type": "object"
     },
+    "ExitCodeRule": {
+      "description": "Whose exit code `services up` exits with: `\"first_non_zero\"`, `\"first_to_exit\"`, or `{ container = \"<member>\" }`.",
+      "oneOf": [
+        {
+          "const": "first_non_zero",
+          "description": "The first non-zero exit code a member exits with of its own accord, or 0 if none did. A member `services up` stopped itself, once the exit condition was met, isn't counted.",
+          "type": "string"
+        },
+        {
+          "const": "first_to_exit",
+          "description": "The exit code of the member that stopped first.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "This member's exit code, whenever it stopped — even when `services up` stopped it.",
+          "properties": {
+            "container": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "container"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExitCondition": {
+      "description": "When `services up` takes a service group down on its own.",
+      "oneOf": [
+        {
+          "const": "any_stopped",
+          "description": "The first member to stop ends the group; the rest are stopped.",
+          "type": "string"
+        },
+        {
+          "const": "all_stopped",
+          "description": "The group ends once every member has stopped, as `docker compose up` does.",
+          "type": "string"
+        }
+      ]
+    },
     "HealthCheckConfig": {
       "additionalProperties": false,
       "description": "Overrides the [health check configuration](https://docs.docker.com/engine/reference/builder/#healthcheck) specified in the container's image. Every field is optional — an omitted field inherits the image's own value, matching Batect (and Docker's `0` = inherit convention). Durations use Batect's Go-style string format: `\"2s\"`, `\"1m30s\"`, `\"500ms\"`, `\"0\"`.",
@@ -926,6 +969,31 @@
           "type": "string"
         }
       ]
+    },
+    "ServiceGroup": {
+      "additionalProperties": false,
+      "description": "One entry in `services`: a **service group**, a named set of the project's containers brought up together by `ratect services up` and taken down together. Composition only: each member is a container declared under `containers`, started as a task's dependency is, so its own `dependencies`, health check and setup commands apply. Native-only: a Batect-format (YAML) file can't declare one.",
+      "properties": {
+        "containers": {
+          "description": "The group's members, by container name. At least one, each at most once. The containers they depend on are started with them and taken down with them, but only a member's exit counts towards `exit_condition` and `exit_code_from`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "exit_code_from": {
+          "$ref": "#/definitions/ExitCodeRule",
+          "description": "Whose exit code `services up` exits with once the exit condition is met. Defaults to `first_non_zero`."
+        },
+        "exit_condition": {
+          "$ref": "#/definitions/ExitCondition",
+          "description": "When `services up` takes the group down on its own: once any member has stopped, or once every member has. Defaults to `all_stopped`."
+        }
+      },
+      "required": [
+        "containers"
+      ],
+      "type": "object"
     },
     "SetupCommand": {
       "additionalProperties": false,
@@ -1274,6 +1342,16 @@
       "description": "The Ratect version this project was written for, e.g. \"0.11.0\". Ratect refuses to run the project if it is older than this, or if a later release has changed what a configuration means. Root file only — or, for a bundle, the file a Git include names, covering the bundle.",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-.+)?$",
       "type": "string"
+    },
+    "services": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ServiceGroup"
+      },
+      "description": "Service groups, keyed by the name `ratect services up` takes: named sets of this project's containers brought up and taken down together.",
+      "propertyNames": {
+        "pattern": "^[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*$"
+      },
+      "type": "object"
     },
     "tasks": {
       "additionalProperties": {

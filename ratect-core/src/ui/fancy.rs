@@ -958,6 +958,11 @@ impl EventSink for FancyEventLogger {
                 state.mark_ready(&container);
                 self.repaint_startup(&mut state);
             }
+            // `services up` runs under the `all` style alone, so this
+            // style never sees one.
+            TaskEvent::ServiceMemberExited { .. }
+            | TaskEvent::RemovingServiceGroupNetwork
+            | TaskEvent::ServiceGroupNetworkRemoved => {}
             TaskEvent::DependencyExitedUnexpectedly {
                 container,
                 exit_code,

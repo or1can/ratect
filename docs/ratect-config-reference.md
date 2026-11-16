@@ -1140,6 +1140,63 @@ On the one version probed, with default file sharing, what a container wrote to 
 mount stayed yours whichever user it ran as, so running as you may not be what delivers
 that there. The same project on Docker Desktop on a Mac runs as the image's `USER`.
 
+## `services`: bringing containers up together
+
+A **service group** is a named set of the project's containers that
+[`ratect services up`](ratect-cli.md#services-options) brings up together, shows
+the output of, and takes down together — a stack to work against, such as an API
+and its database, rather than a task that runs to an end. It names containers
+already declared under `containers`, and adds nothing to them. An illustrative
+project — none of the [worked examples](worked-examples.md) declares a group:
+
+```toml
+[containers.api]
+image = "my-repo/api:latest"
+dependencies = ["migrate"]
+ports = [{ local = 8080, container = 8080 }]
+
+[containers.db]
+image = "postgres:16"
+
+[containers.migrate]
+image = "my-repo/migrate:latest"
+dependencies = ["db"]
+run_to_completion = true
+
+[services.stack]
+containers = ["api", "db"]
+exit_condition = "any_stopped"
+exit_code_from = { container = "api" }
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `containers` | required | The group's **members**, by container name: at least one, each named once. |
+| `exit_condition` | `"all_stopped"` | When `services up` takes the group down on its own: `"any_stopped"` once any member has stopped, `"all_stopped"` once every member has. |
+| `exit_code_from` | `"first_non_zero"` | Where `services up` takes its exit code from: `"first_non_zero"`, the first non-zero exit code a member stopped with of its own accord, or `0`; `"first_to_exit"`, the exit code of the member that stopped first; or `{ container = "<member>" }`, that member's exit code whenever it stopped — even when `services up` stopped it, as it does the rest once `"any_stopped"` is met. |
+
+- **A member starts as a task's dependency does.** Its own `dependencies` start
+  first, and its health check, `setup_commands` and `run_to_completion` apply — see
+  [Dependency Readiness](dependency-readiness.md). Each container is started once,
+  however many members depend on it.
+- **Only a member counts.** A container a member depends on, `migrate` above, is
+  brought up and taken down with the group, but its exit neither meets the exit
+  condition nor gives the exit code. With `run_to_completion`, as `migrate` has, it
+  finishes before the member that depends on it starts, and its exit `0` is its
+  readiness. A dependency that keeps running and then stops is reported as one that
+  exited unexpectedly, as in a task.
+- **Native only.** A Batect-format (YAML) file can't declare `services`, included or
+  not, and `ratect-compat` has no `services` verb.
+- **Any TOML file may declare a group.** Groups from every file are merged, like tasks,
+  and a group name defined in two files fails the load. A group's name follows the rule
+  a container's does: lowercase letters and digits, joined by a single `.`, one or two
+  `_`, or any number of `-`.
+- **What the group's containers are called.** Each is created as
+  `<project>..<group>..default..<container>` on a network named
+  `<project>..<group>..default`, the same names every time: that is what makes a second
+  `services up` [attach to the group, or wait for it, rather than start another
+  copy](ratect-cli.md#services-options).
+
 ## Field reference
 
 Every container and task field from [`ratect-compat-config-reference.md`](ratect-compat-config-reference.md)
@@ -1255,7 +1312,7 @@ Structural validation only catches what the schema can express. For some of the
 rules it can't (a task needing `run` or `prerequisites`, an `extends` cycle),
 [`ratect config validate`](ratect-cli.md#config) checks a `ratect.toml` without a
 Docker daemon, so it also works as a CI gate. A container with neither `image`
-nor `build_directory` is still only reported when a task runs it.
+nor `build_directory` is still only reported when a task or `services up` runs it.
 
 ## Differences from `batect.yml`, at a glance
 
@@ -1280,6 +1337,7 @@ nor `build_directory` is still only reported when a task runs it.
 | Git bundle default | `batect-bundle.yml` | `ratect-bundle.toml`, then `batect-bundle.yml` |
 | Includes | YAML | TOML or YAML, by extension |
 | Written-for version | — | [`ratect_version`](#ratect_version-the-version-a-project-was-written-for) |
+| Bring containers up together | — | [`services`](#services-bringing-containers-up-together) |
 
 Most field *meanings* are unchanged; the spelling and the format-level rules
 above are the bulk of the difference. The exceptions are the native-only

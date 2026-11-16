@@ -32,6 +32,7 @@ history, from when it was the only binary.
 
 ### Added
 
+- **ratect only:** Service groups: a `services` section in `ratect.toml` names a set of containers with an `exit_condition` (`any_stopped` or `all_stopped`) and an `exit_code_from` (`first_non_zero`, `first_to_exit` or `{ container = "<member>" }`). `ratect services up <group>` brings the group up, attaches to it when a member is running, or replaces it when none is, shows every member's output under `-o all`, and takes it down when its exit condition is met or on a termination signal, exiting with the code its `exit_code_from` selects. `ratect services down <group>` takes a group down, and `ratect services list` shows each group on the daemon with its containers' states. `ratect resources` and `ratect doctor` leave them alone.
 - Every task run holds a lock file, `~/.ratect/runs/<run>.lock`, while its process runs it, and deletes it if it cleaned up fully and no create was left unanswered. A run that can't take one still runs.
 - `tools/check-doc-links.py` rebuilds the workspace's documentation and fails on a doc link that renders as literal brackets; CI's Rustdoc job runs it. No effect on the released binaries; contributor-tooling only.
 - The installation page lists each prebuilt binary's minimum OS: glibc 2.34 for `x86_64-unknown-linux-gnu`, macOS 10.12 for `x86_64-apple-darwin`, macOS 11.0 for `aarch64-apple-darwin`, and no shared libc for the statically linked `musl` builds, which a distribution with an older glibc should use. Raising one of these is a breaking change, listed under `### Breaking`.
@@ -39,6 +40,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- A `services` key in a Batect-format (YAML) file is refused as a field only a native `ratect.toml` can declare.
 - The `claims` commit hook refuses a commit that brings in an unmarked `claim-words`, `temporal-words` or `restatement` finding, or that leaves an orphaned mark for one. No effect on the released binaries; contributor-tooling only.
 - The `tools/` scripts need Python 3.11 or later, and are run as `uv run tools/<script>.py`, which fetches one; a plain `python3` older than that, from 3.9, stops with a message saying so. `mdbook build` needs `uv` on `PATH`. No effect on the released binaries; contributor-tooling only.
 

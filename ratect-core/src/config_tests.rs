@@ -39,6 +39,7 @@ fn check_and_evaluate_in_place(
             tasks: config.tasks.clone(),
             config_variables: config.config_variables.clone(),
             forbid_telemetry: config.forbid_telemetry,
+            services: config.services.clone(),
         },
         project_directory,
         // Unread by `evaluate`; Batect-shapedness comes from `provenance`.
@@ -3586,6 +3587,7 @@ fn evaluate_makes_relative_local_volume_host_path_absolute() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -3621,6 +3623,7 @@ fn evaluate_resolves_dot_relative_and_bare_relative_host_paths_alike() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -3649,6 +3652,7 @@ fn evaluate_leaves_absolute_local_volume_host_path_unchanged() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -3685,6 +3689,7 @@ fn evaluate_interpolates_relative_local_volume_host_path_expression() {
             },
         )])),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -3724,6 +3729,7 @@ fn evaluate_interpolates_absolute_local_volume_host_path_expression_without_pref
             },
         )])),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -3754,6 +3760,7 @@ fn evaluate_does_not_touch_cache_volume_mounts() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -4301,6 +4308,7 @@ fn evaluate_resolves_build_directory_relative_path() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -4331,6 +4339,7 @@ fn evaluate_interpolates_build_args() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -4361,6 +4370,7 @@ fn evaluate_resolves_build_secret_path_relative_to_base() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -4394,6 +4404,7 @@ fn evaluate_leaves_build_secret_environment_name_unresolved() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -4608,6 +4619,7 @@ fn a_relative_cache_path_under_run_as_current_user_is_rejected_naming_the_contai
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     // The rule's own function rather than the expression pass it used to
@@ -4643,6 +4655,7 @@ fn load_accepts_a_non_slash_local_mount_path() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -4704,6 +4717,7 @@ fn load_rejects_one_cache_name_with_two_scopes() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let err = reject_conflicting_cache_scopes(&config)
@@ -4752,6 +4766,7 @@ fn the_reported_scope_conflict_does_not_depend_on_hashmap_order() {
                 tasks: IndexMap::new(),
                 config_variables: None,
                 forbid_telemetry: None,
+                services: IndexMap::new(),
             };
 
             let err = reject_conflicting_cache_scopes(&config)
@@ -4800,6 +4815,7 @@ fn load_rejects_a_cache_name_that_is_a_path() {
             tasks: IndexMap::new(),
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         };
 
         let err = config
@@ -4838,6 +4854,7 @@ fn load_accepts_ordinary_cache_names() {
             tasks: IndexMap::new(),
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         };
 
         config
@@ -4941,6 +4958,7 @@ fn load_accepts_a_single_default_ssh_agent() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -4997,6 +5015,7 @@ fn load_accepts_several_distinctly_named_build_ssh_agents() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -5025,6 +5044,7 @@ fn evaluate_resolves_build_ssh_paths_against_the_config_directory() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -5068,6 +5088,7 @@ fn load_rejects_duplicate_build_ssh_agent_ids() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let err = config
@@ -5140,6 +5161,7 @@ fn config_with_container(container: Container) -> Config {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -13917,6 +13939,7 @@ fn evaluate_expands_host_var() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -13947,6 +13970,7 @@ fn evaluate_uses_default_when_host_var_unset() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -13974,6 +13998,7 @@ fn evaluate_errors_when_host_var_unset_without_default() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let result = config.check_and_evaluate_with(
@@ -14006,6 +14031,7 @@ fn evaluate_prefers_cli_override_over_default() {
         tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
@@ -14040,6 +14066,7 @@ fn evaluate_falls_back_to_config_variable_default() {
         tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -14067,6 +14094,7 @@ fn evaluate_errors_on_undeclared_config_variable_reference() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let err = config
@@ -14105,6 +14133,7 @@ fn evaluate_errors_on_declared_config_variable_with_no_value() {
         tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let err = config
@@ -14144,6 +14173,7 @@ fn evaluate_fills_a_declared_defaultless_config_variable_from_an_override() {
         tasks: IndexMap::new(),
         config_variables: Some(config_variables),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let overrides = HashMap::from([("env_name".to_string(), "prod".to_string())]);
@@ -14165,6 +14195,7 @@ fn evaluate_errors_on_unknown_cli_override() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let overrides = HashMap::from([("unknown".to_string(), "value".to_string())]);
@@ -14186,6 +14217,7 @@ fn evaluate_leaves_literal_values_unchanged() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -14213,6 +14245,7 @@ fn evaluate_resolves_built_in_project_directory_var_in_environment() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -14242,6 +14275,7 @@ fn evaluate_resolves_built_in_project_directory_var_in_volumes() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -14272,6 +14306,7 @@ fn evaluate_cleans_project_directory_var_when_base_path_is_empty() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     config
@@ -14293,6 +14328,7 @@ fn evaluate_errors_if_project_directory_is_given_as_a_cli_override() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let overrides = HashMap::from([(
@@ -19522,6 +19558,196 @@ async fn a_native_field_supplied_through_a_merge_key_is_refused() {
     .expect_err("refused");
     assert!(
         format!("{error:#}").contains("The container 'app' uses 'stop_signal'"),
+        "{error:#}"
+    );
+}
+
+/// A `ratect.toml` whose `services` section is `services`, with containers
+/// `api` and `db` and a task using neither.
+fn toml_with_services(services: &str) -> String {
+    format!(
+        r#"
+project_name = "shop"
+
+[containers.api]
+image = "alpine:3.18"
+
+[containers.db]
+image = "alpine:3.18"
+
+[tasks.t]
+run = {{ container = "api" }}
+
+{services}
+"#
+    )
+}
+
+#[tokio::test]
+async fn a_service_group_loads_with_its_defaults() {
+    let project = load_native_toml(&toml_with_services(
+        "[services.stack]\ncontainers = [\"api\", \"db\"]\n",
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(
+        project.config.services["stack"],
+        ServiceGroup {
+            containers: vec!["api".to_string(), "db".to_string()],
+            exit_condition: ExitCondition::AllStopped,
+            exit_code_from: ExitCodeRule::FirstNonZero,
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_service_group_reads_each_exit_condition_and_exit_code_rule() {
+    for (written, condition, rule) in [
+        (
+            "exit_condition = \"any_stopped\"\nexit_code_from = \"first_to_exit\"",
+            ExitCondition::AnyStopped,
+            ExitCodeRule::FirstToExit,
+        ),
+        (
+            "exit_condition = \"all_stopped\"\nexit_code_from = { container = \"db\" }",
+            ExitCondition::AllStopped,
+            ExitCodeRule::Container("db".to_string()),
+        ),
+        (
+            "exit_code_from = \"first_non_zero\"",
+            ExitCondition::AllStopped,
+            ExitCodeRule::FirstNonZero,
+        ),
+    ] {
+        let project = load_native_toml(&toml_with_services(&format!(
+            "[services.stack]\ncontainers = [\"api\", \"db\"]\n{written}\n"
+        )))
+        .await
+        .unwrap();
+
+        let group = &project.config.services["stack"];
+        assert_eq!(
+            (group.exit_condition, &group.exit_code_from),
+            (condition, &rule)
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_service_group_is_refused_for_each_bad_membership() {
+    for (written, expected) in [
+        (
+            "containers = []",
+            "The service group 'stack' has no containers.",
+        ),
+        (
+            "containers = [\"api\", \"cache\"]",
+            "The container 'cache' referenced by service group 'stack' does not exist.",
+        ),
+        (
+            "containers = [\"api\", \"api\"]",
+            "The service group 'stack' lists the container 'api' more than once.",
+        ),
+        (
+            "containers = [\"api\"]\nexit_code_from = { container = \"db\" }",
+            "The service group 'stack' takes its exit code from the container 'db', which is \
+             not one of its containers.",
+        ),
+    ] {
+        let error = load_native_toml(&toml_with_services(&format!(
+            "[services.stack]\n{written}\n"
+        )))
+        .await
+        .unwrap_err();
+
+        assert_eq!(format!("{error:#}"), expected, "for {written}");
+    }
+}
+
+#[tokio::test]
+async fn a_service_group_name_has_the_container_name_rule() {
+    let error = load_native_toml(&toml_with_services(
+        "[services.Stack]\ncontainers = [\"api\"]\n",
+    ))
+    .await
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains(
+            "Invalid service group name 'Stack'. Service group names must contain only \
+             lowercase letters"
+        ),
+        "{error:#}"
+    );
+}
+
+#[tokio::test]
+async fn services_are_refused_in_a_batect_format_file() {
+    let error = load_compat_yaml(
+        "project_name: shop\ncontainers:\n  api:\n    image: alpine:3.18\n\
+         tasks:\n  t:\n    run:\n      container: api\n\
+         services:\n  stack:\n    containers: [api]\n",
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains(
+            "declares 'services', which only a native ratect.toml can do: a Batect-format \
+             (YAML) file keeps Batect's own fields."
+        ),
+        "{error:#}"
+    );
+
+    let (fragment, result) = load_native_including(
+        "more.yml",
+        "containers:\n  app:\n    image: alpine:3.18\nservices:\n  stack:\n    containers: [app]\n",
+    )
+    .await;
+    let error = format!("{:#}", result.unwrap_err());
+    assert!(
+        error.contains("declares 'services', which only a native ratect.toml can do")
+            && error.contains(&fragment.display().to_string()),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn service_groups_merge_across_toml_files_and_refuse_a_duplicate() {
+    let (_, result) = load_native_including(
+        "more.toml",
+        "[containers.app]\nimage = \"alpine:3.18\"\n\n\
+         [services.stack]\ncontainers = [\"app\"]\n",
+    )
+    .await;
+    assert_eq!(result.unwrap().config.services["stack"].containers, ["app"]);
+
+    let dir = unique_temp_dir();
+    std::fs::write(
+        dir.join("more.toml"),
+        "[services.stack]\ncontainers = [\"api\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("ratect.toml"),
+        "project_name = \"shop\"\ninclude = [{ path = \"more.toml\" }]\n\n\
+         [containers.api]\nimage = \"alpine:3.18\"\n\n\
+         [tasks.t]\nrun = { container = \"api\" }\n\n\
+         [services.stack]\ncontainers = [\"api\"]\n",
+    )
+    .unwrap();
+    let error = load_project_native(
+        &dir.join("ratect.toml"),
+        running_0_12(),
+        &LoadOutput::default(),
+    )
+    .await
+    .unwrap_err();
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        format!("{error:#}").contains("The service group 'stack' is defined in multiple files"),
         "{error:#}"
     );
 }

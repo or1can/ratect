@@ -8,7 +8,9 @@ table); the labels themselves are unchanged. The docs site launched at
 anticipates, so its reverse-DNS is not the label namespace; the namespace
 reasoning is unchanged. [0025](0025-task-run-lock.md) answers the last
 consequence below for a task run whose process it can prove dead, and
-[0026](0026-service-instances.md) adds labels for service instances.
+[0026](0026-service-instances.md) adds labels for service instances, and
+has a container's `role` say whether a task run or a service instance owns
+it.
 
 ## Context
 

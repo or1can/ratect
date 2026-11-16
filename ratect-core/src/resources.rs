@@ -30,9 +30,11 @@
 //!
 //! **A task run is the unit.** The containers and network sharing one `run`
 //! label value are selected or skipped together, and `older_than` measures
-//! the task run's age, its oldest resource's. What carries the project label
-//! and no `run` label is not a task run (a service instance, decisions/0026):
-//! it is never selected, and counted nowhere.
+//! the task run's age, its oldest resource's. What carries no `run` label, or
+//! what [`crate::labels::owned_by_service_instance`] says is a service
+//! instance's (decisions/0026), even with a `run` label its image or its
+//! configured `labels` gave it, is not a task run: it is never selected,
+//! and counted nowhere.
 //!
 //! **This module is where the rules live; it prints nothing.** It was in
 //! `ratect/src/main.rs` until 0.6.0, bound to the concrete `DockerClient`
@@ -273,7 +275,9 @@ where
 
     let mut runs: BTreeMap<String, Vec<Leftover>> = BTreeMap::new();
     for resource in found {
-        if !resource.labels.contains_key(crate::labels::PROJECT) {
+        if !resource.labels.contains_key(crate::labels::PROJECT)
+            || crate::labels::owned_by_service_instance(&resource.labels)
+        {
             continue;
         }
         let Some(run) = resource.labels.get(crate::labels::RUN).cloned() else {

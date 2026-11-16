@@ -130,7 +130,8 @@ struct ConfigVarArgs {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 // Variants are ordered as they appear in `--help` and the docs: the
-// task-running verbs first, then the resource-management nouns, then
+// task-running verbs first (`services` brings a group of containers up the
+// way `run` runs a task), then the resource-management nouns, then
 // configuration and diagnostics, and finally the shell-integration utility
 // (`completions`) — grouped by purpose rather than alphabetically, so the
 // flagship `run` stays first. `clap` can't render group *headings* for
@@ -144,6 +145,13 @@ enum Command {
     Tasks {
         #[command(subcommand)]
         command: TasksCommand,
+    },
+
+    /// Bring a service group's containers up together, take them down, and
+    /// see what is up.
+    Services {
+        #[command(subcommand)]
+        command: ServicesCommand,
     },
 
     /// Inspect and remove caches — this project's, and the machine's shared ones.
@@ -179,6 +187,63 @@ enum Command {
     /// Print a shell completion script to standard output. Reaches no daemon
     /// and reads no configuration.
     Completions(CompletionsArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum ServicesCommand {
+    /// Bring a service group up — or attach to it, if it already is — and show
+    /// every member's output until the group's exit condition is met, then take
+    /// it down. A termination signal takes it down too, whichever `up`
+    /// brought it up. Exits with the code the group's exit_code_from selects.
+    Up(ServicesUpArgs),
+
+    /// Take a service group down: stop and remove its containers and its
+    /// network, whatever state they are in.
+    Down(ServicesDownArgs),
+
+    /// List this project's service groups that have containers or a network
+    /// on the daemon, with each container's state and the directory each was
+    /// brought up from.
+    List(ServicesListArgs),
+}
+
+#[derive(ClapArgs, Debug)]
+struct ServicesUpArgs {
+    /// The service group to bring up.
+    group: String,
+
+    #[command(flatten)]
+    config_vars: ConfigVarArgs,
+
+    #[command(flatten)]
+    docker: DockerArgs,
+
+    /// Use BuildKit for image builds, regardless of the daemon's own
+    /// advertised default or DOCKER_BUILDKIT (which this takes precedence
+    /// over). Forcing the classic builder is DOCKER_BUILDKIT=0's job.
+    #[arg(long = "enable-buildkit")]
+    enable_buildkit: bool,
+
+    /// Storage for `cache` volume mounts: volume (a Docker named volume) or
+    /// directory (a host directory under `<project>/.batect/caches/<name>`).
+    #[arg(long = "cache-type", value_enum, default_value = "volume")]
+    cache_type: CacheTypeArg,
+}
+
+#[derive(ClapArgs, Debug)]
+struct ServicesDownArgs {
+    /// The service group to take down. Need not still be in the
+    /// configuration: an instance is found by its labels.
+    group: String,
+
+    #[command(flatten)]
+    docker: DockerArgs,
+}
+
+#[derive(ClapArgs, Debug)]
+struct ServicesListArgs {
+    #[command(flatten)]
+    docker: DockerArgs,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -686,9 +751,27 @@ fn is_a_run(args: &[String]) -> bool {
         Word::Positional(name) => Some(*name),
         _ => None,
     });
-    subcommand
-        .and_then(|name| command.find_subcommand(name))
-        .is_some_and(|subcommand| subcommand.get_name() == "run")
+    let Some(subcommand) = subcommand.and_then(|name| command.find_subcommand(name)) else {
+        return false;
+    };
+    match subcommand.get_name() {
+        "run" => true,
+        // `services up` is a run too: it exits with a member's code.
+        "services" => {
+            let verb = ratect_core::exit_code::command_line_words(args, |word| {
+                takes_value(&command, word) || takes_value(subcommand, word)
+            })
+            .into_iter()
+            .filter_map(|word| match word {
+                Word::Positional(name) => Some(name),
+                _ => None,
+            })
+            .nth(1);
+            verb.and_then(|name| subcommand.find_subcommand(name))
+                .is_some_and(|verb| verb.get_name() == "up")
+        }
+        _ => false,
+    }
 }
 
 /// Whether `word` is one of `command`'s own options and takes a value —
@@ -801,7 +884,13 @@ async fn async_main() {
     let stdout = Console::stdout(color_mode);
     init_tracing(stderr.color_enabled());
 
-    let is_run = matches!(cli.command, Command::Run(_));
+    let is_run = matches!(
+        cli.command,
+        Command::Run(_)
+            | Command::Services {
+                command: ServicesCommand::Up(_)
+            }
+    );
     let exit_code = match run(cli, color_mode, &stdout, &stderr).await {
         Ok(()) => ratect_core::exit_code::SUCCESS,
         Err(error) => {
@@ -886,6 +975,17 @@ async fn run(cli: Cli, color_mode: ColorMode, stdout: &Console, stderr: &Console
             stdout.print(listing);
             Ok(())
         }
+        Command::Services { command } => match command {
+            ServicesCommand::Up(args) => {
+                services_up(args, &global, color_mode, terminal, &load_output).await
+            }
+            ServicesCommand::Down(args) => {
+                services_down(args, &global, style, &load_output, stdout, stderr).await
+            }
+            ServicesCommand::List(args) => {
+                services_list(args, &global, style, stdout, stderr).await
+            }
+        },
         // Deliberately no `load` call: see `CachesArgs`.
         Command::Caches { command } => manage_caches(command, &global, style, stdout, stderr).await,
         Command::Includes { command } => manage_includes(command, style, stdout, stderr).await,
@@ -1239,6 +1339,193 @@ impl RunArgs {
             config_var_overrides,
         }
     }
+}
+
+/// `ratect services up <group>` — the group's service instance brought up
+/// or attached to, its members' output streamed, and taken down by
+/// [`TaskEngine::bring_up_service`] (decisions/0026). Always the `all`
+/// style: a group is several containers' output at once, which only `all`
+/// shows.
+async fn services_up(
+    args: ServicesUpArgs,
+    global: &GlobalArgs,
+    color_mode: ColorMode,
+    terminal: TerminalFacts,
+    load_output: &LoadOutput,
+) -> Result<()> {
+    if let Some(style) = global.output.filter(|style| *style != OutputStyleArg::All) {
+        let name = clap::ValueEnum::to_possible_value(&style)
+            .map(|value| value.get_name().to_string())
+            .unwrap_or_default();
+        return Err(ratect_core::exit_code::InvalidOptionValue::new(format!(
+            "--output {name} can't show a service group's output: 'services up' shows every \
+             member's, which only --output all does."
+        ))
+        .into());
+    }
+    DockerConnectionOptions::from(args.docker.clone()).check_options()?;
+    let (project, config_var_overrides) =
+        load_with_overrides(global, &args.config_vars, load_output).await?;
+    let start_directory = ratect_core::config::project_directory_path(
+        ratect_core::config::base_path_for(&global.config_file),
+    )?;
+    let event_sink = create_event_sink(Some(OutputStyle::All), color_mode, &terminal, PROGRESS)?;
+    let settings = TaskEngineSettings {
+        cache: Some((args.cache_type.into(), project.project_directory.clone())),
+        ratect_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        dialect: project.dialect,
+        config_var_overrides,
+        ..TaskEngineSettings::default()
+    };
+    // As for `run`: armed before connecting, so a signal ends the command
+    // rather than the process, and only once something exists to take down.
+    let interrupt = ratect_core::interrupt::Interrupt::new();
+    interrupt.listen();
+    let docker = match interrupt
+        .unless_signalled(DockerClient::new(&args.docker.into(), |message| {
+            event_sink.post(TaskEvent::Warning {
+                message: message.to_text(),
+            })
+        }))
+        .await
+    {
+        Ok(connected) => connected?,
+        Err(interrupted) => {
+            event_sink.post(TaskEvent::Notice {
+                message: format!(
+                    "{}; not bringing up service group '{}'.",
+                    interrupted.signal.ended_run(),
+                    args.group
+                )
+                .to_text(),
+            });
+            return Err(interrupted.into());
+        }
+    }
+    .with_event_sink(Arc::clone(&event_sink))
+    .with_enable_buildkit(args.enable_buildkit);
+    let engine = TaskEngine::new(project, docker, event_sink, interrupt).with_settings(settings)?;
+    engine
+        .bring_up_service(&args.group, &start_directory.display().to_string())
+        .await
+}
+
+/// The project a `services down`/`list` acts on: its name alone, read from
+/// the root file, as `resources` reads it — a service instance belongs to
+/// whatever brought it up, not to what the configuration says now.
+fn services_project(global: &GlobalArgs) -> Result<String> {
+    ratect_core::config::project_name_of(&global.config_file)
+        .context("Can't tell which project's service groups to act on")
+}
+
+/// `ratect services down <group>` — the group's instance found by its
+/// labels and removed, whatever state it is in. Nothing up is no failure.
+async fn services_down(
+    args: ServicesDownArgs,
+    global: &GlobalArgs,
+    style: OutputStyle,
+    load_output: &LoadOutput,
+    stdout: &Console,
+    stderr: &Console,
+) -> Result<()> {
+    let project = services_project(global)?;
+    let quiet = style == OutputStyle::Quiet;
+    let docker = DockerClient::new(&args.docker.into(), |message| stderr.warning(&message)).await?;
+    let key = ratect_core::service_instances::InstanceKey::default_instance(&project, &args.group);
+    let Some(instance) = ratect_core::service_instances::find_one(&docker, &key).await? else {
+        if !quiet {
+            stdout.println(text!("Service group '{}' is not up.", args.group));
+        }
+        return Ok(());
+    };
+    // In the order and with the stop options `up`'s take-down uses, when the
+    // configuration still loads and declares the group; all at once with
+    // Docker's defaults when it doesn't, since the labels are enough to find
+    // what to remove.
+    let plan = match load(global, load_output).await {
+        Ok(project) => ratect_core::engine::service_stop_plan(&project.config, &args.group),
+        Err(error) => {
+            tracing::debug!("services down without the configuration's stop order: {error:#}");
+            None
+        }
+    }
+    .unwrap_or_default();
+    let failures =
+        ratect_core::service_instances::take_down_until_gone(&docker, &instance, &plan, |step| {
+            if quiet {
+                return;
+            }
+            use ratect_core::service_instances::TakeDownStep;
+            match step {
+                TakeDownStep::ContainerRemoved(name) => {
+                    stdout.println(text!("Removed container {}.", name));
+                }
+                TakeDownStep::NetworkRemoved(name) => {
+                    stdout.println(text!("Removed network {}.", name));
+                }
+                TakeDownStep::ContainerStopped(_) | TakeDownStep::RemovingNetwork(_) => {}
+            }
+        })
+        .await;
+    if !failures.is_empty() {
+        let failures: Vec<String> = failures.iter().map(|error| format!("{error:#}")).collect();
+        anyhow::bail!(
+            "Failed to take down service group '{}': {}",
+            args.group,
+            failures.join("; ")
+        );
+    }
+    if !quiet {
+        stdout.println(text!("Service group '{}' is down.", args.group));
+    }
+    Ok(())
+}
+
+/// `ratect services list` — every service group of this project that is
+/// up, as the daemon has it. `-o quiet` prints each group's name alone.
+async fn services_list(
+    args: ServicesListArgs,
+    global: &GlobalArgs,
+    style: OutputStyle,
+    stdout: &Console,
+    stderr: &Console,
+) -> Result<()> {
+    let project = services_project(global)?;
+    let docker = DockerClient::new(&args.docker.into(), |message| stderr.warning(&message)).await?;
+    let instances = ratect_core::service_instances::find(&docker, &project, None).await?;
+    if style == OutputStyle::Quiet {
+        for instance in &instances {
+            stdout.println(text!("{}", instance.key.group));
+        }
+        return Ok(());
+    }
+    if instances.is_empty() {
+        stdout.println("No service group is up.");
+        return Ok(());
+    }
+    for instance in &instances {
+        let directories: Vec<&str> = instance.start_directories().into_iter().collect();
+        stdout.println(text!(
+            "{} (brought up from {}):",
+            stdout.bold(&instance.key.group),
+            if directories.is_empty() {
+                "an unknown directory".to_string()
+            } else {
+                directories.join(" and ")
+            }
+        ));
+        if instance.containers.is_empty() {
+            stdout.println("  - no containers, only its network");
+        }
+        for container in &instance.containers {
+            stdout.println(text!(
+                "  - {}: {}",
+                ratect_core::service_instances::Instance::container_name(container),
+                container.state.as_deref().unwrap_or("unknown")
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `ratect caches list` / `ratect caches clean [NAME...]` — this project's

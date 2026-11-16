@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The Docker names one task execution's containers and network are created
-//! under — Batect's `DockerResourceNameGenerator`, ported (ratect#299):
+//! The Docker names Ratect creates containers and networks under: a task
+//! execution's, and a service instance's ([`ServiceNames`]).
+//!
+//! A task execution's are Batect's `DockerResourceNameGenerator`, ported (ratect#299):
 //! `<project>-<container>-<suffix>` for a container and
 //! `<project>-network-<suffix>` for the task network, where the suffix is six
 //! random `a-z0-9` characters drawn once per task execution, so everything
 //! one execution creates shares it.
 //!
-//! A name is for a person reading `docker ps`, never for Ratect to read back:
+//! A task execution's name is for a person reading `docker ps`, never for
+//! Ratect to read back:
 //! which project, task, run or container a resource belongs to is what the
 //! `eu.orican.ratect.*` labels say ([`crate::labels`],
 //! [decisions/0002](../../decisions/0002-runtime-ownership-labels.md)), and
@@ -29,6 +32,12 @@
 //! accepted as Batect accepts it, not retried: Docker refuses the second
 //! execution, at a point that depends on the daemon's version
 //! (`docs/task-lifecycle.md`'s Cross-task isolation, ratect#690).
+//!
+//! A service instance's names are different on purpose: fixed, so that the
+//! daemon refusing a second create of one name is what stops two
+//! `services up` creating one container twice (decisions/0026). Ratect still
+//! never parses one — the labels remain the instance's identity — but it
+//! does rely on the daemon's refusal, a [`crate::docker::NameInUse`].
 //!
 //! Neither the project name nor a container name is truncated or checked
 //! here: Batect's `limitTo` truncation has no production caller for these
@@ -60,7 +69,7 @@ fn generate_suffix() -> String {
 }
 
 /// One task execution's Docker names: built once, in `run_task_internal`,
-/// alongside its `RunLabels`, so every name it gives shares one suffix.
+/// alongside its `OwnershipLabels`, so every name it gives shares one suffix.
 #[derive(Debug, Clone)]
 pub struct ResourceNames {
     project: String,
@@ -91,6 +100,44 @@ impl ResourceNames {
     /// Batect's `generateNameFor`: `<project>-<part>-<suffix>`.
     fn name(&self, part: &str) -> String {
         format!("{}-{part}-{}", self.project, self.suffix)
+    }
+}
+
+/// A service instance's Docker names (decisions/0026):
+/// `<project>..<group>..<instance>..<container>` for a container and
+/// `<project>..<group>..<instance>` for its network. Unlike a task run's,
+/// they are the same every time, so that the daemon refuses a create of
+/// one while anything else holds it: only the `services up` that won the
+/// instance's network creates its containers, and the name guards them
+/// against everything else. The labels stay the identity.
+///
+/// Joined with `..`, not `-`, so that no two instances share a name: a
+/// project, group and container name is each an image-name component,
+/// which never holds `..` and never starts or ends with `.`, so each
+/// part is the text between two `..`. Joined with hyphens, project `shop`
+/// with group `api-db` and project `shop-api` with group `db` would collide.
+/// Docker takes `.` in a container's name and a network's.
+#[derive(Debug, Clone)]
+pub struct ServiceNames {
+    prefix: String,
+}
+
+impl ServiceNames {
+    pub fn new(project: &str, group: &str, instance: &str) -> Self {
+        Self {
+            prefix: format!("{project}..{group}..{instance}"),
+        }
+    }
+
+    /// The name of the instance's container for configured container
+    /// `container`.
+    pub fn container(&self, container: &str) -> String {
+        format!("{}..{container}", self.prefix)
+    }
+
+    /// The name of the instance's network.
+    pub fn network(&self) -> String {
+        self.prefix.clone()
     }
 }
 

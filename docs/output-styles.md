@@ -82,7 +82,8 @@ When `--output` isn't given, Ratect auto-selects: `fancy` on an interactive
 console (the stream its progress goes to — stderr for `ratect`, stdout for
 `ratect-compat` — is a real terminal, `TERM` is set and not `dumb`, the
 terminal size is queryable, and there is no `--no-color`); `simple`
-otherwise. `quiet` and `all` are never auto-selected. So `ratect run test >
+otherwise. `quiet` and `all` are never auto-selected; `ratect services up` is the
+exception, which always uses `all` and refuses any other `-o`. So `ratect run test >
 out.txt` on a terminal still gets `fancy` — the pipe took the result, not the
 conversation — where `ratect-compat test > out.txt` gets `simple`.
 
@@ -165,8 +166,8 @@ from `app`/`db`/`cache` — a dependency's own stdout is never shown outside
 --list-tasks`) to a machine-readable format: one task per line, sorted by
 name, as `name` alone or `name<TAB>description` — no header, no
 [grouping](ratect-compat-config-reference.md#list-tasks-output). The `ratect`
-commands with a listing of their own (`caches`, `includes`, `resources`,
-`doctor`) each have a `quiet` form of the same kind, described with the
+commands with a listing of their own (`services list`, `caches`, `includes`,
+`resources`, `doctor`) each have a `quiet` form of the same kind, described with the
 command in the [`ratect` CLI reference](ratect-cli.md#commands).
 
 ## `all`

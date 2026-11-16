@@ -408,21 +408,53 @@ struct TaskRunContext<'a, 'p> {
     pending_creates: &'a PendingCreates<'p>,
     no_proxy_entries: &'a std::collections::BTreeSet<String>,
     customisations: Option<&'a IndexMap<String, TaskContainerCustomisation>>,
-    run_labels: &'a crate::labels::RunLabels,
-    resource_names: &'a crate::resource_names::ResourceNames,
+    owner_labels: &'a crate::labels::OwnershipLabels,
+    resource_names: ContainerNames<'a>,
     dependency_watchers: &'a Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Every container this run started — what cleanup says `Container
     /// stopped.` for; one created but never started is only removed.
     started_containers: &'a Mutex<std::collections::HashSet<String>>,
-    /// The task's own container: its name, its `run` (the overlay it is
-    /// created with, where a dependency gets `customise`), the
-    /// `-- ADDITIONAL_ARGS` only it receives, and whether it is
-    /// interactive-eligible (`run_task_internal` decides; every task's is,
-    /// prerequisites included, outside `-o all`).
-    root: &'a str,
+    /// The task's own container, or `None` for a service instance, which
+    /// has none.
+    root: Option<TaskRoot<'a>>,
+    /// The role every container but the root is labelled with:
+    /// [`Dependency`](crate::labels::ContainerRole::Dependency) in a task
+    /// run, [`Service`](crate::labels::ContainerRole::Service) in a service
+    /// instance.
+    other_role: crate::labels::ContainerRole,
+    /// The containers whose exit is watched by whatever is driving the run
+    /// rather than reported as a dependency exiting unexpectedly: a service
+    /// group's members, whose exits its exit condition counts. Empty for a task.
+    exit_watched_elsewhere: &'a HashSet<String>,
+}
+
+/// A task's own container: its name, its `run` (the overlay it is created
+/// with, where a dependency gets `customise`), the `-- ADDITIONAL_ARGS`
+/// only it receives, and whether it is interactive-eligible
+/// (`run_task_internal` decides; every task's is, prerequisites included,
+/// outside `-o all`).
+struct TaskRoot<'a> {
+    name: &'a str,
     run: &'a crate::config::TaskRun,
     additional_args: &'a [String],
     interactive: bool,
+}
+
+/// Where a run's containers get their Docker names: a task run's, with a
+/// suffix of its own, or a service instance's fixed ones.
+#[derive(Clone, Copy)]
+enum ContainerNames<'a> {
+    Task(&'a crate::resource_names::ResourceNames),
+    Service(&'a crate::resource_names::ServiceNames),
+}
+
+impl ContainerNames<'_> {
+    fn container(&self, name: &str) -> String {
+        match self {
+            ContainerNames::Task(names) => names.container(name),
+            ContainerNames::Service(names) => names.container(name),
+        }
+    }
 }
 
 /// The error for a container name with no container behind it. The config
@@ -2719,6 +2751,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // strictly before cleanup ever stops a container, so a deliberate
         // stop is never misreported as one of these.
         let dependency_watchers: Mutex<Vec<tokio::task::JoinHandle<()>>> = Mutex::new(Vec::new());
+        let no_exit_watched_elsewhere = HashSet::new();
         // See `TaskRunContext::started_containers`.
         let started_containers: Mutex<std::collections::HashSet<String>> = Mutex::default();
         // Memoizes each container's creation and readiness futures for this
@@ -2752,7 +2785,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         // no network is created at all — the containers still need to agree
         // on which run they belong to.
         let run_id = Uuid::new_v4().to_string();
-        let run_labels = crate::labels::RunLabels::new(
+        let owner_labels = crate::labels::OwnershipLabels::new(
             &self.project.config.project_name,
             task_name,
             &run_id,
@@ -2768,7 +2801,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         let run_lock = self.run_locks.take(&run_id);
         // The Docker names this run creates its network and containers
         // under — one suffix for the lot, as Batect draws one per task
-        // (ratect#299). Names only: ownership is `run_labels`' job.
+        // (ratect#299). Names only: ownership is `owner_labels`' job.
         let resource_names =
             crate::resource_names::ResourceNames::new(&self.project.config.project_name);
         // Eligibility only — `ContainerRuntime::run_container` further
@@ -2816,7 +2849,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     network_unanswered.store(true, Ordering::Relaxed);
                     let created = self
                         .docker
-                        .create_network(&name, &run_labels.for_network())
+                        .create_network(&name, &owner_labels.for_network())
                         .await;
                     network_unanswered.store(false, Ordering::Relaxed);
                     created?;
@@ -2902,14 +2935,18 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                 pending_creates: &pending_creates,
                 no_proxy_entries: &no_proxy_entries,
                 customisations: task.customise.as_ref(),
-                run_labels: &run_labels,
-                resource_names: &resource_names,
+                owner_labels: &owner_labels,
+                resource_names: ContainerNames::Task(&resource_names),
                 dependency_watchers: &dependency_watchers,
                 started_containers: &started_containers,
-                root: &run.container,
-                run,
-                additional_args,
-                interactive,
+                root: Some(TaskRoot {
+                    name: &run.container,
+                    run,
+                    additional_args,
+                    interactive,
+                }),
+                other_role: crate::labels::ContainerRole::Dependency,
+                exit_watched_elsewhere: &no_exit_watched_elsewhere,
             };
             // Every container in the graph — each dependency, each readiness
             // companion, the task's own — is created now, concurrently, with
@@ -3907,7 +3944,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                         .containers
                         .get(name)
                         .with_context(|| undeclared_container_bug(name))?;
-                    let is_root = name == context.root;
+                    let root = context.root.as_ref().filter(|root| root.name == name);
                     let identity_host_user = match &container_config.identity {
                         Some(_) => crate::identity::host_user(self.docker.as_ref(), name).await?,
                         None => None,
@@ -3949,22 +3986,21 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // task's own graph), the `-- ADDITIONAL_ARGS` only it
                     // receives, its role, and its interactive eligibility —
                     // a dependency is never interactive.
-                    let (overlay, additional_args, role, interactive) = if is_root {
-                        (
-                            crate::container_spec::Overlay::Run(context.run),
-                            context.additional_args,
+                    let (overlay, additional_args, role, interactive) = match root {
+                        Some(root) => (
+                            crate::container_spec::Overlay::Run(root.run),
+                            root.additional_args,
                             crate::labels::ContainerRole::Task,
-                            context.interactive,
-                        )
-                    } else {
-                        (
+                            root.interactive,
+                        ),
+                        None => (
                             crate::container_spec::Overlay::Customise(
                                 context.customisations.and_then(|c| c.get(name)),
                             ),
                             &[][..],
-                            crate::labels::ContainerRole::Dependency,
+                            context.other_role,
                             false,
-                        )
+                        ),
                     };
                     let term_var = self.term_environment_variable();
                     let volumes = self
@@ -3987,7 +4023,7 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                             proxy: proxy.as_ref(),
                             publish_ports: self.publish_ports,
                             role,
-                            run_labels: context.run_labels,
+                            owner_labels: context.owner_labels,
                         },
                     );
 
@@ -4356,6 +4392,11 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
                     // `dependency_watchers` purely so the run can abort it
                     // later, once watching would otherwise risk catching
                     // cleanup's own deliberate stop instead of a real one.
+                    // A service group's member is watched by `services up`
+                    // itself: its exit is what the group's exit condition counts, not news.
+                    if context.exit_watched_elsewhere.contains(name) {
+                        return Ok(container_id);
+                    }
                     let watcher = {
                         let docker = Arc::clone(&self.docker);
                         let event_sink = Arc::clone(&self.event_sink);
@@ -4397,6 +4438,9 @@ impl<D: ContainerRuntime + Send + Sync + 'static> TaskEngine<D> {
         unshare(result)
     }
 }
+
+mod services;
+pub use services::{service_stop_plan, UnknownServiceGroup};
 
 #[cfg(test)]
 #[path = "engine_tests.rs"]

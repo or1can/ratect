@@ -296,6 +296,69 @@ struct FakeContainerRuntime {
     #[allow(clippy::type_complexity)]
     created_directories: Arc<Mutex<Vec<(String, String, String, crate::user::DirectoryOwner)>>>,
     claimed_directories: Arc<Mutex<Vec<ClaimedDirectory>>>,
+    // Every container and network created and not yet removed, with its
+    // labels and state, as `list_containers`/`list_networks` report them —
+    // what a service instance is found by (see `FakeInventory`).
+    inventory: Arc<Mutex<FakeInventory>>,
+    // Container id -> the exit code a stop gave it, and the signal that one
+    // has, so a `wait_for_container_exit` on a container nothing made exit
+    // resolves once something stops it, as Docker's wait does.
+    stopped_exit_codes: Arc<Mutex<HashMap<String, i64>>>,
+    stops: Arc<tokio::sync::Notify>,
+    // What each next `create_network` does in place of succeeding alone —
+    // see `FakeNetworkCreate` — and how many networks have been created, so
+    // each has an id of its own.
+    network_creates: Arc<Mutex<std::collections::VecDeque<FakeNetworkCreate>>>,
+    network_count: Arc<Mutex<usize>>,
+    // A twin network that `FakeNetworkCreate::TwinAfterList` holds back
+    // until the next network list has answered.
+    late_twin: Arc<Mutex<Option<crate::docker::LabelledResource>>>,
+}
+
+/// One `create_network` other than a plain success, for a test of a
+/// concurrent `services up`.
+enum FakeNetworkCreate {
+    /// The daemon refuses the name as taken (a `NameInUse`), and these
+    /// resources — another `up`'s — appear on it as it does.
+    Conflict(Vec<crate::docker::LabelledResource>),
+    /// The create succeeds, and a second network of the same name and
+    /// labels — another `up`'s, on a daemon that takes one — exists beside
+    /// it until this one is removed: a tie, each `up` seeing both.
+    Twin,
+    /// As `Twin`, but the other `up` creates its network only once this
+    /// one has listed: this one sees its own alone, and the other sees both.
+    TwinAfterList,
+}
+
+/// What [`FakeContainerRuntime`] has created and not removed.
+#[derive(Default)]
+struct FakeInventory {
+    containers: Vec<crate::docker::LabelledResource>,
+    networks: Vec<crate::docker::LabelledResource>,
+}
+
+impl FakeInventory {
+    fn matching(
+        resources: &[crate::docker::LabelledResource],
+        labels: &[(&str, Option<&str>)],
+    ) -> Vec<crate::docker::LabelledResource> {
+        resources
+            .iter()
+            .filter(|resource| {
+                labels.iter().all(|(key, value)| match value {
+                    Some(value) => resource.labels.get(*key).map(String::as_str) == Some(*value),
+                    None => resource.labels.contains_key(*key),
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn set_state(&mut self, id: &str, state: &str) {
+        if let Some(container) = self.containers.iter_mut().find(|c| c.id == id) {
+            container.state = Some(state.to_string());
+        }
+    }
 }
 
 /// What a fake container holds at one path.
@@ -326,6 +389,12 @@ impl Default for FakeContainerRuntime {
             written_files: Default::default(),
             created_directories: Default::default(),
             claimed_directories: Default::default(),
+            inventory: Default::default(),
+            stopped_exit_codes: Default::default(),
+            stops: Default::default(),
+            network_creates: Default::default(),
+            network_count: Default::default(),
+            late_twin: Default::default(),
             events: Default::default(),
             sequence: Default::default(),
             fail_run: Default::default(),
@@ -1178,7 +1247,6 @@ impl FakeContainerRuntime {
 
     /// Makes `create_network` take `delay` to answer, as a slow daemon's
     /// does; a run cut short meanwhile can't tell whether it made one.
-    #[cfg(unix)]
     fn with_network_create_delay(self, delay: std::time::Duration) -> Self {
         *self.network_create_delay.lock().unwrap() = Some(delay);
         self
@@ -1388,7 +1456,7 @@ impl ContainerRuntime for FakeContainerRuntime {
         Ok(())
     }
 
-    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()> {
+    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<String> {
         if *self.fail_network_creation.lock().unwrap() {
             anyhow::bail!("could not find an available, non-overlapping IPv4 address pool");
         }
@@ -1398,8 +1466,49 @@ impl ContainerRuntime for FakeContainerRuntime {
             tokio::time::sleep(delay).await;
         }
         self.push(format!("network-create:{name}"));
+        let instead = self.network_creates.lock().unwrap().pop_front();
+        if let Some(FakeNetworkCreate::Conflict(appearing)) = instead {
+            let mut inventory = self.inventory.lock().unwrap();
+            for resource in appearing {
+                if resource.state.is_some() {
+                    inventory.containers.push(resource);
+                } else {
+                    inventory.networks.push(resource);
+                }
+            }
+            return Err(anyhow::Error::new(crate::docker::NameInUse {
+                name: name.to_string(),
+                message: format!("network with name {name} already exists"),
+            }));
+        }
         *self.network_labels.lock().unwrap() = Some(labels.clone());
-        Ok(())
+        let id = {
+            let mut count = self.network_count.lock().unwrap();
+            *count += 1;
+            match *count {
+                1 => format!("network-id-{name}"),
+                n => format!("network-id-{name}-{n}"),
+            }
+        };
+        let network = |id: &str| crate::docker::LabelledResource {
+            id: id.to_string(),
+            name: name.to_string(),
+            labels: labels.clone(),
+            created: Some(0),
+            state: None,
+        };
+        let mut inventory = self.inventory.lock().unwrap();
+        inventory.networks.push(network(&id));
+        match instead {
+            Some(FakeNetworkCreate::Twin) => {
+                inventory.networks.push(network(&format!("twin-of-{id}")));
+            }
+            Some(FakeNetworkCreate::TwinAfterList) => {
+                *self.late_twin.lock().unwrap() = Some(network(&format!("twin-of-{id}")));
+            }
+            _ => {}
+        }
+        Ok(id)
     }
 
     async fn network_exists(&self, name: &str) -> Result<bool> {
@@ -1444,6 +1553,23 @@ impl ContainerRuntime for FakeContainerRuntime {
         // shows up as the same `sidecar-stop:sidecar-id-{name}` event,
         // which is what the cleanup-flag tests assert on.
         let container_id = format!("sidecar-id-{name}");
+        // A fresh container: what a stop left an earlier one of this id
+        // with — one a replaced instance had — isn't its exit.
+        self.stopped_exit_codes
+            .lock()
+            .unwrap()
+            .remove(&container_id);
+        self.inventory
+            .lock()
+            .unwrap()
+            .containers
+            .push(crate::docker::LabelledResource {
+                id: container_id.clone(),
+                name: spec.shared.docker_name.clone(),
+                labels: spec.labels.clone(),
+                created: Some(0),
+                state: Some("created".to_string()),
+            });
         let reply_delay = self.create_reply_delays.lock().unwrap().get(name).copied();
         if let Some(reply_delay) = reply_delay {
             tokio::time::sleep(reply_delay).await;
@@ -1655,6 +1781,10 @@ impl ContainerRuntime for FakeContainerRuntime {
             .lock()
             .unwrap()
             .insert(container_id.to_string());
+        self.inventory
+            .lock()
+            .unwrap()
+            .set_state(container_id, "running");
         self.push(format!(
             "sidecar-start:{alias}:{}",
             network_label(&spec.shared.network)
@@ -1745,10 +1875,17 @@ impl ContainerRuntime for FakeContainerRuntime {
                 Ok(exit_code)
             }
             // Never exits on its own — matching a real container that just
-            // keeps running until something else stops it. Aborted by the
-            // engine rather than ever resolved, for every dependency this
-            // fake wasn't told to make exit.
-            None => std::future::pending().await,
+            // keeps running until something else stops it, when the wait
+            // reports what the stop left it with. Aborted by the engine
+            // rather than ever resolved, for every dependency this fake
+            // wasn't told to make exit.
+            None => loop {
+                let stopped = self.stops.notified();
+                if let Some(code) = self.stopped_exit_codes.lock().unwrap().get(container_id) {
+                    return Ok(*code);
+                }
+                stopped.await;
+            },
         }
     }
 
@@ -1872,30 +2009,46 @@ impl ContainerRuntime for FakeContainerRuntime {
         // pending too — and dropped with it — rather than already done.
         tokio::task::yield_now().await;
         self.refuses_removal_of(container_id)?;
+        self.inventory
+            .lock()
+            .unwrap()
+            .containers
+            .retain(|container| container.id != container_id);
         if !self.is_gone(container_id) {
             self.push(format!("force-remove:{container_id}"));
         }
+        Ok(())
+    }
+
+    async fn follow_container(&self, container_id: &str, name: &str) -> Result<()> {
+        self.push(format!("follow:{name}:{container_id}"));
         Ok(())
     }
 }
 
 #[async_trait::async_trait]
 impl ResourceInventory for FakeContainerRuntime {
-    // The engine never lists containers or networks — that's the
-    // `resources` verb's business, driven from a binary — so these stay
-    // empty here rather than growing capture state no engine test uses.
+    // Only `services up` lists containers and networks: these answer from
+    // the fake's inventory, which every create, start and removal keeps up
+    // to date.
     async fn list_containers(
         &self,
-        _labels: &[(&str, Option<&str>)],
+        labels: &[(&str, Option<&str>)],
     ) -> Result<Vec<crate::docker::LabelledResource>> {
-        Ok(Vec::new())
+        let inventory = self.inventory.lock().unwrap();
+        Ok(FakeInventory::matching(&inventory.containers, labels))
     }
 
     async fn list_networks(
         &self,
-        _labels: &[(&str, Option<&str>)],
+        labels: &[(&str, Option<&str>)],
     ) -> Result<Vec<crate::docker::LabelledResource>> {
-        Ok(Vec::new())
+        let mut inventory = self.inventory.lock().unwrap();
+        let listed = FakeInventory::matching(&inventory.networks, labels);
+        if let Some(twin) = self.late_twin.lock().unwrap().take() {
+            inventory.networks.push(twin);
+        }
+        Ok(listed)
     }
 
     async fn remove_network(&self, name: &str) -> Result<()> {
@@ -1907,6 +2060,13 @@ impl ResourceInventory for FakeContainerRuntime {
             self.probe_run_lock(LockProbe::NetworkRemoval, &labels);
         }
         self.push(format!("network-remove:{name}"));
+        // A twin's `up` removes it as this one is removed: both saw two.
+        let twin = format!("twin-of-{name}");
+        self.inventory
+            .lock()
+            .unwrap()
+            .networks
+            .retain(|network| network.id != name && network.name != name && network.id != twin);
         Ok(())
     }
 
@@ -1949,7 +2109,17 @@ impl ResourceInventory for FakeContainerRuntime {
         if let Some(stopped) = stopped {
             let _ = stopped.send(());
         }
+        self.stopped_exit_codes
+            .lock()
+            .unwrap()
+            .insert(container_id.to_string(), 143);
+        self.stops.notify_waiters();
         self.refuses_removal_of(container_id)?;
+        self.inventory
+            .lock()
+            .unwrap()
+            .containers
+            .retain(|container| container.id != container_id);
         if !self.is_gone(container_id) {
             self.push(format!("sidecar-stop:{container_id}"));
         }
@@ -2143,6 +2313,7 @@ fn config_with_cycle() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -2153,6 +2324,7 @@ fn empty_config() -> Config {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -2254,6 +2426,7 @@ fn config_with_shared_prerequisite() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -2382,6 +2555,7 @@ fn config_with_wildcard_prerequisite_tasks() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -2426,6 +2600,7 @@ async fn literal_prerequisites_run_in_declared_order() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -2456,6 +2631,7 @@ async fn wildcard_prerequisite_matching_no_tasks_is_not_an_error() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -2487,6 +2663,7 @@ async fn explicit_prerequisite_and_overlapping_wildcard_only_runs_once() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -2519,6 +2696,7 @@ async fn nonexistent_literal_prerequisite_still_errors() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -2548,6 +2726,7 @@ fn config_with_prerequisites(tasks: &[(&str, &[&str])]) -> Config {
         tasks: declared,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -2800,6 +2979,7 @@ async fn wildcard_pattern_with_multiple_asterisks_matches() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3039,6 +3219,7 @@ async fn the_named_tasks_own_container_is_interactive_eligible() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3084,6 +3265,7 @@ async fn prerequisite_tasks_own_container_is_interactive_eligible() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3123,6 +3305,7 @@ fn config_with_nested_prerequisites() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -3244,6 +3427,7 @@ async fn cache_mounts_are_owned_by_the_mapped_user() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3313,6 +3497,7 @@ async fn a_read_only_cache_mount_is_not_owned_by_the_mapped_user() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let project = std::env::temp_dir().join(format!("ratect-ro-cache-{}", uuid::Uuid::new_v4()));
@@ -3348,6 +3533,7 @@ async fn run_as_current_user_reaches_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3386,6 +3572,7 @@ async fn a_dependencys_run_as_current_user_is_independent_of_its_own_containers(
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3423,6 +3610,7 @@ async fn container_without_run_as_current_user_reaches_the_container_with_no_map
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3469,6 +3657,7 @@ async fn additional_hostnames_and_hosts_reach_a_tasks_own_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3513,6 +3702,7 @@ async fn additional_hostnames_and_hosts_reach_a_dependency_independently() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3567,6 +3757,7 @@ async fn ports_reach_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3595,6 +3786,7 @@ async fn task_run_ports_are_added_to_the_containers_own_ports() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3623,6 +3815,7 @@ async fn disable_port_publishing_suppresses_configured_ports() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3706,6 +3899,7 @@ async fn run_as_current_user_explicitly_disabled_reaches_the_container_with_no_m
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3788,6 +3982,7 @@ async fn build_directory_container_builds_then_runs_the_built_image() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3836,6 +4031,7 @@ async fn build_directory_container_does_not_force_pull_by_default() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3864,6 +4060,7 @@ async fn build_directory_container_with_always_policy_force_pulls_the_base_image
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -3891,6 +4088,7 @@ fn config_building_with_dockerfile(dockerfile: &str) -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -3985,6 +4183,7 @@ async fn build_directory_container_passes_dockerfile_and_target_through() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4015,6 +4214,7 @@ async fn build_directory_container_defaults_dockerfile_when_unset() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4044,6 +4244,7 @@ async fn build_directory_container_without_secrets_or_ssh_skips_buildkit() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4088,6 +4289,7 @@ async fn build_directory_container_passes_secrets_and_ssh_through_as_buildkit_op
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4142,6 +4344,7 @@ async fn a_missing_build_secret_file_fails_before_the_image_is_built() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4198,6 +4401,7 @@ async fn build_ssh_key_paths_reach_docker_as_a_named_key_source() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4256,6 +4460,7 @@ async fn an_invalid_build_ssh_entry_names_the_container_it_came_from() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let engine = engine(config, FakeContainerRuntime::default());
@@ -4295,6 +4500,7 @@ async fn a_failed_build_names_the_container_whatever_layer_failed() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let engine = engine(
@@ -4366,6 +4572,7 @@ fn config_building_build_env(build_args: Option<HashMap<String, String>>) -> Con
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -4474,6 +4681,7 @@ async fn built_image_is_tagged_with_project_and_container_name() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4524,6 +4732,7 @@ async fn build_directory_is_only_built_once_when_reused_across_tasks() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4557,6 +4766,7 @@ async fn build_args_reach_the_build() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4593,6 +4803,7 @@ async fn dependency_container_with_build_directory_is_built_and_started() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4693,6 +4904,7 @@ async fn container_without_image_or_build_directory_errors() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4722,6 +4934,7 @@ async fn dependency_less_task_still_gets_its_own_network() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4766,6 +4979,7 @@ async fn use_network_reuses_an_existing_network_instead_of_creating_one() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -4829,6 +5043,7 @@ async fn network_mode_applies_to_its_own_container_alone() {
             tasks,
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         };
 
         let docker = FakeContainerRuntime::default();
@@ -4873,6 +5088,7 @@ async fn use_network_errors_clearly_when_the_network_does_not_exist() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().without_existing_network();
@@ -4912,6 +5128,7 @@ async fn a_missing_network_still_posts_task_failed() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let sink = RecordingEventSink::default();
@@ -4963,6 +5180,7 @@ async fn dependency_starts_before_main_container_and_is_cleaned_up() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -5056,6 +5274,7 @@ fn config_with_database_dependency(configure: impl FnOnce(&mut Container)) -> Co
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -5747,6 +5966,7 @@ fn config_with_sibling_dependencies() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -5793,6 +6013,7 @@ fn config_with_containers(app_dependencies: &[&str], containers: &[(&str, &[&str
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -6387,6 +6608,7 @@ async fn a_container_sharing_anothers_network_is_created_after_its_target_and_st
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
     let docker = FakeContainerRuntime::default()
         .with_health_check_delay("db", std::time::Duration::from_secs(1));
@@ -6575,6 +6797,7 @@ fn config_with_an_external_health_check() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -6837,6 +7060,7 @@ async fn run_to_completion_and_regular_dependencies_can_be_mixed() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().with_dependency_exit(
@@ -6896,6 +7120,7 @@ async fn independent_run_to_completion_dependencies_run_concurrently() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let delay = std::time::Duration::from_millis(100);
@@ -6937,6 +7162,7 @@ async fn run_to_completion_dependency_declared_directly_on_the_task() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().with_dependency_exit(
@@ -6984,6 +7210,7 @@ async fn run_to_completion_is_inert_on_a_tasks_own_container() {
             tasks,
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         }
     };
 
@@ -8299,6 +8526,7 @@ async fn a_failure_reported_elsewhere_posts_no_second_error_event() {
             tasks,
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         }
     };
 
@@ -8522,6 +8750,7 @@ async fn no_other_failure_hints_no_cleanup_after_failure() {
             tasks,
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         }
     };
     let cases: Vec<(&str, &str, FakeContainerRuntime)> = vec![
@@ -8605,6 +8834,7 @@ async fn task_containers_own_health_check_reaches_docker_and_is_waited_on() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     // The gate runs alongside the main command and is dropped the moment
@@ -8654,6 +8884,7 @@ async fn unhealthy_task_container_fails_the_task() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default()
@@ -8688,6 +8919,7 @@ async fn task_containers_own_setup_commands_run() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     // The gate runs alongside the main command and is dropped the moment
@@ -8732,6 +8964,7 @@ fn config_with_task_working_directory_and_setup_command(
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -8782,6 +9015,7 @@ async fn failing_setup_command_on_the_tasks_own_container_fails_the_task() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default()
@@ -9030,6 +9264,7 @@ fn config_with_failing_task_container_setup_command() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -9059,6 +9294,7 @@ async fn task_containers_own_setup_commands_run_concurrently_with_its_main_comma
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let delay = std::time::Duration::from_millis(100);
@@ -9723,6 +9959,7 @@ async fn task_fails_when_container_exits_nonzero_but_dependencies_are_still_clea
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().failing_run();
@@ -9912,6 +10149,7 @@ fn config_with_a_prerequisite_that_has_a_dependency() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -10254,6 +10492,7 @@ async fn nested_dependencies_start_in_order_on_same_network() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -10310,6 +10549,7 @@ async fn independent_dependencies_start_concurrently_not_sequentially() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let delay = std::time::Duration::from_millis(100);
@@ -10353,6 +10593,7 @@ async fn concurrent_dependencies_sharing_an_image_only_pull_it_once() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default()
@@ -10398,6 +10639,7 @@ fn config_with_two_independent_image_pulls() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -10491,6 +10733,7 @@ fn config_with_a_dependency_chain_of_three_pulls() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -10567,6 +10810,7 @@ async fn a_failed_pull_of_the_task_image_stops_a_dependency_before_its_setup_com
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     // The pull takes a moment to fail, and the setup command takes longer
@@ -10615,6 +10859,7 @@ async fn a_build_starts_before_a_dependency_is_ready() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let sink = RecordingEventSink::default();
@@ -10681,6 +10926,7 @@ async fn each_built_container_waits_for_its_own_build() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let dep_build = std::time::Duration::from_millis(300);
@@ -10733,6 +10979,7 @@ async fn a_failed_network_creation_attempts_no_pull_or_build() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().failing_network_creation();
@@ -10777,6 +11024,7 @@ fn config_with_a_pulled_task_container_and_a_built_dependency() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -10925,6 +11173,7 @@ fn config_with_two_independent_dependencies() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -11300,6 +11549,7 @@ async fn shared_nested_dependency_started_once_per_task() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -11351,6 +11601,7 @@ async fn task_level_dependency_starts_alongside_container_level_ones() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -11395,6 +11646,7 @@ async fn task_level_dependency_shared_with_a_container_level_one_only_starts_onc
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -11440,6 +11692,7 @@ async fn deeply_nested_dependencies_all_start_in_order() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -11506,6 +11759,7 @@ async fn separate_tasks_each_get_their_own_dependency_instance() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -11600,6 +11854,7 @@ async fn dependency_without_image_or_build_directory_errors() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -11634,6 +11889,7 @@ async fn detects_circular_container_dependency() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12161,6 +12417,7 @@ async fn task_run_environment_reaches_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12200,6 +12457,7 @@ async fn task_run_environment_overrides_container_environment_on_key_collision()
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12227,6 +12485,7 @@ async fn container_working_directory_reaches_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12258,6 +12517,7 @@ async fn task_run_working_directory_overrides_container_working_directory() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12308,6 +12568,7 @@ async fn container_command_reaches_the_container_when_run_command_is_unset() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12378,6 +12639,7 @@ async fn additional_args_follow_the_containers_own_command_when_run_command_is_u
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12417,6 +12679,7 @@ async fn container_entrypoint_reaches_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12449,6 +12712,7 @@ async fn container_labels_reach_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12485,6 +12749,7 @@ async fn every_resource_a_run_creates_is_labelled_with_that_run() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12574,6 +12839,7 @@ async fn a_run_names_its_network_and_containers_the_batect_way() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12658,6 +12924,7 @@ async fn containers_are_named_the_batect_way_under_use_network() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12698,6 +12965,7 @@ async fn containers_share_a_run_id_even_with_an_existing_network() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12739,6 +13007,7 @@ async fn container_capabilities_reach_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12772,6 +13041,7 @@ async fn container_privileged_reaches_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12798,6 +13068,7 @@ async fn container_shm_size_reaches_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12828,6 +13099,7 @@ async fn container_devices_reach_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12861,6 +13133,7 @@ async fn container_enable_init_process_reaches_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12889,6 +13162,7 @@ async fn an_omitted_enable_init_process_reaches_the_container_as_false() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12917,6 +13191,7 @@ async fn container_log_driver_and_log_options_reach_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -12961,6 +13236,7 @@ async fn container_tmpfs_mounts_reach_the_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -13004,6 +13280,7 @@ async fn binds_for_volumes(volumes: Vec<crate::config::VolumeMount>) -> Option<V
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let project = std::env::temp_dir().join(format!("ratect-binds-{}", uuid::Uuid::new_v4()));
@@ -13106,6 +13383,7 @@ async fn run_with_cache_mounts(
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -13323,6 +13601,7 @@ async fn container_tmpfs_mount_without_options_defaults_to_an_empty_string() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -13349,6 +13628,7 @@ async fn if_not_present_policy_pulls_when_the_image_is_missing_locally() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -13373,6 +13653,7 @@ async fn if_not_present_policy_skips_the_pull_when_the_image_already_exists_loca
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
@@ -13397,6 +13678,7 @@ async fn always_policy_pulls_even_when_the_image_already_exists_locally() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().with_local_image("alpine:3.18");
@@ -13427,6 +13709,7 @@ async fn only_if_not_present_looks_the_image_up_locally() {
             tasks: IndexMap::from([("test".to_string(), task("build-env", "echo hi"))]),
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         };
         let mut docker = FakeContainerRuntime::default();
         if local {
@@ -13455,6 +13738,7 @@ fn config_running(image: &str) -> Config {
         tasks: IndexMap::from([("start".to_string(), task("app", "echo hi"))]),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -13652,6 +13936,7 @@ fn two_containers_on_one_image(policy: crate::config::ImagePullPolicy) -> Config
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -13835,6 +14120,7 @@ async fn image_override_pulls_the_override_instead_of_the_configured_image() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -13887,6 +14173,7 @@ async fn image_overrides_are_what_the_graph_reports() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
     let sink = RecordingEventSink::default();
     let engine = TaskEngine::new(
@@ -13948,6 +14235,7 @@ async fn image_override_ignores_the_containers_configured_pull_policy() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default().with_local_image("ubuntu:22.04");
@@ -13984,6 +14272,7 @@ async fn image_override_replaces_a_build_directory_container_with_a_pull_instead
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14027,6 +14316,7 @@ async fn several_image_overrides_each_replace_only_their_own_containers_image() 
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14105,6 +14395,7 @@ fn config_with_a_prerequisites_only_task() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -14204,6 +14495,7 @@ fn with_settings_applies_every_setting() {
             },
         )])),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let settings = TaskEngineSettings {
@@ -14273,6 +14565,7 @@ fn default_settings_leave_an_engine_in_its_no_flags_state() {
         tasks: IndexMap::new(),
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
     let engine = engine(config, FakeContainerRuntime::default())
         .with_settings(TaskEngineSettings::default())
@@ -14308,6 +14601,7 @@ async fn tag_image_tags_a_built_image_in_addition_to_the_default_tag() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14345,6 +14639,7 @@ fn config_building(project_name: &str, container_name: &str) -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -14464,6 +14759,7 @@ async fn tag_image_errors_immediately_when_the_container_uses_a_pulled_image() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14533,6 +14829,7 @@ async fn tag_image_errors_immediately_when_an_override_image_replaces_a_build_wi
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14573,6 +14870,7 @@ async fn tag_image_errors_once_the_task_finishes_if_the_tagged_container_never_r
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14613,6 +14911,7 @@ async fn task_run_command_overrides_container_command() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14647,6 +14946,7 @@ async fn task_run_entrypoint_overrides_container_entrypoint() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14676,6 +14976,7 @@ async fn a_container_with_no_entrypoint_or_shm_size_reaches_the_container_with_n
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14701,6 +15002,7 @@ async fn proxy_environment_variables_reach_a_tasks_own_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14738,6 +15040,7 @@ async fn explicit_environment_overrides_a_proxy_derived_value_on_collision() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14767,6 +15070,7 @@ async fn no_proxy_vars_flag_suppresses_propagation() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14819,6 +15123,7 @@ async fn environment_with_host_proxies(
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -14891,6 +15196,7 @@ async fn no_proxy_vars_turns_off_config_file_proxies_for_a_build() {
             tasks,
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         }
     };
 
@@ -14963,6 +15269,7 @@ fn proxy_warning_config() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -15057,6 +15364,7 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_tasks_own_container() 
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15090,6 +15398,7 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_a_dependencys_container(
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15116,6 +15425,7 @@ async fn a_rewritten_proxy_url_adds_the_host_gateway_to_an_image_build() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15145,6 +15455,7 @@ async fn a_proxy_url_that_was_not_rewritten_adds_no_host_gateway() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15174,6 +15485,7 @@ async fn a_dependencys_name_is_exempted_from_the_tasks_own_no_proxy() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15211,6 +15523,7 @@ async fn a_task_level_dependencys_name_is_exempted_from_the_tasks_own_no_proxy()
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15256,6 +15569,7 @@ async fn customise_overrides_a_dependencys_working_directory_environment_and_por
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15302,6 +15616,7 @@ fn config_with_an_unevaluable_container(unevaluable: &str) -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -15385,6 +15700,7 @@ fn config_with_a_prerequisite_in_its_own_container() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -15553,6 +15869,7 @@ async fn a_tasks_values_are_evaluated_against_the_host_and_its_config_variables(
             },
         )])),
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15600,6 +15917,7 @@ async fn term_env_var_reaches_a_tasks_own_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15628,6 +15946,7 @@ async fn term_env_var_is_absent_when_host_has_no_term_set() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15660,6 +15979,7 @@ async fn term_env_var_reaches_a_dependency_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15692,6 +16012,7 @@ async fn term_env_var_reaches_a_task_level_dependency_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15718,6 +16039,7 @@ async fn explicit_environment_overrides_term_on_collision() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15765,6 +16087,7 @@ async fn term_env_var_reaches_a_prerequisite_tasks_own_container() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15808,6 +16131,7 @@ async fn build_args_get_proxy_vars_merged_with_explicit_build_args_winning() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15860,6 +16184,7 @@ async fn dependency_container_environment_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15892,6 +16217,7 @@ async fn dependency_container_working_directory_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15923,6 +16249,7 @@ async fn dependency_container_entrypoint_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15959,6 +16286,7 @@ async fn dependency_container_command_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -15993,6 +16321,7 @@ async fn dependency_container_labels_reach_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16023,6 +16352,7 @@ async fn dependency_container_capabilities_reach_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16054,6 +16384,7 @@ async fn dependency_container_privileged_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16082,6 +16413,7 @@ async fn dependency_container_shm_size_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16114,6 +16446,7 @@ async fn dependency_container_devices_reach_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16154,6 +16487,7 @@ async fn dependency_container_tmpfs_mounts_reach_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16185,6 +16519,7 @@ async fn dependency_container_enable_init_process_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16213,6 +16548,7 @@ async fn an_omitted_enable_init_process_reaches_the_sidecar_as_false() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16241,6 +16577,7 @@ async fn dependency_container_log_driver_reaches_the_sidecar() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let docker = FakeContainerRuntime::default();
@@ -16530,6 +16867,7 @@ async fn posts_lifecycle_events_in_order_for_task_with_dependency() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let sink = RecordingEventSink::default();
@@ -16709,6 +17047,7 @@ async fn posts_pull_events_only_when_a_pull_actually_happens() {
             tasks,
             config_variables: None,
             forbid_telemetry: None,
+            services: IndexMap::new(),
         }
     };
 
@@ -16770,6 +17109,7 @@ async fn image_resolved_posts_even_when_no_pull_or_build_happens() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let sink = RecordingEventSink::default();
@@ -16941,6 +17281,7 @@ async fn interleaved_policy_disables_interactive_and_sets_dumb_term_everywhere()
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
 
     let sink = InterleavedRecordingSink::default();
@@ -17434,6 +17775,7 @@ async fn a_failure_before_any_container_is_created_still_removes_the_network() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
     let docker = FakeContainerRuntime::default().failing_image_build();
     let engine = engine(config, docker.clone());
@@ -18631,6 +18973,7 @@ async fn a_build_failure_mid_run_quotes_a_line_break_in_the_value_escaped() {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     };
     let sink = RecordingEventSink::default();
     let docker = FakeContainerRuntime::default();
@@ -18728,6 +19071,7 @@ fn config_with_identity(configure: impl FnOnce(&mut Container)) -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -20480,6 +20824,7 @@ fn config_with_app(configure: impl FnOnce(&mut Container)) -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -20704,6 +21049,7 @@ fn config_with_one_dependency() -> Config {
         tasks,
         config_variables: None,
         forbid_telemetry: None,
+        services: IndexMap::new(),
     }
 }
 
@@ -20985,4 +21331,978 @@ async fn a_task_run_signalled_while_creating_its_network_keeps_its_lock_file() {
 
     assert_eq!(run_lock_files(&directory).len(), 1, "the file stays");
     std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A project with containers `api` and `db` and the service group `stack`
+/// over both, with `condition` and `rule`.
+fn config_with_service_group(
+    condition: crate::config::ExitCondition,
+    rule: crate::config::ExitCodeRule,
+) -> Config {
+    let mut config = empty_config();
+    config
+        .containers
+        .insert("api".to_string(), container("alpine:3.18", None));
+    config
+        .containers
+        .insert("db".to_string(), container("postgres:16", None));
+    config.services.insert(
+        "stack".to_string(),
+        crate::config::ServiceGroup {
+            containers: vec!["api".to_string(), "db".to_string()],
+            exit_condition: condition,
+            exit_code_from: rule,
+        },
+    );
+    config
+}
+
+/// The exit code `bring_up_service` came back with, as the binary reads it.
+fn service_exit_code(result: &Result<()>) -> i64 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            error
+                .downcast_ref::<crate::docker::ContainerExitedNonZero>()
+                .unwrap_or_else(|| panic!("not an exit code: {error:?}"))
+                .exit_code
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn services_up_brings_up_every_member_under_the_instances_labels_and_names() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        3,
+    );
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstToExit,
+        ),
+        docker.clone(),
+    );
+
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 3);
+    for member in ["api", "db"] {
+        let spec = docker.spec_for(member).unwrap();
+        assert_eq!(
+            spec.shared.docker_name,
+            format!("demo..stack..default..{member}")
+        );
+        assert_eq!(spec.labels[crate::labels::ROLE], "service");
+        assert_eq!(spec.labels[crate::labels::SERVICE], "stack");
+        assert_eq!(spec.labels[crate::labels::INSTANCE], "default");
+        assert_eq!(spec.labels[crate::labels::START_DIRECTORY], "/work/demo");
+        assert!(!spec.labels.contains_key(crate::labels::RUN));
+        assert!(!spec.labels.contains_key(crate::labels::TASK));
+    }
+    let events = docker.events();
+    assert!(events.contains(&"network-create:demo..stack..default".to_string()));
+    // Taken down: both containers, then the network.
+    assert!(events.contains(&"sidecar-stop:sidecar-id-api".to_string()));
+    assert!(events.contains(&"sidecar-stop:sidecar-id-db".to_string()));
+    assert_eq!(
+        events.last().unwrap(),
+        "network-remove:network-id-demo..stack..default"
+    );
+    let inventory = docker.inventory.lock().unwrap();
+    assert!(inventory.containers.is_empty() && inventory.networks.is_empty());
+}
+
+/// A migration a member depends on, run to completion before it, exits
+/// `0` as its readiness: only a member's exit counts, so under
+/// `any_stopped` it neither ends the group nor is the first to exit.
+#[tokio::test(start_paused = true)]
+async fn a_run_to_completion_dependency_exiting_is_no_members_stop() {
+    let mut config = config_with_service_group(
+        crate::config::ExitCondition::AnyStopped,
+        crate::config::ExitCodeRule::FirstToExit,
+    );
+    let mut migrate = container("alpine:3.18", None);
+    migrate.run_to_completion = Some(true);
+    config.containers.insert("migrate".to_string(), migrate);
+    config.containers.get_mut("api").unwrap().dependencies = Some(vec!["migrate".to_string()]);
+    let docker = FakeContainerRuntime::default()
+        .with_dependency_exit("migrate", std::time::Duration::from_secs(5), 0)
+        .with_dependency_exit("api", std::time::Duration::from_secs(10), 4);
+    let engine = engine(config, docker.clone());
+
+    let started = tokio::time::Instant::now();
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 4);
+    // `api`'s ten seconds only begin once the migration's five are over.
+    assert!(started.elapsed() >= std::time::Duration::from_secs(15));
+    let events = docker.events();
+    let migrated = events
+        .iter()
+        .position(|e| e.starts_with("sidecar-start:migrate:"))
+        .expect("the migration should have run");
+    let api_started = events
+        .iter()
+        .position(|e| e.starts_with("sidecar-start:api:"))
+        .expect("api should have started");
+    assert!(migrated < api_started, "{events:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn all_stopped_waits_for_every_member_and_first_non_zero_picks_the_first_failure() {
+    let docker = FakeContainerRuntime::default()
+        .with_dependency_exit("api", std::time::Duration::from_secs(1), 0)
+        .with_dependency_exit("db", std::time::Duration::from_secs(5), 7);
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AllStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        ),
+        docker,
+    );
+    let started = tokio::time::Instant::now();
+
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 7);
+    assert!(started.elapsed() >= std::time::Duration::from_secs(5));
+}
+
+#[tokio::test(start_paused = true)]
+async fn first_non_zero_is_zero_when_every_member_that_stopped_of_its_own_accord_exited_zero() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        ),
+        docker,
+    );
+
+    // `db` is stopped by the take-down, exiting 143: not of its own accord.
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_nominated_member_gives_its_exit_code_even_when_the_take_down_stopped_it() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::Container("db".to_string()),
+        ),
+        docker,
+    );
+
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 143);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_nominated_member_gives_its_exit_code_whatever_the_order_members_stop_in() {
+    let docker = FakeContainerRuntime::default()
+        .with_dependency_exit("db", std::time::Duration::from_secs(1), 4)
+        .with_dependency_exit("api", std::time::Duration::from_secs(2), 9);
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AllStopped,
+            crate::config::ExitCodeRule::Container("api".to_string()),
+        ),
+        docker,
+    );
+
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 9);
+}
+
+/// What an instance of `stack` holds on a daemon: its network, and a
+/// container in each of `states`' states.
+fn stack_instance(
+    states: &[(&str, &str)],
+    directory: &str,
+) -> Vec<crate::docker::LabelledResource> {
+    let labels = crate::labels::OwnershipLabels::for_service_instance(
+        "demo",
+        "stack",
+        crate::labels::DEFAULT_INSTANCE,
+        directory,
+        None,
+    );
+    let mut resources = vec![crate::docker::LabelledResource {
+        id: "network-id-demo..stack..default".to_string(),
+        name: "demo..stack..default".to_string(),
+        labels: labels.for_network(),
+        created: Some(0),
+        state: None,
+    }];
+    for (name, state) in states {
+        resources.push(crate::docker::LabelledResource {
+            id: format!("sidecar-id-{name}"),
+            name: format!("demo..stack..default..{name}"),
+            labels: labels.for_container(name, crate::labels::ContainerRole::Service, None),
+            created: Some(0),
+            state: Some(state.to_string()),
+        });
+    }
+    resources
+}
+
+/// [`stack_instance`], already on the fake's daemon.
+fn running_stack_instance(
+    docker: &FakeContainerRuntime,
+    states: [(&str, &str); 2],
+    directory: &str,
+) {
+    let mut inventory = docker.inventory.lock().unwrap();
+    for resource in stack_instance(&states, directory) {
+        if resource.state.is_some() {
+            inventory.containers.push(resource);
+        } else {
+            inventory.networks.push(resource);
+        }
+    }
+}
+
+/// Attaching follows each running container, starts nothing, and neither
+/// follows nor counts a member that had already exited: under `any_stopped`,
+/// `db`'s old exit doesn't end the group — `api`'s, a second in, does.
+#[tokio::test(start_paused = true)]
+async fn attaching_follows_what_runs_and_leaves_an_exited_member_alone() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    running_stack_instance(
+        &docker,
+        [("api", "running"), ("db", "exited")],
+        "/work/demo",
+    );
+    docker
+        .stopped_exit_codes
+        .lock()
+        .unwrap()
+        .insert("sidecar-id-db".to_string(), 6);
+    let posted = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        )),
+        docker.clone(),
+        Arc::new(posted.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+    let started = tokio::time::Instant::now();
+
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 0);
+    assert!(started.elapsed() >= std::time::Duration::from_secs(1));
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("create:")
+            || e.starts_with("network-create:")
+            || e.starts_with("start:")),
+        "{events:?}"
+    );
+    let followed: Vec<&String> = events.iter().filter(|e| e.starts_with("follow:")).collect();
+    assert_eq!(followed, ["follow:api:sidecar-id-api"]);
+    assert!(!posted
+        .events()
+        .iter()
+        .any(|event| matches!(event, TaskEvent::Warning { .. })));
+    let inventory = docker.inventory.lock().unwrap();
+    assert!(inventory.containers.is_empty() && inventory.networks.is_empty());
+}
+
+/// A nominated member that had exited before this `up` attached gives the
+/// exit code it left, which no watch of this `up` would see.
+#[tokio::test(start_paused = true)]
+async fn a_nominated_member_that_had_already_exited_gives_the_code_it_left() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    running_stack_instance(
+        &docker,
+        [("api", "running"), ("db", "exited")],
+        "/work/demo",
+    );
+    docker
+        .stopped_exit_codes
+        .lock()
+        .unwrap()
+        .insert("sidecar-id-db".to_string(), 6);
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::Container("db".to_string()),
+        ),
+        docker,
+    );
+
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 6);
+}
+
+#[tokio::test(start_paused = true)]
+async fn attaching_to_an_instance_brought_up_from_another_directory_warns() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    running_stack_instance(
+        &docker,
+        [("api", "running"), ("db", "running")],
+        "/work/first",
+    );
+    let posted = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        )),
+        docker,
+        Arc::new(posted.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine
+        .bring_up_service("stack", "/work/second")
+        .await
+        .unwrap();
+
+    let warnings: Vec<String> = posted
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            TaskEvent::Warning { message } => Some(message.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        warnings,
+        [
+            "Attaching to service group 'stack', which was brought up from /work/first, not \
+             /work/second: its containers' bind mounts point there."
+        ]
+    );
+}
+
+#[tokio::test]
+async fn services_up_refuses_a_group_the_project_doesnt_declare() {
+    let docker = FakeContainerRuntime::default();
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        ),
+        docker.clone(),
+    );
+
+    let error = engine
+        .bring_up_service("stak", "/work/demo")
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        "The service group 'stak' does not exist. Its service groups are 'stack'."
+    );
+    assert!(docker.events().is_empty());
+}
+
+/// The default `stack` group, whose `api` exits `code` a second in.
+fn stack_engine(docker: &FakeContainerRuntime, code: i64) -> TaskEngine<FakeContainerRuntime> {
+    let docker =
+        docker
+            .clone()
+            .with_dependency_exit("api", std::time::Duration::from_secs(1), code);
+    engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstToExit,
+        ),
+        docker,
+    )
+}
+
+/// With the fake scripted as a daemon that takes two networks of one name
+/// (Docker 20.10 to 24, which no test here runs), an `up` that finds a
+/// second network beside its own removes its own and starts over, and
+/// brings the group up on the network it then wins — by that network's id.
+#[tokio::test(start_paused = true)]
+async fn an_up_that_finds_a_twin_network_removes_its_own_and_starts_over() {
+    let docker = FakeContainerRuntime::default();
+    docker
+        .network_creates
+        .lock()
+        .unwrap()
+        .push_back(FakeNetworkCreate::Twin);
+
+    let result = stack_engine(&docker, 4)
+        .bring_up_service("stack", "/work/demo")
+        .await;
+
+    assert_eq!(service_exit_code(&result), 4);
+    let events = docker.events();
+    let position = |event: &str| events.iter().position(|e| e == event);
+    let removed_own = position("network-remove:network-id-demo..stack..default").unwrap();
+    let created_api = events
+        .iter()
+        .position(|e| e.starts_with("create:api"))
+        .unwrap();
+    assert!(removed_own < created_api, "{events:?}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.starts_with("network-create:"))
+            .count(),
+        2,
+        "{events:?}"
+    );
+    let network = format!("{:?}", docker.spec_for("api").unwrap().shared.network);
+    assert!(
+        network.contains("network-id-demo..stack..default-2"),
+        "{network}"
+    );
+}
+
+/// An `up` whose network create the daemon refuses because another `up`'s
+/// instance has it attaches to that instance, and creates nothing.
+#[tokio::test(start_paused = true)]
+async fn an_up_whose_network_create_is_refused_attaches_to_the_instance_that_has_it() {
+    let docker = FakeContainerRuntime::default();
+    docker
+        .network_creates
+        .lock()
+        .unwrap()
+        .push_back(FakeNetworkCreate::Conflict(stack_instance(
+            &[("api", "running"), ("db", "running")],
+            "/work/demo",
+        )));
+
+    stack_engine(&docker, 0)
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("create:")),
+        "{events:?}"
+    );
+    assert!(events.contains(&"follow:api:sidecar-id-api".to_string()));
+}
+
+/// A refused create with no instance and no network of that name left is
+/// the holder having gone, as a failed `up` takes its network with it:
+/// this `up` starts over and brings the group up.
+#[tokio::test(start_paused = true)]
+async fn an_up_whose_network_create_is_refused_by_a_holder_since_gone_starts_over() {
+    let docker = FakeContainerRuntime::default().without_existing_network();
+    docker
+        .network_creates
+        .lock()
+        .unwrap()
+        .push_back(FakeNetworkCreate::Conflict(Vec::new()));
+
+    let result = stack_engine(&docker, 0)
+        .bring_up_service("stack", "/work/demo")
+        .await;
+
+    result.unwrap();
+    assert!(docker.events().iter().any(|e| e.starts_with("create:api")));
+}
+
+/// A network name held by a network without the instance's labels stops
+/// `up`, which neither attaches to it nor removes it, nor takes anything down.
+#[tokio::test(start_paused = true)]
+async fn an_up_refuses_a_network_name_held_by_something_else() {
+    let docker = FakeContainerRuntime::default();
+    docker
+        .network_creates
+        .lock()
+        .unwrap()
+        .push_back(FakeNetworkCreate::Conflict(Vec::new()));
+
+    let error = stack_engine(&docker, 0)
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains(
+            "the network name 'demo..stack..default' is in use by a network that is not this \
+             service group's instance"
+        ),
+        "{error:#}"
+    );
+    assert!(
+        !docker
+            .events()
+            .iter()
+            .any(|e| e.starts_with("network-remove:")),
+        "{:?}",
+        docker.events()
+    );
+}
+
+/// A paused member is watched, not waited on as if stopped: nominated, it
+/// gives the code the take-down's stop leaves it with, and attaching doesn't
+/// hang reading an exit it hasn't had.
+#[tokio::test(start_paused = true)]
+async fn a_paused_nominated_member_is_watched_like_a_running_one() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    running_stack_instance(
+        &docker,
+        [("api", "running"), ("db", "paused")],
+        "/work/demo",
+    );
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::Container("db".to_string()),
+        ),
+        docker.clone(),
+    );
+
+    let result = engine.bring_up_service("stack", "/work/demo").await;
+
+    assert_eq!(service_exit_code(&result), 143);
+    let followed: Vec<String> = docker
+        .events()
+        .into_iter()
+        .filter(|e| e.starts_with("follow:"))
+        .collect();
+    assert_eq!(followed, ["follow:api:sidecar-id-api"]);
+}
+
+/// An attached `up` takes down what it attached to and nothing else. Here
+/// another `up` replaced the instance while this one was attached — took it
+/// down, then brought up a new one under the same labels and names — and
+/// this one's take-down, finding only the newer instance, leaves it alone.
+#[tokio::test(start_paused = true)]
+async fn an_attached_ups_take_down_leaves_a_newer_instance_alone() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(2),
+        0,
+    );
+    running_stack_instance(
+        &docker,
+        [("api", "running"), ("db", "running")],
+        "/work/demo",
+    );
+    let replaced = {
+        let inventory = Arc::clone(&docker.inventory);
+        let mut newer = stack_instance(&[("api", "running"), ("db", "running")], "/work/demo");
+        for resource in &mut newer {
+            resource.id = format!("newer-{}", resource.id);
+        }
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let mut inventory = inventory.lock().unwrap();
+            inventory.containers.clear();
+            inventory.networks.clear();
+            for resource in newer {
+                if resource.state.is_some() {
+                    inventory.containers.push(resource);
+                } else {
+                    inventory.networks.push(resource);
+                }
+            }
+        })
+    };
+    let engine = engine(
+        config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        ),
+        docker.clone(),
+    );
+
+    engine
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap();
+    replaced.await.unwrap();
+
+    let inventory = docker.inventory.lock().unwrap();
+    let left: Vec<&str> = inventory
+        .containers
+        .iter()
+        .chain(&inventory.networks)
+        .map(|resource| resource.id.as_str())
+        .collect();
+    assert_eq!(
+        left,
+        [
+            "newer-sidecar-id-api",
+            "newer-sidecar-id-db",
+            "newer-network-id-demo..stack..default"
+        ]
+    );
+}
+
+/// A create the winner stopped waiting for, at a second signal, may still
+/// make its container: the take-down removes every container of the
+/// instance while the network it won is there, since nothing else creates
+/// one, and a warning says the create went unanswered.
+#[tokio::test(start_paused = true)]
+async fn a_winners_take_down_removes_a_container_whose_create_it_stopped_waiting_for() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default().with_create_reply_delay("db", REPLY);
+    let posted = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        )),
+        docker.clone(),
+        Arc::new(posted.clone()),
+        Arc::clone(&interrupt),
+    );
+    let signaller = signal_later(
+        &interrupt,
+        &[
+            crate::interrupt::TerminationSignal::Interrupt,
+            crate::interrupt::TerminationSignal::Interrupt,
+        ],
+    );
+
+    engine
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap_err();
+    signaller.await.unwrap();
+
+    let inventory = docker.inventory.lock().unwrap();
+    assert!(
+        inventory.containers.is_empty(),
+        "{:?}",
+        inventory.containers
+    );
+    assert!(inventory.networks.is_empty(), "{:?}", inventory.networks);
+    assert!(
+        posted.events().iter().any(|event| matches!(event,
+            TaskEvent::Warning { message } if *message
+                == "Stopped waiting for the create of db to answer, so it may exist; `ratect \
+                    services down stack` removes it.")),
+        "{:?}",
+        posted.events()
+    );
+}
+
+/// A second signal during the take-down force-removes what is left of the
+/// instance, and each step — each container's removal, the network's — is
+/// reported once, whichever pass made it.
+#[tokio::test(start_paused = true)]
+async fn a_second_signal_during_the_take_down_force_removes_the_rest_reporting_each_step_once() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_stop_delay("db", std::time::Duration::from_secs(1_000));
+    let posted = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        )),
+        docker.clone(),
+        Arc::new(posted.clone()),
+        Arc::clone(&interrupt),
+    );
+    let signaller = signal_later(
+        &interrupt,
+        &[
+            crate::interrupt::TerminationSignal::Interrupt,
+            crate::interrupt::TerminationSignal::Interrupt,
+        ],
+    );
+
+    engine
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap_err();
+    signaller.await.unwrap();
+
+    let events = posted.events();
+    let count = |wanted: &TaskEvent| events.iter().filter(|event| *event == wanted).count();
+    for container in ["api", "db"] {
+        assert_eq!(
+            count(&TaskEvent::ContainerRemoved {
+                container: container.to_string()
+            }),
+            1,
+            "{container}: {events:?}"
+        );
+    }
+    assert_eq!(
+        count(&TaskEvent::RemovingServiceGroupNetwork),
+        1,
+        "{events:?}"
+    );
+    assert_eq!(
+        count(&TaskEvent::ServiceGroupNetworkRemoved),
+        1,
+        "{events:?}"
+    );
+    assert!(docker.inventory.lock().unwrap().containers.is_empty());
+}
+
+/// An instance without a container the configuration has since gained is
+/// attached to as it is: a change to the configuration reaches an instance
+/// only once it has been taken down (decisions/0026).
+#[tokio::test(start_paused = true)]
+async fn an_instance_without_a_container_the_configuration_has_gained_is_attached_to() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    running_stack_instance(
+        &docker,
+        [("api", "running"), ("db", "running")],
+        "/work/demo",
+    );
+    let mut config = config_with_service_group(
+        crate::config::ExitCondition::AnyStopped,
+        crate::config::ExitCodeRule::FirstNonZero,
+    );
+    config
+        .containers
+        .insert("cache".to_string(), container("redis:7", None));
+    config.containers["api"].dependencies = Some(vec!["cache".to_string()]);
+
+    engine(config, docker.clone())
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap();
+
+    let events = docker.events();
+    assert!(
+        !events.iter().any(|e| e.starts_with("create:")),
+        "{events:?}"
+    );
+    assert!(events.contains(&"follow:api:sidecar-id-api".to_string()));
+}
+
+/// An instance with no member running — every container exited, or its
+/// network gone — is replaced: taken down by its labels, then brought up
+/// anew, never started again where it stands.
+#[tokio::test(start_paused = true)]
+async fn an_instance_with_no_member_running_or_no_network_is_replaced() {
+    for network_gone in [false, true] {
+        let docker = FakeContainerRuntime::default();
+        let states = if network_gone {
+            [("api", "running"), ("db", "running")]
+        } else {
+            [("api", "exited"), ("db", "exited")]
+        };
+        running_stack_instance(&docker, states, "/work/demo");
+        if network_gone {
+            docker.inventory.lock().unwrap().networks.clear();
+        }
+
+        stack_engine(&docker, 0)
+            .bring_up_service("stack", "/work/demo")
+            .await
+            .unwrap();
+
+        let events = docker.events();
+        let position = |prefix: &str| events.iter().position(|e| e.starts_with(prefix));
+        let removed_old = position("sidecar-stop:sidecar-id-db").unwrap();
+        let created_network = position("network-create:").unwrap();
+        assert!(removed_old < created_network, "{events:?}");
+        assert!(position("create:api").is_some(), "{events:?}");
+        assert!(position("follow:").is_none(), "{events:?}");
+    }
+}
+
+/// While a container is only created or being removed, another `up` is
+/// changing the instance: this one waits, saying so once, and attaches once
+/// the containers run — creating nothing.
+#[tokio::test(start_paused = true)]
+async fn an_up_waits_while_another_brings_the_instance_up_then_attaches() {
+    let docker = FakeContainerRuntime::default().with_dependency_exit(
+        "api",
+        std::time::Duration::from_secs(1),
+        0,
+    );
+    running_stack_instance(
+        &docker,
+        [("api", "created"), ("db", "created")],
+        "/work/demo",
+    );
+    let other_up = {
+        let inventory = Arc::clone(&docker.inventory);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let mut inventory = inventory.lock().unwrap();
+            inventory.set_state("sidecar-id-api", "running");
+            inventory.set_state("sidecar-id-db", "running");
+        })
+    };
+    let posted = RecordingEventSink::default();
+    let engine = TaskEngine::new(
+        project(config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        )),
+        docker.clone(),
+        Arc::new(posted.clone()),
+        crate::interrupt::Interrupt::new(),
+    );
+
+    engine
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap();
+    other_up.await.unwrap();
+
+    let events = docker.events();
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.starts_with("create:") || e.starts_with("network-create:")),
+        "{events:?}"
+    );
+    assert!(events.contains(&"follow:api:sidecar-id-api".to_string()));
+    let waits = posted
+        .events()
+        .iter()
+        .filter(|event| {
+            matches!(event, TaskEvent::Notice { message }
+                if message.to_string().starts_with("Waiting for service group 'stack'"))
+        })
+        .count();
+    assert_eq!(waits, 1);
+}
+
+/// An instance another `up` is taking down is waited on, and once it has
+/// gone this `up` brings the group up anew.
+#[tokio::test(start_paused = true)]
+async fn an_up_waits_while_another_takes_the_instance_down_then_brings_it_up() {
+    let docker = FakeContainerRuntime::default();
+    running_stack_instance(
+        &docker,
+        [("api", "removing"), ("db", "running")],
+        "/work/demo",
+    );
+    let other_down = {
+        let inventory = Arc::clone(&docker.inventory);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let mut inventory = inventory.lock().unwrap();
+            inventory.containers.clear();
+            inventory.networks.clear();
+        })
+    };
+
+    stack_engine(&docker, 0)
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap();
+    other_down.await.unwrap();
+
+    let events = docker.events();
+    assert!(
+        events.iter().any(|e| e.starts_with("create:api")),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| e.starts_with("follow:")),
+        "{events:?}"
+    );
+}
+
+/// A signal while the network create is still waiting for the daemon's
+/// answer: the create is carried out, and the network it made removed,
+/// since this `up` can't have won it.
+#[tokio::test(start_paused = true)]
+async fn a_signal_during_the_network_create_removes_the_network_it_makes() {
+    let interrupt = crate::interrupt::Interrupt::new();
+    let docker = FakeContainerRuntime::default()
+        .with_network_create_delay(std::time::Duration::from_secs(5));
+    let engine = TaskEngine::new(
+        project(config_with_service_group(
+            crate::config::ExitCondition::AnyStopped,
+            crate::config::ExitCodeRule::FirstNonZero,
+        )),
+        docker.clone(),
+        Arc::new(RecordingEventSink::default()),
+        Arc::clone(&interrupt),
+    );
+    let signaller = signal_later(
+        &interrupt,
+        &[crate::interrupt::TerminationSignal::Interrupt],
+    );
+
+    engine
+        .bring_up_service("stack", "/work/demo")
+        .await
+        .unwrap_err();
+    signaller.await.unwrap();
+
+    let events = docker.events();
+    assert!(
+        events.contains(&"network-remove:network-id-demo..stack..default".to_string()),
+        "{events:?}"
+    );
+    assert!(docker.inventory.lock().unwrap().networks.is_empty());
+}
+
+/// The one-sided tie: another `up`'s network appears only once this one has
+/// listed, so this one sees its own alone and has won — it doesn't start
+/// over, and its containers join its own network by id.
+#[tokio::test(start_paused = true)]
+async fn an_up_that_saw_its_network_alone_wins_whatever_appears_after() {
+    let docker = FakeContainerRuntime::default();
+    docker
+        .network_creates
+        .lock()
+        .unwrap()
+        .push_back(FakeNetworkCreate::TwinAfterList);
+
+    let result = stack_engine(&docker, 4)
+        .bring_up_service("stack", "/work/demo")
+        .await;
+
+    assert_eq!(service_exit_code(&result), 4);
+    let events = docker.events();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.starts_with("network-create:"))
+            .count(),
+        1,
+        "{events:?}"
+    );
+    let network = format!("{:?}", docker.spec_for("api").unwrap().shared.network);
+    assert!(
+        network.contains("\"network-id-demo..stack..default\""),
+        "{network}"
+    );
 }

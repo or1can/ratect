@@ -14,8 +14,8 @@
 
 use super::*;
 
-fn labels() -> RunLabels {
-    RunLabels::new("demo", "build", "run-id", Some("0.21.1"))
+fn labels() -> OwnershipLabels {
+    OwnershipLabels::new("demo", "build", "run-id", Some("0.21.1"))
 }
 
 /// Every key is namespaced, and namespaced consistently — a stray one
@@ -62,7 +62,7 @@ fn a_containers_own_configured_labels_are_kept_alongside() {
     assert_eq!(container[PROJECT], "demo");
 }
 
-/// See [`RunLabels::for_container`]: a configuration that sets one of
+/// See [`OwnershipLabels::for_container`]: a configuration that sets one of
 /// these — however it came to — must not be able to make its own
 /// containers unfindable.
 #[test]
@@ -80,9 +80,76 @@ fn ratects_own_labels_win_over_a_configured_one_of_the_same_name() {
 /// omitted rather than invented.
 #[test]
 fn an_unknown_version_omits_that_label_rather_than_guessing() {
-    let labels = RunLabels::new("demo", "build", "run-id", None);
+    let labels = OwnershipLabels::new("demo", "build", "run-id", None);
     assert!(!labels.for_network().contains_key(VERSION));
     assert!(!labels
         .for_container("app", ContainerRole::Task, None)
         .contains_key(VERSION));
+}
+
+fn service_labels() -> OwnershipLabels {
+    OwnershipLabels::for_service_instance(
+        "shop",
+        "stack",
+        DEFAULT_INSTANCE,
+        "/work/shop",
+        Some("0.14.0"),
+    )
+}
+
+/// decisions/0026's table: a service instance's resources carry its group,
+/// instance and start directory, and no `task` or `run` label.
+#[test]
+fn a_service_instances_network_and_containers_carry_its_own_labels_and_no_runs() {
+    let network = service_labels().for_network();
+    let container = service_labels().for_container("api", ContainerRole::Service, None);
+    for labels in [&network, &container] {
+        assert_eq!(labels[PROJECT], "shop");
+        assert_eq!(labels[SERVICE], "stack");
+        assert_eq!(labels[INSTANCE], "default");
+        assert_eq!(labels[START_DIRECTORY], "/work/shop");
+        assert_eq!(labels[VERSION], "0.14.0");
+        assert!(!labels.contains_key(TASK) && !labels.contains_key(RUN));
+    }
+    assert_eq!(container[ROLE], "service");
+    assert_eq!(container[CONTAINER], "api");
+    assert!(!network.contains_key(ROLE) && !network.contains_key(CONTAINER));
+}
+
+#[test]
+fn a_task_runs_labels_carry_no_service_instance_labels() {
+    let container = labels().for_container("app", ContainerRole::Task, None);
+    for key in [SERVICE, INSTANCE, START_DIRECTORY] {
+        assert!(!container.contains_key(key), "{key}");
+    }
+}
+
+/// A key Ratect doesn't write for a container's owner can come from its
+/// configured `labels` or, since Docker copies an image's labels onto a
+/// container for each key the create doesn't set, from its image. Neither
+/// changes who owns it: its `role`, which Ratect always sets, decides.
+#[test]
+fn a_containers_role_says_who_owns_it_whatever_other_labels_it_carries() {
+    let foreign: HashMap<String, String> = ALL
+        .iter()
+        .map(|key| (key.to_string(), "foreign".to_string()))
+        .collect();
+    let member = service_labels().for_container("api", ContainerRole::Service, Some(&foreign));
+    assert!(owned_by_service_instance(&member));
+    for role in [ContainerRole::Task, ContainerRole::Dependency] {
+        let task_container = labels().for_container("app", role, Some(&foreign));
+        assert_eq!(task_container[ROLE], role.as_str());
+        assert!(!owned_by_service_instance(&task_container), "{role:?}");
+    }
+}
+
+/// A network has no `role`, and takes no image's labels: a `service` label
+/// and no `run` label make it an instance's.
+#[test]
+fn a_network_is_an_instances_with_a_service_label_and_no_run_label() {
+    assert!(owned_by_service_instance(&service_labels().for_network()));
+    assert!(!owned_by_service_instance(&labels().for_network()));
+    let mut both = service_labels().for_network();
+    both.insert(RUN.to_string(), "run-id".to_string());
+    assert!(!owned_by_service_instance(&both));
 }

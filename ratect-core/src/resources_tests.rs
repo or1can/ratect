@@ -389,8 +389,8 @@ async fn a_task_runs_containers_and_network_go_together() {
     );
 }
 
-/// What has the project label and no `run` label is not a task run (a
-/// service instance, decisions/0026): never selected, and counted nowhere.
+/// What has the project label and no `run` label is not a task run: never
+/// selected, and counted nowhere.
 #[tokio::test]
 async fn a_resource_with_no_run_label_is_never_selected_or_counted() {
     let docker = FakeRuntime {
@@ -418,6 +418,54 @@ async fn a_resource_with_no_run_label_is_never_selected_or_counted() {
             .unwrap();
         assert!(found.selected.is_empty());
         assert_eq!((found.alive, found.unknown), (0, 0));
+    }
+}
+
+/// A service instance, with the labels `services up` gives it, is never
+/// selected or counted, running or exited, under every combination of
+/// `resources`' flags (decisions/0026's Decision 5).
+#[tokio::test]
+async fn a_service_instance_is_never_selected_whatever_its_state_or_the_flags() {
+    let labels = crate::labels::OwnershipLabels::for_service_instance(
+        "demo",
+        "stack",
+        crate::labels::DEFAULT_INSTANCE,
+        "/work/demo",
+        Some("0.14.0"),
+    );
+    let member = |id: &str, state: &str| LabelledResource {
+        id: id.to_string(),
+        name: format!("demo..stack..default..{id}"),
+        labels: labels.for_container(id, crate::labels::ContainerRole::Service, None),
+        created: Some(100),
+        state: Some(state.to_string()),
+    };
+    let docker = FakeRuntime {
+        containers: vec![member("api", "running"), member("db", "exited")],
+        networks: vec![LabelledResource {
+            id: "net".to_string(),
+            name: "demo..stack..default".to_string(),
+            labels: labels.for_network(),
+            created: Some(100),
+            state: None,
+        }],
+        ..Default::default()
+    };
+    let locks = FakeLocks::with(&[]);
+
+    for project in [Some("demo"), None] {
+        for older_than in [None, Some(std::time::Duration::from_secs(1))] {
+            for all in [false, true] {
+                let found = find(&docker, project, &locks, older_than, all, 1_000_000)
+                    .await
+                    .unwrap();
+                assert!(
+                    found.selected.is_empty(),
+                    "{project:?} {older_than:?} {all}"
+                );
+                assert_eq!((found.alive, found.unknown), (0, 0));
+            }
+        }
     }
 }
 
@@ -569,4 +617,81 @@ async fn a_dead_task_runs_lock_file_goes_only_once_all_of_it_has() {
     remove(&docker, &runs, &locks, |_, _| {}).await;
 
     assert_eq!(locks.forgotten(), vec!["gone"]);
+}
+
+/// Docker copies an image's labels onto the container for each key the
+/// create doesn't set, so a service member whose image was committed from a
+/// task run's container carries that run's `run` label. Its `role`, which
+/// Ratect always sets, keeps it out of the selection.
+#[tokio::test]
+async fn a_service_member_whose_image_carries_a_run_label_is_never_selected() {
+    let labels = crate::labels::OwnershipLabels::for_service_instance(
+        "demo",
+        "stack",
+        crate::labels::DEFAULT_INSTANCE,
+        "/work/demo",
+        Some("0.14.0"),
+    );
+    let mut member_labels =
+        labels.for_container("api", crate::labels::ContainerRole::Service, None);
+    member_labels.insert(crate::labels::RUN.to_string(), "old-run".to_string());
+    member_labels.insert(crate::labels::TASK.to_string(), "build".to_string());
+    let docker = FakeRuntime {
+        containers: vec![LabelledResource {
+            id: "api".to_string(),
+            name: "demo..stack..default..api".to_string(),
+            labels: member_labels,
+            created: Some(100),
+            state: Some("running".to_string()),
+        }],
+        ..Default::default()
+    };
+    let locks = FakeLocks::with(&[]);
+
+    let found = find(&docker, Some("demo"), &locks, None, true, 1_000_000)
+        .await
+        .unwrap();
+    assert!(found.selected.is_empty());
+    assert_eq!((found.alive, found.unknown), (0, 0));
+}
+
+/// The other way round: a task run's container whose image or configured
+/// `labels` gave it a service instance's labels is still selected with its
+/// run.
+#[tokio::test]
+async fn a_task_containers_service_labels_from_elsewhere_leave_it_its_runs() {
+    let labels = crate::labels::OwnershipLabels::new("demo", "build", "dead-run", Some("0.14.0"));
+    let service_labels = HashMap::from([
+        (crate::labels::SERVICE.to_string(), "stack".to_string()),
+        (crate::labels::INSTANCE.to_string(), "default".to_string()),
+    ]);
+    let docker = FakeRuntime {
+        containers: vec![LabelledResource {
+            id: "app".to_string(),
+            name: "demo-app-abcdef".to_string(),
+            labels: labels.for_container(
+                "app",
+                crate::labels::ContainerRole::Task,
+                Some(&service_labels),
+            ),
+            created: Some(100),
+            state: Some("exited".to_string()),
+        }],
+        ..Default::default()
+    };
+    let locks = FakeLocks::with(&[]);
+
+    let found = find(&docker, Some("demo"), &locks, None, true, 1_000_000)
+        .await
+        .unwrap();
+    let selected: Vec<&str> = found
+        .selected
+        .iter()
+        .flat_map(|run| {
+            run.resources
+                .iter()
+                .map(|leftover| leftover.resource.id.as_str())
+        })
+        .collect();
+    assert_eq!(selected, ["app"]);
 }

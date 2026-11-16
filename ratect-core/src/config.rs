@@ -153,6 +153,12 @@ pub struct Config {
     /// same "no effect" treatment already given `--upgrade`/
     /// `--no-update-notification`/`--no-wrapper-cache-cleanup`.
     pub forbid_telemetry: Option<bool>,
+    /// The project's service groups, merged across its TOML files — see
+    /// [`ServiceGroup`]. Always empty in a Batect-compatible project, and
+    /// then not serialized, so a `Config` with none serializes as it did
+    /// before groups existed.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub services: IndexMap<String, ServiceGroup>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2792,6 +2798,69 @@ pub struct TaskContainerCustomisation {
     pub working_directory: Option<String>,
 }
 
+/// One entry in `services`: a **service group**, a named set of the
+/// project's containers brought up together by `ratect services up` and
+/// taken down together. Composition only: each member is a
+/// container declared under `containers`, started as a task's dependency is,
+/// so its own `dependencies`, health check and setup commands apply.
+/// Native-only: a Batect-format (YAML) file can't declare one.
+///
+/// What a group is once brought up — a service instance, owned by no
+/// process — is decisions/0026.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceGroup {
+    /// The group's members, by container name. At least one, each at most
+    /// once. The containers they depend on are started with them and taken
+    /// down with them, but only a member's exit counts towards
+    /// `exit_condition` and `exit_code_from`.
+    pub containers: Vec<String>,
+    /// When `services up` takes the group down on its own: once any member
+    /// has stopped, or once every member has. Defaults to `all_stopped`.
+    #[serde(default)]
+    pub exit_condition: ExitCondition,
+    /// Whose exit code `services up` exits with once the exit condition is
+    /// met. Defaults to `first_non_zero`.
+    #[serde(default)]
+    pub exit_code_from: ExitCodeRule,
+}
+
+/// When `services up` takes a service group down on its own.
+///
+/// [`ServiceGroup::exit_condition`]'s type.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitCondition {
+    /// The first member to stop ends the group; the rest are stopped.
+    AnyStopped,
+    /// The group ends once every member has stopped, as `docker compose up`
+    /// does.
+    #[default]
+    AllStopped,
+}
+
+/// Whose exit code `services up` exits with: `"first_non_zero"`,
+/// `"first_to_exit"`, or `{ container = "<member>" }`.
+///
+/// [`ServiceGroup::exit_code_from`]'s type.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitCodeRule {
+    /// The first non-zero exit code a member exits with of its own accord,
+    /// or 0 if none did. A member `services up` stopped itself, once the
+    /// exit condition was met, isn't counted.
+    #[default]
+    FirstNonZero,
+    /// The exit code of the member that stopped first.
+    FirstToExit,
+    /// This member's exit code, whenever it stopped — even when `services up`
+    /// stopped it.
+    Container(String),
+}
+
 /// Returns `root` plus every container name transitively reachable from it
 /// via `dependencies` — the full set of containers that will share one
 /// task's network. Used both as the `no_proxy` "these are local, don't
@@ -3275,6 +3344,24 @@ impl CheckedName for ContainerName {
     }
 }
 
+/// A service group's name. It is part of the Docker names of the instance's
+/// containers and network ([`crate::resource_names::ServiceNames`]), so it
+/// has the rule a container's and a project's name have, and Docker takes it
+/// there as it is.
+struct ServiceGroupName;
+
+impl CheckedName for ServiceGroupName {
+    fn check(name: &str) -> std::result::Result<(), String> {
+        if crate::image_reference::is_name_component(name) {
+            return Ok(());
+        }
+        Err(format!(
+            "Invalid service group name '{}'. Service group names {IMAGE_NAME_RULE}",
+            printable(name)
+        ))
+    }
+}
+
 /// `serde` `deserialize_with` for `project_name`: Batect's
 /// `ProjectNameSerializer` rule and message, checked as the value is read so
 /// the parser locates it, as a [`CheckedName`] is.
@@ -3440,6 +3527,16 @@ pub(crate) struct ConfigFile {
     /// Skipped from the compat schema, added to the native one.
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub(crate) ratect_version: Option<String>,
+    /// Service groups, keyed by the name `ratect services up` takes — see
+    /// [`ServiceGroup`]. Refused in a YAML file
+    /// ([`reject_services_in_yaml`]). Skipped from the compat schema, added
+    /// to the native one.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_named::<ServiceGroupName, _, _>"
+    )]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub(crate) services: IndexMap<String, ServiceGroup>,
 }
 
 /// Which binary's rules govern a project — see `CONTEXT.md`'s **Dialect**.
@@ -3920,6 +4017,32 @@ fn reject_misplaced_ratect_version(
         anyhow::bail!(
             "Included file {} declares 'ratect_version', but only the root configuration \
              file, or the file a Git include names, can do so.",
+            describe_file(path, boundary)
+        );
+    }
+    Ok(())
+}
+
+/// Refuses `services` in a YAML file, root or included, under either
+/// loader: a Batect-format file keeps Batect's own fields
+/// (decisions/0021), and Batect has no service groups.
+fn reject_services_in_yaml(
+    path: &Path,
+    boundary: Option<&Boundary>,
+    file: &ConfigFile,
+    format: ConfigFormat,
+) -> Result<()> {
+    if file.services.is_empty() {
+        return Ok(());
+    }
+    let yaml = match format {
+        ConfigFormat::Compat => true,
+        ConfigFormat::Native => matches!(config_file_format(path), Ok(FileFormat::Yaml)),
+    };
+    if yaml {
+        anyhow::bail!(
+            "{} declares 'services', which only a native ratect.toml can do: a \
+             Batect-format (YAML) file keeps Batect's own fields.",
             describe_file(path, boundary)
         );
     }
@@ -4664,6 +4787,7 @@ impl Config {
         };
         let root_file = format.parse(path, None, native_fields)?;
         reject_misplaced_ratect_version(path, None, &root_file, format, true)?;
+        reject_services_in_yaml(path, None, &root_file, format)?;
 
         let mut seen: HashSet<PathBuf> = HashSet::new();
         seen.insert(root_path.clone());
@@ -4852,6 +4976,7 @@ impl Config {
                 format,
                 matches!(include, IncludeEntry::Git { .. }),
             )?;
+            reject_services_in_yaml(&resolved, boundary.as_ref(), &file, format)?;
             if file.project_name.is_some() {
                 anyhow::bail!(
                     "Included file {} declares 'project_name', but only the root \
@@ -4902,6 +5027,8 @@ impl Config {
         let mut task_files: IndexMap<&str, Vec<(&Path, Option<&Boundary>)>> = IndexMap::new();
         let mut config_variable_files: IndexMap<&str, Vec<(&Path, Option<&Boundary>)>> =
             IndexMap::new();
+        let mut services = IndexMap::new();
+        let mut service_files: IndexMap<&str, Vec<(&Path, Option<&Boundary>)>> = IndexMap::new();
 
         // Borrowed, not consumed: each file is kept whole in `files` for
         // `crate::convert`, which needs it as parsed rather than merged.
@@ -4938,6 +5065,13 @@ impl Config {
                     config_variables.insert(name.clone(), var.clone());
                 }
             }
+            for (name, group) in &file.services {
+                let files = service_files.entry(name).or_default();
+                files.push((file_path, boundary.as_ref()));
+                if files.len() == 1 {
+                    services.insert(name.clone(), group.clone());
+                }
+            }
         }
         // Tasks, then containers, then config variables, as Batect checks
         // them; within each, the first duplicated name as declared.
@@ -4945,6 +5079,7 @@ impl Config {
             ("task", &task_files),
             ("container", &container_files),
             ("config variable", &config_variable_files),
+            ("service group", &service_files),
         ] {
             if let Some((name, files)) = defined_in.iter().find(|(_, files)| files.len() > 1) {
                 let files: Vec<String> = files
@@ -4969,6 +5104,7 @@ impl Config {
                     Some(config_variables)
                 },
                 forbid_telemetry,
+                services,
             },
             container_base_paths,
             container_boundaries,
@@ -6415,6 +6551,9 @@ fn load_project_impl(
     // before every rule below that follows a reference, so each of those can
     // take its target's existence as given.
     reject_references_to_undeclared_containers(&config)?;
+    // Before `expand_external_health_checks`, so a member is one of the
+    // containers the user wrote.
+    validate_service_groups(&config)?;
     // After `extends`, so an inherited cache mount is judged on the scope
     // the container effectively has.
     reject_conflicting_cache_scopes(&config)?;
@@ -7242,6 +7381,44 @@ fn reject_references_to_undeclared_containers(config: &Config) -> Result<()> {
             .chain(task.dependencies.iter().flatten());
         for reference in references {
             check(reference, format!("task '{task_name}'"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a service group with no members, a member named twice or not
+/// declared under `containers`, or an `exit_code_from` naming a container
+/// that isn't one of its members. Nothing here depends on `extends`: a group
+/// names containers, and inheritance adds none.
+fn validate_service_groups(config: &Config) -> Result<()> {
+    for (group_name, group) in &config.services {
+        if group.containers.is_empty() {
+            anyhow::bail!("The service group '{group_name}' has no containers.");
+        }
+        let mut seen = HashSet::new();
+        for member in &group.containers {
+            if !config.containers.contains_key(member) {
+                anyhow::bail!(
+                    "The container '{}' referenced by service group '{group_name}' does not \
+                     exist.",
+                    printable(member)
+                );
+            }
+            if !seen.insert(member.as_str()) {
+                anyhow::bail!(
+                    "The service group '{group_name}' lists the container '{member}' more \
+                     than once."
+                );
+            }
+        }
+        if let ExitCodeRule::Container(nominated) = &group.exit_code_from {
+            if !seen.contains(nominated.as_str()) {
+                anyhow::bail!(
+                    "The service group '{group_name}' takes its exit code from the container \
+                     '{}', which is not one of its containers.",
+                    printable(nominated)
+                );
+            }
         }
     }
     Ok(())

@@ -136,8 +136,10 @@ measures the task run's age, which is its oldest resource's. A network can
 only be removed once its containers are.
 
 What carries Ratect's labels and no `run` label is not a task run: it is not
-selected, and the notice does not count it. That is a service instance
-([0026](0026-service-instances.md)), which `resources` leaves alone.
+selected, and the notice does not count it. Nor is a container whose `role`
+says a service instance ([0026](0026-service-instances.md)) owns it, whatever
+`run` label its image or its configured `labels` gave it: `resources` leaves
+a service instance alone.
 
 `resources list` stays `clean`'s dry run: it shows what `clean` would remove
 and nothing else. When a selection leaves task runs out, both verbs say so in
