@@ -18514,3 +18514,12 @@ note = "Items 13 and 15 checked (no --all-projects prompt in ratect/src/main.rs;
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/schema.rs" = "57f5ceb73f085de1", "ratect/src/main.rs" = "196ff8cf1312a81f" }
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "stale-claims"
+unit = "d7003e256cf075f4"
+copies = 1
+note = "The ROADMAP.md it cites is Batect's (lines 88-90 in ~/git/or1can/batect), not this repo's, whose only change was removing the shipped multiple-container bullet; GitHub Actions, Testcontainers and Earthly claims are pinned upstream."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "25955ca943036063" }
