@@ -164,6 +164,33 @@ pub fn native_config_file_schema() -> serde_json::Value {
     json
 }
 
+/// Replaces each `allOf` holding a lone `$ref` with the `$ref` itself, and
+/// drops the `default` beside it: `schemars` wraps a field's reference so
+/// as to annotate it, and the rest of the schema states a default in its
+/// description instead, which the field's does. A bare `$ref` with a
+/// description is the shape the walks over the schema read
+/// (`tests/common`).
+fn unwrap_lone_references(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            let lone = match object.get("allOf").and_then(serde_json::Value::as_array) {
+                Some(all_of) if all_of.len() == 1 => all_of[0].get("$ref").cloned(),
+                _ => None,
+            };
+            if let Some(reference) = lone {
+                object.remove("allOf");
+                object.remove("default");
+                object.insert("$ref".to_string(), reference);
+            }
+            for (_, child) in object.iter_mut() {
+                unwrap_lone_references(child);
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(unwrap_lone_references),
+        _ => {}
+    }
+}
+
 /// Transforms the base (compat-shaped) schema into the native format's: the
 /// list entries become object-only, and a container gains the native-only
 /// `extends` field. Everything else — field names, types, descriptions, the
@@ -191,12 +218,55 @@ fn make_native(json: &mut serde_json::Value) {
         );
     }
 
+    // Add the native-only top-level `services` — skipped from the compat
+    // schema (`ConfigFile::services`'s `schemars(skip)`, since a
+    // `batect.yml` may not declare it). Its entry type is generated as every
+    // other is, and its definitions join the rest.
+    let mut services = serde_json::to_value(
+        SchemaSettings::draft07()
+            .into_generator()
+            .into_root_schema_for::<crate::config::ServiceGroup>(),
+    )
+    .expect("a generated schema is always valid JSON");
+    summarize_descriptions(&mut services);
+    unwrap_lone_references(&mut services);
+    let mut service_definitions = services
+        .as_object_mut()
+        .and_then(|object| object.remove("definitions"))
+        .and_then(|definitions| match definitions {
+            serde_json::Value::Object(definitions) => Some(definitions),
+            _ => None,
+        })
+        .unwrap_or_default();
+    if let Some(object) = services.as_object_mut() {
+        object.remove("$schema");
+        object.remove("title");
+    }
+    service_definitions.insert("ServiceGroup".to_string(), services);
+    if let Some(properties) = json
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        properties.insert(
+            "services".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "description": "Service groups, keyed by the name `ratect services up` takes: \
+                                named sets of this project's containers brought up and taken \
+                                down together.",
+                "propertyNames": { "pattern": crate::image_reference::NAME_COMPONENT_PATTERN },
+                "additionalProperties": { "$ref": "#/definitions/ServiceGroup" },
+            }),
+        );
+    }
+
     let Some(definitions) = json
         .get_mut("definitions")
         .and_then(serde_json::Value::as_object_mut)
     else {
         return;
     };
+    definitions.extend(service_definitions);
 
     // Drop the compact string form from each string-or-object field: a native
     // `ratect.toml` spells these out as objects (inline tables or `[[...]]`).

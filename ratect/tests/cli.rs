@@ -4868,7 +4868,6 @@ fn run_checks_the_docker_directory_options_before_reading_the_config() {
 }
 
 /// Polls `condition` every 50 ms until it holds or `timeout` passes.
-#[cfg(unix)]
 fn poll_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -6160,4 +6159,608 @@ fn a_live_task_run_whose_task_container_has_exited_is_not_selected() {
         !run_lock_containers().iter().any(|c| c.run == run),
         "and cleaned up after itself"
     );
+}
+
+/// A project of its own, named `project`, with containers `api` and `db`
+/// running `api_command` and `db_command`, and the service group `stack`
+/// over both, configured by `group`. Returns its `ratect.toml`.
+fn service_project(project: &str, api_command: &str, db_command: &str, group: &str) -> PathBuf {
+    let directory = unique_project_dir();
+    let config = directory.join("ratect.toml");
+    std::fs::write(
+        &config,
+        written_for_latest(&format!(
+            r#"project_name = "{project}"
+
+[containers.api]
+image = "alpine:3.18.2"
+command = "sh -c '{api_command}'"
+
+[containers.db]
+image = "alpine:3.18.2"
+command = "sh -c '{db_command}'"
+
+[tasks.unused]
+run = {{ container = "api" }}
+
+[services.stack]
+containers = ["api", "db"]
+{group}
+"#
+        )),
+    )
+    .unwrap();
+    config
+}
+
+/// A member that runs until it is stopped, and exits `code` when it is —
+/// escaped for the TOML string [`service_project`] puts it in.
+fn until_stopped(code: i32) -> String {
+    format!("trap \\\"exit {code}\\\" TERM; echo up; while true; do sleep 1; done")
+}
+
+/// `docker ps -a` (or `docker network ls`) for `project`'s resources: each
+/// one's name, and its labels as `key=value` joined by commas.
+fn docker_resources(kind: &str, project: &str) -> Vec<String> {
+    let (command, format): (&[&str], &str) = match kind {
+        "container" => (&["ps", "-a"], "{{.Names}} {{.State}} {{.Labels}}"),
+        _ => (&["network", "ls"], "{{.Name}} - {{.Labels}}"),
+    };
+    let output = Command::new("docker")
+        .args(command)
+        .args([
+            "--filter",
+            &format!("label=eu.orican.ratect.project={project}"),
+            "--format",
+            format,
+        ])
+        .output()
+        .expect("failed to run docker");
+    let mut lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    lines.sort();
+    lines
+}
+
+/// Waits until `project` has `count` running containers.
+fn wait_for_running_members(project: &str, count: usize) {
+    assert!(
+        poll_until(Duration::from_secs(60), || {
+            docker_resources("container", project)
+                .iter()
+                .filter(|line| line.split(' ').nth(1) == Some("running"))
+                .count()
+                == count
+        }),
+        "{project} never had {count} running containers: {:?}",
+        docker_resources("container", project)
+    );
+}
+
+/// Whatever a test left behind of `project`, removed.
+fn remove_service_project(config: &Path, project: &str) {
+    let _ = ratect_command()
+        .arg("-f")
+        .arg(config)
+        .args(["services", "down", "stack"])
+        .output();
+    for line in docker_resources("container", project) {
+        let name = line.split(' ').next().unwrap().to_string();
+        let _ = Command::new("docker").args(["rm", "-f", &name]).output();
+    }
+    if let Some(directory) = config.parent() {
+        std::fs::remove_dir_all(directory).ok();
+    }
+}
+
+fn services_up(config: &Path) -> std::process::Output {
+    ratect_command()
+        .arg("-f")
+        .arg(config)
+        .args(["services", "up", "stack"])
+        .output()
+        .expect("failed to run ratect")
+}
+
+/// `any_stopped` with `first_to_exit`: `api` exiting `3` ends the
+/// group, both containers and the network go, and `up` exits `3`.
+#[test]
+#[ignore]
+fn services_up_ends_the_group_when_any_member_stops_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-any";
+    let config = service_project(
+        project,
+        "echo api up; sleep 1; exit 3",
+        &until_stopped(0),
+        "exit_condition = \"any_stopped\"\nexit_code_from = \"first_to_exit\"",
+    );
+
+    let output = services_up(&config);
+
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let left = (
+        docker_resources("container", project),
+        docker_resources("network", project),
+    );
+    remove_service_project(&config, project);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("api up") || stdout.contains("api up"),
+        "{stdout}\n{stderr}"
+    );
+    assert_eq!(left, (vec![], vec![]));
+}
+
+/// `all_stopped` with `first_non_zero`: `api` exiting `0` at once leaves
+/// the group up until `db` exits `5` of its own accord, and `up` exits `5`.
+#[test]
+#[ignore]
+fn services_up_with_all_stopped_waits_for_every_member_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-all";
+    let config = service_project(
+        project,
+        "exit 0",
+        "sleep 4; exit 5",
+        "exit_condition = \"all_stopped\"",
+    );
+    let started = Instant::now();
+
+    let output = services_up(&config);
+
+    let elapsed = started.elapsed();
+    remove_service_project(&config, project);
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(elapsed >= Duration::from_secs(4), "ended after {elapsed:?}");
+}
+
+/// A nominated member's exit code is the group's even when another member
+/// stops first and `up` stops the nominated one itself.
+#[test]
+#[ignore]
+fn services_up_takes_a_nominated_members_exit_code_whatever_stops_first_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-nominated";
+    let config = service_project(
+        project,
+        "sleep 1; exit 0",
+        &until_stopped(7),
+        "exit_condition = \"any_stopped\"\nexit_code_from = { container = \"db\" }",
+    );
+
+    let output = services_up(&config);
+
+    remove_service_project(&config, project);
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// While a group is up: its containers and network carry the instance's
+/// labels and no `run` or `task` label; `services list` shows it; neither
+/// `resources list` nor `resources clean --all` touches it; and
+/// `services down` removes it, which ends the attached `up`.
+#[test]
+#[ignore]
+fn a_service_instance_is_labelled_listed_left_alone_by_resources_and_taken_down_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-lifecycle";
+    let config = service_project(project, &until_stopped(0), &until_stopped(0), "");
+    let mut up = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["services", "up", "stack"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("failed to spawn ratect");
+    wait_for_running_members(project, 2);
+    // The directory as `-f` names it, made absolute and nothing more.
+    let start_directory = config.parent().unwrap().to_path_buf();
+
+    let containers = docker_resources("container", project);
+    let networks = docker_resources("network", project);
+    let list = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["services", "list"])
+        .output()
+        .unwrap();
+    let resources = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["resources", "clean", "--all"])
+        .output()
+        .unwrap();
+    let after_resources = docker_resources("container", project);
+    let doctor = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .arg("doctor")
+        .output()
+        .unwrap();
+    let down = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["services", "down", "stack"])
+        .output()
+        .unwrap();
+    let up_ended = poll_until(Duration::from_secs(30), || up.try_wait().unwrap().is_some());
+    let left = (
+        docker_resources("container", project),
+        docker_resources("network", project),
+    );
+    if !up_ended {
+        let _ = up.kill();
+    }
+    remove_service_project(&config, project);
+
+    assert_eq!(containers.len(), 2, "{containers:?}");
+    for (line, member) in containers.iter().zip(["api", "db"]) {
+        assert!(
+            line.starts_with(&format!("{project}..stack..default..{member} running")),
+            "{line}"
+        );
+        for label in [
+            "eu.orican.ratect.role=service".to_string(),
+            "eu.orican.ratect.service=stack".to_string(),
+            "eu.orican.ratect.instance=default".to_string(),
+            format!(
+                "eu.orican.ratect.start-directory={}",
+                start_directory.display()
+            ),
+            format!("eu.orican.ratect.container={member}"),
+        ] {
+            assert!(line.contains(&label), "{label} missing from {line}");
+        }
+        assert!(!line.contains("eu.orican.ratect.run="), "{line}");
+        assert!(!line.contains("eu.orican.ratect.task="), "{line}");
+    }
+    assert_eq!(networks.len(), 1, "{networks:?}");
+    assert!(
+        networks[0].starts_with(&format!("{project}..stack..default ")),
+        "{networks:?}"
+    );
+    assert!(
+        networks[0].contains("eu.orican.ratect.service=stack"),
+        "{networks:?}"
+    );
+    assert!(
+        !networks[0].contains("eu.orican.ratect.run="),
+        "{networks:?}"
+    );
+
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list.contains(&format!(
+            "stack (brought up from {}):",
+            start_directory.display()
+        )) && list.contains("  - api: running")
+            && list.contains("  - db: running"),
+        "{list}"
+    );
+    assert!(resources.status.success());
+    assert_eq!(
+        after_resources, containers,
+        "resources clean touched the instance"
+    );
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        doctor.contains("no leftovers from previous runs"),
+        "{doctor}"
+    );
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    assert!(
+        up_ended,
+        "the attached up didn't end once the group was taken down"
+    );
+    assert_eq!(left, (vec![], vec![]));
+}
+
+/// A second `up` attaches to the running instance — no second container per
+/// member — and says so; a termination signal to it takes the instance
+/// down, though the first `up` brought it up, and the first then ends.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn a_signal_to_an_attached_up_takes_the_instance_down_and_ends_the_other_up_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-attach";
+    let config = service_project(project, &until_stopped(0), &until_stopped(0), "");
+    let spawn_up = || {
+        ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .args(["services", "up", "stack"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("failed to spawn ratect")
+    };
+    let mut first = spawn_up();
+    wait_for_running_members(project, 2);
+    let mut second = spawn_up();
+    std::thread::sleep(Duration::from_secs(3));
+    let while_attached = docker_resources("container", project);
+
+    Command::new("kill")
+        .args(["-TERM", &second.id().to_string()])
+        .status()
+        .unwrap();
+    let both_ended = poll_until(Duration::from_secs(60), || {
+        second.try_wait().unwrap().is_some() && first.try_wait().unwrap().is_some()
+    });
+    if !both_ended {
+        let _ = first.kill();
+        let _ = second.kill();
+    }
+    let second_output = second.wait_with_output().unwrap();
+    let _ = first.wait_with_output();
+    let left = (
+        docker_resources("container", project),
+        docker_resources("network", project),
+    );
+    remove_service_project(&config, project);
+
+    assert_eq!(while_attached.len(), 2, "{while_attached:?}");
+    let stderr = String::from_utf8_lossy(&second_output.stderr);
+    assert!(
+        stderr.contains("Service group 'stack' is already up; attaching to it."),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Warning"), "{stderr}");
+    assert!(both_ended, "an up didn't end after the signal");
+    assert_eq!(left, (vec![], vec![]));
+}
+
+/// A foreground `up` killed outright leaves its instance running. Once its
+/// members have stopped too, the next `up` replaces the instance: new
+/// containers in place of the old, and never a second generation beside it.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn an_up_killed_outright_leaves_the_instance_for_the_next_up_to_replace_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-killed";
+    let config = service_project(project, &until_stopped(0), &until_stopped(0), "");
+    let mut killed = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["services", "up", "stack"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_running_members(project, 2);
+    killed.kill().unwrap();
+    killed.wait().unwrap();
+    let after_kill = docker_resources("container", project);
+    let ids = || {
+        let output = Command::new("docker")
+            .args([
+                "ps",
+                "-aq",
+                "--no-trunc",
+                "--filter",
+                &format!("label=eu.orican.ratect.project={project}"),
+            ])
+            .output()
+            .unwrap();
+        let mut ids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        ids.sort();
+        ids
+    };
+    let old_ids = ids();
+    for member in ["api", "db"] {
+        Command::new("docker")
+            .args(["stop", &format!("{project}..stack..default..{member}")])
+            .output()
+            .unwrap();
+    }
+
+    let mut next = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["services", "up", "stack"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_running_members(project, 2);
+    let replaced = docker_resources("container", project);
+    let new_ids = ids();
+    Command::new("kill")
+        .args(["-INT", &next.id().to_string()])
+        .status()
+        .unwrap();
+    let ended = poll_until(Duration::from_secs(60), || {
+        next.try_wait().unwrap().is_some()
+    });
+    if !ended {
+        let _ = next.kill();
+    }
+    remove_service_project(&config, project);
+
+    assert_eq!(after_kill.len(), 2, "{after_kill:?}");
+    assert!(
+        after_kill.iter().all(|line| line.contains(" running ")),
+        "{after_kill:?}"
+    );
+    assert_eq!(replaced.len(), 2, "a second generation: {replaced:?}");
+    assert_eq!(new_ids.len(), 2, "{new_ids:?}");
+    assert!(
+        new_ids.iter().all(|id| !old_ids.contains(id)),
+        "not replaced: {old_ids:?} then {new_ids:?}"
+    );
+    assert!(ended);
+}
+
+/// Two `up`s started at once make one instance: one container per member
+/// and one network.
+#[test]
+#[ignore]
+fn two_ups_at_once_make_one_instance_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-concurrent";
+    let config = service_project(project, &until_stopped(0), &until_stopped(0), "");
+    let spawn_up = || {
+        ratect_command()
+            .arg("-f")
+            .arg(&config)
+            .args(["services", "up", "stack"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut ups = [spawn_up(), spawn_up()];
+    wait_for_running_members(project, 2);
+    std::thread::sleep(Duration::from_secs(3));
+    let containers = docker_resources("container", project);
+    let networks = docker_resources("network", project);
+    let down = ratect_command()
+        .arg("-f")
+        .arg(&config)
+        .args(["services", "down", "stack"])
+        .output()
+        .unwrap();
+    let ended = poll_until(Duration::from_secs(60), || {
+        ups.iter_mut().all(|up| up.try_wait().unwrap().is_some())
+    });
+    for up in &mut ups {
+        let _ = up.kill();
+    }
+    remove_service_project(&config, project);
+
+    assert_eq!(containers.len(), 2, "{containers:?}");
+    assert_eq!(networks.len(), 1, "{networks:?}");
+    assert!(down.status.success());
+    assert!(ended, "an up didn't end once the group was taken down");
+}
+
+/// An instance's name held by a container without its labels stops `up`
+/// with an error; that container is neither attached to nor removed.
+#[test]
+#[ignore]
+fn up_refuses_a_name_held_by_something_else_and_leaves_it_alone_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-foreign";
+    let config = service_project(project, &until_stopped(0), &until_stopped(0), "");
+    let foreign = format!("{project}..stack..default..api");
+    let created = Command::new("docker")
+        .args(["create", "--name", &foreign, "alpine:3.18.2", "true"])
+        .output()
+        .unwrap();
+    assert!(
+        created.status.success(),
+        "{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+
+    let output = services_up(&config);
+
+    let foreign_still_there = Command::new("docker")
+        .args(["inspect", "--format", "{{.Name}}", &foreign])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    let left = docker_resources("container", project);
+    let _ = Command::new("docker").args(["rm", "-f", &foreign]).output();
+    remove_service_project(&config, project);
+
+    assert_eq!(output.status.code(), Some(125));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Failed to create container 'api'") && stderr.contains("already in use"),
+        "{stderr}"
+    );
+    assert!(foreign_still_there, "up removed a container it doesn't own");
+    assert_eq!(left, Vec::<String>::new());
+}
+
+/// `up` from a second checkout of the same project attaches to the instance the
+/// first brought up, and warns that its bind mounts point into the first.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn up_from_a_second_checkout_attaches_and_warns_via_docker() {
+    let _guard = shared_docker();
+    let project = "ratect-services-checkouts";
+    // `api` writes a line a second, so the attached `up` shows output for
+    // as long as it is attached, not just what arrived as it attached.
+    let ticking = "trap \\\"exit 0\\\" TERM; while true; do echo tick; sleep 1; done";
+    let first = service_project(project, ticking, &until_stopped(0), "");
+    let second = service_project(project, ticking, &until_stopped(0), "");
+    let mut first_up = ratect_command()
+        .arg("-f")
+        .arg(&first)
+        .args(["services", "up", "stack"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    wait_for_running_members(project, 2);
+    let mut second_up = ratect_command()
+        .arg("-f")
+        .arg(&second)
+        .args(["services", "up", "stack"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Long enough that a slow attach still leaves several of `api`'s lines,
+    // and far beyond the second a container found stopped is followed for.
+    std::thread::sleep(Duration::from_secs(6));
+    Command::new("kill")
+        .args(["-TERM", &second_up.id().to_string()])
+        .status()
+        .unwrap();
+    let ended = poll_until(Duration::from_secs(60), || {
+        second_up.try_wait().unwrap().is_some() && first_up.try_wait().unwrap().is_some()
+    });
+    if !ended {
+        let _ = first_up.kill();
+        let _ = second_up.kill();
+    }
+    let stderr =
+        String::from_utf8_lossy(&second_up.wait_with_output().unwrap().stderr).into_owned();
+    remove_service_project(&first, project);
+    remove_service_project(&second, project);
+
+    let first_directory = first.parent().unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "Attaching to service group 'stack', which was brought up from {}",
+            first_directory.display()
+        )),
+        "{stderr}"
+    );
+    // Under `all`, a container's output is interleaved on stderr.
+    let ticks = stderr.lines().filter(|line| line.contains("tick")).count();
+    assert!(ticks >= 3, "only {ticks} lines while attached:\n{stderr}");
+    assert!(ended);
 }

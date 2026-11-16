@@ -181,6 +181,9 @@ pub fn convert_project(
                 // Refused in a Batect-format file at load, so never set here;
                 // the root's is declared by `render` instead.
                 ratect_version: _,
+                // Refused in a Batect-format file at load, like
+                // `ratect_version`, so never set here.
+                services: _,
             } = &file.file;
             let mut checks = Vec::new();
             let include = include

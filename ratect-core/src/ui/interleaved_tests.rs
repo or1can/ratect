@@ -472,6 +472,22 @@ fn task_level_lines_use_the_task_name_prefix() {
     );
 }
 
+/// `services up`'s take-down names the network it removes as the service
+/// group's, not a task's.
+#[test]
+fn a_service_groups_network_removal_names_the_group() {
+    let (logger, buffer) = logger();
+    start_task(&logger, vec![info("db", Some("postgres:15"), None)]);
+    logger.post(TaskEvent::RemovingServiceGroupNetwork);
+    logger.post(TaskEvent::ServiceGroupNetworkRemoved);
+    assert_eq!(
+        buffer.contents(),
+        "test | Running test...\n\
+             test | Removing service group network...\n\
+             test | Service group network removed.\n"
+    );
+}
+
 /// A milestone, not a warning (decisions/0017): under its own prefix, with
 /// no `Warning:` marker.
 #[test]

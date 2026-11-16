@@ -239,6 +239,40 @@ impl std::fmt::Display for ContainerStartFailed {
     }
 }
 
+/// The daemon refused to create a container or network because something
+/// already has the name — its 409. A task run's names carry a suffix of
+/// their own, so this is rare there and reported like any other refusal; a
+/// service instance's names are fixed, and this is how a concurrent
+/// `services up` finds it has lost a create (decisions/0026). Displays as
+/// the daemon's message.
+#[derive(Debug)]
+pub struct NameInUse {
+    pub name: String,
+    pub message: String,
+}
+
+impl std::error::Error for NameInUse {}
+
+impl std::fmt::Display for NameInUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// `error` as a [`NameInUse`] when it is the daemon's 409 for `name`.
+fn name_in_use(name: &str, error: bollard::errors::Error) -> anyhow::Error {
+    match error {
+        bollard::errors::Error::DockerResponseServerError {
+            status_code: 409,
+            message,
+        } => anyhow::Error::new(NameInUse {
+            name: name.to_string(),
+            message,
+        }),
+        error => anyhow::Error::new(error),
+    }
+}
+
 /// Why [`ContainerRuntime::create_container`] failed — and, when Docker's own
 /// create had already succeeded, the container it left behind.
 ///
@@ -2074,10 +2108,12 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// attempt every tag and report each one the daemon refuses.
     async fn tag_image(&self, image_id: &str, tag: &str) -> Result<()>;
 
-    /// Creates a task-scoped network. `labels` are Ratect's own ownership
-    /// labels (see [`crate::labels`]) — a network has no user-configurable
-    /// labels of its own, so this is the whole set.
-    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()>;
+    /// Creates a task's or a service instance's network, returning its id.
+    /// `labels` are Ratect's own ownership labels (see [`crate::labels`]) —
+    /// a network has no user-configurable labels of its own, so this is the
+    /// whole set. A daemon refusing the name as taken fails with a
+    /// [`NameInUse`].
+    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<String>;
 
     /// `true` if a network named (or IDed) `name` already exists — used to
     /// validate `--use-network` up front, with a clear error, rather than
@@ -2184,8 +2220,9 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// Starts `container_id` — created by
     /// [`create_container`](Self::create_container) from `spec` — in the
     /// background: does not wait for it to exit. Used for sidecar/dependency
-    /// containers; `spec.role` is always
-    /// [`crate::labels::ContainerRole::Dependency`] here, `spec.interactive`
+    /// containers and a service instance's; `spec.role` is
+    /// [`crate::labels::ContainerRole::Dependency`] or
+    /// [`crate::labels::ContainerRole::Service`] here, `spec.interactive`
     /// always `false`, and `spec.additional_args` always empty (only the
     /// top-level requested task's own container can receive
     /// `-- ADDITIONAL_ARGS`, via [`run_container`](Self::run_container)
@@ -2219,7 +2256,7 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// Blocks until `container_id` exits, returning its exit code — a
     /// genuine, possibly-long wait, unlike [`exit_code`](DockerClient::exit_code)'s
     /// own callers, which only ever call it once a container is already
-    /// known to have stopped. Two call sites in engine.rs, with different
+    /// known to have stopped. Its callers in engine.rs have different
     /// stakes:
     ///
     /// - The background watcher for a dependency that has already become
@@ -2232,6 +2269,13 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     ///   called synchronously, in the foreground, *before* the dependency is
     ///   considered ready at all — not a background watcher, and not aborted
     ///   by anything; its exit code is what readiness is decided on.
+    ///
+    /// And `services up`, in `engine/services.rs`, for each service group
+    /// member it watches: its exit is what the group's exit condition
+    /// counts, so it is waited for until the condition is met, and a
+    /// nominated member's through the take-down that stops it. A nominated member that had already
+    /// exited when `up` attached is waited for too, answering at once with
+    /// the code it left.
     async fn wait_for_container_exit(&self, container_id: &str) -> Result<i64>;
 
     /// Whether `container_id` is still running, answered at once. The engine
@@ -2340,7 +2384,24 @@ pub trait ContainerRuntime: ResourceInventory + VolumeStore {
     /// stop was cancelled mid-flight — force removal doesn't care what state
     /// the container is in, or whether the daemon finished that stop anyway.
     async fn remove_container_forcibly(&self, container_id: &str) -> Result<()>;
+
+    /// Follows the output of `container_id`, a running container some
+    /// earlier invocation created — a service instance's, attached to by
+    /// `services up` (decisions/0026). `name` is its name in the
+    /// configuration, which its lines are shown under. Under the interleaved
+    /// I/O policy (the `all` output mode) its output from now on is followed
+    /// as [`start_background_container`](Self::start_background_container)
+    /// follows a container it starts; under any other policy nothing is
+    /// followed. Docker's attach to a container that isn't running waits for
+    /// its next run, even past its removal, so one found stopped once
+    /// attached is followed only for [`FOLLOWED_STOPPED_DRAIN`] more.
+    async fn follow_container(&self, container_id: &str, name: &str) -> Result<()>;
 }
+
+/// How long [`ContainerRuntime::follow_container`] follows a container found
+/// stopped once attached: long enough for what it wrote before stopping to
+/// arrive.
+pub const FOLLOWED_STOPPED_DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Container ID -> the background log-follower task
 /// `start_background_container` spawned for it under the interleaved (`all`
@@ -3645,17 +3706,19 @@ impl ContainerRuntime for DockerClient {
         Ok(())
     }
 
-    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<()> {
-        self.docker
+    async fn create_network(&self, name: &str, labels: &HashMap<String, String>) -> Result<String> {
+        let created = self
+            .docker
             .create_network(NetworkCreateRequest {
                 name: name.to_string(),
                 labels: Some(labels.clone()),
                 ..Default::default()
             })
             .await
+            .map_err(|error| name_in_use(name, error))
             .with_context(|| format!("Failed to create network '{}'", name))?;
-        tracing::debug!(network = name, "created network");
-        Ok(())
+        tracing::debug!(network = name, id = created.id, "created network");
+        Ok(created.id)
     }
 
     async fn network_exists(&self, name: &str) -> Result<bool> {
@@ -3688,6 +3751,7 @@ impl ContainerRuntime for DockerClient {
             .docker
             .create_container(Some(options), config)
             .await
+            .map_err(|error| name_in_use(&shared.docker_name, error))
             .with_context(|| format!("Failed to create container '{}'", shared.name))
             .map_err(CreateContainerError::before_creation)?;
         tracing::debug!(container_id = %container.id, name = shared.name.as_str(), image = shared.image.as_str(), "created container");
@@ -4157,6 +4221,42 @@ impl ContainerRuntime for DockerClient {
         // comment.
         self.log_followers.await_and_remove(container_id).await;
 
+        Ok(())
+    }
+
+    async fn follow_container(&self, container_id: &str, name: &str) -> Result<()> {
+        if self.event_sink.container_io_streaming() != ContainerIoStreaming::Interleaved {
+            return Ok(());
+        }
+        let attached = self.attach_output(name, container_id, false).await?;
+        // Asked after the attach, so a container still running here was
+        // running when it attached, and its stream ends at its exit. One
+        // that isn't may have stopped before the attach, whose stream would
+        // then never end.
+        let running = self
+            .container_is_running(container_id)
+            .await
+            .unwrap_or(false);
+        let event_sink = std::sync::Arc::clone(&self.event_sink);
+        let container_name = name.to_string();
+        let handle = tokio::spawn(async move {
+            let drain = drain_interleaved_output(attached.output, &event_sink, &container_name);
+            let ended = if running {
+                Some(drain.await)
+            } else {
+                tokio::time::timeout(FOLLOWED_STOPPED_DRAIN, drain)
+                    .await
+                    .ok()
+            };
+            if let Some(Err(e)) = ended {
+                tracing::debug!(
+                    container = container_name.as_str(),
+                    error = ?e,
+                    "followed container output stream ended"
+                );
+            }
+        });
+        self.log_followers.insert(container_id.to_string(), handle);
         Ok(())
     }
 }

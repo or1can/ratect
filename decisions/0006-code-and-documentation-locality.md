@@ -18,7 +18,7 @@ wasn't: it was written as its own module when cache mounts were added
 Corrected since (ratect#844): the line counts in Context and Alternatives, and
 the observation that every module with a `//!` comment is under 800 lines,
 were measured at 0.25.0-dev; `config.rs`, `docker.rs` and `engine.rs` have
-since gained `//!` comments and grown to about 4,400–7,900 lines, and
+since gained `//!` comments and grown to about 4,400–8,000 lines, and
 `git_include.rs` to about 1,500.
 
 ## Context

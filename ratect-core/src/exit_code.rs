@@ -32,9 +32,10 @@
 //! The design is [decisions/0016](../../decisions/0016-exit-codes.md), and
 //! its two paths are this module's shape:
 //!
-//! - **Path 1, a run** — `ratect run` and a `ratect-compat` line meant to run
-//!   a task. The code answers whether the task's own container ran to an exit
-//!   code of its own: [`for_error`] is that mapping, and every failure of
+//! - **Path 1, a run** — `ratect run`, `ratect services up` and a
+//!   `ratect-compat` line meant to run a task. The code answers whether the
+//!   task's own container (for `services up`, the member its group's
+//!   `exit_code` rule selects) ran to an exit code of its own: [`for_error`] is that mapping, and every failure of
 //!   Ratect's own to run the task is [`RATECT_FAILED`], a usage error or an
 //!   invalid option value included.
 //! - **Path 2, every other verb** — it runs nothing, so [`RATECT_FAILED`]

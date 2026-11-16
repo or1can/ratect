@@ -4,6 +4,12 @@
 [#535](https://github.com/or1can/ratect/issues/535)). Refined by
 [#473](https://github.com/or1can/ratect/issues/473): a task that fails to run
 once started ends with a summary line of its own, so that route is listed below.
+Extended by [0026](0026-service-instances.md): `ratect services up` has no task
+container, so every member's output is progress, on the progress console (stderr),
+under the `all` style it always uses. Its take-down ends an interrupted run with
+`Service group '<group>' is down.` rather than `Cleanup complete.`, and what it
+leaves behind is reported with `ratect services down <group>` as the command
+rather than `docker`'s.
 
 ## Context
 

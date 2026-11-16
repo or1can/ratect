@@ -22,11 +22,11 @@ evaluation reads what the machine running it supplies — see
 
 1. **`load_project`** (or `load_project_native`, for `ratect.toml`) starts with
    `Config::load_from_file_with_git_cache` (or `load_from_file_native_written_for`): the root file is parsed
-   into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable` structs — YAML via
+   into `Config`/`Container`/`Task`/`TaskRun`/`ConfigVariable`/`ServiceGroup` structs — YAML via
    [`noyalib`](https://docs.rs/noyalib), TOML via [`toml`](https://docs.rs/toml),
    one struct set for both formats — and its top-level `include` list (if any) is
-   resolved, with every loaded file's `containers`/`tasks`/`config_variables`
-   merged into one `Config` (see
+   resolved, with every loaded file's `containers`/`tasks`/`config_variables`,
+   and a TOML file's `services`, merged into one `Config` (see
    [how included files combine](includes.md#how-included-files-combine)).
 
    Includes are walked breadth-first, so every entry in the root file is reached
@@ -221,12 +221,16 @@ unit-tested with a fake implementation instead of a real Docker daemon.
   created, its own container included, so `--no-cleanup-*` is interpreted in exactly
   one place.
 - **`create_network` / `remove_network` / `network_exists`**: the per-task network,
+  or a service instance's ([decisions/0026](../decisions/0026-service-instances.md)),
   plus the up-front validation that makes `--use-network` fail with a clear error
   rather than an unrelated API failure later.
 - **`start_background_container` / `stop_and_remove_container`**: the same, for a
-  dependency or sidecar — started and left running alongside the task rather than
-  waited on, so no task `command` applies; its output is shown only under
-  [`-o all`](output-styles.md#all), read from an attach made before it starts.
+  dependency, sidecar or service group's container — started and left running
+  alongside the task rather than waited on, so no task `command` applies; its output
+  is shown only under [`-o all`](output-styles.md#all), read from an attach made
+  before it starts.
+- **`follow_container`**: the output of a service group's container that another
+  `ratect services up` started, attached to after the fact, under `-o all`.
 - **`wait_for_container_healthy` / `exec_in_container`**: the two steps of the
   [dependency readiness gate](dependency-readiness.md#the-readiness-gate). The first
   blocks on Docker's own event stream, replayed from the beginning so a verdict
@@ -288,7 +292,8 @@ it** ([decisions/0017](https://github.com/or1can/ratect/blob/main/decisions/0017
   a closed stdout, or a failure to run the task once it had started or to clean
   up after it, which the engine reported as it happened), which gets no second
   line, and for a verb that printed its own `Error:` line for each thing it
-  couldn't do (`ratect includes clean`/`refresh`). `ratect-compat` also records every one at `debug`, so `--log-file`
+  couldn't do (`ratect includes clean`/`refresh`). A failed `ratect services up` is
+  a run, and reports as one. `ratect-compat` also records every one at `debug`, so `--log-file`
   says why the run failed unless `RUST_LOG` filters that record out.
 
 Colours (e.g. the exit code in the task summary line, the `Error:` marker) are,

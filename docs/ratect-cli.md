@@ -14,8 +14,9 @@ project per language.
 > [decisions/0003](../decisions/0003-ratect-native-config-format.md) for why. Its
 > full schema is the [`ratect.toml` reference](ratect-config-reference.md); it's the
 > same schema [Configuration Reference](ratect-compat-config-reference.md) documents for
-> `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors and
-> `identity` in place of `run_as_current_user`. A
+> `batect.yml`, re-spelled in TOML, with `extends` in place of YAML anchors,
+> `identity` in place of `run_as_current_user`, and native-only additions such as
+> [`services`](ratect-config-reference.md#services-bringing-containers-up-together). A
 > `batect.yml` is still readable by naming it with `-f`, so a project can migrate
 > incrementally — [`ratect config convert`](#config) translates one automatically.
 
@@ -40,6 +41,9 @@ group headings there, so the order alone carries them.
 | --- | --- |
 | `ratect run <task> [-- ARGS...]` | Runs a task. Anything after `--` is appended to the task command's own arguments, or replaces the image's default `CMD` when the task has no command. |
 | `ratect tasks list` | Lists the tasks this project defines. |
+| `ratect services up <group>` | Brings a [service group](ratect-config-reference.md#services-bringing-containers-up-together) up, or attaches to it if it already is, shows every member's output, and takes it down once its exit condition is met — see [`services` options](#services-options). |
+| `ratect services down <group>` | Takes a service group down, whatever state its containers are in. |
+| `ratect services list` | Lists this project's service groups that have containers or a network on the daemon, in any state. |
 
 ### Managing resources
 
@@ -76,6 +80,9 @@ interface can't answer, so `run` is always explicit.
 ratect run build
 ratect run test -- --filter integration
 ratect tasks list
+ratect services up stack
+ratect services list
+ratect services down stack
 
 ratect caches list
 ratect caches clean gradle-cache
@@ -103,14 +110,14 @@ and `ratect run build -f custom.yml` are the same invocation.
 
 Narrower options attach to the commands that actually use them, rather than being
 global: a flag that's accepted and then ignored reads as a promise. So the
-config-variable options below belong to `run`, `config validate` and `doctor` (the
-commands that evaluate configuration), and the Docker connection options to `run`, `caches`, `resources` and `doctor` (the
+config-variable options below belong to `run`, `services up`, `config validate` and `doctor` (the
+commands that evaluate configuration), and the Docker connection options to `run`, `services`, `caches`, `resources` and `doctor` (the
 ones that reach a daemon).
 
 | Option | Applies to | Description |
 | --- | --- | --- |
-| `--config-var <NAME=VALUE>` | `run`, `config validate`, `doctor` | Sets a [config variable](ratect-compat-config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
-| `--config-vars-file <PATH>` | `run`, `config validate`, `doctor` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. In a YAML file an unquoted number or boolean is read as written, as in `ratect-compat`. Defaults to an auto-discovered [`ratect.local.toml`](ratect-config-reference.md#local-overrides) beside the config file, when present. |
+| `--config-var <NAME=VALUE>` | `run`, `services up`, `config validate`, `doctor` | Sets a [config variable](ratect-compat-config-reference.md#configvariable). Repeatable; wins over `--config-vars-file` and the variable's own default. |
+| `--config-vars-file <PATH>` | `run`, `services up`, `config validate`, `doctor` | A file of config variable values (a flat `NAME = VALUE` map), parsed as TOML or YAML by extension. In a YAML file an unquoted number or boolean is read as written, as in `ratect-compat`. Defaults to an auto-discovered [`ratect.local.toml`](ratect-config-reference.md#local-overrides) beside the config file, when present. |
 
 A path given to `-f` or `--config-vars-file` has a leading `~` expanded to your home
 directory, and `.` and `..` removed before the path is used, so `link/../ratect.toml` <!-- example -->
@@ -124,7 +131,7 @@ removed in a later release.
 
 ## Docker connection options
 
-Taken by `run`, `caches`, `resources` and `doctor` — every command that reaches a
+Taken by `run`, `services`, `caches`, `resources` and `doctor` — every command that reaches a
 daemon — and never by `tasks list`, `includes` or `config`, which don't. Which
 daemon they reach, their `DOCKER_*` environment-variable defaults, and TLS with a
 private certificate authority are on [Connecting to
@@ -146,7 +153,7 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--enable-buildkit` | — | Force BuildKit for image builds, over the daemon's default and `DOCKER_BUILDKIT`. Only `run` builds images, so only `run` takes it. |
+| `--enable-buildkit` | — | Force BuildKit for image builds, over the daemon's default and `DOCKER_BUILDKIT`. Only `run` and `services up` build images, so only they take it. |
 | `--use-network <NAME>` | — | Reuse an existing Docker network for every task in this invocation instead of creating one per task — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
 | `--disable-ports` | — | Never bind container ports on the host — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
 | `--no-proxy-vars` | — | Don't propagate proxy environment variables to image builds or containers, nor the proxies in Docker's `config.json` to image builds — see [Proxies](proxies.md). |
@@ -156,6 +163,92 @@ Docker](connecting-to-docker.md), shared with `ratect-compat`.
 | `--no-cleanup`, `--no-cleanup-after-success`, `--no-cleanup-after-failure` | — | Leave the task's containers and network in place, running, after success (the task's own container ran, whatever its exit code), after failure (something failed before it could), or both. After success that is the named task's alone — its prerequisites are still cleaned up; after failure it is whichever task failed — see [`ratect-compat`'s description](ratect-compat-cli.md#cleanup-after-a-run). |
 | `--max-parallelism <N>` | unbounded | Cap concurrent image pulls/builds, container creates, dependency container starts and setup commands — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution). |
 | `--cache-type <TYPE>` | `volume` | `volume` or `directory` — see [`ratect-compat`'s description](ratect-compat-cli.md#task-execution) and [cache volumes](ratect-compat-config-reference.md#cache-volumes). |
+
+## `services` options
+
+`services up <group>` brings up the [service
+group](ratect-config-reference.md#services-bringing-containers-up-together)'s
+containers — each member, and whatever it depends on, started as a task's
+dependency is — then shows every member's output on stderr, each line under its
+container's name as [`-o all`](output-styles.md) shows it, until the group's `exit_condition`
+is met. It then takes the group down: every container stopped and removed, each
+before what it depends on, then its network. It exits with the code the group's `exit_code_from` selects,
+and otherwise as a run does: `125` for Ratect's own failure, `128` + the signal's
+number for a termination signal — see [Exit codes](#exit-codes-and-diagnostics). Its
+output style is always `all`, the one that shows several containers' output at once,
+so `-o` with any other style is refused.
+
+**A group that is up belongs to no `services up`.** It is the containers and network
+carrying its labels, wherever they came from, so a second `services up` of the same
+group never starts another copy. What it does depends on what it finds, the first of
+these that applies deciding:
+
+- **A container only created or being removed, or a network with no container:**
+  another `services up` or `services down` is bringing the group up or taking it down,
+  so it waits, saying so once, and looks again. A group left that way — by a `services
+  up` killed outright while bringing it up, or a take-down that couldn't remove the
+  network because a task was still running on it — is waited on until you end the wait
+  and run `services down`.
+- **Its network gone, or no member up:** it **replaces** the group, saying `Replacing
+  service group 'stack': none of its members is up, or its network is gone.`, then
+  takes it down and brings it up anew.
+- **A member up** — running, or paused or restarting: it **attaches**, saying `Service
+  group 'stack' is already up; attaching to it. Ending this takes it down.`, and from
+  then on shows the output of each of the group's containers that was running as it
+  attached, and waits for the exit condition. It starts nothing: a member that has already
+  exited stays exited and doesn't count towards the condition, though `exit_code_from = {
+  container = "<member>" }` still takes the code that member left.
+
+Two `services up` started at once end up the same way: one brings the group up and the
+other waits for it, then attaches. Whichever ends:
+
+- **Its exit condition being met, or a termination signal, takes the group down**, whoever
+  brought it up — Ctrl+C in an attached `services up` stops a group another terminal
+  started. Every other `services up` attached to it then sees its members stop, and
+  ends, finishing whatever of the take-down is left. A further signal during the take-down force-removes what is left, as it does a
+  task's cleanup.
+- **Killed outright** (`kill -9`, a terminal closed under it), a `services up` takes
+  nothing down and can't say so: the group stays up. The next `services up` attaches to
+  it, saying so, and `services down` ends it.
+
+The group is labelled with the directory of the configuration file `up` was given.
+Every checkout of a project shares its project name, so `services up` in a second
+checkout attaches to the group the first brought up, and warns that its containers'
+bind mounts point into the first: `Attaching to service group 'stack', which was
+brought up from /work/first, not /work/second: its containers' bind mounts point
+there.`
+
+A container already holding one of the group's names, `<project>..<group>..default..<container>`, without the group's labels stops `services up` with
+the daemon's error; Ratect neither attaches to it nor removes it. A container running
+when `services up` attaches is used as it is, and a container the configuration has
+gained since the group came up is not added: to apply a change to the group's
+configuration or images, take the group down first.
+
+A task reaches a group that is up by running on its network, whose name is fixed:
+`ratect run <task> --use-network <project>..<group>..default` runs the task's
+containers there, where each of the group's containers answers to its name in the
+configuration, and leaves the network alone afterwards.
+
+`services down <group>` stops and removes the group's containers and network, whatever
+state they are in — running, stopped, or half brought up. While the configuration
+declares the group, it stops them as `up` does, each before what it depends on and
+with its own `stop_signal` and `stop_grace_period`; it needs only the `project_name`
+the root configuration file sets, though, so it also takes down a group the
+configuration no longer declares, or one whose configuration fails to load after the
+root file parses, stopping its containers all at once. A group that isn't up is no failure. `services list` shows each group that
+has containers or a network on the daemon, whatever their state, with each container's state and the directory it was brought up from; with
+`-o quiet`, each group's name alone.
+
+[`resources`](#resources-options) never selects a service group's containers or
+network, whatever their state and whatever its options, and `doctor` doesn't count
+them as leftovers: `services down` is how a group ends.
+
+| Option | Applies to | Description |
+| --- | --- | --- |
+| `--config-var`, `--config-vars-file` | `up` | As for [`run`](#global-options). |
+| Docker connection options | `up`, `down`, `list` | See [Docker connection options](#docker-connection-options). |
+| `--enable-buildkit` | `up` | As for [`run`](#run-options). |
+| `--cache-type <TYPE>` | `up` | As for [`run`](#run-options): use the same type as the tasks sharing the group's caches. |
 
 ## `caches` options
 
@@ -347,7 +440,8 @@ When the selection leaves task runs out for their state, both commands say so on
 stderr — `Left out 2 task runs still going, and 1 task run Ratect can't tell has
 ended (pass --all to include it).` A task run too young for `--older-than` isn't
 counted there. Containers and networks carrying Ratect's project label but no task
-run's (a service instance's) are neither selected nor counted.
+run's are neither selected nor counted, and nor is a service instance's container
+whose image or configured `labels` gave it a task run's label.
 
 `--all` here composes with `--older-than`, where [`includes clean`](#includes-options)'
 `--all` conflicts with it: that one means every cached include, whatever its age,
@@ -673,10 +767,14 @@ until the first real run caches it.
 Identical to `ratect-compat`'s: both binaries share one mapping, whose design is
 [decisions/0016](../decisions/0016-exit-codes.md). An invocation is on one of two paths,
 and its exit code depends on which. `ratect run` is a **run**, even when its arguments
-don't parse; every other verb isn't. For a line that doesn't parse, the subcommand
+don't parse, and so is `ratect services up`; every other verb isn't. For a line that doesn't parse, the subcommand
 counts where it would be read as one — not after `--`, and not as another option's
 value — so `ratect --bogus run test` is a run. `--help` and `--version` exit `0` on
 either path, once the arguments reach them.
+
+`ratect services up` is a run too, whose exit code is the one its group's `exit_code_from`
+selects in place of the task's own (see [`services`
+options](#services-options)); the rules below hold for it with that change.
 
 A run exits with one of three things, answering one question: did the task's own
 container run to an exit code of its own?
@@ -693,7 +791,8 @@ container run to an exit code of its own?
    (`SIGINT`), `143` for `SIGTERM`, `129` for `SIGHUP`. Any of the three abandons the run
    and then cleans up after it; a second one *during* that cleanup force-removes
    whatever is left, a Ctrl+C after that stops the cleanup, and `ratect resources list`
-   finds whatever that leaves. A signal that arrives only during the cleanup of a run
+   finds whatever that leaves (for `services up`, `ratect services down <group>`
+   removes it instead). A signal that arrives only during the cleanup of a run
    that had already finished doesn't change its exit code; one during a prerequisite's
    cleanup ends the run before the next task starts; one while the run is still
    connecting to Docker ends it at once, with nothing yet to clean up. A run whose
@@ -746,6 +845,7 @@ section](ratect-compat-cli.md#exit-codes-and-error-reporting) has each rule in f
 | Cache cleanup | `--clean`/`--clean-cache` | `ratect caches clean [NAME...]` |
 | Listing caches | not available | `ratect caches list` |
 | Finding leftovers from a previous run | not available | `ratect resources list`/`clean` |
+| Bringing a group of containers up together | not available | `ratect services up`/`down`/`list` |
 | Checking a project without running it | not available | `ratect doctor` |
 | Managing the Git include cache | not available (only the automatic sweep) | `ratect includes list`/`clean`/`refresh` |
 | Batect-inert flags (`--upgrade`, `--no-update-notification`, `--no-wrapper-cache-cleanup`) | accepted, no effect | not offered |

@@ -158,6 +158,15 @@ const DIVERGENCES: &[Divergence] = &[
     Divergence {
         between: BOTH,
         case: "native-only",
+        pointer: "/services",
+        left: r#"null"#,
+        right: r#"{"stack":{"containers":["child","migrate"],"exit_code_from":{"container":"child"},"exit_condition":"any_stopped"}}"#,
+        because: "docs/ratect-config-reference.md#services-bringing-containers-up-together: \
+                  a batect.yml can't declare a service group",
+    },
+    Divergence {
+        between: BOTH,
+        case: "native-only",
         pointer: "/containers/api/external_health_check",
         left: r#"null"#,
         right: r#"{"expected_status":204,"interval":"2000000000ns","path":"/healthz","port":8080,"retries":3,"timeout":"1000000000ns","type":"http"}"#,

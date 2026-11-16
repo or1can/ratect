@@ -200,6 +200,16 @@ impl EventSink for SimpleEventLogger {
                     super::exited_unexpectedly(&self.console, exit_code)
                 ));
             }
+            TaskEvent::ServiceMemberExited {
+                container,
+                exit_code,
+            } => {
+                self.console.println(text!(
+                    "{} {}.",
+                    self.console.bold(&container),
+                    super::exited(&self.console, exit_code)
+                ));
+            }
             TaskEvent::RunningTaskContainer { container, command } => {
                 let bold = |text: &str| self.console.bold(text);
                 let line = match command {
@@ -248,6 +258,8 @@ impl EventSink for SimpleEventLogger {
             | TaskEvent::ContainerRemoved { .. }
             | TaskEvent::RemovingNetwork
             | TaskEvent::NetworkRemoved
+            | TaskEvent::RemovingServiceGroupNetwork
+            | TaskEvent::ServiceGroupNetworkRemoved
             | TaskEvent::RunEnded { .. }
             | TaskEvent::CleanupFinished
             | TaskEvent::ContainerOutput { .. }

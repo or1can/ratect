@@ -143,6 +143,24 @@ three states:
   platform that isn't Unix. Selected only with `--all`. Said as *can't tell
   has ended*.
 
+## Service groups
+
+**Service group** — a named set of a project's containers, its **members**,
+declared under `services` in a native file, with an exit condition and an
+exit-code rule. Configuration only: a group names containers, and is not a
+kind of container.
+
+**Service instance** — one copy of a service group, brought up: its members,
+the containers they depend on, and a network, carrying the project, service
+group, instance and start-directory labels and, from Ratect, no `run` or
+`task` label. Its containers' `role` label says they are its, whatever other
+labels their image or configuration gave them.
+Not a task run: no process owns one, and it takes no lock
+([0026](decisions/0026-service-instances.md)). A group has one instance,
+`default`. A foreground `services up` is its *client* — it brings the instance
+up or attaches to the one there, and takes it down — and `services down`
+removes it. Never a leftover: `resources` doesn't select one.
+
 ## Cancelling a run
 
 **Termination signal** — any signal Ratect traps so a run cleans up after
@@ -172,8 +190,9 @@ a cancel that fails is a warning, not a cleanup failure.
 
 ## Output
 
-**Result** — what an invocation was asked to produce: for a run, the task
-container's own output; for any other verb, what that verb produces (a
+**Result** — what an invocation was asked to produce: for a task run, the
+task container's own output, and for `services up` none, since its members'
+output is progress; for any other verb, what that verb produces (a
 listing, a report, a conversion). Ratect's own progress and a dependency's
 output are not part of it.
 

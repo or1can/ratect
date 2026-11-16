@@ -80,15 +80,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "docs/ratect-config-reference.md"
-mode = "claim-words-totalising"
-unit = "9a7007818593e795"
-copies = 1
-note = "Ran a ratect.toml whose container has neither image nor build_directory: `ratect config validate` reports 0 problems, and only `ratect run t` fails with \"Container 'base' has neither 'image' nor 'build_directory' set\"."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "docs/output-styles.md"
 mode = "claim-words-totalising"
 unit = "74a99964df200e18"
@@ -519,24 +510,6 @@ copies = 1
 note = "image_reference.rs:19-35 says it ports distribution/reference's ParseNormalizedNamed plus the docker CLI's digest refusal, which is what `docker tag` checks, and returns that package's own error text as the reason."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/image_reference.rs" = "1218fdb8352074a8" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-totalising"
-unit = "070bc2dfefde4844"
-copies = 1
-note = "resource_names.rs:16-37: the format is <project>-<container>-<suffix>, the module is Batect's DockerResourceNameGenerator, and nothing parses a name. resources.rs:152,159 uses names only for display. The single ResourceNames::new is at engine.rs:2720, once per task execution, next to run_id."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-counts"
-unit = "070bc2dfefde4844"
-copies = 1
-note = "engine.rs:2715-2720 draws one ResourceNames, so one suffix, per task execution. That is the same unit as the `run` label's run_id at engine.rs:2709. The suffix is six characters (resource_names.rs:48-59)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -4698,24 +4671,6 @@ subjects = {}
 
 [[mark]]
 file = "docs/how-it-works.md"
-mode = "claim-words-totalising"
-unit = "ab79680a6704437a"
-copies = 1
-note = "The dependency's echo (dep-says-hi) appears under -o all ('talk | dep-says-hi') and not under simple."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "claim-words-about-elsewhere"
-unit = "ab79680a6704437a"
-copies = 1
-note = "The output-styles.md#all anchor exists. Behaviour as in the line 220 totalising record."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/how-it-works.md"
 mode = "claim-words-counts"
 unit = "1f35223fe38ac3f7"
 copies = 1
@@ -5373,15 +5328,6 @@ subjects = {}
 
 [[mark]]
 file = "docs/ratect-cli.md"
-mode = "claim-words-totalising"
-unit = "1c2aeb0550bf81df"
-copies = 1
-note = "'ratect run --bogus' -> 125. 'ratect tasks list --bogus' -> 2. 'ratect --bogus' -> 2."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-cli.md"
 mode = "claim-words-about-elsewhere"
 unit = "484b7de91236e227"
 copies = 1
@@ -5404,15 +5350,6 @@ mode = "claim-words-totalising"
 unit = "eed3c6d8f754a501"
 copies = 1
 note = "exit_code.rs:157-174: ContainerExitedNonZero is matched first. fail3 with --no-cleanup-after-success exited 3."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-cli.md"
-mode = "claim-words-counts"
-unit = "653e60c301dc12fa"
-copies = 1
-note = "SIGTERM -> 143, cleanup, and the notice 'Send SIGTERM again to force-remove what's left, and Ctrl+C after that to stop cleaning up.' A second signal was not exercised."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -7478,42 +7415,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "agents/domain.md" = "befc2eb13561a492", "agents/issue-tracker.md" = "786e5d0a2116054e", "agents/triage-labels.md" = "4f53c9b40ce2651e" }
 
 [[mark]]
-file = ".out-of-scope/cheaper-fancy-repaints.md"
-mode = "stale-claims"
-unit = "dd656ffcd24a40a1"
-copies = 1
-note = "Section is lines 10-21. Checked the claims about the code it names: ratect-core/src/ui/fancy.rs:590 repaint_startup re-renders every line and skips the write only when 'state.last_rendered == rendered', so it repaints the whole block, with no diffing, and the cursor-repaint machinery is as described. The rest (nobody has reported it, no measurement, revisit later) is policy."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
-
-[[mark]]
-file = "decisions/0017-output-streams-and-styles.md"
-mode = "stale-claims"
-unit = "e73648860f673a33"
-copies = 1
-note = "Section 97-109 (13 lines): stderr SGR only on a terminal (file vs pty capture); fancy refusals name stderr (ratect) / stdout (compat); tracing with_ansi tied to stderr (ratect/src/main.rs:661, ratect-compat/src/main.rs:630); fancy auto-select uses ui.rs:635 on the progress console. The pty-with-redirected-stdout case couldn't be run here."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
-
-[[mark]]
-file = "decisions/0017-output-streams-and-styles.md"
-mode = "stale-claims"
-unit = "bfb3781e6939f264"
-copies = 1
-note = "Section 237-242 (6 lines): colour sites only ui.rs:1389,1404,1644, ui/interleaved.rs:167, each also carried by words; fancy uses no Color (no Color:: in fancy.rs)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
-
-[[mark]]
-file = "decisions/0017-output-streams-and-styles.md"
-mode = "stale-claims"
-unit = "a79fd74dcca4a383"
-copies = 1
-note = "Section 305-311 (7 lines): .out-of-scope/cheaper-fancy-repaints.md exists; the rest is a list of things not decided."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".out-of-scope/cheaper-fancy-repaints.md" = "2fc55e567f1d7bf3", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
-
-[[mark]]
 file = "README.md"
 mode = "stale-claims"
 unit = "dabe88a1049e7687"
@@ -7521,15 +7422,6 @@ copies = 1
 note = "Section is 7 lines. docs/installation.md:102-114 states Docker 20.10 or newer with API version negotiation, and Rust stable. The #prerequisites anchor exists (installation.md:102)."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/installation.md#prerequisites" = "7d92fa8704ca4242" }
-
-[[mark]]
-file = "decisions/0017-output-streams-and-styles.md"
-mode = "stale-claims"
-unit = "b12bf5fa35aecbc0"
-copies = 1
-note = "Section 129-147 (19 lines): four classes, markers bold red/yellow (ui.rs:1389,1404), notices unmarked (observed), quiet keeps errors/warnings/notices; exited_unexpectedly is a milestone without Warning: (ui.rs:1653-1662). Duplicate key guard: see the other 0017:129 stale-claims record (true)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/ui/fancy.rs" = "443d25245d97f664", "ratect-core/src/ui/simple.rs" = "90de978b0825599d" }
 
 [[mark]]
 file = "examples/getting-started/README.md"
@@ -9449,15 +9341,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "AGENTS.md" = "ffd5702f09a657c0", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6" }
 
 [[mark]]
-file = "decisions/0019-readiness-gates-starting-only.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "## CLI flags' --max-parallelism row and the startup-failure row are unchanged; the edit was the credentials bullet. Earlier reading: Decision checked: differences-from-batect.md#cli-flags (:193) has the --max-parallelism row (:224) recording that a dependency's start is capped, and :466-469 records \"A startup failure drops the rest of startup at once\" against Batect's cancel-and-wait. | The Decision (61-101) was re-checked: differences-from-batect.md ## CLI flags (:193) has the --max-parallelism row (:224) recording a dependency's start as capped; :468-476 records \"A startup failure drops the rest of startup at once\" against Batect's cancel-and-wait; Batect TaskStep.kt:62 exempts RunContainerStep from the cap."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/differences-from-batect.md" = "45fb071bf8699a6c", "docs/differences-from-batect.md#cli-flags" = "68852b06d3e1914a", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
-
-[[mark]]
 file = "decisions/0023-git-include-entry-lock.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -9611,29 +9494,11 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0012-native-task-container-has-no-readiness-gate.md" = "65be0317e52a91d1", "decisions/0019-readiness-gates-starting-only.md" = "f56c3b070b1c6694" }
 
 [[mark]]
-file = "CONTEXT.md"
-mode = "stale-claims"
-unit = "74f78c2b3253e401"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Cancelling a run re-read: interrupt.rs:125-131 has TerminationSignal::Interrupt = SIGINT plus Terminate/Hangup, and its module doc gives all three one path and the ladder (one more signal of any kind force-removes, a SIGINT after that abandons); engine.rs:3285-3292 sends abandoned-build cancels first with or without --no-cleanup*; a failed cancel is a TaskEvent::Warning (engine.rs:1777-1782); 0016's fix-commit changes are survey text only."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
-
-[[mark]]
 file = "docs/ratect-cli.md"
 mode = "stale-claims"
 unit = "8f0c8171ca58d859"
 copies = 1
 note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Exit codes section run against target/debug/ratect: \"--bogus run test\", \"run --bogus\" and \"-o bogus run test\" exit 125; \"--bogus\", \"tasks list --bogus\" and a missing subcommand exit 2; run nosuch exits 125 with \"(Run 'ratect tasks list' ... or 'ratect run --help' for help.)\"; tasks list with no ratect.toml exits 2; config validate with no file or bad TOML exits 1; caches list --docker-config /nonexist exits 2 and doctor with it exits 1; caches list with the daemon down exits 1; --version and run --help exit 0. | prior note holds (0016 changed only its survey paragraph): re-run against target/debug/ratect: \"--bogus run test\", \"run --bogus\" and \"-o bogus run test\" give 125, while \"--bogus\", \"tasks list --bogus\", no subcommand, and tasks list with no ratect.toml give 2; config validate with no file gives 1; --version and run --help give 0; run nosuch gives 125 with the \"(Run 'ratect tasks list' ... or 'ratect run --help' for help.)\" hint; a task's own exit 42 passes through as 42."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
-
-[[mark]]
-file = "docs/ratect-compat-cli.md"
-mode = "stale-claims"
-unit = "72e425f2afe62ace"
-copies = 1
-note = "This release's only changes to what the section names are the status lines of decisions 0016-0023 (implemented to shipped), the version bump in the crates' Cargo.toml, CHANGELOG.md's new release heading and the RELEASES.md entries; the section states none of those records' status or the version, so they don't reach it. Earlier reading: Exit codes section run against ratect-compat: an -o quiet run of 'exit 42' exits 42; SIGINT/SIGTERM/SIGHUP give 130/143/129 with their notices; yes | head -n1 exits 141 with \"Stdout closed; cleaning up.\"; no task name (even with a missing -f) exits 125 and names --list-tasks/--help; \"-- x\" with no task exits 125; --bogus build exits 125 and --bogus --clean exits 2; bad YAML under -T exits 1; --log-file in a missing dir exits 125 on a run and 2 under -T; \"Did you mean 'test' or 'yes'?\" lists every tie, and a prerequisite gets no list hint. | prior note holds (0016 changed only its survey paragraph): re-run against ratect-compat: no task name gives 125, \"-- x\" gives 125, \"--bogus build\" gives 125 and \"--bogus --clean\" gives 2, and SIGINT gives 130 with its notice (scratch r2-docs/ex, sig)."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5" }
 
@@ -10016,24 +9881,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d" }
 
 [[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "7cd0026d8877e5e8"
-copies = 1
-note = "Spot-checked by running ratect-compat: --version, --help, -T, --tag-image, TASK_NAME, -o fancy off a terminal, --docker-host ssh://, --docker-config, --cache-type, --clean. Batect's side not checked, and not every row was run."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0016-exit-codes.md" = "631e121fcc6998b5", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "70c5bb9821819a66" }
-
-[[mark]]
-file = "docs/ratect-config-reference.md"
-mode = "stale-claims"
-unit = "9d67410bcb6185a0"
-copies = 1
-note = "Ran the refusal, patch-number, default-version and include cases, and read all nine BREAKING_CHANGES rows. Git bundle paths not exercised."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "8e096c328bd513dabe9eb631195af67ba281b095", "docs/captures/written-for-refusal.ansi" = "f76db4a4faeac4ab" }
-
-[[mark]]
 file = "CONTEXT.md"
 mode = "stale-claims"
 unit = "e0ee8bb50685e05f"
@@ -10129,24 +9976,6 @@ mode = "claim-words-counts"
 unit = "b4450e48ec64ae65"
 copies = 1
 note = "Checked BatectFile::of and remedy in include_trust.rs against native_field_rejection, and the tests for a local .yml and a bundle under a YAML root."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "claim-words-totalising"
-unit = "15526fbe24be0eeb"
-copies = 1
-note = "Checked load_project (config.rs, calls load_from_file_with_git_cache) and load_project_native (calls load_from_file_native_written_for) by reading both."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "claim-words-counts"
-unit = "15526fbe24be0eeb"
-copies = 1
-note = "Same read: each loader has the one starting call this sentence names."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -11159,15 +10988,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0004-git-include-host-path-trust.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Subagent read: allow_nested_git_includes and scope shared have shipped since; append-only history; properties 1, 2 and 5 hold per include_trust.rs"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md#future-vision" = "de51e3239425bbce" }
-
-[[mark]]
 file = "ROADMAP.md"
 mode = "stale-claims"
 unit = "e2503d5dfad6af8a"
@@ -11663,15 +11483,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0003-ratect-native-config-format.md"
-mode = "stale-claims"
-unit = "e1cc01c2338a448e"
-copies = 1
-note = "Read the object-shape paragraph against schema/ratect-config.schema.json and config.rs: PortMapping/VolumeMount/IncludeEntry impls are untouched by this diff, which removes only run_as_current_user; the Status corrects the validate claim."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-compat/tests/fixtures/devices.yml" = "c1617261bc88c0bf", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-compat/tests/fixtures/ports.yml" = "a6d5b13c651f3afa", "ratect-core/src/schema.rs" = "3c623a991c420654" }
-
-[[mark]]
 file = "docs/worked-examples.md"
 mode = "stale-claims"
 unit = "521fe5c9ece1aa1f"
@@ -11907,15 +11718,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f" }
 
 [[mark]]
-file = "decisions/README.md"
-mode = "stale-claims"
-unit = "d7ef70d0a2f09cab"
-copies = 1
-note = "Cross-cutting vs version-scoped rule checked against the decisions/ listing and 0002's references from resources.rs and diagnostics.rs."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/schema.rs" = "3c623a991c420654" }
-
-[[mark]]
 file = "decisions/0011-container-identity.md"
 mode = "stale-claims"
 unit = "a40ff2cbaad0babc"
@@ -11923,15 +11725,6 @@ copies = 1
 note = "Checked against diagnostics.rs remapped_daemon_warning, the engine's warning, doctor's findings in main.rs and identity.rs's non-root image user warning."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f" }
-
-[[mark]]
-file = "decisions/0017-output-streams-and-styles.md"
-mode = "stale-claims"
-unit = "c08f1b626e102ed5"
-copies = 1
-note = "Checked progress console split, resources listing on stdout and left-out notice on stderr in manage_resources, doctor report on stdout; captures match."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664", "ratect-core/src/ui/simple.rs" = "90de978b0825599d" }
 
 [[mark]]
 file = "docs/ratect-cli.md"
@@ -12283,15 +12076,6 @@ copies = 6
 note = "A different snippet: 'The file' section's own build-env example, unrelated to the identity snippet this diff replaced with an include."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
-
-[[mark]]
-file = "ROADMAP.md"
-mode = "stale-claims"
-unit = "7907fc63f83118a2"
-copies = 1
-note = "Checked against docs/ratect-cli.md#doctor and diagnostics.rs: no proxy/HEALTHCHECK/entrypoint check exists, so still open; linked files exist."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".out-of-scope/cheaper-fancy-repaints.md" = "2fc55e567f1d7bf3", ".out-of-scope/doctor-daemon-proxy-mismatch-check.md" = "88a35c12d11c9481", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "docs/SUMMARY.md" = "7da083d464908433", "docs/ratect-cli.md#doctor" = "5abbf435dd300599", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -12852,24 +12636,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0007-where-agent-process-docs-live.md" = "3ad12b72630d25fa" }
 
 [[mark]]
-file = ".out-of-scope/prerequisite-arguments.md"
-mode = "stale-claims"
-unit = "108160dc20ea7f71"
-copies = 1
-note = "engine.rs still runs a prerequisite with no arguments (run_task_scoped(prerequisite, &[], false)); PortMapping exists in config.rs."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/engine.rs" = "ed64978f6310f2c6" }
-
-[[mark]]
-file = "decisions/0019-readiness-gates-starting-only.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "how-it-works.md, dependency-readiness.md Resolution order, CONTEXT.md entry and --max-parallelism row"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "b1b1fcfacb4e76414fbe61ec6d0f2247a2d3d707", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/how-it-works.md" = "80dd3867f8a2c51f", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664" }
-
-[[mark]]
 file = "decisions/0012-native-task-container-has-no-readiness-gate.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -12879,24 +12645,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/differences-from-batect.md#container-fields" = "29c3b8d5d098835d", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/task-lifecycle.md#known-limitations" = "b24bc9481b6d7986" }
 
 [[mark]]
-file = "decisions/0003-ratect-native-config-format.md"
-mode = "stale-claims"
-unit = "1757c79603750326"
-copies = 1
-note = "extends checked against config.rs's cycle check and per-field merge and engine.rs resolve_image's lazy image check; xor wording corrected in Status."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/engine.rs" = "ed64978f6310f2c6" }
-
-[[mark]]
-file = "decisions/0017-output-streams-and-styles.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "historical; no written_for row claimed for 0017, matching BREAKING_CHANGES"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "b1b1fcfacb4e76414fbe61ec6d0f2247a2d3d707", "docs/output-styles.md" = "bcb281e707ef2be1", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664", "ratect-core/src/ui/simple.rs" = "90de978b0825599d", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
-
-[[mark]]
 file = "decisions/0015-native-project-records-its-written-for-version.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
@@ -12904,15 +12652,6 @@ copies = 1
 note = "BreakingChange fields; the two 0.13.0 CHANGELOG ratect.toml entries match the two 0.13.0 rows"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "b1b1fcfacb4e76414fbe61ec6d0f2247a2d3d707", "docs/ratect-config-reference.md#where-the-semantics-differ" = "6a5deb32604f6a3a" }
-
-[[mark]]
-file = "ROADMAP.md"
-mode = "stale-claims"
-unit = "96ac0674b29ad7a7"
-copies = 1
-note = "build_context_tar returns Result; non-Unix fallbacks in user.rs and interrupt.rs"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "ratect-core/src/docker.rs" = "2f2543eac749ae10" }
 
 [[mark]]
 file = "examples/identity/README.md"
@@ -13032,25 +12771,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "schema/batect-config.schema.json" = "19c8a4ec25eef8cd" }
 
 [[mark]]
-file = "docs/ratect-config-reference.md"
-mode = "stale-claims"
-unit = "aa4f57e276df5494"
-copies = 1
-note = "Editor support and the at-a-glance table read: the closing paragraph that listed native-only fields (missing identity and ratect_version) and credited every semantic difference to extends now points at the table rows with no batect.yml entry instead; the table matches the fields the loader refuses in a .yml."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "schema/ratect-config.schema.json" = "082b30fcdc43615c" }
-
-[[mark]]
-file = "decisions/0011-container-identity.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "user.rs generators, local-socket pre-creation, userns-remap warning and identity::host_user spot-checked; probed edge cases not checkable in code."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/ratect-config-reference.md" = "19aaf620598872f5", "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
-
-[[mark]]
 file = "docs/includes.md"
 mode = "claim-words-totalising"
 unit = "38213490526fee13"
@@ -13083,15 +12803,6 @@ mode = "restatement-ngram"
 unit = "cf3fb5d256e8e390-0349c209aad323cd"
 copies = 1
 note = "A setup command's run_in is still in the list and still refused in a .yml (reject_setup_command_run_in_compat)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-cli.md"
-mode = "restatement-ngram"
-unit = "ca73e87d476db401-3d3d19b727812bee"
-copies = 1
-note = "ratect's --config-vars-file row says an unquoted value in a YAML file is read as written, as in ratect-compat: true for every YAML file now, tagged or not (load_config_vars_file goes through crate::yaml, and the tagged config-vars test passes)."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -13871,78 +13582,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "docs/how-it-works.md"
-mode = "stale-claims"
-unit = "db26194905776a79"
-copies = 1
-note = "Read against docker.rs (pub trait ContainerRuntime: ResourceInventory + VolumeStore) and engine_tests.rs's FakeContainerRuntime driving the cycle, dedup and prerequisite tests."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad" }
-
-[[mark]]
-file = "decisions/0003-ratect-native-config-format.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Consequences checked: engine.rs's dialect setting and identity use are in Status; Config::load_from_file exists in config.rs."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/schema.rs" = "3c623a991c420654" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "b8f51c8bb848e6ed"
-copies = 1
-note = "Read against agents/docs.md's sections (The two config references, Examples and captured output, Ownership) and the repo layout of contributor files; CLAUDE.md is a symlink to AGENTS.md."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "e22f7b0ed47e83f03629994da02c1c77891091bb", "ROADMAP.md" = "edf7cca5bb31c742", "agents/docs.md" = "252e6e2722865b23" }
-
-[[mark]]
-file = "decisions/0024-host-identity.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Read against written_for.rs's ~ detector rows, CHANGELOG.md's $HOME entry, docs/differences-from-batect.md's $HOME divergence, agents/probing.md's setpriv probe, ratect/tests/support/unnamed_host_user.rs (shared by both binaries' cli.rs, gated cfg(unix) on this branch) and cache.rs's shared_cache_root propagating user::home errors."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/probing.md" = "bf91674285619801", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "stale-claims"
-unit = "cd82ea9cde0a70a4"
-copies = 1
-note = "docker.rs imports only resolve_option_path from config, ssh_agent.rs no crate use, dockerignore independent; conversion move is in Status."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Three rules hold; run_lock.rs is a feature module carrying its own //! notes; cache.rs's creation correction is in Status."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
-
-[[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "f2571114ef32d2be"
-copies = 1
-note = "Read against the docs/ directory listing and SUMMARY.md: every named page exists, and none of the contributor files lives under docs/."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "e22f7b0ed47e83f03629994da02c1c77891091bb", "ROADMAP.md" = "edf7cca5bb31c742" }
-
-[[mark]]
-file = "ratect-compat/tests/conformance/README.md"
-mode = "stale-claims"
-unit = "0afb59bca4a328d6"
-copies = 1
-note = "Read against ROADMAP.md#batect-parity, renovate.json5's ignorePaths, the nginx pins in the journey Dockerfiles and batect.yml files, the ADAPTED FROM BATECT comments, .gitignore's output rule, and conformance.rs's reset_output_dir and divergence field (gated cfg(unix) on this branch)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "ROADMAP.md#batect-parity" = "3ab0fecdb0e276a1" }
-
-[[mark]]
 file = "SECURITY.md"
 mode = "stale-claims"
 unit = "f6a589cf70c5e404"
@@ -13961,78 +13600,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0003-ratect-native-config-format.md" = "4e46cecd5f4321e2" }
 
 [[mark]]
-file = "ROADMAP.md"
-mode = "stale-claims"
-unit = "1d74098c854152ae"
-copies = 1
-note = "Read against #599/#600/#601 open in milestone ratect 0.17.0, config.rs's serial ensure_cached loop, ratect-core's tracing macros with no spans, the digest-pinned curl image, schema/, the anchors it links, the CHANGELOG entries it cites, and gh issue list -R batect/batect --state open (7)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "70c5bb9821819a66", "docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it" = "23b04874957e5077", "docs/ratect-config-reference.md#run_to_completion-init-containers" = "eebcbf97189cbdeb", "schema/batect-config.schema.json" = "19c8a4ec25eef8cd", "schema/ratect-config.schema.json" = "082b30fcdc43615c" }
-
-[[mark]]
-file = "TODO.md"
-mode = "stale-claims"
-unit = "4722fac5bc8b3840"
-copies = 1
-note = "Read against docker.rs: split_image_reference, docker_buildkit_env_value and select_builder_version are private and used only there, and connection.rs's //! dates its split."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/docker/connection.rs" = "2584cc267720f139" }
-
-[[mark]]
-file = "decisions/0016-exit-codes.md"
-mode = "stale-claims"
-unit = "975160af5e200673"
-copies = 1
-note = "Read against exit_code.rs's for_error mappings (pass-through, 128+n, 141, 125, CleanupFailed after Ok), engine.rs's cleanup_failed and docker.rs's 404/409 cleanup handling."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad" }
-
-[[mark]]
-file = "decisions/0017-output-streams-and-styles.md"
-mode = "stale-claims"
-unit = "556ae971cddef085"
-copies = 1
-note = "Read the quoted wording against engine.rs's LeftBehind messages, command() and investigation(), the no-cleanup and complete notices, ui.rs's Cleaning up lines and ui/interleaved.rs's per-prefix lines."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/ui/fancy.rs" = "443d25245d97f664", "ratect-core/src/ui/simple.rs" = "90de978b0825599d" }
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "stale-claims"
-unit = "edff3ef22243ce64"
-copies = 1
-note = "run_task_internal's order checked: prerequisites, evaluation before Docker work, network; the lock is taken between them, so no sentence becomes untrue."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6" }
-
-[[mark]]
-file = "TODO.md"
-mode = "stale-claims"
-unit = "b3b8ab66b02ea5fa"
-copies = 1
-note = "Read item 6 against ui.rs's Console writer, println and reader_gone, and item 19 against docker.rs's two resize/SIGWINCH tracing::warn!s."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/ui.rs" = "3053430b40f9f56f" }
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "stale-claims"
-unit = "8242d442698604d0"
-copies = 1
-note = "Read against the ContainerRuntime trait and DockerClient impl in docker.rs: each named method, create_container's ContainerSpec and CreateContainerError::created, the health-wait event filters, dockerignore::PatternMatcher for the build tar, and no config types outside comments."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/docker.rs" = "1d51ac64208addad" }
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "stale-claims"
-unit = "f93147ee2f007c27"
-copies = 1
-note = "already_reported's list in exit_code.rs, VerbFailuresReported's users, docker.rs's resize warn!s, and resources' notice on stderr checked."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6" }
-
-[[mark]]
 file = "agents/claims.md"
 mode = "stale-claims"
 unit = "cfe94b9cdcec4a14"
@@ -14040,33 +13607,6 @@ copies = 1
 note = "Read against .pre-commit-config.yaml (v0.28.1 pre-commit and pre-push entries), renovate.json5's pre-commit manager, ci.yml's claims job, claims.toml's [hook] fail_on_unmarked and the gh api ruleset, where Claims is not required."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6" }
-
-[[mark]]
-file = "decisions/0024-host-identity.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Read against user.rs's home/chosen_home and CurrentUser naming, the no-home refusals in docker/connection.rs, cache.rs and git_include.rs, and a grep finding no uid, gid, passwd or HOME lookup outside user.rs."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad" }
-
-[[mark]]
-file = ".claude/skills/ready/SKILL.md"
-mode = "stale-claims"
-unit = "7fc87c0ababb2f62"
-copies = 1
-note = "Spot-checked each name it cites: include_trust::restricting's Option<&Bundle>, CACHE_MOUNT_PROJECT's static Mutex, ConfigFormat::Native/Compat, RELEASES.md's 0.26.0 entry and ratect#813's 2026-11-10 comment."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0024-host-identity.md" = "bc84ea5051abe040", "ratect-core/src/docker.rs" = "1d51ac64208addad" }
-
-[[mark]]
-file = "decisions/0005-build-ssh-keyring-placement.md"
-mode = "stale-claims"
-unit = "073c1634c496cdb6"
-copies = 1
-note = "Read against classify_ssh_agent_paths in docker.rs (a socket must be the entry's only path, one socket per id) and the root Cargo.toml's bollard patch tag; this branch's non-Unix is_socket and Keyring::start refusal are outside the Unix-socket case it describes."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad" }
 
 [[mark]]
 file = "docs/installation.md"
@@ -14702,37 +14242,10 @@ subjects = {}
 
 [[mark]]
 file = "decisions/0026-service-instances.md"
-mode = "claim-words-totalising"
-unit = "2df2cce387dd1d51"
-copies = 1
-note = "Maintainer's answer to Q6 in triage, recorded on ratect#103."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "2df2cce387dd1d51"
-copies = 1
-note = "Maintainer's answer to Q6 in triage, recorded on ratect#103."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
 mode = "claim-words-counts"
 unit = "74391a6c6cf5a11b"
 copies = 1
 note = "Maintainer's answer to Q6 in triage; research file Summary item 4 records Compose behaving the same."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "cf0f4e2cba3311de"
-copies = 1
-note = "Maintainer's answer to Q19 in triage, recorded on ratect#103."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -14765,28 +14278,10 @@ subjects = {}
 
 [[mark]]
 file = "decisions/0026-service-instances.md"
-mode = "claim-words-totalising"
-unit = "edf8b0ab13d76595"
-copies = 1
-note = "Checked against docs/task-lifecycle.md and resource_names.rs's doc comment: Docker 20.10 to 24 create a second same-named network."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
 mode = "claim-words-counts"
 unit = "840b956c21767101"
 copies = 1
 note = "Heading; maintainer's answer to the revised Q3 and Q11 in triage."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "0662dbeb58e2cca0"
-copies = 1
-note = "Checked against config: the project label is Config::project_name (labels.rs), which two worktrees share; maintainer's answer to Q10."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -14801,15 +14296,6 @@ subjects = {}
 
 [[mark]]
 file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "5c1a5481d4892ce0"
-copies = 1
-note = "Checked against docs/task-lifecycle.md (members created before start) and Decision 1's adoption rule; ratect#103's latest comment gives the starting case."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
 mode = "claim-words-totalising"
 unit = "5893be6017664575"
 copies = 1
@@ -14823,24 +14309,6 @@ mode = "claim-words-counts"
 unit = "5893be6017664575"
 copies = 1
 note = "Rationale as decided with the maintainer (decision 2 of the third review round)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "c1e36547880558e5"
-copies = 1
-note = "Checked against docs/task-lifecycle.md's cross-task isolation section."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "a13d9423a476e2d1"
-copies = 1
-note = "Reasoning from the third review pass, recorded on ratect#103's open points."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -14892,24 +14360,6 @@ subjects = {}
 [[mark]]
 file = "decisions/0026-service-instances.md"
 mode = "claim-words-about-elsewhere"
-unit = "b4417055a8566d3f"
-copies = 1
-note = "Follows from Decision 1's adoption rule; decision 2 of the third review round."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-about-elsewhere"
-unit = "c7690aaedaeb1e95"
-copies = 1
-note = "Checked against labels.rs (RUN) and ratect#103's reconcile criterion."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-about-elsewhere"
 unit = "4e1590f3ba683e20"
 copies = 1
 note = "Checked against research/leftover-selection-and-instance-identity.md, Summary item 2 and its synthesis table (Dev Containers CLI)."
@@ -14924,52 +14374,6 @@ copies = 1
 note = "Checked against docs/ratect-config-reference.md: `ports` entries are integers ({ local = 5432, container = 5432 }); recorded on ratect#873."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "b800a3b60b44ffc9"
-copies = 1
-note = "Open point as recorded on ratect#103; raised by the maintainer when reading the first draft."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-totalising"
-unit = "098dcf2fd796635e"
-copies = 1
-note = "Checked against ratect#875's results comment, answer 6 and its Not varied list."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "claim-words-counts"
-unit = "098dcf2fd796635e"
-copies = 1
-note = "Checked against ratect#875's results comment, answer 6 and its Not varied list."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = ".out-of-scope/build-image-provenance-labels.md"
-mode = "stale-claims"
-unit = "5c293ea4cec35643"
-copies = 1
-note = "Read the whole file against this branch's change to decisions/0002, which adds two forward links to its status line (0025, 0026). 0002's labels are still on containers and networks, never on a built image, and 0026's planned labels are on containers and networks too, so 'a different thing on a different object' holds."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0002-runtime-ownership-labels.md" = "f46fc6d7d5f77262" }
-
-[[mark]]
-file = "docs/differences-from-batect.md"
-mode = "stale-claims"
-unit = "16396f3e621b0738"
-copies = 1
-note = "Read only the passages about ownership labels (lines 290-293 and 331-334) against decisions/0002 as this branch leaves it, with two forward links added to its status line. Every container and network Ratect creates carries the labels and `ratect resources list`/`clean` finds what an abandoned cleanup leaves: both describe shipped code, which this branch does not change (0025's selection is planned). The rest of the section was not re-read."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "decisions/0002-runtime-ownership-labels.md" = "f46fc6d7d5f77262", "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0016-exit-codes.md" = "631e121fcc6998b5", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da" }
 
 [[mark]]
 file = "decisions/0003-ratect-native-config-format.md"
@@ -15116,15 +14520,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/includes.md#which-fields-a-file-may-use" = "733c9635b939c422", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993" }
 
 [[mark]]
-file = "decisions/0003-ratect-native-config-format.md"
-mode = "stale-claims"
-unit = "4cd31ca54286b7a1"
-copies = 1
-note = "convert --force/--stdout/no-clobber and the verb list checked against ratect/src/main.rs; the rest is corrected in Status."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/includes.md" = "7327593788ec3ba8", "ratect-core/src/convert.rs" = "6bdc669fca178e49" }
-
-[[mark]]
 file = "decisions/0012-native-task-container-has-no-readiness-gate.md"
 mode = "stale-claims"
 unit = "c52f36dde6ff2a95"
@@ -15132,16 +14527,6 @@ copies = 1
 note = "Checked against engine.rs's task_container_readiness_gate and its callers, the per-loader Dialect in config.rs, and diagnostics.rs's run_to_completion finding."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/includes.md" = "7327593788ec3ba8", "docs/includes.md#which-fields-a-file-may-use" = "733c9635b939c422" }
-
-[[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "01b8016fdce455c4"
-copies = 1
-note = "Read for native-field, load-order, convert and completion claims; none affected by ratect#216."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "CHANGELOG.md" = "7dbe397e494da73546dd1ca544c2d628f879ba1f", "ROADMAP.md" = "edf7cca5bb31c742", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "7327593788ec3ba8", "docs/installation.md" = "f090088ec7661efd", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/ratect-config-reference.md#field-reference" = "26b25fdae4a72f87", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
 
 [[mark]]
 file = ".out-of-scope/wildcard-includes.md"
@@ -15152,25 +14537,6 @@ note = "Read for include_trust claims; ratect#216 changed only a doc comment the
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "ratect-core/src/include_trust.rs" = "50c5ced25f3b1a90" }
-
-[[mark]]
-file = "decisions/0016-exit-codes.md"
-mode = "stale-claims"
-unit = "58129cb86125e87b"
-copies = 1
-note = "Codes 0/1/2 and the path split checked against exit_code.rs, is_run in ratect/src/main.rs, and ratect-compat's task-replacing flags."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/includes.md" = "7327593788ec3ba8", "ratect-core/src/convert.rs" = "6bdc669fca178e49" }
-
-[[mark]]
-file = "docs/ratect-compat-config-reference.md"
-mode = "stale-claims"
-unit = "a7baf8faabfe2cf2"
-copies = 1
-note = "Read the native-field and cache-scope mentions (lines 210, 480); still true."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "ratect-core/src/config.rs" = "28158cda74320221" }
 
 [[mark]]
 file = "decisions/0023-git-include-entry-lock.md"
@@ -15886,32 +15252,12 @@ subjects = {}
 [[mark]]
 file = "decisions/0009-adopt-claims-plugin.md"
 mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = ".claude/settings.json, claims.toml and the removed tools/ scripts checked; upstream plugin facts not checked."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "94beb8ae992e3b9b", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
 note = "Pre-commit pin, ci.yml claims job and module_reference_scope checked; upstream fixes and check-citations' language support not checked."
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", "TODO.md" = "94beb8ae992e3b9b", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "agents/claims.md"
-mode = "stale-claims"
-unit = "24d9d9ee602a12ed"
-copies = 1
-note = "Every claims.toml setting checked; which checks the plugin registers and which gate is plugin behaviour, not checked here."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "ROADMAP.md" = "edf7cca5bb31c742", "TODO.md" = "94beb8ae992e3b9b" }
 
 [[mark]]
 file = "decisions/0027-git-include-staging-survives-two-holders.md"
@@ -16367,15 +15713,6 @@ subjects = {}
 
 [[mark]]
 file = "CONTEXT.md"
-mode = "claim-words-counts"
-unit = "83bd4987b77bef9d"
-copies = 1
-note = "Checked against run_lock::probe and lock_path: every non-dead path returns Unknown, and boot_identity is None off Linux/macOS."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "CONTEXT.md"
 mode = "claim-words-totalising"
 unit = "6254b2838fb8c18b"
 copies = 1
@@ -16726,24 +16063,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "restatement-ngram"
-unit = "2621ec32b6a2e827-7ac1a21e3895e826"
-copies = 1
-note = "0026's own open section for #103, unchanged and still open."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0026-service-instances.md"
-mode = "restatement-ngram"
-unit = "e045273616e2fe53-2193f05050c6c5f9"
-copies = 1
-note = "0026's own open section for #103, unchanged and still open."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "docs/ratect-cli.md"
 mode = "restatement-ngram"
 unit = "98ec951eca197138-7202e5b1af66e5a8"
@@ -16880,24 +16199,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f" }
 
 [[mark]]
-file = "research/leftover-selection-and-instance-identity.md"
-mode = "stale-claims"
-unit = "04c60844ae0eec98"
-copies = 1
-note = "0025 and 0026 exist, the anchors resolve, the intro chooses no design; batect 67c94224 describes as 0.85.0-3."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0025-task-run-lock.md" = "2d153595464833bc", "decisions/0026-service-instances.md" = "fe1f26b488c30585", "examples/go/go.mod" = "80b863a097b997d2" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "stale-claims"
-unit = "073c1634c496cdb6"
-copies = 1
-note = "Line counts (git_include.rs 1,416; config/docker/engine 7,838/4,396/4,403), container_spec.rs's derive fns and 378c8ce7 checked."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/git_include.rs" = "dfc3c71ba6f26f95", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
-
-[[mark]]
 file = "docs/ratect-compat-cli.md"
 mode = "stale-claims"
 unit = "ac10f097bf7d78d4"
@@ -16906,25 +16207,6 @@ note = "Flag tables match ratect-compat --help and the hidden flags; exit codes 
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "ratect-compat/src/main.rs" = "557c001313210eba" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "2f519634b0b93218"
-copies = 1
-note = "tools/ Python minimum, release.yml, named tests, CONTRIBUTING and settings.json lists checked; GitHub-side ruleset claims and audit.toml justifications not."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "1398408cdadf4250bcec240ed5968be4d184a1be", "CONTRIBUTING.md" = "2eb16737419da988", "ROADMAP.md" = "edf7cca5bb31c742", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "4086d7621a3443da", "decisions/README.md" = "32a25605b975c31b", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "28158cda74320221", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
-
-[[mark]]
-file = "decisions/0001-two-binaries.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "After the rebase: one shared CHANGELOG.md, the anonymous-volume entry under ratect-compat 0.22.0, marker spelling corrected in Status; main only added an entry."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "1398408cdadf4250bcec240ed5968be4d184a1be", "CLAUDE.md" = "7139e58bbee88d6e" }
 
 [[mark]]
 file = "decisions/0016-exit-codes.md"
@@ -16981,33 +16263,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "claim-words-totalising"
-unit = "c05fa53008dfabc5"
-copies = 1
-note = "Re-measured with wc -l: config.rs 7,838, docker.rs 4,396, engine.rs 4,403 (each with a //! comment), git_include.rs 1,517."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
-
-[[mark]]
-file = "decisions/0006-code-and-documentation-locality.md"
-mode = "claim-words-counts"
-unit = "c05fa53008dfabc5"
-copies = 1
-note = "Re-measured with wc -l: config.rs 7,838, docker.rs 4,396, engine.rs 4,403 (each with a //! comment), git_include.rs 1,517."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
-
-[[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "25e8a1870e46a028"
-copies = 1
-note = "Re-read for #884: defers field meanings to the compat reference; #884 changes a CLI verb's report, not a config field."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "19aaf620598872f5" }
-
-[[mark]]
 file = "decisions/0014-config-checked-at-load-evaluated-per-task.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -17015,15 +16270,6 @@ copies = 1
 note = "Re-read for #884: load versus per-task evaluation only; nothing on Git include cleaning."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb" }
-
-[[mark]]
-file = "docs/how-it-works.md"
-mode = "stale-claims"
-unit = "c449976ecb5100e4"
-copies = 1
-note = "Re-read for #884: clap parsing in both main.rs files, which #884 doesn't change."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-compat/src/main.rs" = "557c001313210eba", "ratect/src/main.rs" = "d46827a9452b1e64" }
 
 [[mark]]
 file = "research/shared-cache-concurrency.md"
@@ -17044,33 +16290,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
 
 [[mark]]
-file = "docs/how-it-works.md"
-mode = "stale-claims"
-unit = "a79f54158176959a"
-copies = 1
-note = "Re-read for #884: a git entry still clones into ~/.ratect/incl first; nothing on clean."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "decisions/0014-config-checked-at-load-evaluated-per-task.md" = "186e0b75044a03f2", "ratect-core/src/cache.rs" = "139da432ed9c8f74", "ratect-core/src/config.rs" = "28158cda74320221", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
-
-[[mark]]
-file = "README.md"
-mode = "stale-claims"
-unit = "caf9f906b16a91cb"
-copies = 1
-note = "Re-read for #884: the documentation index; #884 adds no page."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/comparison.md" = "0eb7bb383099fed1", "docs/connecting-to-docker.md" = "3c5685291bc57cfa", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "7327593788ec3ba8", "docs/index.md" = "44c68e79c054a6cf", "docs/installation.md" = "f090088ec7661efd", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "4ff36a36d8ced555", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "c8e426c4c33360b1", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
-
-[[mark]]
-file = "TODO.md"
-mode = "stale-claims"
-unit = "9616cab717fb309a"
-copies = 1
-note = "Re-read for #884: items 13, 15 and 17 don't concern Git includes."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ratect-core/src/config.rs" = "28158cda74320221", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect/src/main.rs" = "d46827a9452b1e64" }
-
-[[mark]]
 file = "docs/ratect-config-reference.md"
 mode = "stale-claims"
 unit = "e5745f2e8a08d7cf"
@@ -17089,24 +16308,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "acec0e5a5304cd93"
-copies = 1
-note = "Re-read for #884: test, CI, fixture-layer and cfg(unix) rules hold; the new Unix-only tests are gated."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", "ROADMAP.md" = "edf7cca5bb31c742", "agents/claims.md" = "17ea62e5c299c295", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "557c001313210eba", "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/tests/format_twins.rs" = "097b3ee55af38b3a", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "16f7eb1f7adf6ce7", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
-file = "agents/docs.md"
-mode = "stale-claims"
-unit = "53f9fac61c746451"
-copies = 1
-note = "Re-read for #884: the captured-so-far list already covers ratect-cli.md's includes blocks; includes-clean-leftovers.ansi is from a scratch HOME, as its prose says."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "book.toml" = "5be1237a684817bc", "docs/demo.cast" = "dea031efbde9ac70", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "bcb281e707ef2be1", "docs/ratect-cli.md" = "4ff36a36d8ced555", "docs/ratect-config-reference.md" = "19aaf620598872f5", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "90b2416bf81dab8d", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "044487bde4ba7725" }
-
-[[mark]]
 file = "decisions/0004-git-include-host-path-trust.md"
 mode = "stale-claims"
 unit = "0222d94d199feaee"
@@ -17115,16 +16316,6 @@ note = "Re-read for #884 by search for clean/sweep/leftover claims: host-path tr
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "docs/includes.md" = "7327593788ec3ba8", "docs/includes.md#containment" = "5e9932f8ba94d3e8", "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb" }
-
-[[mark]]
-file = "decisions/0003-ratect-native-config-format.md"
-mode = "stale-claims"
-unit = "013af8aeb0018e02"
-copies = 1
-note = "Re-read for #884 by search for clean/sweep/incl: only the sidecar read in git_include.rs, still accurate."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "ROADMAP.md#future-vision" = "de51e3239425bbce", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
 
 [[mark]]
 file = "docs/ratect-config-reference.md"
@@ -17137,46 +16328,6 @@ extent = "partial"
 subjects = { "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "4ca303a3bf7ddf7b"
-copies = 1
-note = "Re-read for #884: the git_include.rs row (clone cache and staleness sweep) and the ratect verbs passage; both still accurate."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "f46fc6d7d5f77262", "decisions/0003-ratect-native-config-format.md" = "4e46cecd5f4321e2", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0011-container-identity.md" = "cca22d618942f0f6", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0025-task-run-lock.md" = "2d153595464833bc", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/how-it-works.md" = "80dd3867f8a2c51f", "docs/includes.md" = "7327593788ec3ba8", "docs/ratect-cli.md" = "4ff36a36d8ced555", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "19aaf620598872f5", "ratect-compat/src/main.rs" = "557c001313210eba", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/container_spec.rs" = "e394797da4b97130", "ratect-core/src/convert.rs" = "6bdc669fca178e49", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "c43133b202f1d054", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "2584cc267720f139", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "ed64978f6310f2c6", "ratect-core/src/exit_code.rs" = "780d6e93214b0a5c", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "1aa5717f7451484f", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "50c5ced25f3b1a90", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "b4f35ec291651338", "ratect-core/src/resource_names.rs" = "9d4f45af7904fc8e", "ratect-core/src/run_lock.rs" = "fc32ea166bcf0a14", "ratect-core/src/schema.rs" = "3c623a991c420654", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d", "ratect-core/src/ui.rs" = "3053430b40f9f56f", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b", "ratect-core/src/yaml.rs" = "4051e9b0303db9d9", "ratect/src/main.rs" = "d46827a9452b1e64" }
-
-[[mark]]
-file = "TODO.md"
-mode = "stale-claims"
-unit = "602fae580f5863ab"
-copies = 1
-note = "Re-read for the 0006 size-note edit: TODO cites 0006 only for where a non-fix's reasoning lives, which is unchanged."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "decisions/0006-code-and-documentation-locality.md" = "aeae38739a9a6502", "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/docker.rs" = "1d51ac64208addad", "ratect-core/src/engine.rs" = "ed64978f6310f2c6" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "4ec09a71e1dcc730"
-copies = 1
-note = "Re-read for the 0006 size-note edit: cites 0006 for dependency rationale living beside its declaration, unchanged."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { ".cargo/audit.toml" = "109a49049f151f6a", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0006-code-and-documentation-locality.md" = "aeae38739a9a6502" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "e245434933571536"
-copies = 1
-note = "Re-read for the 0006 size-note edit: cites 0006 as asking for more explanatory prose, unchanged."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { "TODO.md" = "94beb8ae992e3b9b", "decisions/0006-code-and-documentation-locality.md" = "aeae38739a9a6502" }
-
-[[mark]]
 file = "TODO.md"
 mode = "stale-claims"
 unit = "da6d38ffc884cb42"
@@ -17184,3 +16335,2182 @@ copies = 1
 note = "Re-read for #884 after gating the removed_leftovers test helper on unix: item 20's list of ungated takeover tests stands; neither the helper nor the new leftover-failure test is a takeover test."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/git_include_tests.rs" = "ee4e7a29955d6360" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "79fa92bf77818878"
+copies = 1
+note = "Checked against OwnershipLabels::shared for Owner::ServiceInstance in labels.rs: project, service, instance, start-directory; Ratect writes no run or task label for it, and a network per instance."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "5c594642c5e12826"
+copies = 1
+note = "Checked against OwnershipLabels::shared (service owner writes no run/task) and for_container (configured labels passed through but for Ratect's own keys); moby daemon/commit.go merge copies image labels for unset keys."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "30bf233034b7b410"
+copies = 1
+note = "Checked against labels::owned_by_service_instance and for_container (ROLE inserted after configured labels, so it wins); for_network writes shared() only; tests a_containers_role_says_who_owns_it_whatever_other_labels_it_carries and a_network_is_an_instances_with_a_service_label_and_no_run_label."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "a15fef4c3bd3173d"
+copies = 1
+note = "Checked against project_name_of (project_name from the root file) and attach_instance's start-directory warning; up_from_a_second_checkout_attaches_and_warns_via_docker."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "e203107bbc051283"
+copies = 1
+note = "Checked against docker::NameInUse and up_refuses_a_name_held_by_something_else_and_leaves_it_alone_via_docker in ratect/tests/cli.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "09e3a28b9db497dc"
+copies = 1
+note = "Alternatives entry; checked that attach_instance reuses an existing instance across invocations and the run label is per task execution (engine.rs run_id)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "restatement-ngram"
+unit = "5b7d1490a34641ff-1b35ba9754a59e70"
+copies = 1
+note = "Checked against resources::find: a resource without a run label is skipped, and one owned_by_service_instance says is an instance's too."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/labels.rs"
+mode = "restatement-ngram"
+unit = "ab09e01b38082aa9-7a6db22c6c2e6b4a"
+copies = 1
+note = "OwnershipLabels::new builds Owner::TaskRun, so 'A task run's.' is true."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect/tests/cli.rs"
+mode = "restatement-ngram"
+unit = "96c2116539383d57-746229e220b52cc5"
+copies = 1
+note = "The e2e test asserts the labels Ratect writes on a fresh instance (no run or task label); true of for_container/for_network for a service owner."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect/tests/cli.rs"
+mode = "restatement-ngram"
+unit = "bf9ba983f01d6895-12d604459a81c9e4"
+copies = 1
+note = "The e2e test asserts the labels Ratect writes on a fresh instance (no run or task label); true of for_container/for_network for a service owner."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "02845548cfdfe961"
+copies = 1
+note = "Checked against labels::DEFAULT_INSTANCE and InstanceKey::default_instance, which bring_up_service and services_down always use."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "ae6c899d6a506e18"
+copies = 1
+note = "Checked against bring_up_service/claim_found in engine/services.rs and services_down in ratect/src/main.rs (take_down_until_gone)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "ae6c899d6a506e18"
+copies = 1
+note = "Checked against bring_up_service/claim_found in engine/services.rs and services_down in ratect/src/main.rs (take_down_until_gone)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "897bdc229edb67e0"
+copies = 1
+note = "Checked against resources::find, which skips a resource without a run label or one labels::owned_by_service_instance says is an instance's (role service); resources_tests covers an inherited run label."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "2f3409bdaaeb7cfd"
+copies = 1
+note = "Checked against this file: Decision 3's last bullet covers the network serialisation, and Decision 6 is the settlement section."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "4a2cd260be3c0c92"
+copies = 1
+note = "Checked against seen() in engine/services.rs: Attach, Wait and Replace only, no repair path; the cited research file exists."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "research/concurrent-clients-on-one-container-group.md" = "f8a25fe38ac12673" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "4a2cd260be3c0c92"
+copies = 1
+note = "Checked against seen() in engine/services.rs: Attach, Wait and Replace only, no repair path; the cited research file exists."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "research/concurrent-clients-on-one-container-group.md" = "f8a25fe38ac12673" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "8d9e4967270ea68d"
+copies = 1
+note = "Checked against seen() and claim_found in engine/services.rs: Replace takes the found instance down before starting over."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "525f4d25df2a2d7c"
+copies = 1
+note = "Checked against claim_instance in engine/services.rs: create_network, find_one again, won only if networks.len() == 1 and it is its own id; the Context records Docker 20.10 to 24 allowing twins."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "7d70a20dc27edf15"
+copies = 1
+note = "Checked against claim_instance: a second network gives remove_network(own), StartOver and tie_break_pause; NameInUse goes to claim_found."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "41f4246c66e7e192"
+copies = 1
+note = "Checked against claim_instance and the services.rs module doc: a tie where each lists both makes both start over."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "41f4246c66e7e192"
+copies = 1
+note = "Checked against claim_instance and the services.rs module doc: a tie where each lists both makes both start over."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "40abe1891aa47e67"
+copies = 1
+note = "Checked against seen(): no member running, paused or restarting gives Replace; an_up_waits_attaches_or_replaces_by_what_it_finds covers it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "efe7bd831de97d0f"
+copies = 1
+note = "Checked against claim_instance: the decision is made from the list after create, whether or not the daemon refused a second create; line 314 names the unprobed list behaviour."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "4dcfd750ca82050a"
+copies = 1
+note = "Checked against ci.yml's docker-integration job (ubuntu-latest, --ignored) and engine_tests' an_up_that_finds_a_twin_network_removes_its_own_and_starts_over (FakeNetworkCreate::Twin)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "4dcfd750ca82050a"
+copies = 1
+note = "Checked against ci.yml's docker-integration job (ubuntu-latest, --ignored) and engine_tests' an_up_that_finds_a_twin_network_removes_its_own_and_starts_over (FakeNetworkCreate::Twin)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "a0835accf728c626"
+copies = 1
+note = "Checked against seen(): rows checked in order, first match returns, no branch starts a stopped container; attach_instance starts nothing."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "9cc47ef57bb45a7e"
+copies = 1
+note = "Checked against seen(): created or removing gives Wait; the notice is posted once via waiting_noticed and the loop sleeps SETTLE_POLL."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "8d74784a4ec877a4"
+copies = 1
+note = "Checked against bring_up_members: try_join_all of ensure_container_created over the graph before any ensure_container_ready; a failed winner's take-down leaves the network gone."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "8d74784a4ec877a4"
+copies = 1
+note = "Checked against bring_up_members: try_join_all of ensure_container_created over the graph before any ensure_container_ready; a failed winner's take-down leaves the network gone."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "8d74784a4ec877a4"
+copies = 1
+note = "Checked against bring_up_members: try_join_all of ensure_container_created over the graph before any ensure_container_ready; a failed winner's take-down leaves the network gone."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "0140e23b29f50c61"
+copies = 1
+note = "Checked against ATTEMPTS = 5 in engine/services.rs; the Wait arm continues before attempt += 1."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "67efa8aac2af0c38"
+copies = 1
+note = "Checked against take_down_service (own_ids), take_down_until_gone (TAKE_DOWN_ROUNDS = 10), claim_found's Replace arm and services_down."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "67efa8aac2af0c38"
+copies = 1
+note = "Checked against take_down_service (own_ids), take_down_until_gone (TAKE_DOWN_ROUNDS = 10), claim_found's Replace arm and services_down."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "292fc867d762d5af"
+copies = 1
+note = "Checked against bring_up_members (all created before any started) and claim_instance's NameInUse arm, which creates nothing."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "292fc867d762d5af"
+copies = 1
+note = "Checked against bring_up_members (all created before any started) and claim_instance's NameInUse arm, which creates nothing."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "4281af62d6e929a1"
+copies = 1
+note = "Checked against bring_up_service: only the Claim::Won arm reaches bring_up_members; attach and replace create no container."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "363cb2828e7b691a"
+copies = 1
+note = "Checked against ServiceGroupName::check in config.rs (image_reference::is_name_component) and ServiceNames' .. separator."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "8f127e5dd188d5a8"
+copies = 1
+note = "Checked against attach_instance (skips a container the instance lacks) and an_instance_without_a_container_the_configuration_has_gained_is_attached_to."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "8f127e5dd188d5a8"
+copies = 1
+note = "Checked against attach_instance (skips a container the instance lacks) and an_instance_without_a_container_the_configuration_has_gained_is_attached_to."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "555d2816abee57ae"
+copies = 1
+note = "Checked against this session's svcprobe run of ratect run --use-network svcprobe..stack..default on Docker 29, and a grep of every tests/cli.rs: no test passes a group network."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "ce2e702c0c6f66df"
+copies = 1
+note = "Alternatives entry describing the replaced design; checked that seen() has no repair path and the research file records the races."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "86470cb0920dae87"
+copies = 1
+note = "Checked against seen(): an instance with no member up is replaced by the next up, so resources removing it too would be a second remover."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "86470cb0920dae87"
+copies = 1
+note = "Checked against seen(): an instance with no member up is replaced by the next up, so resources removing it too would be a second remover."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "98c1dac75feb1879"
+copies = 1
+note = "Checked against issue #875: OrbStack Docker 29.8.2 on macOS, five pairs of concurrent docker create."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "98c1dac75feb1879"
+copies = 1
+note = "Checked against issue #875: OrbStack Docker 29.8.2 on macOS, five pairs of concurrent docker create."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "961f51f1a81755d8"
+copies = 1
+note = "Checked against two_ups_at_once_make_one_instance_via_docker in ratect/tests/cli.rs and ci.yml's docker-integration job on ubuntu-latest."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "b29578ffbf76f313"
+copies = 1
+note = "Checked against ci.yml (only ubuntu-latest, local socket) and this session's OrbStack runs: no daemon below 25, rootless, userns-remap or remote transport has run."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "4ce68f86f5a703bc"
+copies = 1
+note = "Checked against bring_up_service's Claim::Wait loop (SETTLE_POLL, no counter or deadline) and seen()'s Wait rows."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "4ce68f86f5a703bc"
+copies = 1
+note = "Checked against bring_up_service's Claim::Wait loop (SETTLE_POLL, no counter or deadline) and seen()'s Wait rows."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "4860e7833eed9fdd"
+copies = 1
+note = "Checked against the clap structs in ratect/src/main.rs: DockerArgs flattened into run, services, caches, resources, doctor args and none of tasks list, includes or config."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "f86239f93a0b9b77"
+copies = 1
+note = "Checked against ratect/src/main.rs: enable_buildkit is declared only on RunArgs and ServicesUpArgs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "5823a6fd35d5bc19"
+copies = 1
+note = "Checked against stop_plan/stop_layers in engine/services.rs and take_down in service_instances.rs: dependents first, then networks."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "1cbb4b29c1b396f5"
+copies = 1
+note = "Checked against services_up in ratect/src/main.rs: any --output other than all is refused and the sink is OutputStyle::All."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "fee914bc69040301"
+copies = 1
+note = "Checked against claim_instance/claim_found: a found instance is waited on, attached to or replaced, never duplicated."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "832d75d4f3dd9c1e"
+copies = 1
+note = "Checked against seen(): created/removing and network-without-container give Wait; waiting_noticed posts the notice once."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "2ea8c8f63528565a"
+copies = 1
+note = "Checked against claim_instance and two_ups_at_once_make_one_instance_via_docker: the loser waits on created containers then attaches."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "2b9213346142e2ea"
+copies = 1
+note = "Checked against watch_members and take_down_service: an attached up sees its watched members exit and takes down what of its own_ids remains."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "0e5c5e4d98a91ad5"
+copies = 1
+note = "Checked against attach_instance's start-directory warning text and project_name_of; up_from_a_second_checkout_attaches_and_warns_via_docker covers it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-about-elsewhere"
+unit = "99b505e9d5a254fa"
+copies = 1
+note = "Checked against ServiceNames in resource_names.rs and docker::NameInUse, and the cli.rs test that leaves the foreign container alone."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "5dd234689efe82dd"
+copies = 1
+note = "Checked against ServiceNames::network, build_networking_config's alias, and engine.rs's existing-network path (owns_network false); probed by hand with svcprobe."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "fcf4c37c5164784f"
+copies = 1
+note = "Checked against services_down in ratect/src/main.rs (service_stop_plan, else an empty StopPlan) and project_name_of, which parses only the root file."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "fcf4c37c5164784f"
+copies = 1
+note = "Checked against services_down in ratect/src/main.rs (service_stop_plan, else an empty StopPlan) and project_name_of, which parses only the root file."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "d6d9a8dcb8e145b5"
+copies = 1
+note = "Checked against resources::find (no run label, or owned_by_service_instance, is skipped, --all-projects too) and diagnostics' leftover_finding, which goes through it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "48dac2ae9f503289"
+copies = 1
+note = "Checked against is_a_run in ratect/src/main.rs: run, and services up even on a parse failure."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-about-elsewhere"
+unit = "6d2b457981b71e2c"
+copies = 1
+note = "Checked against the ServiceGroup doc in config.rs and ServicesCommand::Up."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "1a61c75d587858c5"
+copies = 1
+note = "Checked by grepping examples/: no [services.*] table in any worked example."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "1d0742a72bf9abdb"
+copies = 1
+note = "Checked against bring_up_service: only member ids feed watch_members and select_exit_code; others get the dependency-exit watcher."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "eac7361d98d6d0ce"
+copies = 1
+note = "Checked against reject_services_in_yaml in config.rs; ratect-compat has no services verb."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "0fa7d54af786b2df"
+copies = 1
+note = "Checked against config.rs's merge loop: a group in two files bails with 'defined in multiple files'."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-counts"
+unit = "0fa7d54af786b2df"
+copies = 1
+note = "Checked against config.rs's merge loop: a group in two files bails with 'defined in multiple files'."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "812cb93511d9ba27"
+copies = 1
+note = "Checked against ServiceNames::container/network and InstanceKey::default_instance, with claim_instance's wait/attach handling."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-about-elsewhere"
+unit = "812cb93511d9ba27"
+copies = 1
+note = "Checked against ServiceNames::container/network and InstanceKey::default_instance, with claim_instance's wait/attach handling."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0002-runtime-ownership-labels.md"
+mode = "restatement-ngram"
+unit = "73fc67dbc18bbb86-07a80542f975f49f"
+copies = 1
+note = "Shipped ADR, append-only; its Status now says 0026 replaced the exact-collision rule, matching labels.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/labels.rs"
+mode = "restatement-ngram"
+unit = "8ca3d43ed4efb89f-0d19e36041d89a2e"
+copies = 1
+note = "TASK is written only for Owner::TaskRun in OwnershipLabels::shared, so it names the task that created it."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "restatement-ngram"
+unit = "5b7d1490a34641ff-e17bfc4ce79d172c"
+copies = 1
+note = "Checked against resources::find: a resource without a run label is skipped, and one owned_by_service_instance says is an instance's too."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/container_spec.rs"
+mode = "restatement-ngram"
+unit = "0083acf6b0b72485-fa1d8bba8b12ab2e"
+copies = 1
+note = "History of what derive_spec replaced; the next sentence says one call site, ensure_container_created, derives it now, checked against engine.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/container_spec.rs"
+mode = "restatement-ngram"
+unit = "38e92565e11cdfb4-c62bd584d3bb81ce"
+copies = 1
+note = "History of what derive_spec replaced; the next sentence says one call site, ensure_container_created, derives it now, checked against engine.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/labels.rs"
+mode = "restatement-ngram"
+unit = "260b7ba618d59916-894ee209e82a2fbf"
+copies = 1
+note = "Checked against for_container: configured labels first, then Ratect's own keys inserted over them, so a configured eu.orican.ratect.run is replaced on a task run's container."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "feb58af1add98769"
+copies = 1
+note = "Read the line: `NetworkCreate` is moby's daemon function (libnetwork controller, cited with its tag), not engine::services' NetworkCreate type alias."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CHANGELOG.md"
+mode = "judgment-agent-added"
+unit = "b76fd0de6f4dd77a"
+copies = 1
+note = "Read the line: `services` here is the ratect services verb or the ratect.toml key, not the engine::services module the check matched; the verb and key are checked against ServicesCommand in ratect/src/main.rs and Config::services in config.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "5b60b5ec0883cf7f"
+copies = 1
+note = "Read the line: `services` here is the ratect services verb or the ratect.toml key, not the engine::services module the check matched; the verb and key are checked against ServicesCommand in ratect/src/main.rs and Config::services in config.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "4860e7833eed9fdd"
+copies = 1
+note = "Read the line: `services` here is the ratect services verb or the ratect.toml key, not the engine::services module the check matched; the verb and key are checked against ServicesCommand in ratect/src/main.rs and Config::services in config.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "883d755624a53cf4"
+copies = 1
+note = "Read the line: `services` here is the ratect services verb or the ratect.toml key, not the engine::services module the check matched; the verb and key are checked against ServicesCommand in ratect/src/main.rs and Config::services in config.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "d5d56e7cdcf83a79"
+copies = 1
+note = "Read the line: `services` here is the ratect services verb or the ratect.toml key, not the engine::services module the check matched; the verb and key are checked against ServicesCommand in ratect/src/main.rs and Config::services in config.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "a3763a041a147701"
+copies = 1
+note = "Read the line: `services` here is the ratect services verb or the ratect.toml key, not the engine::services module the check matched; the verb and key are checked against ServicesCommand in ratect/src/main.rs and Config::services in config.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "judgment-agent-added"
+unit = "d6ed8aba8e0391a7"
+copies = 1
+note = "Read the line: `services` here is the ratect services verb or the ratect.toml key, not the engine::services module the check matched; the verb and key are checked against ServicesCommand in ratect/src/main.rs and Config::services in config.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "deb92e5ac5dad30c"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "0541d3c615073de2"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "cb1b8008bfdc29ae"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "6499af9b003688d3"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "b948938a03c85094"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "19c7c75534d30823"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "a4a60ac07b571cb9"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "81f6e09af5fe9e9a"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "54eb3003b3c4b3ad"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "366f1b88e88a96d3"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "e81f935ce6cb5fea"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "3e925f00e60bb74c"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "8b3d4ec187a11a65"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "00eb6a8064f92c71"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "d13db9dd3821a31c"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "4358857fba6a3e6e"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "e60db077d46c29b4"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "2a4cf3b2165b34a3"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "judgment-agent-added"
+unit = "2f9db577778db94b"
+copies = 1
+note = "Read the line: `exited` here is Docker's container state, as moby's container/state.go names it, not ratect-core's ui::exited; the research file cites its source for each observation."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "0d223b930cd96c8c"
+copies = 1
+note = "Checked against ratect/src/main.rs: DockerArgs is flattened into run, services up/down/list, caches, resources and doctor args only; OutputStyleArg/CacheTypeArg are ratect's own mirrors."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "0d223b930cd96c8c"
+copies = 1
+note = "Checked against ratect/src/main.rs: DockerArgs is flattened into run, services up/down/list, caches, resources and doctor args only; OutputStyleArg/CacheTypeArg are ratect's own mirrors."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "0d223b930cd96c8c"
+copies = 1
+note = "Checked against ratect/src/main.rs: DockerArgs is flattened into run, services up/down/list, caches, resources and doctor args only; OutputStyleArg/CacheTypeArg are ratect's own mirrors."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "0c5556f561f71d48"
+copies = 1
+note = "Checked against ratect/tests/cli.rs: run_executes_a_task_via_docker, plus the services e2e tests, which drive engine/services.rs through ratect since reject_services_in_yaml refuses services in a batect.yml."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "0c5556f561f71d48"
+copies = 1
+note = "Checked against ratect/tests/cli.rs: run_executes_a_task_via_docker, plus the services e2e tests, which drive engine/services.rs through ratect since reject_services_in_yaml refuses services in a batect.yml."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "claim-words-totalising"
+unit = "6d3745348611f715"
+copies = 1
+note = "Checked against engine/services.rs (members posted with is_task_container false), interleaved.rs's ContainerOutput arm (non-task container to the progress console) and services_up's OutputStyle::All sink."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-totalising"
+unit = "ed4b878f0913e61c"
+copies = 1
+note = "Checked against config.rs: Config has services: IndexMap<String, ServiceGroup>, merged from TOML files only (reject_services_in_yaml)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-counts"
+unit = "ed4b878f0913e61c"
+copies = 1
+note = "Checked against config.rs: Config has services: IndexMap<String, ServiceGroup>, merged from TOML files only (reject_services_in_yaml)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-totalising"
+unit = "9d2752102eaad02a"
+copies = 1
+note = "Checked against ensure_container_ready (start_background_container for dependencies and, via services.rs, service containers) and follow_container in docker.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-about-elsewhere"
+unit = "9d2752102eaad02a"
+copies = 1
+note = "Checked against ensure_container_ready (start_background_container for dependencies and, via services.rs, service containers) and follow_container in docker.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/output-styles.md"
+mode = "claim-words-totalising"
+unit = "b75696fa0ad75aa5"
+copies = 1
+note = "Checked against select_output_style in ui.rs and services_up in ratect/src/main.rs, which refuses any -o but all."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "ad94b303772f5ed6"
+copies = 1
+note = "Checked against resolve_image's lazy 'neither image nor build_directory' error in engine.rs, reached by tasks and by services' ensure_container_created."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "restatement-ngram"
+unit = "975160af5e200673-afb9380647f8a29f"
+copies = 1
+note = "Shipped ADR body, append-only; its Status now records 0026's extension of Path 1 to services up."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "restatement-ngram"
+unit = "1ac5ce13e8ce18c7-ef4d799346a15f66"
+copies = 1
+note = "Shipped ADR body, append-only; its Status now records 0026's extension of Path 1 to services up."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/task-lifecycle.md"
+mode = "restatement-ngram"
+unit = "be7189ea76918e43-d9bb90debe966e36"
+copies = 1
+note = "About a task run's --no-cleanup flags, which services up doesn't take; true of engine.rs's cleanup for runs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "ratect-core/src/docker.rs"
+mode = "restatement-ngram"
+unit = "3b43f17722895c1f-f07773e7dedaaae2"
+copies = 1
+note = "run_container is called only for a task's own container in engine.rs; services never call it, so its role is always Task."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "44a8e39f0d9f1dc7"
+copies = 1
+note = "Checked against run_lock.rs: read_boot_identity exists for linux and macos only, None elsewhere, and the probe reads unknown for no file, another boot, an unknown format or a lock error."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "stale-claims"
+unit = "4cd31ca54286b7a1"
+copies = 1
+note = "Read whole; body outdated but the Status preamble records each difference; checked against convert_config/validate_config in ratect/src/main.rs and convert.rs's toml::Value round trip."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/includes.md" = "7327593788ec3ba8", "ratect-core/src/convert.rs" = "cf9c6752d1f95ef7" }
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "stale-claims"
+unit = "e1cc01c2338a448e"
+copies = 1
+note = "String-or-object Deserialize impls for PortMapping/VolumeMount/IncludeEntry/DeviceMapping in config.rs; schema/ratect-config.schema.json object forms; Status covers the validate correction."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/tests/fixtures/devices.yml" = "c1617261bc88c0bf", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-compat/tests/fixtures/ports.yml" = "a6d5b13c651f3afa", "ratect-core/src/schema.rs" = "57f5ceb73f085de1" }
+
+[[mark]]
+file = ".out-of-scope/build-image-provenance-labels.md"
+mode = "stale-claims"
+unit = "5c293ea4cec35643"
+copies = 1
+note = "BuildSpec in container_spec.rs has no image-label field; config labels stay container-only."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0002-runtime-ownership-labels.md" = "c6ecf48326d11605" }
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "stale-claims"
+unit = "58129cb86125e87b"
+copies = 1
+note = "Body is shipped and append-only; the Status now records that services list and services down are Path 2 (is_run in ratect/src/main.rs)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/includes.md" = "7327593788ec3ba8", "ratect-core/src/convert.rs" = "cf9c6752d1f95ef7" }
+
+[[mark]]
+file = ".out-of-scope/cheaper-fancy-repaints.md"
+mode = "stale-claims"
+unit = "dd656ffcd24a40a1"
+copies = 1
+note = "fancy.rs repaint_startup skips identical content via last_rendered and otherwise repaints the block."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "e73648860f673a33"
+copies = 1
+note = "select_output_style/supports_interactivity ask the progress stream; explicit_fancy_refusal; per-Console colour; compat tracing with_ansi(stderr_color)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "bfb3781e6939f264"
+copies = 1
+note = "Colour only in all's prefixes, the summary exit code and the markers; ui::exited is bold, uncoloured."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "a79fd74dcca4a383"
+copies = 1
+note = "cheaper-fancy-repaints.md exists and #427 is cited."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".out-of-scope/cheaper-fancy-repaints.md" = "2fc55e567f1d7bf3", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "b12bf5fa35aecbc0"
+copies = 1
+note = "Console::error/warning markers in ui.rs, print_stderr_class in every style; ServiceMemberExited goes to the progress console unmarked."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui/fancy.rs" = "baab50f84e562245", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103" }
+
+[[mark]]
+file = "decisions/README.md"
+mode = "stale-claims"
+unit = "d7ef70d0a2f09cab"
+copies = 1
+note = "Labels example checked against resources, diagnostics' leftover_finding and config.rs; RELEASES.md still shows the old pattern."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/schema.rs" = "57f5ceb73f085de1" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "stale-claims"
+unit = "7907fc63f83118a2"
+copies = 1
+note = "No proxy check in diagnostics.rs, no health countdown; fancy.rs unicode_width, EventSink in ui.rs, SUMMARY.md and the out-of-scope link exist."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".out-of-scope/cheaper-fancy-repaints.md" = "2fc55e567f1d7bf3", ".out-of-scope/doctor-daemon-proxy-mismatch-check.md" = "88a35c12d11c9481", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "docs/SUMMARY.md" = "7da083d464908433", "docs/ratect-cli.md#doctor" = "5abbf435dd300599", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "97fe812787f4b27e"
+copies = 1
+note = "ui::exited_unexpectedly shared by fancy and simple; ui::exited only by simple and all; fancy ignores ServiceMemberExited."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui/fancy.rs" = "baab50f84e562245", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "c0ad0f32dac4156f"
+copies = 1
+note = "docs/output-styles.md says ratect-compat progress shares stdout unmarked, with -o quiet as the escape."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/output-styles.md" = "5349d598e5d0c602", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103" }
+
+[[mark]]
+file = "decisions/0019-readiness-gates-starting-only.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Separate create and dependency-start permits in engine.rs, task start takes none; services reuse ensure_container_created/ready."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/differences-from-batect.md#cli-flags" = "68852b06d3e1914a", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "5a7c42a5127388b7"
+copies = 1
+note = "Checked against engine.rs's cleanup ladder (TerminationSignal::ALL, escalation, stop) and resources::find, which skips a service instance; services.rs's left-behind error names ratect services down."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "restatement-ngram"
+unit = "9645d072d3fb522b-f4d435193bc22a27"
+copies = 1
+note = "Intro lists native additions including fields marked native only under Field reference, where the services row sits; identity in place of run_as_current_user still true."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Historical Decision, append-only; claims.toml, .claude/settings.json plugin entries exist, the four deleted scripts are gone, tools/changelog-section.py stays."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "25955ca943036063", "TODO.md" = "94beb8ae992e3b9b", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0004-git-include-host-path-trust.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "ROADMAP.md#future-vision anchor still resolves and still mentions allow_nested_git_includes as shipped; the removed bullet isn't referenced."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md#future-vision" = "3c976a6a621fcf59" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "4ec09a71e1dcc730"
+copies = 1
+note = "Root Cargo.toml's bollard ratect-pin patch and .cargo/audit.toml's two advisories match; no Cargo.toml or audit change on this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "109a49049f151f6a", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0006-code-and-documentation-locality.md" = "cc525a059ae0fb22" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "e245434933571536"
+copies = 1
+note = "Its tie to 0006 is the prose-locality principle; 0006 changed only a line count."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "TODO.md" = "94beb8ae992e3b9b", "decisions/0006-code-and-documentation-locality.md" = "cc525a059ae0fb22" }
+
+[[mark]]
+file = "ratect-compat/tests/conformance/README.md"
+mode = "stale-claims"
+unit = "0afb59bca4a328d6"
+copies = 1
+note = "ROADMAP.md#batect-parity anchor exists, and the run-up to ratect-compat 1.0.0 matches ROADMAP."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "25955ca943036063", "ROADMAP.md#batect-parity" = "3ab0fecdb0e276a1" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "stale-claims"
+unit = "24d9d9ee602a12ed"
+copies = 1
+note = "Checked against claims.toml: claim-words/temporal-words lists, restatement .rs, stale-claims scope, executable-claims timeout, no check-config-defaults table or .env.example."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "25955ca943036063", "TODO.md" = "94beb8ae992e3b9b" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "judgment-agent-added"
+unit = "dbfa04006c1a070e"
+copies = 1
+note = "Checked against DockerClient::follow_container in docker.rs: attaches to an existing container's output and drains a stopped one; called from attach_instance for running members under services up's all style."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "judgment-agent-added"
+unit = "ed4b878f0913e61c"
+copies = 1
+note = "`services` here is the ratect.toml table merged into Config::services, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "40f122b4e89c395b"
+copies = 1
+note = "`services` here links the ratect.toml services table (Config::services), not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-totalising"
+unit = "45911b0c86f63965"
+copies = 1
+note = "Checked against is_a_run/is_run in ratect/src/main.rs (Run and ServicesCommand::Up) and select_exit_code over group.exit_code_from in engine/services.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "claim-words-counts"
+unit = "45911b0c86f63965"
+copies = 1
+note = "Checked against is_a_run/is_run in ratect/src/main.rs (Run and ServicesCommand::Up) and select_exit_code over group.exit_code_from in engine/services.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "4e5e6e1f1cd8c3c6"
+copies = 1
+note = "Checked against bring_up_service/claim_found/attach_instance in engine/services.rs: up, attach or replace, stream, take down once condition_met or on a signal."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "4e5e6e1f1cd8c3c6"
+copies = 1
+note = "Checked against bring_up_service/claim_found/attach_instance in engine/services.rs: up, attach or replace, stream, take down once condition_met or on a signal."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "0a243c84e59e8beb"
+copies = 1
+note = "Checked against research/service-group-exit-option-names.md's survey: no surveyed tool has an exit_code field holding a non-code; Compose's stop_signal/stop_grace_period are its field names."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/exit_code.rs" = "c0539e1457ed4133" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "9f81c13fc65be3f8"
+copies = 1
+note = "Checked against the research file's Compose section (--exit-code-from takes a service and implies --abort-on-container-exit) and ExitCodeRule/condition_met in Ratect, which are independent."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "research/service-group-exit-option-names.md" = "4b9a6bc05c3016b1" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-counts"
+unit = "9f81c13fc65be3f8"
+copies = 1
+note = "Checked against the research file's Compose section (--exit-code-from takes a service and implies --abort-on-container-exit) and ExitCodeRule/condition_met in Ratect, which are independent."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "research/service-group-exit-option-names.md" = "4b9a6bc05c3016b1" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "36c80b3ed3061a6e"
+copies = 1
+note = "Checked against the research file's --abort-on-container-failure row and ExitCondition in config.rs (two values); #901 tracks the third."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-about-elsewhere"
+unit = "36c80b3ed3061a6e"
+copies = 1
+note = "Checked against the research file's --abort-on-container-failure row and ExitCondition in config.rs (two values); #901 tracks the third."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "claim-words-totalising"
+unit = "591d59d461521e21"
+copies = 1
+note = "Checked against attach_instance (only is_up members watched) and watch_members' watched count; attaching_follows_what_runs_and_leaves_an_exited_member_alone."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "cadcebd096004f25"
+copies = 1
+note = "Checked against ServicesCommand::Up and bring_up_service/claim_found/attach_instance: up, attach or replace, all members' output, down once condition_met."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "f4995b6e85e7b2d7"
+copies = 1
+note = "Checked against bring_up_members, the OutputStyle::All sink, condition_met in watch_members, and stop_plan's dependents-first take-down."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-about-elsewhere"
+unit = "ea7e3ca708f13e70"
+copies = 1
+note = "Checked against select_exit_code over group.exit_code_from in engine/services.rs and exit_code::for_error (125, 128 + signal)."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "87e844a07c8cfcd2"
+copies = 1
+note = "Checked against seen()/is_up and attach_instance: the notice text, running containers followed, only up members watched, a nominated exited member's code read."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-totalising"
+unit = "7f062e0b57a95a94"
+copies = 1
+note = "Checked against is_a_run in ratect/src/main.rs and bring_up_service's select_exit_code over exit_code_from."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "claim-words-counts"
+unit = "7f062e0b57a95a94"
+copies = 1
+note = "Checked against is_a_run in ratect/src/main.rs and bring_up_service's select_exit_code over exit_code_from."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "bb74a985956e8115"
+copies = 1
+note = "Checked against ExitCondition in config.rs (#[default] AllStopped) and condition_met in engine/services.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "restatement-ngram"
+unit = "124d00349e362f3a-7a0594331b145a94"
+copies = 1
+note = "A candidate in the survey, spelled with the value name current at its pinned commit; the record of the choice is decisions/0026."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "3d0080a6f0387069"
+copies = 1
+note = "Checked against the Command enum in ratect/src/main.rs: Run, Tasks, Services (Up/Down/List), Caches, Includes, Resources, Doctor, Config, Completions."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/includes.md" = "7327593788ec3ba8", "ratect-core/src/convert.rs" = "cf9c6752d1f95ef7", "ratect-core/src/engine/services.rs" = "9919408711d7dad7" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "6cb40869781807d7"
+copies = 1
+note = "Checked against resource_names.rs (Batect-style task names, ServiceNames' fixed ones) and docker::NameInUse: the daemon's 409 on a taken container name stops up; the network's guard is 0026 Decision 3."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0026-service-instances.md" = "b2344096d5bda05b", "ratect-core/src/resource_names.rs" = "01b38bade831cda5" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-counts"
+unit = "6cb40869781807d7"
+copies = 1
+note = "Checked against resource_names.rs (Batect-style task names, ServiceNames' fixed ones) and docker::NameInUse: the daemon's 409 on a taken container name stops up; the network's guard is 0026 Decision 3."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0026-service-instances.md" = "b2344096d5bda05b", "ratect-core/src/resource_names.rs" = "01b38bade831cda5" }
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "claim-words-totalising"
+unit = "b5bb5de51805239c"
+copies = 1
+note = "Measured with wc -l: config.rs 8,015, docker.rs 4,496, engine.rs 4,447, git_include.rs 1,517."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "claim-words-counts"
+unit = "b5bb5de51805239c"
+copies = 1
+note = "Measured with wc -l: config.rs 8,015, docker.rs 4,496, engine.rs 4,447, git_include.rs 1,517."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "claim-words-about-elsewhere"
+unit = "b77b8959aef72c6c"
+copies = 1
+note = "Checked against bring_up_service's notice \"Service group '{g}' is down.\" and its left-behind error naming `ratect services down {g}` in engine/services.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "claim-words-about-elsewhere"
+unit = "2e226bb2abb53bc2"
+copies = 1
+note = "Checked against the ContainerRuntime trait in docker.rs and claim_instance's create_network call in engine/services.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0026-service-instances.md" = "b2344096d5bda05b" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "judgment-agent-added"
+unit = "3d0080a6f0387069"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/includes.md" = "7327593788ec3ba8", "ratect-core/src/convert.rs" = "cf9c6752d1f95ef7", "ratect-core/src/engine/services.rs" = "9919408711d7dad7" }
+
+[[mark]]
+file = "CHANGELOG.md"
+mode = "judgment-agent-added"
+unit = "2383d669f3f9bce8"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "judgment-agent-added"
+unit = "047ddde56f0307f8"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "judgment-agent-added"
+unit = "5024c8a9d070dcfb"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/engine/services.rs" = "9919408711d7dad7" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "judgment-agent-added"
+unit = "8ae2c6ed9d752dcb"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/engine/services.rs" = "9919408711d7dad7" }
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "cadcebd096004f25"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-cli.md"
+mode = "judgment-agent-added"
+unit = "7f062e0b57a95a94"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "judgment-agent-added"
+unit = "893ed9329c11ccd8"
+copies = 1
+note = "`services` here is the ratect services verb or the ratect.toml services table, not the engine::services module."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "judgment-agent-added"
+unit = "1c5c4c19de724ac6"
+copies = 1
+note = "ExitCodeRule is the type in config.rs that exit_code_from holds, as the survey line says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/config.rs" = "1adef80de57f99d5" }
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "judgment-agent-added"
+unit = "79a2f2255e11dc31"
+copies = 1
+note = "ExitCodeRule is the type in config.rs that exit_code_from holds, as the survey line says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "judgment-agent-added"
+unit = "b08627c55498d491"
+copies = 1
+note = "ExitCodeRule is the type in config.rs that exit_code_from holds, as the survey line says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "judgment-agent-added"
+unit = "71b6e026b658d38a"
+copies = 1
+note = "ExitCodeRule is the type in config.rs that exit_code_from holds, as the survey line says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "judgment-agent-added"
+unit = "d12a6f409f9b27b3"
+copies = 1
+note = "ExitCodeRule is the type in config.rs that exit_code_from holds, as the survey line says."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CLAUDE.md"
+mode = "restatement-ngram"
+unit = "6cb40869781807d7-c7f37cef30b3d293"
+copies = 1
+note = "AGENTS.md's resource_names.rs row keeps that phrase for task names, still true per resource_names.rs; only the service clause changed."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0026-service-instances.md" = "b2344096d5bda05b", "ratect-core/src/resource_names.rs" = "01b38bade831cda5" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "stale-claims"
+unit = "db26194905776a79"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/schema.rs" = "57f5ceb73f085de1" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "01b8016fdce455c4"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "ROADMAP.md" = "25955ca943036063", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "7327593788ec3ba8", "docs/installation.md" = "f090088ec7661efd", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "docs/ratect-config-reference.md#field-reference" = "26b25fdae4a72f87", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "25e8a1870e46a028"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "81ffb2428cda34ab" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "b8f51c8bb848e6ed"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "ROADMAP.md" = "25955ca943036063", "agents/docs.md" = "252e6e2722865b23" }
+
+[[mark]]
+file = "decisions/0024-host-identity.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "agents/probing.md" = "bf91674285619801", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
+
+[[mark]]
+file = "research/concurrent-clients-on-one-container-group.md"
+mode = "stale-claims"
+unit = "d9e066716694560c"
+copies = 1
+note = "Top section makes no claim about Ratect code; links resolve and upstream sources are pinned to tags."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0026-service-instances.md" = "b2344096d5bda05b" }
+
+[[mark]]
+file = "research/leftover-selection-and-instance-identity.md"
+mode = "stale-claims"
+unit = "04c60844ae0eec98"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0025-task-run-lock.md" = "5b9039361a52d57c", "decisions/0026-service-instances.md" = "b2344096d5bda05b", "examples/go/go.mod" = "80b863a097b997d2" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "stale-claims"
+unit = "c449976ecb5100e4"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/src/main.rs" = "557c001313210eba", "ratect/src/main.rs" = "196ff8cf1312a81f" }
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "stale-claims"
+unit = "cd82ea9cde0a70a4"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "7cd0026d8877e5e8"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "db82ab6fd68eb96d", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "70c5bb9821819a66" }
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "74f78c2b3253e401"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "db82ab6fd68eb96d" }
+
+[[mark]]
+file = "docs/ratect-compat-cli.md"
+mode = "stale-claims"
+unit = "72e425f2afe62ace"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0016-exit-codes.md" = "db82ab6fd68eb96d" }
+
+[[mark]]
+file = ".out-of-scope/prerequisite-arguments.md"
+mode = "stale-claims"
+unit = "108160dc20ea7f71"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/engine.rs" = "9605e3afb6fcb847" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "4ca303a3bf7ddf7b"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "NOTICE" = "5438c04db2cde5e5", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0002-runtime-ownership-labels.md" = "c6ecf48326d11605", "decisions/0003-ratect-native-config-format.md" = "6ff871de354b4fd0", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0011-container-identity.md" = "cca22d618942f0f6", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0025-task-run-lock.md" = "5b9039361a52d57c", "decisions/0026-service-instances.md" = "b2344096d5bda05b", "dockerignore/src/lib.rs" = "5a65d0781c2da9e9", "dockerignore/src/pattern.rs" = "0857415a84f191ef", "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/how-it-works.md" = "893a5840df601d71", "docs/includes.md" = "7327593788ec3ba8", "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "ratect-compat/src/main.rs" = "557c001313210eba", "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/container_spec.rs" = "a98f877b6456804e", "ratect-core/src/convert.rs" = "cf9c6752d1f95ef7", "ratect-core/src/daemon_class.rs" = "b79e527bce59c07e", "ratect-core/src/diagnostics.rs" = "c43133b202f1d054", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/docker/build_output.rs" = "0c1d2a00706baa7d", "ratect-core/src/docker/connection.rs" = "2584cc267720f139", "ratect-core/src/docker/stdin.rs" = "1b9a7f2f9987d8fd", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/engine/services.rs" = "9919408711d7dad7", "ratect-core/src/exit_code.rs" = "c0539e1457ed4133", "ratect-core/src/expressions.rs" = "adc88736e829ea7b", "ratect-core/src/git_include.rs" = "1aa5717f7451484f", "ratect-core/src/image_reference.rs" = "1218fdb8352074a8", "ratect-core/src/include_trust.rs" = "50c5ced25f3b1a90", "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0", "ratect-core/src/registry_auth.rs" = "b4f35ec291651338", "ratect-core/src/resource_names.rs" = "01b38bade831cda5", "ratect-core/src/run_lock.rs" = "fc32ea166bcf0a14", "ratect-core/src/schema.rs" = "57f5ceb73f085de1", "ratect-core/src/service_instances.rs" = "c4ecaba2a930521b", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b", "ratect-core/src/yaml.rs" = "4051e9b0303db9d9", "ratect/src/main.rs" = "196ff8cf1312a81f" }
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "stale-claims"
+unit = "013af8aeb0018e02"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md#future-vision" = "3c976a6a621fcf59", "ratect-core/src/convert.rs" = "cf9c6752d1f95ef7", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/engine/services.rs" = "9919408711d7dad7", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
+
+[[mark]]
+file = "decisions/0026-service-instances.md"
+mode = "stale-claims"
+unit = "c2ebf2a6e33e56de"
+copies = 1
+note = "Status block re-read after the rename: Decision 6 now records the exit options' names; Decision 3 and Decision 6's attach/wait/replace checked against engine/services.rs."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/engine/services.rs" = "9919408711d7dad7", "research/concurrent-clients-on-one-container-group.md" = "f8a25fe38ac12673" }
+
+[[mark]]
+file = "decisions/0019-readiness-gates-starting-only.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/how-it-works.md" = "893a5840df601d71", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "f2571114ef32d2be"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "ROADMAP.md" = "25955ca943036063" }
+
+[[mark]]
+file = "decisions/0003-ratect-native-config-format.md"
+mode = "stale-claims"
+unit = "1757c79603750326"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-compat/tests/fixtures/include.yml" = "3988a20460e08993", "ratect-core/src/engine.rs" = "9605e3afb6fcb847" }
+
+[[mark]]
+file = "docs/differences-from-batect.md"
+mode = "stale-claims"
+unit = "16396f3e621b0738"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0002-runtime-ownership-labels.md" = "c6ecf48326d11605", "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0016-exit-codes.md" = "db82ab6fd68eb96d", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0025-task-run-lock.md" = "5b9039361a52d57c" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "stale-claims"
+unit = "8242d442698604d0"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0026-service-instances.md" = "b2344096d5bda05b", "ratect-core/src/container_spec.rs" = "a98f877b6456804e", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "stale-claims"
+unit = "8012d8399acdaf77"
+copies = 1
+note = "Top section is a survey pinned to commit 80972f0c, where Ratect spelled exit_trigger/exit_code; it says decisions/0026 records the choice, which it does."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0026-service-instances.md" = "b2344096d5bda05b" }
+
+[[mark]]
+file = "decisions/0011-container-identity.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "c08f1b626e102ed5"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "docs/output-styles.md" = "5349d598e5d0c602", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
+
+[[mark]]
+file = "README.md"
+mode = "stale-claims"
+unit = "caf9f906b16a91cb"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/comparison.md" = "0eb7bb383099fed1", "docs/connecting-to-docker.md" = "3c5685291bc57cfa", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "893a5840df601d71", "docs/includes.md" = "7327593788ec3ba8", "docs/index.md" = "44c68e79c054a6cf", "docs/installation.md" = "f090088ec7661efd", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "5349d598e5d0c602", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "c8e426c4c33360b1", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "stale-claims"
+unit = "1d74098c854152ae"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "25955ca943036063", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0018-built-images-named-for-people-found-by-labels.md" = "70c5bb9821819a66", "docs/ratect-config-reference.md#external_health_check-checking-a-container-from-outside-it" = "23b04874957e5077", "docs/ratect-config-reference.md#run_to_completion-init-containers" = "eebcbf97189cbdeb", "schema/batect-config.schema.json" = "19c8a4ec25eef8cd", "schema/ratect-config.schema.json" = "7e236ada7287e8d5" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "stale-claims"
+unit = "edff3ef22243ce64"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/container_spec.rs" = "a98f877b6456804e", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "2f519634b0b93218"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "CONTRIBUTING.md" = "2eb16737419da988", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/README.md" = "32a25605b975c31b", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
+
+[[mark]]
+file = "decisions/0016-exit-codes.md"
+mode = "stale-claims"
+unit = "975160af5e200673"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "acec0e5a5304cd93"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "17ea62e5c299c295", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "557c001313210eba", "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "57f5ceb73f085de1", "ratect-core/tests/format_twins.rs" = "e7928d63cfd38531", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "cf4e3fc27db852a9", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "556ae971cddef085"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103" }
+
+[[mark]]
+file = "agents/docs.md"
+mode = "stale-claims"
+unit = "53f9fac61c746451"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "book.toml" = "5be1237a684817bc", "docs/demo.cast" = "dea031efbde9ac70", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "5349d598e5d0c602", "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "90b2416bf81dab8d", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "044487bde4ba7725" }
+
+[[mark]]
+file = "docs/output-styles.md"
+mode = "stale-claims"
+unit = "d04e328162f1d0e3"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa" }
+
+[[mark]]
+file = "decisions/0001-two-binaries.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "CLAUDE.md" = "cc32cd1bf51157c1" }
+
+[[mark]]
+file = "decisions/0006-code-and-documentation-locality.md"
+mode = "stale-claims"
+unit = "073c1634c496cdb6"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/container_spec.rs" = "a98f877b6456804e", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/git_include.rs" = "1aa5717f7451484f", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
+
+[[mark]]
+file = "decisions/0024-host-identity.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "stale-claims"
+unit = "aa4f57e276df5494"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "schema/ratect-config.schema.json" = "7e236ada7287e8d5" }
+
+[[mark]]
+file = ".claude/skills/ready/SKILL.md"
+mode = "stale-claims"
+unit = "7fc87c0ababb2f62"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0013-when-ratect-compat-copies-batect.md" = "3ff602b4f0fa6c6a", "decisions/0024-host-identity.md" = "bc84ea5051abe040", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "decisions/0005-build-ssh-keyring-placement.md"
+mode = "stale-claims"
+unit = "073c1634c496cdb6"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "docs/ratect-compat-config-reference.md"
+mode = "stale-claims"
+unit = "a7baf8faabfe2cf2"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/config.rs" = "1adef80de57f99d5" }
+
+[[mark]]
+file = "research/service-group-exit-option-names.md"
+mode = "stale-claims"
+unit = "2c2bc34ada1e23f7"
+copies = 1
+note = "Section describes Ratect at the pinned commit 80972f0c (ExitTrigger, exit_code, ExitCodeRule, run_as_current_user refused, identity and health_check tables); checked against config.rs and the config reference."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "ratect-core/src/config.rs" = "1adef80de57f99d5" }
+
+[[mark]]
+file = "ROADMAP.md"
+mode = "stale-claims"
+unit = "96ac0674b29ad7a7"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/ssh_agent.rs" = "fb5940df6640c00d" }
+
+[[mark]]
+file = "decisions/0025-task-run-lock.md"
+mode = "stale-claims"
+unit = "0e63b8325001c2fb"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/README.md" = "32a25605b975c31b", "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
+mode = "stale-claims"
+unit = "9d67410bcb6185a0"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "docs/captures/written-for-refusal.ansi" = "3ae8730f1b5399f7" }
+
+[[mark]]
+file = "decisions/0017-output-streams-and-styles.md"
+mode = "stale-claims"
+unit = "b5109aac2607f1e1"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "stale-claims"
+unit = "f93147ee2f007c27"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847" }
+
+[[mark]]
+file = "docs/how-it-works.md"
+mode = "stale-claims"
+unit = "a79f54158176959a"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0014-config-checked-at-load-evaluated-per-task.md" = "186e0b75044a03f2", "ratect-core/src/cache.rs" = "139da432ed9c8f74", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "311218ddb1948858"
+copies = 1
+note = "Checked against ServiceGroup in config.rs: it holds containers, exit_condition and exit_code_from only; nothing treats a group as a container."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "TODO.md"
+mode = "stale-claims"
+unit = "602fae580f5863ab"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "decisions/0006-code-and-documentation-locality.md" = "cc525a059ae0fb22", "ratect-compat/tests/cli.rs" = "2b4bcad797f717b2", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847" }
+
+[[mark]]
+file = "TODO.md"
+mode = "stale-claims"
+unit = "b3b8ab66b02ea5fa"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa" }
+
+[[mark]]
+file = "TODO.md"
+mode = "stale-claims"
+unit = "4722fac5bc8b3840"
+copies = 1
+note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/docker/connection.rs" = "2584cc267720f139" }
+
+[[mark]]
+file = "TODO.md"
+mode = "stale-claims"
+unit = "9616cab717fb309a"
+copies = 1
+note = "Items 13 and 15 checked (no --all-projects prompt in ratect/src/main.rs; schema_tests and descriptions naming Rust items, none of them the renamed exit options); item 17's noyalib internals are outside the repo and unread."
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/schema.rs" = "57f5ceb73f085de1", "ratect/src/main.rs" = "196ff8cf1312a81f" }

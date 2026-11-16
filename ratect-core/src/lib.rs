@@ -60,6 +60,7 @@ pub mod resources;
 pub mod run_lock;
 #[cfg(feature = "schema")]
 pub mod schema;
+pub mod service_instances;
 pub mod ssh_agent;
 pub mod ui;
 pub mod user;

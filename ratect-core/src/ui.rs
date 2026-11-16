@@ -313,6 +313,13 @@ pub enum TaskEvent {
         container: String,
         exit_code: i64,
     },
+    /// A service group's member stopped — what its exit condition counts.
+    /// Posted by `services up` only, which shows every container's output
+    /// and so runs under the `all` style alone.
+    ServiceMemberExited {
+        container: String,
+        exit_code: i64,
+    },
     /// The task's own container — already created, see
     /// [`TaskEvent::ContainerCreated`] — is about to be started: every
     /// container it depends on is ready. `command` is the resolved command
@@ -359,6 +366,13 @@ pub enum TaskEvent {
     /// The task's own network was removed — posted only after a
     /// [`TaskEvent::RemovingNetwork`] whose removal succeeded.
     NetworkRemoved,
+    /// A service group's network is about to be removed, at the end of
+    /// `services up`'s take-down; like [`TaskEvent::ServiceMemberExited`],
+    /// posted under the `all` style alone.
+    RemovingServiceGroupNetwork,
+    /// A service group's network was removed — posted only after a
+    /// [`TaskEvent::RemovingServiceGroupNetwork`] whose removal succeeded.
+    ServiceGroupNetworkRemoved,
     /// The task's run has ended — its command finished, a failure stopped
     /// it, or a signal did — and nothing more of its startup will happen.
     /// Posted the moment the run resolves, before cleanup and before any
@@ -1647,6 +1661,15 @@ pub(crate) fn format_task_summary(
         console.bold(task),
         exit_code,
         format_duration(duration)
+    )
+}
+
+/// What a service group's member stopping says — `exited with exit code
+/// <n>` — the exit its group's exit condition counts, so not unexpected.
+pub(crate) fn exited(console: &Console, exit_code: i64) -> Text {
+    text!(
+        "exited with exit code {}",
+        console.bold(&exit_code.to_string())
     )
 }
 

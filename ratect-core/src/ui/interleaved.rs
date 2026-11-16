@@ -415,6 +415,16 @@ impl EventSink for InterleavedEventLogger {
                     text!("{}.", super::exited_unexpectedly(&self.console, exit_code)),
                 );
             }
+            TaskEvent::ServiceMemberExited {
+                container,
+                exit_code,
+            } => {
+                self.print_for_container(
+                    &state,
+                    &container,
+                    text!("Container {}.", super::exited(&self.console, exit_code)),
+                );
+            }
             TaskEvent::RunningTaskContainer { container, command } => {
                 let line = match command {
                     Some(command) => {
@@ -453,6 +463,12 @@ impl EventSink for InterleavedEventLogger {
             }
             TaskEvent::NetworkRemoved => {
                 self.print_for_task(&state, "Task network removed.");
+            }
+            TaskEvent::RemovingServiceGroupNetwork => {
+                self.print_for_task(&state, "Removing service group network...");
+            }
+            TaskEvent::ServiceGroupNetworkRemoved => {
+                self.print_for_task(&state, "Service group network removed.");
             }
             TaskEvent::TaskFinished {
                 task,

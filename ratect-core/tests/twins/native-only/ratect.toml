@@ -57,3 +57,8 @@ run = { container = "child", command = "echo hi" }
 
 [tasks.share]
 run = { container = "sharer", command = "echo hi" }
+
+[services.stack]
+containers = ["child", "migrate"]
+exit_condition = "any_stopped"
+exit_code_from = { container = "child" }

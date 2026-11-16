@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::labels::{ContainerRole, RunLabels};
+use crate::labels::{ContainerRole, OwnershipLabels};
 use std::collections::HashMap;
 
 fn sample_container() -> Container {
@@ -93,7 +93,7 @@ fn empty_run() -> TaskRun {
 #[test]
 fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
     let container_config = sample_container();
-    let run_labels = RunLabels::new("demo", "task", "run-id", Some("0.6.0"));
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", Some("0.6.0"));
     let run = empty_run();
 
     let task_spec = derive_spec(ContainerSpecInputs {
@@ -112,7 +112,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     let dependency_spec = derive_spec(ContainerSpecInputs {
@@ -131,7 +131,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Dependency,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     assert_eq!(task_spec.shared, dependency_spec.shared);
@@ -155,7 +155,7 @@ fn shared_is_identical_between_an_empty_run_overlay_and_no_customise_overlay() {
 #[test]
 fn a_run_overlay_overrides_the_containers_own_fields() {
     let container_config = sample_container();
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
     let run = TaskRun {
         container: "app".to_string(),
         command: Some("echo overridden".to_string()),
@@ -184,7 +184,7 @@ fn a_run_overlay_overrides_the_containers_own_fields() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     assert_eq!(spec.shared.command, Some("echo overridden".to_string()));
@@ -212,7 +212,7 @@ fn a_run_overlay_overrides_the_containers_own_fields() {
 #[test]
 fn a_customise_overlay_has_no_command_or_entrypoint_override() {
     let container_config = sample_container();
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
     let customisation = TaskContainerCustomisation {
         environment: Some(HashMap::from([(
             "FOO".to_string(),
@@ -238,7 +238,7 @@ fn a_customise_overlay_has_no_command_or_entrypoint_override() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Dependency,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     // Overridden.
@@ -544,7 +544,7 @@ fn derive_spec_carries_ulimits_as_plain_triples() {
             hard: -1,
         },
     ]);
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
@@ -562,7 +562,7 @@ fn derive_spec_carries_ulimits_as_plain_triples() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     assert_eq!(
@@ -579,7 +579,7 @@ fn derive_spec_carries_ulimits_as_plain_triples() {
 #[test]
 fn derive_spec_leaves_ulimits_unset_when_the_container_declares_none() {
     let container_config = sample_container();
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
@@ -597,7 +597,7 @@ fn derive_spec_leaves_ulimits_unset_when_the_container_declares_none() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     assert_eq!(spec.shared.options.ulimits, None);
@@ -615,7 +615,7 @@ fn derive_spec_carries_the_containers_own_dns_settings() {
     ]);
     container_config.dns_search = Some(vec!["corp.example.com".to_string()]);
     container_config.dns_options = Some(vec!["ndots:2".to_string()]);
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
@@ -633,7 +633,7 @@ fn derive_spec_carries_the_containers_own_dns_settings() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     let options = &spec.shared.options;
@@ -656,7 +656,7 @@ fn derive_spec_carries_the_containers_own_dns_settings() {
 #[test]
 fn derive_spec_leaves_dns_unset_when_the_container_declares_none() {
     let container_config = sample_container();
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
@@ -674,7 +674,7 @@ fn derive_spec_leaves_dns_unset_when_the_container_declares_none() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     let options = &spec.shared.options;
@@ -735,7 +735,7 @@ fn spec_on_network(network: ContainerNetwork) -> ContainerSpec {
         |name| (name == "http_proxy").then(|| "http://localhost:3333".to_string()),
         &std::collections::BTreeSet::new(),
     );
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
     derive_spec(ContainerSpecInputs {
         name: "app",
         docker_name: "demo-app-abc123",
@@ -752,7 +752,7 @@ fn spec_on_network(network: ContainerNetwork) -> ContainerSpec {
         proxy: Some(&proxy),
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     })
 }
 
@@ -802,7 +802,7 @@ fn derive_spec_passes_an_unquoted_yaml_environment_value_on_as_written() {
          tasks: {}\n",
     )
     .unwrap();
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
 
     let spec = derive_spec(ContainerSpecInputs {
         name: "app",
@@ -820,7 +820,7 @@ fn derive_spec_passes_an_unquoted_yaml_environment_value_on_as_written() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     assert_eq!(spec.shared.environment.unwrap()["PYTHON_VERSION"], "3.10");
@@ -870,7 +870,7 @@ fn an_empty_customisation_derives_the_same_spec_as_none() {
         container: crate::config::PortRange { from: 80, to: 80 },
         protocol: "tcp".to_string(),
     }]);
-    let run_labels = RunLabels::new("demo", "task", "run-id", Some("0.6.0"));
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", Some("0.6.0"));
     let empty = TaskContainerCustomisation {
         environment: None,
         ports: None,
@@ -893,7 +893,7 @@ fn an_empty_customisation_derives_the_same_spec_as_none() {
             proxy: None,
             publish_ports: true,
             role: ContainerRole::Dependency,
-            run_labels: &run_labels,
+            owner_labels: &owner_labels,
         })
     };
 
@@ -921,7 +921,7 @@ fn published_ports(container_ports: &[&str], run_ports: &[&str]) -> Vec<(u16, u1
         ports: port_mappings(run_ports),
         ..empty_run()
     };
-    let run_labels = RunLabels::new("demo", "task", "run-id", Some("0.6.0"));
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", Some("0.6.0"));
     derive_spec(ContainerSpecInputs {
         name: "app",
         docker_name: "demo-app-abc123",
@@ -938,7 +938,7 @@ fn published_ports(container_ports: &[&str], run_ports: &[&str]) -> Vec<(u16, u1
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     })
     .shared
     .network_options
@@ -1167,7 +1167,7 @@ fn a_build_secret_refusal_quotes_a_line_break_in_the_id_and_path_escaped() {
 #[test]
 fn derive_spec_maps_host_root_to_a_process_user_of_0_0() {
     let container_config = sample_container();
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
     let mapping = crate::docker::UserMapping {
         user: crate::user::NamedUser {
             uid: 0,
@@ -1195,7 +1195,7 @@ fn derive_spec_maps_host_root_to_a_process_user_of_0_0() {
         proxy: None,
         publish_ports: true,
         role: ContainerRole::Task,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     assert_eq!(spec.shared.process_user.as_deref(), Some("0:0"));
@@ -1205,7 +1205,7 @@ fn derive_spec_maps_host_root_to_a_process_user_of_0_0() {
 /// container without one can't be made to run as the host user this way.
 #[test]
 fn derive_spec_takes_an_identity_host_user_only_with_an_identity() {
-    let run_labels = RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = OwnershipLabels::new("demo", "task", "run-id", None);
     let user = crate::user::CurrentUser {
         uid: 1000,
         gid: 20,
@@ -1229,7 +1229,7 @@ fn derive_spec_takes_an_identity_host_user_only_with_an_identity() {
             proxy: None,
             publish_ports: true,
             role: ContainerRole::Task,
-            run_labels: &run_labels,
+            owner_labels: &owner_labels,
         })
     };
 

@@ -58,3 +58,19 @@ fn every_name_from_one_generator_shares_its_suffix() {
     );
     assert_eq!(names.network(), format!("my_project-network-{suffix}"));
 }
+
+#[test]
+fn a_service_instances_names_are_fixed_and_unambiguous() {
+    let names = ServiceNames::new("shop", "api-db", "default");
+    assert_eq!(names.network(), "shop..api-db..default");
+    assert_eq!(names.container("api"), "shop..api-db..default..api");
+    assert_eq!(
+        ServiceNames::new("shop", "api-db", "default").container("api"),
+        names.container("api")
+    );
+    // Hyphen-joined, these two were the same name.
+    assert_ne!(
+        ServiceNames::new("shop-api", "db", "default").network(),
+        names.network()
+    );
+}

@@ -2284,7 +2284,7 @@ async fn create_request(network: ContainerNetwork) -> (Option<String>, serde_jso
         additional_hostnames: Some(vec!["db.local".to_string()]),
         ..Default::default()
     };
-    let run_labels = crate::labels::RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = crate::labels::OwnershipLabels::new("demo", "task", "run-id", None);
     let spec = crate::container_spec::derive_spec(crate::container_spec::ContainerSpecInputs {
         name: "db",
         docker_name: "demo-db-abc123",
@@ -2301,7 +2301,7 @@ async fn create_request(network: ContainerNetwork) -> (Option<String>, serde_jso
         proxy: None,
         publish_ports: true,
         role: crate::labels::ContainerRole::Dependency,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     });
 
     assert_eq!(client.create_container(&spec).await.unwrap(), "new-id");
@@ -4055,7 +4055,7 @@ fn spec_from(
     role: crate::labels::ContainerRole,
 ) -> ContainerSpec {
     use crate::container_spec::{derive_spec, ContainerSpecInputs, Overlay};
-    let run_labels = crate::labels::RunLabels::new("demo", "task", "run-id", None);
+    let owner_labels = crate::labels::OwnershipLabels::new("demo", "task", "run-id", None);
     derive_spec(ContainerSpecInputs {
         name: "app",
         docker_name: "demo-app-abc123",
@@ -4072,7 +4072,7 @@ fn spec_from(
         proxy: None,
         publish_ports: true,
         role,
-        run_labels: &run_labels,
+        owner_labels: &owner_labels,
     })
 }
 

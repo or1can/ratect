@@ -18,7 +18,10 @@ implemented, a graceful stop or a network removal answered `404` counted as
 one, while forced removal did not. Refined again before release by
 [#670](https://github.com/or1can/ratect/issues/670): a run whose stdout's
 reader goes exits `141`, as though `SIGPIPE` had ended it. As first written,
-no rule covered it, so it fell to rule 3's `125`.
+no rule covered it, so it fell to rule 3's `125`. Extended by
+[0026](0026-service-instances.md): `ratect services up` is a run too, on
+Path 1, its code the one its group's `exit_code_from` selects in place of a
+task container's; `services list` and `services down` are on Path 2.
 
 ## Context
 
