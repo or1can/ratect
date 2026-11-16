@@ -15241,25 +15241,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "TODO.md"
-mode = "claim-words-about-elsewhere"
-unit = "3adc0765f0e278fb"
-copies = 1
-note = "abandoned_lock, this_test_binary_running and LOCK_HOLDER_ENV/LOCK_HELD are used only by the ungated takeover tests and a_lock_holder_process; gating those tests would leave them unused off Unix. Only edit: one holder process remains after ratect#888 removed a_lock_releasing_process"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Pre-commit pin, ci.yml claims job and module_reference_scope checked; upstream fixes and check-citations' language support not checked."
-by = "Claude Code agent, approved by Kevin Rogers"
-extent = "partial"
-subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", "TODO.md" = "94beb8ae992e3b9b", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
 file = "decisions/0027-git-include-staging-survives-two-holders.md"
 mode = "claim-words-totalising"
 unit = "d84f94e56c0e8284"
@@ -17588,15 +17569,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "decisions/0009-adopt-claims-plugin.md"
-mode = "stale-claims"
-unit = "86ae35d58a6aa3b5"
-copies = 1
-note = "Historical Decision, append-only; claims.toml, .claude/settings.json plugin entries exist, the four deleted scripts are gone, tools/changelog-section.py stays."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "25955ca943036063", "TODO.md" = "94beb8ae992e3b9b", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
-
-[[mark]]
 file = "decisions/0004-git-include-host-path-trust.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
@@ -17615,15 +17587,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { ".cargo/audit.toml" = "109a49049f151f6a", "decisions/0005-build-ssh-keyring-placement.md" = "1731835384b5aef7", "decisions/0006-code-and-documentation-locality.md" = "cc525a059ae0fb22" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "e245434933571536"
-copies = 1
-note = "Its tie to 0006 is the prose-locality principle; 0006 changed only a line count."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "TODO.md" = "94beb8ae992e3b9b", "decisions/0006-code-and-documentation-locality.md" = "cc525a059ae0fb22" }
-
-[[mark]]
 file = "ratect-compat/tests/conformance/README.md"
 mode = "stale-claims"
 unit = "0afb59bca4a328d6"
@@ -17631,15 +17594,6 @@ copies = 1
 note = "ROADMAP.md#batect-parity anchor exists, and the run-up to ratect-compat 1.0.0 matches ROADMAP."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ROADMAP.md" = "25955ca943036063", "ROADMAP.md#batect-parity" = "3ab0fecdb0e276a1" }
-
-[[mark]]
-file = "agents/claims.md"
-mode = "stale-claims"
-unit = "24d9d9ee602a12ed"
-copies = 1
-note = "Checked against claims.toml: claim-words/temporal-words lists, restatement .rs, stale-claims scope, executable-claims timeout, no check-config-defaults table or .env.example."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "ROADMAP.md" = "25955ca943036063", "TODO.md" = "94beb8ae992e3b9b" }
 
 [[mark]]
 file = "docs/how-it-works.md"
@@ -18290,15 +18244,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/container_spec.rs" = "a98f877b6456804e", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847" }
 
 [[mark]]
-file = "AGENTS.md"
-mode = "stale-claims"
-unit = "2f519634b0b93218"
-copies = 1
-note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "CONTRIBUTING.md" = "2eb16737419da988", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/README.md" = "32a25605b975c31b", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/test_python_minimum.py" = "cd361a64286d5594" }
-
-[[mark]]
 file = "decisions/0016-exit-codes.md"
 mode = "stale-claims"
 unit = "975160af5e200673"
@@ -18342,15 +18287,6 @@ copies = 1
 note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa" }
-
-[[mark]]
-file = "decisions/0001-two-binaries.md"
-mode = "stale-claims"
-unit = "de00163e80311042"
-copies = 1
-note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "CLAUDE.md" = "cc32cd1bf51157c1" }
 
 [[mark]]
 file = "decisions/0006-code-and-documentation-locality.md"
@@ -18523,3 +18459,77 @@ copies = 1
 note = "The ROADMAP.md it cites is Batect's (lines 88-90 in ~/git/or1can/batect), not this repo's, whose only change was removing the shipped multiple-container bullet; GitHub Actions, Testcontainers and Earthly claims are pinned upstream."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ROADMAP.md" = "25955ca943036063" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "481fe4d121030ca2"
+copies = 1
+note = "tools/check-windows-build.py's CHECK is held to ci.yml windows-check's run line plus --target by WindowsCheckJobTest; that job installs dtolnay/rust-toolchain@stable while the script uses the local rustc/cargo"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "37d154cd90ff80e1"
+copies = 1
+note = "Ran the script on macOS with an ungated call to a cfg(unix)-only fn (E0425, exit 101) and with a helper used only from cfg(unix) code (never used under -D warnings, exit 101); main exits 0"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "86ae35d58a6aa3b5"
+copies = 1
+note = "Read whole Decision: it records the decision as taken; the Status section already says CI's Tools Tests now runs every tools/test_*.py and that AGENTS.md Tooling & CI describes the current setup. changelog-section.py still exists; TODO.md and claims.md churn doesn't bear on it"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/settings.json" = "914f3e3ae73d1efa", "ROADMAP.md" = "25955ca943036063", "TODO.md" = "030b1657f32ac695", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "decisions/0009-adopt-claims-plugin.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read whole Consequences: historical record; the Status note covers the two that no longer hold (claims now runs in CI, ratect#707; Tools Tests runs every tools/test_*.py). The executable-claims deny-by-default paragraph matches agents/claims.md's Grants section"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".github/workflows/ci.yml" = "15a474e4729b5fd6", "TODO.md" = "030b1657f32ac695", "agents/claims.md" = "17ea62e5c299c295", "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "e245434933571536"
+copies = 1
+note = "Read whole section: 0006 still asks for explanatory prose; the gardening paragraph's 'note that in TODO.md instead' still holds, TODO.md's entries remain such notes"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "TODO.md" = "030b1657f32ac695", "decisions/0006-code-and-documentation-locality.md" = "cc525a059ae0fb22" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "stale-claims"
+unit = "24d9d9ee602a12ed"
+copies = 1
+note = "Read whole section: claim-words and temporal-words file lists match claims.toml exactly, including TODO.md and ROADMAP.md on claim-words only"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "ROADMAP.md" = "25955ca943036063", "TODO.md" = "030b1657f32ac695" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "2f519634b0b93218"
+copies = 1
+note = "Read guideline 8's Python-minimum paragraph, the part naming test_python_minimum.py: MINIMUM is still (3, 11) there and its tests still fail until scripts' headers, checks, ci.yml/release.yml pins and CONTRIBUTING agree; this branch only added a PAST_THE_CHECK entry and a maxsplit keyword"
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "914f3e3ae73d1efa", ".github/workflows/ci.yml" = "15a474e4729b5fd6", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "afa70c6b16c4a18df47d016893b18ae6b91c8035", "CONTRIBUTING.md" = "8affb0704cb6a6d9", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/README.md" = "32a25605b975c31b", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "a4d6c1d2935d1d07" }
+
+[[mark]]
+file = "decisions/0001-two-binaries.md"
+mode = "stale-claims"
+unit = "de00163e80311042"
+copies = 1
+note = "Read the shared-CHANGELOG bullet, the part naming CHANGELOG.md: one CHANGELOG.md is still the arrangement; the marker spelling it gives is superseded, which the Status line already records"
+by = "Claude Code agent, approved by Kevin Rogers"
+extent = "partial"
+subjects = { "CHANGELOG.md" = "afa70c6b16c4a18df47d016893b18ae6b91c8035", "CLAUDE.md" = "53a466cfdfd79ca4" }

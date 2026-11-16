@@ -109,8 +109,8 @@ Confirmed against GitHub's own `/markdown` API, not assumed.
   Unix-only tests behind `cfg(unix)`. Left because gating them can leave
   helpers they share (`abandoned_lock`, `this_test_binary_running`, the
   holder process's constants) unused off Unix, which a Windows `cargo
-  check` would report, and that check didn't build here (`ring`'s C code
-  needs Windows headers); CI's Windows Check runs it. Found reviewing
+  check` reports; `uv run tools/check-windows-build.py` runs that check
+  locally, so the gating can be tried and checked there. Found reviewing
   ratect#886.
 
 ## Efficiency
