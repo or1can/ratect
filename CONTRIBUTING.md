@@ -57,7 +57,7 @@ prune the orphan.
 
 The Python scripts under `tools/` (release notes extraction, the docs'
 captures and their `ansi` preprocessor, the README and doc-link checks,
-the release binaries' minimum-OS check)
+the release binaries' minimum-OS check, the local Windows type check)
 need Python 3.11 or later and nothing outside the standard library. Run
 them with
 [uv](https://docs.astral.sh/uv/), which fetches a matching Python when

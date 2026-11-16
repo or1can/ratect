@@ -54,9 +54,19 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
    nothing skips the sweep and says so. The `claims` `restatement` check
    doesn't replace this: it runs at commit or through `check-claims`,
    keyed on text you deleted, and guideline 16 says what it misses.
+
+   **Once a pass changes nothing, check the Windows build** with
+   `uv run tools/check-windows-build.py`, which runs CI's Windows Check
+   locally. Neither review compiles the `cfg(not(unix))` side of a gate,
+   and Windows Check isn't a required status, so a break there is found
+   after the PR opens unless it's found here (ratect#904). A change to
+   nothing cargo reads (Rust sources, manifests, `Cargo.lock`, `.cargo/`
+   config, a file a crate includes) and not to the check itself or CI's
+   `windows-check` job skips it and says so. A fix it needs is a new gap, so go round this step again.
    *Done when* a pass changes no file, each of its findings listed with
-   why not, and each sweep hit fixed or listed with why it stands — or
-   the design is with the user.
+   why not, each sweep hit fixed or listed with why it stands, and the
+   Windows check exits 0 over the final tree or was skipped — or the
+   design is with the user.
 
 5. **Size the claims work,** before reporting the work as done or opening
    its PR, once the change is committed (before a commit, skip to step 6
@@ -69,7 +79,8 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
 
 6. **Report** which review covered which commit, what each found, what was
    fixed, what wasn't and why, what each step 4 sweep searched for (or
-   that a round renamed nothing), and the unmarked claims count.
+   that a round renamed nothing), the Windows check's result (or that it
+   was skipped), and the unmarked claims count.
 
 ## Review rules
 

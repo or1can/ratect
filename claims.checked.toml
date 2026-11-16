@@ -15241,15 +15241,6 @@ by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
-file = "TODO.md"
-mode = "claim-words-about-elsewhere"
-unit = "3adc0765f0e278fb"
-copies = 1
-note = "abandoned_lock, this_test_binary_running and LOCK_HOLDER_ENV/LOCK_HELD are used only by the ungated takeover tests and a_lock_holder_process; gating those tests would leave them unused off Unix. Only edit: one holder process remains after ratect#888 removed a_lock_releasing_process"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
 file = "decisions/0009-adopt-claims-plugin.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
@@ -18523,3 +18514,21 @@ copies = 1
 note = "The ROADMAP.md it cites is Batect's (lines 88-90 in ~/git/or1can/batect), not this repo's, whose only change was removing the shipped multiple-container bullet; GitHub Actions, Testcontainers and Earthly claims are pinned upstream."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ROADMAP.md" = "25955ca943036063" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "481fe4d121030ca2"
+copies = 1
+note = "tools/check-windows-build.py's CHECK is held to ci.yml windows-check's run line plus --target by WindowsCheckJobTest; that job installs dtolnay/rust-toolchain@stable while the script uses the local rustc/cargo"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-totalising"
+unit = "37d154cd90ff80e1"
+copies = 1
+note = "Ran the script on macOS with an ungated call to a cfg(unix)-only fn (E0425, exit 101) and with a helper used only from cfg(unix) code (never used under -D warnings, exit 101); main exits 0"
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }

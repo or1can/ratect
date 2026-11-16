@@ -63,6 +63,8 @@ SCRIPTS = sorted(p for p in TOOLS.glob("*.py") if not p.name.startswith("test_")
 PAST_THE_CHECK = {
     # A cold doc build of the whole workspace.
     "check-doc-links.py": ["--help"],
+    # A `cargo check` of the whole workspace for Windows.
+    "check-windows-build.py": ["--help"],
 }
 
 HEADER = re.compile(
