@@ -41,8 +41,22 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
    until a pass changes nothing. If a pass finds more of the same kind of
    problem in the mechanism the last pass fixed, stop and put the design to
    the user instead (guideline 16: the design is the finding).
-   *Done when* a pass changes no file, each of its findings listed with why
-   not, or the design is with the user.
+
+   **Before every pass, sweep what the last fixes renamed.** If they
+   renamed an identifier or term, or changed what one means, run
+   `git grep --untracked` over the whole checkout, not the diff, for the
+   old name and the old defining phrases. The reviews read only the diff,
+   so they find leftovers elsewhere only a few per pass (ratect#906). Fix
+   each hit or say why it stands; a shipped `CHANGELOG.md` or
+   `RELEASES.md` entry stands (guideline 9). Grep matches spelling, not
+   meaning, so a sentence asserting the old meaning in other words needs
+   reading around the hits, not another grep. A round that renamed
+   nothing skips the sweep and says so. The `claims` `restatement` check
+   doesn't replace this: it runs at commit or through `check-claims`,
+   keyed on text you deleted, and guideline 16 says what it misses.
+   *Done when* a pass changes no file, each of its findings listed with
+   why not, and each sweep hit fixed or listed with why it stands — or
+   the design is with the user.
 
 5. **Size the claims work,** before reporting the work as done or opening
    its PR, once the change is committed (before a commit, skip to step 6
@@ -54,7 +68,8 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
    reported as pending.
 
 6. **Report** which review covered which commit, what each found, what was
-   fixed, what wasn't and why, and the unmarked claims count.
+   fixed, what wasn't and why, what each step 4 sweep searched for (or
+   that a round renamed nothing), and the unmarked claims count.
 
 ## Review rules
 
