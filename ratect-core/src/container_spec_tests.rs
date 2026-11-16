@@ -83,9 +83,8 @@ fn empty_run() -> TaskRun {
 /// The property this module's own doc comment promises: a task-derived and
 /// a dependency-derived spec for the *same* container must agree on
 /// `shared` when neither overlay contributes anything — proving the two
-/// call sites in `engine.rs` (the task's own container, and
-/// `ensure_container_ready`'s dependency start) really do share one
-/// assembly path now, rather than two that happen to agree today. Before
+/// paths through `engine.rs`'s `ensure_container_created` (the task's own
+/// container, and a dependency's) really do share one assembly path now, rather than two that happen to agree today. Before
 /// this candidate, there was no single function whose output both paths
 /// could be compared against — each built its own `NetworkOptions`/
 /// `ContainerOptions` by hand, so this property could only ever be

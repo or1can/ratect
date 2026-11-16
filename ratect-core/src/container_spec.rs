@@ -24,10 +24,10 @@
 //! container, and `ensure_container_ready`'s recursive dependency start) with
 //! no shared code between them to keep the two in step. Since the create/start
 //! split (decisions/0019) one call site derives it —
-//! `ensure_container_created`, for a dependency and the task's own container
-//! alike — and hands it to `ContainerRuntime::create_container`, then to the
-//! start call. [`Overlay`] is
-//! matched exactly once, inside `derive_spec`, and each arm destructures its
+//! `ensure_container_created`, for a dependency, a service group's container
+//! and the task's own container alike — and hands it to
+//! `ContainerRuntime::create_container`, then to the start call. [`Overlay`]
+//! is matched exactly once, inside `derive_spec`, and each arm destructures its
 //! config struct exhaustively by name (no `..`) — a field added to `TaskRun`
 //! or `TaskContainerCustomisation` becomes a compiler error here rather than
 //! a silently-ignored new field.
@@ -41,7 +41,7 @@
 //! own values (see [`crate::labels::OwnershipLabels::for_container`]), so nesting
 //! any of the four inside `shared` would make the equivalence property false
 //! by construction, for every real pair of specs, regardless of whether the
-//! two call sites actually agree on everything else.
+//! task's and a dependency's paths actually agree on everything else.
 //!
 //! [`BuildSpec`] is the same idea for `ContainerRuntime::build_image`'s own
 //! call, one owned value [`derive_build_spec`] assembles instead of the 8
