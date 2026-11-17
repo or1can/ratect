@@ -5315,10 +5315,11 @@ async fn cleanup_passes_each_containers_own_stop_signal_and_grace_period_to_dock
 /// express a dependency exiting at an *expected* moment (e.g. in response
 /// to cleanup) would make this untestable, since there would be no way to
 /// distinguish "detected while something else was still going" from
-/// "detected because the run had already finished anyway" (see the `ready`
-/// skill's rule on coverage shaped by the test harness). `with_dependency_exit`
-/// exists so this fake can actually express the case: the dependency exits
-/// mid-run, at a moment the engine did not ask for and does not expect.
+/// "detected because the run had already finished anyway" (see
+/// `agents/review-brief.md`'s check on coverage shaped by the test harness).
+/// `with_dependency_exit` exists so this fake can actually express the case:
+/// the dependency exits mid-run, at a moment the engine did not ask for and
+/// does not expect.
 #[tokio::test(start_paused = true)]
 async fn dependency_exiting_after_ready_warns_while_the_task_container_still_runs() {
     let config = config_with_database_dependency(|_| {});

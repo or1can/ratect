@@ -95,3 +95,4 @@ record refined this way.
 | [0025](0025-task-run-lock.md) | A task run holds a lock, and `resources` removes what the lock proves dead | Accepted — planned (ratect-compat 0.35.0 · ratect 0.14.0) |
 | [0026](0026-service-instances.md) | A service instance belongs to no process | Accepted — planned (ratect 0.14.0) |
 | [0027](0027-git-include-staging-survives-two-holders.md) | No holder touches another clone's staging directory, so two holders of an entry lock cost only a duplicate clone | Accepted — planned (ratect-compat 0.35.0 · ratect 0.14.0) |
+| [0028](0028-design-and-implementation-review.md) | Design and implementation review: three tools around one design record | Accepted — planned (ratect 0.14.0) |

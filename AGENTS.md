@@ -408,8 +408,9 @@ for — note that in `TODO.md` instead.
 15. **Review before committing, not after.** Run `/ready` over the working
     diff *before* each commit, not over a run of commits afterwards, and
     before reporting work as done: it runs whichever of the bug review and
-    the two-axis review hasn't covered the change yet, and its review rules
-    are the checks both reviewers apply.
+    the two-axis review hasn't covered the change yet, and briefs both
+    reviewers with [`agents/review-brief.md`](agents/review-brief.md), the
+    checks they apply and how they class a finding.
 16. **Fix the class, not the instance — and say what you swept.** A review
     finding is a *sample*. Before fixing it, ask what else in the codebase has
     that shape and go and look; then report the sweep, including when it comes
@@ -435,8 +436,11 @@ for — note that in `TODO.md` instead.
     correct location for the wrong reason looks exactly like a catch.
 
     - **Prefer the structural fix when the local one leaves the invariant
-      unstated.** When one area keeps producing findings, the design is the
-      finding.
+      unstated.** When one area keeps producing findings, suspect the design:
+      check each against the design record, since one that shows the record
+      wrong is a design flaw, one the record is silent on a design gap, and
+      one that only argues with a decision a dispute
+      ([decisions/0028](decisions/0028-design-and-implementation-review.md)).
     - **A repeated process error is a defect in the process, not in the
       attempt.** Resolving to be more careful is not a fix: change the method,
       then write it down here. Standing method — **stage explicit paths, never
@@ -466,14 +470,31 @@ Default canonical label strings, unchanged. See `agents/triage-labels.md`.
 
 ### Settling design
 
-Run the `settle-design` skill on a ticket at the end of its triage, before
-it moves to `ready-for-agent` or `ready-for-human`, and again before writing
-its code, so an open mechanism is designed before the code, not by the
-review passes after it (ratect#902). `ready`'s design stop
-recommends it too. The `mattpocock-skills` plugin's `triage`, `implement`
-and `implement-spec` skills can't call it, so
-`.claude/hooks/settle-design-reminder.py` adds a reminder when a prompt
-starts one of them.
+Design and implementation review is three tools around one **design record**
+per issue — why three, and what each must not do, is
+[decisions/0028](decisions/0028-design-and-implementation-review.md):
+
+1. **`settle-design`**, at the end of triage, before the issue moves to
+   `ready-for-agent` or `ready-for-human`: makes the design clear,
+   actionable and achievable, and writes the record.
+2. **`check-design`**, before implementation starts: does the record still
+   hold, given what is known now? It does not critique the design.
+3. **`ready`**, before each commit (guideline 15): does the change meet the
+   record, its spec and this repo's standards, and does it have bugs?
+
+`settle-design` and `ready` brief their reviewers with
+[`agents/review-brief.md`](agents/review-brief.md). The `mattpocock-skills`
+plugin's `triage`, `implement` and `implement-spec` skills can't call any
+of them, so `.claude/hooks/settle-design-reminder.py` adds a reminder when
+a prompt starts one of them.
+
+The tools are being built in ratect#924's sub-issues. Until ratect#930
+adds `check-design`, the reminder at implementation names `settle-design`,
+and until ratect#927 and ratect#928 land, `settle-design` and `ready` keep
+their current steps, including `ready`'s design stop recommending
+`settle-design`. Meanwhile the brief's classes label a finding without
+changing those steps: a dispute is listed with why it wasn't fixed, and a
+design gap is appended to the issue's `## settle-design record`.
 
 ### Domain docs
 
