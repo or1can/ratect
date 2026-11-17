@@ -170,6 +170,7 @@ jobs:
       # and the two never check against different releases. `tools/claims.py`
       # reads it, the same parser the documented mark command uses.
       - name: Check out the pinned claims release
+        id: claims-release
         shell: bash
         run: |
           rev=$(python3 tools/claims.py --print-rev)
@@ -209,6 +210,33 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli --repo-root . --diff-range "origin/$BASE_REF" --fail-on-unmarked
+      # `tools/check-pending-marks.py` finds the `[[mark]]` headers in
+      # `claims.checked.toml` with a copy of the pattern `claims` uses, so a
+      # bump that changes the pattern fails here until the copy follows. Only
+      # the pattern is compared, not how `claims` splits lines or applies it.
+      # It runs even when the claims checks fail, so one run reports both, but
+      # not without the clone. `-P` keeps the repo root off `sys.path`, so
+      # `claims` is imported from the clone.
+      - name: Check the copied mark header pattern
+        if: ${{ !cancelled() && steps.claims-release.outcome == 'success' }}
+        run: |
+          PYTHONPATH="$RUNNER_TEMP/claims" python3 -P - tools/check-pending-marks.py <<'EOF'
+          import runpy, sys
+          try:
+              from claims.checked import _MARK_HEADER_RE as theirs
+          except ImportError as error:
+              sys.exit(
+                  f"error: can't import _MARK_HEADER_RE from the pinned claims "
+                  f"release ({error}): find where the pattern went, then update "
+                  f"this step and {sys.argv[1]}'s HEADER to match"
+              )
+          ours = runpy.run_path(sys.argv[1])["HEADER"]
+          if (ours.pattern, ours.flags) != (theirs.pattern, theirs.flags):
+              sys.exit(
+                  f"error: {sys.argv[1]}'s HEADER is {ours.pattern!r}, and the "
+                  f"pinned claims release's _MARK_HEADER_RE is {theirs.pattern!r}"
+              )
+          EOF
 
   # No mark in `claims.checked.toml` still pending the maintainer's review
   # (`agents/claims.md`). The whole file, not the PR's change: `main` holds no

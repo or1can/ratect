@@ -79,8 +79,10 @@ FILE = "claims.checked.toml"
 PENDING = re.compile(r"pending review by", re.IGNORECASE)
 APPROVED = "approved by"
 # The header `claims` itself recognises, comment and spacing included: a
-# copy of v0.28.1's `_MARK_HEADER_RE` in `claims/checked.py`, to re-read
-# when a bump of the pinned release changes how marks are written.
+# copy of `_MARK_HEADER_RE` in `claims/checked.py`. CI's Claims job compares
+# it with the pinned release's; `lines` and the `match` in `entries` copy
+# how v0.28.1's `claims` applies it, which nothing compares: on a bump,
+# re-read them and update that version.
 HEADER = re.compile(r"^\s*\[\[\s*mark\s*\]\]\s*(#.*)?$")
 BY = re.compile(r"^\s*by\s*=")
 

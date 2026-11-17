@@ -33,8 +33,10 @@ hand-rolled `tools/` scripts, and
   blocks only on those, and on an orphaned mark, from the checks `[hook]
   fail_on_unmarked` lists). So a PR resolves the findings it brings in, and
   whoever batches Renovate's changes marks what those bring in. It writes
-  its own `claims.local.toml` with `AGENTS.md`'s grant list. The job is
-  not a required status check.
+  its own `claims.local.toml` with `AGENTS.md`'s grant list. It also
+  fails when the pinned release's pattern for a `[[mark]]` header
+  differs from the copy in `tools/check-pending-marks.py`, so a bump that
+  changes the pattern prompts updating the copy. The job is not a required status check.
 
 ## The checks here
 
