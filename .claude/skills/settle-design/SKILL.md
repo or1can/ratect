@@ -61,14 +61,17 @@ does in each state.
    *Done when* each mechanism has its sibling list and the searches that
    found it.
 
-3. **Settle each open part as a design.** Write its whole design to
-   `/tmp/settle-design-<issue>.md`, including any part an ADR already
-   holds, as a table of state by actor where one fits. Find facts
+3. **Settle each open part as a design.** Make a new directory each time
+   this skill runs, with `mktemp -d /tmp/settle-design-<issue>.XXXXXX`
+   (with no issue, `/tmp/settle-design.XXXXXX`), and write every part's
+   whole design into one `design.md` inside it, including any part an ADR
+   already holds, as a table of state by actor where one fits. Find facts
    yourself; put each decision to the user as `mattpocock-skills:grilling`
    does, a round at a time with your recommendation.
 
-   Then invoke the built-in `code-review` at `high` over that file, briefed
-   with the "Review rules" in `.claude/skills/ready/SKILL.md` and told to
+   Then invoke the built-in `code-review` at `high` over that file, by its
+   full path, briefed with the "Review rules" in
+   `.claude/skills/ready/SKILL.md` and told to
    **break the design**: each finding is a concrete interleaving of the
    listed actors, step by step, ending in a state the design doesn't
    handle or handles wrongly. Revise for what it confirms, then ask the
@@ -87,7 +90,7 @@ does in each state.
    - each mechanism examined, and where its design lives;
    - each sibling search and what it found;
    - what the user decided;
-   - each settled design in full, from the `/tmp` file.
+   - each settled design in full, from step 3's `design.md`.
 
    At triage it goes into the brief triage posts next instead, heading
    and all. A ticket that changes no mechanism gets one line saying so. An
