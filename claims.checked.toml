@@ -18538,7 +18538,7 @@ mode = "claim-words-totalising"
 unit = "b437619e1cbc3982"
 copies = 1
 note = "Guideline 16's bullet read against #924's record D15/D16: recurring finding checked against the record, three outcomes as the brief defines them."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c" }
 
 [[mark]]
@@ -18547,7 +18547,7 @@ mode = "claim-words-counts"
 unit = "b437619e1cbc3982"
 copies = 1
 note = "Guideline 16's bullet read against #924's record D15/D16: recurring finding checked against the record, three outcomes as the brief defines them."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c" }
 
 [[mark]]
@@ -18556,7 +18556,7 @@ mode = "claim-words-counts"
 unit = "91809b1dee1981e0"
 copies = 1
 note = "Three tools and one record per issue: #924's record D5 and D13-D15, and decisions/0028 Decision 1."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c" }
 
 [[mark]]
@@ -18565,7 +18565,7 @@ mode = "claim-words-about-elsewhere"
 unit = "3a6a125ba2159d88"
 copies = 1
 note = "Interim note read against ready/SKILL.md steps 2-4 (fix or list with why not) and settle-design/SKILL.md step 4's '## settle-design record' heading."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18574,7 +18574,7 @@ mode = "claim-words-totalising"
 unit = "94633868a291907c"
 copies = 1
 note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18583,7 +18583,7 @@ mode = "claim-words-counts"
 unit = "94633868a291907c"
 copies = 1
 note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18592,7 +18592,7 @@ mode = "claim-words-counts"
 unit = "c899325f93297414"
 copies = 1
 note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c" }
 
 [[mark]]
@@ -18601,7 +18601,7 @@ mode = "claim-words-totalising"
 unit = "79e7c3bc1ce22bcd"
 copies = 1
 note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18610,7 +18610,7 @@ mode = "claim-words-counts"
 unit = "79e7c3bc1ce22bcd"
 copies = 1
 note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18619,7 +18619,7 @@ mode = "claim-words-counts"
 unit = "421fb80f74aa75bc"
 copies = 1
 note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18628,7 +18628,7 @@ mode = "claim-words-counts"
 unit = "d024928b709f764b"
 copies = 1
 note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18637,7 +18637,7 @@ mode = "claim-words-totalising"
 unit = "bdbbcd0c8054d25b"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18646,7 +18646,7 @@ mode = "claim-words-counts"
 unit = "589c7d9a3a36d5f6"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c" }
 
 [[mark]]
@@ -18655,7 +18655,7 @@ mode = "claim-words-totalising"
 unit = "897f3032d6f6f5d1"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18664,7 +18664,7 @@ mode = "claim-words-counts"
 unit = "d73cde3c1e3e5211"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18673,7 +18673,7 @@ mode = "claim-words-totalising"
 unit = "b15ca6e91e53c264"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18682,7 +18682,7 @@ mode = "claim-words-totalising"
 unit = "d736938768be4b14"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18691,7 +18691,7 @@ mode = "claim-words-totalising"
 unit = "dc5897b733ea42fd"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18700,7 +18700,7 @@ mode = "claim-words-counts"
 unit = "dc5897b733ea42fd"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18709,7 +18709,7 @@ mode = "claim-words-counts"
 unit = "0de1d842619a76ed"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18718,7 +18718,7 @@ mode = "claim-words-counts"
 unit = "77ce45ec7a718b86"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18727,7 +18727,7 @@ mode = "claim-words-about-elsewhere"
 unit = "db49ef755e5b1832"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0024-host-identity.md" = "bc84ea5051abe040" }
 
 [[mark]]
@@ -18736,7 +18736,7 @@ mode = "claim-words-totalising"
 unit = "1236e725f77dcd71"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18745,7 +18745,7 @@ mode = "claim-words-counts"
 unit = "1236e725f77dcd71"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18754,7 +18754,7 @@ mode = "claim-words-totalising"
 unit = "326868a062f6cf51"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18763,7 +18763,7 @@ mode = "claim-words-counts"
 unit = "8795643a11277de2"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18772,7 +18772,7 @@ mode = "claim-words-totalising"
 unit = "78fe80ee6e394ed4"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18781,7 +18781,7 @@ mode = "claim-words-counts"
 unit = "8c82ca571666e34e"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
 
 [[mark]]
@@ -18790,7 +18790,7 @@ mode = "claim-words-totalising"
 unit = "b6c821fa9168a003"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18799,7 +18799,7 @@ mode = "claim-words-totalising"
 unit = "fed5f2e3912fb4cc"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18808,7 +18808,7 @@ mode = "claim-words-counts"
 unit = "fed5f2e3912fb4cc"
 copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18817,7 +18817,7 @@ mode = "claim-words-counts"
 unit = "8941afb9d1ca1d1c"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18826,7 +18826,7 @@ mode = "claim-words-counts"
 unit = "d7449cb890491ff2"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18835,7 +18835,7 @@ mode = "claim-words-counts"
 unit = "99f2a168b513baf0"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18844,7 +18844,7 @@ mode = "claim-words-counts"
 unit = "e9a7cbaafc16208f"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18853,7 +18853,7 @@ mode = "claim-words-totalising"
 unit = "611d538a67883add"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18862,7 +18862,7 @@ mode = "claim-words-counts"
 unit = "5de436f4df1ae59b"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18871,7 +18871,7 @@ mode = "claim-words-counts"
 unit = "4185b0926455381b"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18880,7 +18880,7 @@ mode = "claim-words-counts"
 unit = "06e1a95cb031ff34"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18889,7 +18889,7 @@ mode = "claim-words-totalising"
 unit = "57029988afdb290e"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18898,7 +18898,7 @@ mode = "claim-words-totalising"
 unit = "64a9790aebab2e1f"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18907,7 +18907,7 @@ mode = "claim-words-counts"
 unit = "64a9790aebab2e1f"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18916,7 +18916,7 @@ mode = "claim-words-totalising"
 unit = "da5152433d8e36bb"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18925,7 +18925,7 @@ mode = "claim-words-counts"
 unit = "0d7f7cd92235ff4f"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18934,7 +18934,7 @@ mode = "claim-words-totalising"
 unit = "3e87d4c8de137c61"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18943,7 +18943,7 @@ mode = "claim-words-counts"
 unit = "ac419b0ab087d862"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18952,7 +18952,7 @@ mode = "claim-words-counts"
 unit = "b511f8368e7fee82"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18961,7 +18961,7 @@ mode = "claim-words-counts"
 unit = "9331c395a93972c6"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18970,7 +18970,7 @@ mode = "claim-words-totalising"
 unit = "22ae231e76944895"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18979,7 +18979,7 @@ mode = "claim-words-about-elsewhere"
 unit = "22ae231e76944895"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18988,7 +18988,7 @@ mode = "claim-words-totalising"
 unit = "3f94edc194b28689"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -18997,7 +18997,7 @@ mode = "claim-words-totalising"
 unit = "c78d8924a6abbd86"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19006,7 +19006,7 @@ mode = "claim-words-totalising"
 unit = "ed9b503817933366"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19015,7 +19015,7 @@ mode = "claim-words-counts"
 unit = "f4a5ba712f9bc057"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19024,7 +19024,7 @@ mode = "claim-words-totalising"
 unit = "d5ac5b1affc367b0"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19033,7 +19033,7 @@ mode = "claim-words-counts"
 unit = "992e87f0d1e57538"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19042,7 +19042,7 @@ mode = "claim-words-counts"
 unit = "1c29e96cf8ebe08f"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19051,7 +19051,7 @@ mode = "claim-words-totalising"
 unit = "1c29e96cf8ebe08f"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19060,7 +19060,7 @@ mode = "claim-words-totalising"
 unit = "d510d966827ec103"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19069,7 +19069,7 @@ mode = "claim-words-counts"
 unit = "d510d966827ec103"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19078,7 +19078,7 @@ mode = "claim-words-counts"
 unit = "d7f55a64f3bca7b3"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19087,7 +19087,7 @@ mode = "claim-words-totalising"
 unit = "2de55f4e8af5c1a7"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19096,7 +19096,7 @@ mode = "claim-words-counts"
 unit = "2de55f4e8af5c1a7"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19105,7 +19105,7 @@ mode = "claim-words-counts"
 unit = "6c5e4aa72b669165"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19114,7 +19114,7 @@ mode = "claim-words-counts"
 unit = "2978ab2a76ae6de7"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19123,7 +19123,7 @@ mode = "claim-words-counts"
 unit = "1a454a1ea43b1fba"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19132,7 +19132,7 @@ mode = "claim-words-counts"
 unit = "4a2f7089d0cbf8e5"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19141,7 +19141,7 @@ mode = "claim-words-about-elsewhere"
 unit = "4a2f7089d0cbf8e5"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19150,7 +19150,7 @@ mode = "claim-words-about-elsewhere"
 unit = "c3848dd2d4b2b3c8"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19159,7 +19159,7 @@ mode = "claim-words-totalising"
 unit = "141e4c852c87cb26"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "agents/domain.md" = "befc2eb13561a492" }
 
 [[mark]]
@@ -19168,7 +19168,7 @@ mode = "claim-words-counts"
 unit = "5b0478a555a81f58"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19177,7 +19177,7 @@ mode = "claim-words-counts"
 unit = "e5522e834da143e7"
 copies = 1
 note = "Index row matches 0028's title and status line."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19186,7 +19186,7 @@ mode = "restatement-ngram"
 unit = "b02fb846afa3985b-03c20eae62d9b3df"
 copies = 1
 note = "Moved, not retracted: the reviewer-side check about briefs went to agents/review-brief.md, and this author habit about handoffs stays; both are true."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19195,7 +19195,7 @@ mode = "restatement-ngram"
 unit = "7bf4dd450c10dae8-063db78e0dc1bb25"
 copies = 1
 note = "Source of the rule moved to agents/review-brief.md; 0024's text unchanged and still true."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -19204,7 +19204,7 @@ mode = "restatement-ngram"
 unit = "b22dd53b870d0e7a-d483f84079890967"
 copies = 1
 note = "Comment about #[ignore]d Docker tests not running in the default suite is true; the brief's check moved, not retracted."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect/tests/cli.rs" = "cf4e3fc27db852a9" }
 
 [[mark]]
@@ -19213,7 +19213,7 @@ mode = "stale-claims"
 unit = "dab39bc0f67f4b49"
 copies = 1
 note = "Whole section re-read: decisions/README.md's only change here is 0028's index row; the section's description of decisions/ and CONTEXT.md still holds, CONTEXT.md's intro now naming its review-process section."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/README.md" = "d60c5818ead7728c" }
 
 [[mark]]
@@ -19222,7 +19222,7 @@ mode = "stale-claims"
 unit = "57c8e234debc95bb"
 copies = 1
 note = "Whole section re-read: CONTEXT.md is still the one glossary and decisions/ the ADR home; this change only adds a row to decisions/README.md and an Unreleased CHANGELOG entry."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "7fff649d4c47144d9ab7f0c8505293042c2b242b", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "d60c5818ead7728c" }
 
 [[mark]]
@@ -19231,7 +19231,7 @@ mode = "stale-claims"
 unit = "602fae580f5863ab"
 copies = 1
 note = "Read the intro only: this change touches cli.rs and engine_tests.rs in comments alone, which no TODO.md claim depends on."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "decisions/0006-code-and-documentation-locality.md" = "cc525a059ae0fb22", "ratect-compat/tests/cli.rs" = "fde4bf7929eef88b", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847" }
 
@@ -19241,7 +19241,7 @@ mode = "stale-claims"
 unit = "acec0e5a5304cd93"
 copies = 1
 note = "Read the claims-hook and grant paragraphs against agents/claims.md; this change touches none of settings.json, claims.md or ci.yml."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "3630b504df465dd3", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "d8f3e5807ec44f83", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "557c001313210eba", "ratect-compat/tests/cli.rs" = "fde4bf7929eef88b", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "57f5ceb73f085de1", "ratect-core/tests/format_twins.rs" = "e7928d63cfd38531", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "cf4e3fc27db852a9", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
 
@@ -19251,7 +19251,7 @@ mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
 note = "Read the CHANGELOG bullets: the new Unreleased entry is unmarked because it is contributor tooling reaching neither binary, as the existing tooling entries are."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "CHANGELOG.md" = "7fff649d4c47144d9ab7f0c8505293042c2b242b", "CLAUDE.md" = "27b0979267c7ece5" }
 
@@ -19261,7 +19261,7 @@ mode = "stale-claims"
 unit = "0e63b8325001c2fb"
 copies = 1
 note = "Read the section's opening, which cites decisions/README.md's refinement rule; this change only adds 0028's index row there and touches no docker.rs."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "decisions/README.md" = "d60c5818ead7728c", "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a" }
 
@@ -19271,5 +19271,5 @@ mode = "stale-claims"
 unit = "da6d38ffc884cb42"
 copies = 1
 note = "Whole section re-read: this change touches cli.rs only in two comments, which neither task_output nor any other claim in the section depends on."
-by = "Claude Code agent, pending review by Kevin Rogers"
+by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-compat/tests/cli.rs" = "fde4bf7929eef88b", "ratect-core/src/git_include_tests.rs" = "ee4e7a29955d6360", "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
