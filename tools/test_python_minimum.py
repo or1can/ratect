@@ -65,6 +65,9 @@ PAST_THE_CHECK = {
     "check-doc-links.py": ["--help"],
     # A `cargo check` of the whole workspace for Windows.
     "check-windows-build.py": ["--help"],
+    # A fetch of the pinned `claims` release through uv, then a full run of
+    # its checks.
+    "claims.py": ["--print-rev"],
 }
 
 HEADER = re.compile(
