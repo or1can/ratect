@@ -43,6 +43,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- `/ready` and `/settle-design` brief their reviewers from `agents/review-brief.md`, which holds the checks a reviewer applies and classes what a reviewer raises as a bug, design gap, design flaw or dispute. No effect on the released binaries; contributor-tooling only.
 - A `services` key in a Batect-format (YAML) file is refused as a field only a native `ratect.toml` can declare.
 - The `claims` commit hook refuses a commit that brings in an unmarked `claim-words`, `temporal-words` or `restatement` finding, or that leaves an orphaned mark for one. No effect on the released binaries; contributor-tooling only.
 - The `tools/` scripts need Python 3.11 or later, and are run as `uv run tools/<script>.py`, which fetches one; a plain `python3` older than that, from 3.9, stops with a message saying so. `mdbook build` needs `uv` on `PATH`. No effect on the released binaries; contributor-tooling only.

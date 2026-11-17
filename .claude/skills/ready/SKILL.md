@@ -24,7 +24,7 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
    *Done when* each review is marked covered, or has a gap named as a diff.
 
 2. **Bug review over its gap.** Invoke the built-in `code-review` at `high`
-   over the gap, briefed with the review rules below. For a change that
+   over the gap, briefed with `agents/review-brief.md`. For a change that
    drives the Docker daemon, brief it to read the daemon's own sources
    (moby and runc in the Go module cache) for side effects, and probe each
    finding against a real daemon before ranking it: `agents/probing.md`
@@ -32,15 +32,15 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
    *Done when* each finding is fixed, or listed with why not.
 
 3. **Two-axis review over its gap,** after step 2's fixes, so it reads the
-   fixed code. Invoke `mattpocock-skills:code-review` and give both its
-   reviewers the review rules below. Fix what it confirms.
+   fixed code. Invoke `mattpocock-skills:code-review` and brief both its
+   reviewers with `agents/review-brief.md`. Fix what it confirms.
    *Done when* each finding is fixed, or listed with why not.
 
 4. **Review the fixes.** Fixes from steps 2 and 3 are a new gap for both
    reviews. Run each over that diff alone, bug review first, and repeat
    until a pass changes nothing. If a pass finds more of the same kind of
    problem in the mechanism the last pass fixed, stop and put the design to
-   the user (the **design stop**; guideline 16: the design is the finding)
+   the user (the **design stop**; guideline 16: suspect the design)
    as two options, recommending the first: rethink it with `settle-design`
    on that mechanism, or keep fixing. Twice in 0.14.0 the recommendation
    was to carry on, and both times the maintainer reversed it
@@ -89,33 +89,12 @@ review missed on six PRs, and only ran when the maintainer asked (ratect#813).
    that a round renamed nothing), the Windows check's result (or that it
    was skipped), and the unmarked claims count.
 
-## Review rules
+## Author habits
 
-For both reviewers:
-
-- **A comment the change made false means an invariant moved.** Check the
-  invariant before accepting a reworded comment.
-- **A test or comment that presents the fake's behaviour as the daemon's**
-  is coverage shaped by the harness. Ask what the daemon does there.
-- **A mutation check counts once it has shown red.** A green result from a
-  mutation that disabled nothing proves nothing.
-- **A design record names the axes its probes didn't vary.**
-- **A comment calling a behaviour deliberate should say whose decision it
-  was.** Behaviour carried over from Batect can be a platform default it
-  inherited (the JVM's `user.home`,
-  [decisions/0024](../../../decisions/0024-host-identity.md)) or a bug it
-  shipped (no final newline), rather than a choice. Ask where it came from,
-  then judge it by
-  [decisions/0013](../../../decisions/0013-when-ratect-compat-copies-batect.md)'s
-  rules like any other Batect behaviour, since knowing its origin doesn't
-  settle whether to copy it. 0024 declined to copy Batect's `user.home` home into
-  `ratect-compat` under rule 3, since it reads a different `~/.docker` from
-  the one `docker login` wrote (ratect#813, the comment of 2026-11-10).
-- **A brief is a specification, not a source for what exists.** A ticket's
-  "settled" or "don't" may only flag something as hard; check what was
-  actually decided.
-
-Each of these has caught something a review missed:
+These are for you, while writing a fix; a reviewer can't act on them, so
+they stay out of the reviewers' brief, `agents/review-brief.md`, which holds
+the checks a reviewer applies. Each of these has caught something a review
+missed:
 
 - **Anchor an inserted item on the preceding item's closing brace, never on
   the new one's attributes.** A Rust item's doc comment sits *above* its
@@ -126,10 +105,8 @@ Each of these has caught something a review missed:
   candidate rather than treating a report as a defect.
 - **Re-read every string you added, in its final control-flow position.**
   Nothing type-checks a log or error message, so they stay as written while
-  the code around them moves. For errors specifically: name something the
-  user actually wrote. A lower layer speaks its own vocabulary — `docker.rs`
-  knows an ssh agent id, not which container declared it — so an error
-  crossing up from one needs the caller to attach that.
+  the code around them moves. An error should name something the user
+  actually wrote (the reviewers' brief has why).
 - **When a change alters observable behaviour, re-read that behaviour's
   whole doc section and *run* each claim against the binary.** Not grep —
   execute. Every claim: the example output, the flag descriptions, the "this
@@ -158,29 +135,6 @@ Each of these has caught something a review missed:
   wasn't). Correct the handoff where it is still live;
   where it is already struck through, record the correction in its
   done-summary rather than editing history.
-- **A behaviour that depends on which format/mode you're in needs one
-  derived value, not a guard per call site.** Derive it once
-  (`include_trust::restricting`, returning `Option<&Bundle>`) and have every
-  site consume it, so the divergence is unrepresentable. Guarding
-  site-by-site means the next site added is unguarded by default.
-- **Never spell config syntax in an error message — name the field.** `set
-  'x' to true`, not `add 'x: true'` or `'x = true'`. Unconditional, even
-  where the message fires in one format only: `ConfigFormat::Native` is the
-  **project's** format, not the **file's**, so a native project can locally
-  include a `.yml` and the entry the message names may be YAML.
-- **Watch for coverage shaped by the test harness rather than the
-  behaviour.** If the fake can only express one ordering of something
-  inherently timing-dependent, the untestable orderings are where the bug
-  will be — extend the harness instead of concluding the cases are covered.
 - **Run a self-cleaning test twice, asserting external state (`docker volume
   ls`) rather than the exit code.** One run passes whether or not the
   cleanup matched anything — the first run starts clean by definition.
-- **Two tests sharing a fixture directory need a lock, not luck.** `cargo
-  test` runs a binary's tests on several threads, and contention over a
-  shared fixture surfaces as a behaviour failure ("the cache did not
-  persist"), not as a race. A `static Mutex` around the project is the cheap
-  fix — see `CACHE_MOUNT_PROJECT`.
-- **A real-daemon test can mask a missing unit test.** The `#[ignore]`d
-  Docker tests don't run in the default suite, so a path they cover can be
-  unprotected in `cargo test --workspace`. Assert each effect separately —
-  one assertion per thing removed, not one for "cleanup happened".

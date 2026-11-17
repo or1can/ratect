@@ -4280,7 +4280,7 @@ tasks:
 /// existed.
 ///
 /// Run twice in one test, since a scratch directory that starts empty
-/// passes the first run whatever the order (the `ready` skill's review rules).
+/// passes the first run whatever the order (the `ready` skill's author habits).
 #[test]
 #[ignore]
 fn a_failed_task_image_pull_stops_a_dependency_before_its_setup_command_via_docker() {
@@ -4376,7 +4376,7 @@ tasks:
 /// until the marker existed.
 ///
 /// Run twice in one test, since a scratch directory that starts empty
-/// passes the first run whatever the order (the `ready` skill's review rules).
+/// passes the first run whatever the order (the `ready` skill's author habits).
 #[test]
 #[ignore]
 fn a_refused_task_container_create_stops_a_dependency_before_its_setup_command_via_docker() {

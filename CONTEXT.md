@@ -1,7 +1,8 @@
 # Domain glossary
 
 What each term in Ratect's domain denotes — its configuration model, and the
-runs, output and caches that model drives. Definitions, with only as much
+runs, output and caches that model drives — and, in its last section, the
+terms of the review process that builds it. Definitions, with only as much
 behaviour as a definition needs; why a thing works as it does belongs in
 [`decisions/`](decisions/README.md); what it does for a user belongs
 in [`docs/`](docs/).
@@ -276,3 +277,46 @@ satisfy: lowercase letters and digits, with `.`, `_`, `__` or a run of `-`
 between them, and nothing else.
 
 The naming is [0018](decisions/0018-built-images-named-for-people-found-by-labels.md)'s.
+
+## Design review
+
+How a change's design is settled and its implementation reviewed: not
+Ratect's product, but the process that builds it, and named here because
+this is the one glossary. Three tools share these terms
+([0028](decisions/0028-design-and-implementation-review.md)).
+
+**Design record** — the one record of an issue's design, kept on the issue:
+its decisions, the mechanisms they cover, its open points and an amendment
+log. Links to an ADR's decisions rather than restating them.
+
+**Decision** — one settled choice in a design record, with an id (D1, D2…),
+what was decided and why, the alternatives rejected and why, and its
+accepted cost. Confirmed by the maintainer.
+
+**Accepted cost** — what a decision knowingly gives up, recorded with it.
+
+**Open point** — a part of a design that a design record leaves unsettled,
+naming who must settle it.
+
+**Bug** — a review finding that the code departs from its design record or
+its spec.
+
+**Design gap** — a finding that a design record is silent on a case. Settled
+in flow and appended to the record. Not a **parity gap**, which is a
+difference from Batect.
+
+**Design flaw** — a finding that a design record is wrong, or one whose fix
+would change a decision.
+
+**Dispute** — an argument against a recorded decision that brings no new
+evidence. Not a finding: put to the maintainer once per decision, as
+whether to reopen it.
+
+**Design stop** — where review halts on a confirmed design flaw, and the
+design goes back to be settled again.
+
+**Ledger** — a review's earlier findings, each with what was done about it,
+given to its later passes.
+
+**Review coverage** — which reviews have read which part of a change. Not
+test coverage, which is what a test suite exercises.

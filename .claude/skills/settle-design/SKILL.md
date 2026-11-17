@@ -70,8 +70,7 @@ does in each state.
    does, a round at a time with your recommendation.
 
    Then invoke the built-in `code-review` at `high` over that file, by its
-   full path, briefed with the "Review rules" in
-   `.claude/skills/ready/SKILL.md` and told to
+   full path, briefed with `agents/review-brief.md` and told to
    **break the design**: each finding is a concrete interleaving of the
    listed actors, step by step, ending in a state the design doesn't
    handle or handles wrongly. Revise for what it confirms, then ask the
