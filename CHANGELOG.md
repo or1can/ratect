@@ -39,7 +39,7 @@ history, from when it was the only binary.
 - CI's Windows Check job compiles the workspace, tests included, for Windows; nothing is run there. `nix` is a dependency on Unix targets only. No effect on the released binaries, none of which targets Windows.
 - `tools/check-windows-build.py` runs Windows Check's `cargo check` from a macOS or Linux host. No effect on the released binaries; contributor-tooling only.
 - A `/settle-design` Claude Code skill finds what a ticket's brief or ADR leaves open and settles it as a design before code is written; a prompt starting `/triage`, `/implement` or `/implement-spec` gets a reminder to run it, and `/ready`'s design stop recommends it. No effect on the released binaries; contributor-tooling only.
-- `tools/claims.py` runs the `claims` CLI at the release the pre-commit hook pins. `tools/check-pending-marks.py` fails while a mark in `claims.checked.toml` is still pending the maintainer's review, and approves the marks pending at a given commit; CI's new Claims Marks job runs it. No effect on the released binaries; contributor-tooling only.
+- `tools/claims.py` runs the `claims` CLI at the release the pre-commit hook pins. CI's new Claims Marks job fails while a mark in `claims.checked.toml` is still pending the maintainer's review. No effect on the released binaries; contributor-tooling only.
 
 ### Changed
 

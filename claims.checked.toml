@@ -21,9 +21,22 @@ file = ".claude/skills/ready/SKILL.md"
 mode = "stale-claims"
 unit = "b7595e2a863957fc"
 copies = 1
-note = "Steps read: step 2's pointer (\"agents/probing.md says how, for each daemon class\") still holds after this branch's edits to probing.md, which keep every class's method."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/probing.md" = "bf91674285619801" }
+note = "Read against this branch's change only: one Unreleased CHANGELOG.md line about tools/, which nothing in these steps reads."
+by = "Claude Code agent"
+extent = "partial"
+review = "pending"
+subjects = { "CHANGELOG.md" = "25bfe19ca97926a4536da47ff35405a98395ac14", "agents/probing.md" = "bf91674285619801", "agents/review-brief.md" = "9fb9c7b07e2f6547", "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "stale-claims"
+unit = "b7595e2a863957fc"
+copies = 1
+note = "Read against this branch's change only: one Unreleased CHANGELOG.md line; step 2 reads only dated release headings, which this branch leaves alone."
+by = "Claude Code agent"
+extent = "partial"
+review = "pending"
+subjects = { "CHANGELOG.md" = "25bfe19ca97926a4536da47ff35405a98395ac14", "agents/review-brief.md" = "9fb9c7b07e2f6547" }
 
 [[mark]]
 file = ".github/workflows/ci.yml"
@@ -967,9 +980,11 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
-note = "Read whole Repo-specific guidelines against settings.json ask/deny lists, unfiltered-check-output.py, the main ruleset (required checks, no bypass, squash off), BREAKING_CHANGES and its guards, test_python_minimum.py's scope (the 3.9 hooks step doesn't touch guideline 8's minimum), smoke.yml and the root dev configs"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "1f6998bddab10828", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "50701c83961db548f3eeed61264b7866a373638f", "CONTRIBUTING.md" = "8affb0704cb6a6d9", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "17ea62e5c299c295", "agents/releasing.md" = "f4bbda4dc76cc0b1", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/README.md" = "32a25605b975c31b", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "a4d6c1d2935d1d07" }
+note = "Read the guidelines naming CONTRIBUTING.md, ci.yml and CHANGELOG.md against this branch: guideline 8's tools/ minimum-Python list (CONTRIBUTING's tools section, ci.yml's python-version) is unchanged by its edits, which only drop check-pending-marks.py from the tools list and swap the Claims Marks step."
+by = "Claude Code agent"
+extent = "partial"
+review = "pending"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "25bfe19ca97926a4536da47ff35405a98395ac14", "CONTRIBUTING.md" = "c9c2770bd3f5f46b", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1003,9 +1018,11 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "694f6b1650954bb2"
 copies = 1
-note = "Read the whole Claims checks section: agents/claims.md still covers where each check runs, claims.toml's configuration and how a mark is written (now its Marking and An agent's marks sections)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/claims.md" = "d8f3e5807ec44f83" }
+note = "Read against this branch: the section only points at agents/claims.md for marking and hook blocks, which still holds after the agent-marks rewrite."
+by = "Claude Code agent"
+extent = "partial"
+review = "pending"
+subjects = { "agents/claims.md" = "f36f780912b0147a" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1021,10 +1038,11 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "acec0e5a5304cd93"
 copies = 1
-note = "Read the claims-hook and grant paragraphs against agents/claims.md; this change touches none of settings.json, claims.md or ci.yml."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Read the claims bullet against this branch: pre-commit hook, claims.local.toml grants and marker list are unchanged; the claims-marks job and pending-mark flow it doesn't describe."
+by = "Claude Code agent"
 extent = "partial"
-subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "3630b504df465dd3", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "d8f3e5807ec44f83", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "557c001313210eba", "ratect-compat/tests/cli.rs" = "fde4bf7929eef88b", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "57f5ceb73f085de1", "ratect-core/tests/format_twins.rs" = "e7928d63cfd38531", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "cf4e3fc27db852a9", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
+review = "pending"
+subjects = { ".cargo/audit.toml" = "109a49049f151f6a", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", "ROADMAP.md" = "25955ca943036063", "agents/claims.md" = "f36f780912b0147a", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/worked-examples.md" = "e78371101742f5a7", "examples/getting-started/ratect.toml" = "ab6c1c8f5f922dd5", "examples/jvm/batect.yml" = "f39af5512ce9fc96", "examples/rust/ratect.toml" = "963811667c430cb8", "ratect-compat/src/main.rs" = "557c001313210eba", "ratect-compat/tests/cli.rs" = "fde4bf7929eef88b", "ratect-compat/tests/fixtures/manual-terminal-resize.yml" = "b6c87d2ca7b54067", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/schema.rs" = "57f5ceb73f085de1", "ratect-core/tests/format_twins.rs" = "e7928d63cfd38531", "ratect-core/tests/written_for_fields.rs" = "726584c3a6108e5a", "ratect/tests/cli.rs" = "cf4e3fc27db852a9", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1554,9 +1572,11 @@ file = "CONTRIBUTING.md"
 mode = "stale-claims"
 unit = "9b4a78f293092bcf"
 copies = 1
-note = "Read the whole Development setup section after ratect#905: its claims paragraphs (pre-commit install, the pre-push hook, fix or mark as agents/claims.md describes, prune the orphan) still hold; agents/claims.md still describes marking, now via uv run tools/claims.py. The cargo commands are unchanged."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/claims.md" = "d8f3e5807ec44f83" }
+note = "Read the section's claims mentions against this branch's change (claims pin v0.29.0, claims.md's agent-marks section): it names agents/claims.md only for the pre-commit hook, which this branch leaves unchanged."
+by = "Claude Code agent"
+extent = "partial"
+review = "pending"
+subjects = { "agents/claims.md" = "f36f780912b0147a" }
 
 [[mark]]
 file = "README.md"
@@ -1977,11 +1997,22 @@ subjects = { ".github/workflows/ci.yml" = "a0ac475e101f67c7" }
 [[mark]]
 file = "agents/claims.md"
 mode = "claim-words-about-elsewhere"
-unit = "bc9de30550fa7eaa"
+unit = "d2c0ef00d3c0d2ec"
 copies = 1
-note = "Same check against tools/check-pending-marks.py approve() and its tests in tools/test_check_pending_marks.py."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "tools/check-pending-marks.py" = "9b970ef77643b5ac" }
+note = "Checked against claims v0.29.0's docs/checked-marks.md: a plain mark-checked over a pending entry replaces it as a reviewed mark."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-about-elsewhere"
+unit = "d58869c9fe554123"
+copies = 1
+note = "Checked against claims v0.29.0's docs/checked-marks.md, whose approve-marks paragraph says exactly this: entries pending now and at REV with identical keys are approved."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "tools/claims.py" = "305c08b7ffd48628" }
 
 [[mark]]
 file = "agents/claims.md"
@@ -2022,19 +2053,20 @@ subjects = {}
 [[mark]]
 file = "agents/claims.md"
 mode = "claim-words-counts"
-unit = "e9636f5674df2e7d"
+unit = "ec90d5d910fc0012"
 copies = 1
-note = "Same: one job run per pull request over the whole file, with no diff scoping in check-pending-marks.py main()."
+note = "Same entry: the pre-push run covers the whole branch from its merge-base, so its count is the PR's, unlike the commit hook's single-commit list."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
 [[mark]]
 file = "agents/claims.md"
 mode = "claim-words-counts"
-unit = "ec90d5d910fc0012"
+unit = "f412be751cd8f5b7"
 copies = 1
-note = "Same entry: the pre-push run covers the whole branch from its merge-base, so its count is the PR's, unlike the commit hook's single-commit list."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Same sentence as the totalising mark: ci.yml's claims-marks job runs on every pull request and pending-marks fails on any pending mark in the whole file."
+by = "Claude Code agent"
+review = "pending"
 subjects = {}
 
 [[mark]]
@@ -2058,29 +2090,11 @@ subjects = {}
 [[mark]]
 file = "agents/claims.md"
 mode = "claim-words-totalising"
-unit = "0f97b59d8b1915b6"
-copies = 1
-note = "approve() edits only the `by` line (test_approves_a_mark_pending_at_the_commit_by_editing_only_by); claims v0.28.1 docs/checked-marks.md says of `by`: \"Nothing reads this key; it is a record.\""
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "agents/claims.md"
-mode = "claim-words-totalising"
 unit = "1f97b854b2acd7c5"
 copies = 1
 note = "Checked against `claims.cli mark-checked --help` at v0.28.1: --prune removes every mark a run reports as checked-mark. Moved verbatim from AGENTS.md."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
-
-[[mark]]
-file = "agents/claims.md"
-mode = "claim-words-totalising"
-unit = "1fe8f5c5f516f250"
-copies = 1
-note = "Checked against tools/check-pending-marks.py main(): --list reads `git show HEAD:./claims.checked.toml`, prints the HEAD SHA from rev-parse, then every mark pending() returns."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "tools/check-pending-marks.py" = "9b970ef77643b5ac" }
 
 [[mark]]
 file = "agents/claims.md"
@@ -2099,6 +2113,16 @@ copies = 1
 note = "Checked: the hook's only check-cli-flags finding is AGENTS.md:348, guideline 8's line, which names tools/changelog-section.py and the `--prerelease` flag; it is reported as denied and skipped."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "tools/changelog-section.py" = "45082c17a3944098" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "3baea574af7abc40"
+copies = 1
+note = "Checked against claims v0.29.0's docs/checked-marks.md: approve-marks removes `review` only, rewrites each approved entry as mark-checked writes it and keeps every other entry's text, so the mark's keys that decide whether it applies are unchanged."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
 
 [[mark]]
 file = "agents/claims.md"
@@ -2157,24 +2181,6 @@ subjects = {}
 [[mark]]
 file = "agents/claims.md"
 mode = "claim-words-totalising"
-unit = "a9bf05ebb9dda27c"
-copies = 1
-note = "The rule this section sets (ratect#905 settle-design record); in the tooling, only check-pending-marks.py's approve() writes `approved by`, by substituting it into a pending mark's `by` line."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "agents/claims.md"
-mode = "claim-words-totalising"
-unit = "bc9de30550fa7eaa"
-copies = 1
-note = "Checked against approve(): approvable = fingerprints of every mark pending at the SHA, and each current pending mark whose fingerprint (all keys) is in that set is approved, a rejected one included if still present."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "tools/check-pending-marks.py" = "9b970ef77643b5ac" }
-
-[[mark]]
-file = "agents/claims.md"
-mode = "claim-words-totalising"
 unit = "bdb41a374e3a65b0"
 copies = 1
 note = "A process rule, not a claim about code; moved verbatim from AGENTS.md, and this branch's marks follow it (each read against what it names)."
@@ -2193,11 +2199,22 @@ subjects = {}
 [[mark]]
 file = "agents/claims.md"
 mode = "claim-words-totalising"
-unit = "e9636f5674df2e7d"
+unit = "ca69b7f1e6c187b3"
 copies = 1
-note = "The claims-marks job in .github/workflows/ci.yml has no `if:`, so it runs on every pull request, and check-pending-marks.py reads the whole claims.checked.toml rather than a diff."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
+note = "Checked against claims v0.29.0's docs/checked-marks.md: `pending-marks --at REV` reads claims.checked.toml as committed at REV and lists each pending entry, so it lists every mark pending in the file committed at HEAD."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "tools/claims.py" = "305c08b7ffd48628" }
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "d58869c9fe554123"
+copies = 1
+note = "Checked against claims v0.29.0's docs/checked-marks.md: `approve-marks REV` removes `review` from every entry pending in the working tree and pending at REV with every other key identical, so a rejected mark left in place at REV would be approved with the rest."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "tools/claims.py" = "305c08b7ffd48628" }
 
 [[mark]]
 file = "agents/claims.md"
@@ -2206,6 +2223,46 @@ unit = "ec90d5d910fc0012"
 copies = 1
 note = "Checked against .pre-commit-config.yaml's claims-unmarked entry: stage pre-push, --diff-range origin/main...HEAD --fail-on-unmarked, reading the clone's own claims.local.toml."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "claim-words-totalising"
+unit = "f412be751cd8f5b7"
+copies = 1
+note = "Checked against ci.yml: claims-marks has no `if`, so it runs on every pull request, and pending-marks without --at reads the whole working-tree claims.checked.toml, exiting 1 while any mark is pending."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "restatement-ngram"
+unit = "5fc09ed361eeef0d-96e9a06be5b23c03"
+copies = 1
+note = "The phrase 'approves the marks pending at a' survives from this same section's rewrite; the new sentence is true of approve-marks per claims v0.29.0's docs/checked-marks.md."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "restatement-ngram"
+unit = "68e4a59b090687ac-f67d372448c1ccca"
+copies = 1
+note = "The phrase 'before merge. Merging is not approval.' survives from this same section's rewrite and still holds: the approval is a commit on the PR branch."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/claims.md"
+mode = "restatement-ngram"
+unit = "9deb65b8788f41ff-770dba55c485f5ed"
+copies = 1
+note = "The phrase 'approval. CI's Claims Marks job' survives from this section's rewrite; ci.yml's claims-marks job now runs claims.cli pending-marks, as the sentence says."
+by = "Claude Code agent"
+review = "pending"
 subjects = {}
 
 [[mark]]
@@ -2222,9 +2279,11 @@ file = "agents/claims.md"
 mode = "stale-claims"
 unit = "cfe94b9cdcec4a14"
 copies = 1
-note = "Read the whole Where it runs section after ratect#905: the CI claims job still checks out the release .pre-commit-config.yaml pins, read at run time (now by tools/claims.py --print-rev), runs against the base branch with --fail-on-unmarked, and writes its own claims.local.toml; it is still not required (ruleset via gh api)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "3630b504df465dd3" }
+note = "Read against this branch: its ci.yml change is the claims-marks job, which 'Where it runs' doesn't describe; the Claims job and hooks it describes are unchanged."
+by = "Claude Code agent"
+extent = "partial"
+review = "pending"
+subjects = { ".github/workflows/ci.yml" = "9784eb2993e058e7" }
 
 [[mark]]
 file = "agents/docs.md"
@@ -2339,9 +2398,11 @@ file = "agents/domain.md"
 mode = "stale-claims"
 unit = "57c8e234debc95bb"
 copies = 1
-note = "Whole section re-read: CONTEXT.md is still the one glossary and decisions/ the ADR home; this change only adds a row to decisions/README.md and an Unreleased CHANGELOG entry."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "7fff649d4c47144d9ab7f0c8505293042c2b242b", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "d60c5818ead7728c" }
+note = "Read against this branch's change only: its CHANGELOG edit is one Unreleased tools line, which this reading list's description of CHANGELOG.md still fits."
+by = "Claude Code agent"
+extent = "partial"
+review = "pending"
+subjects = { "CHANGELOG.md" = "25bfe19ca97926a4536da47ff35405a98395ac14", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "d60c5818ead7728c" }
 
 [[mark]]
 file = "agents/domain.md"
@@ -2798,10 +2859,11 @@ file = "decisions/0001-two-binaries.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read the CHANGELOG bullets: the new Unreleased entry is unmarked because it is contributor tooling reaching neither binary, as the existing tooling entries are."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Read against this branch's change only: one Unreleased CHANGELOG line about tools/, which the shared-changelog consequence still covers."
+by = "Claude Code agent"
 extent = "partial"
-subjects = { "CHANGELOG.md" = "7fff649d4c47144d9ab7f0c8505293042c2b242b", "CLAUDE.md" = "27b0979267c7ece5" }
+review = "pending"
+subjects = { "CHANGELOG.md" = "25bfe19ca97926a4536da47ff35405a98395ac14", "CLAUDE.md" = "27b0979267c7ece5" }
 
 [[mark]]
 file = "decisions/0002-runtime-ownership-labels.md"
@@ -3367,10 +3429,11 @@ file = "decisions/0009-adopt-claims-plugin.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read the Consequences bullets naming ci.yml and changelog-section.py: they say the checks are not in CI and Tools Tests tests only changelog-section.py, and this ADR's own Status line already says both no longer hold (ratect#707). ratect#905's ci.yml change touches neither claim."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Read against this branch's change only: the Consequences don't describe the claims-marks job or check-pending-marks.py, so retiring that script leaves them as they were."
+by = "Claude Code agent"
 extent = "partial"
-subjects = { ".github/workflows/ci.yml" = "3630b504df465dd3", "TODO.md" = "030b1657f32ac695", "tools/changelog-section.py" = "45082c17a3944098" }
+review = "pending"
+subjects = { ".github/workflows/ci.yml" = "9784eb2993e058e7", "TODO.md" = "030b1657f32ac695", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
 file = "decisions/0010-release-binary-distribution.md"
@@ -3422,20 +3485,22 @@ file = "decisions/0010-release-binary-distribution.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
-note = "Read the Decision's ci.yml lines (the Release Pipeline Config CI guard, ci.yml:507, running dist plan) and its changelog-section.py lines; ratect#905 changed only ci.yml's claims jobs and added Claims Marks, neither of which this section describes."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Read against this branch's change only: it edits ci.yml's claims-marks job and an Unreleased CHANGELOG line, neither of which this Decision's release-pipeline text describes."
+by = "Claude Code agent"
 extent = "partial"
-subjects = { ".github/workflows/ci.yml" = "3630b504df465dd3", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "057a95fe5c39567082337fe7312741dac7a93a53", "dist-workspace.toml" = "17839d788f79ca82", "tools/changelog-section.py" = "45082c17a3944098" }
+review = "pending"
+subjects = { ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "25bfe19ca97926a4536da47ff35405a98395ac14", "dist-workspace.toml" = "17839d788f79ca82", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
 file = "decisions/0010-release-binary-distribution.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read the Consequences' ci.yml lines: Release Pipeline Config gates (it is in the ruleset's required checks, gh api) and reads dist-workspace.toml's copy; ratect#905's ci.yml change does not touch that job."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Read against this branch's change only: its ci.yml edit is the claims-marks job, which these release-pipeline Consequences don't mention."
+by = "Claude Code agent"
 extent = "partial"
-subjects = { ".github/workflows/ci.yml" = "3630b504df465dd3", ".github/workflows/release.yml" = "b6792a8571c0bd61", "dist-workspace.toml" = "17839d788f79ca82", "docs/installation.md" = "f090088ec7661efd" }
+review = "pending"
+subjects = { ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "dist-workspace.toml" = "17839d788f79ca82", "docs/installation.md" = "f090088ec7661efd" }
 
 [[mark]]
 file = "decisions/0011-container-identity.md"
@@ -19273,3 +19338,23 @@ copies = 1
 note = "Re-read for #884, which doesn't touch the clone or lock code; its fixed <key>.tmp description predates #880 and is left as research."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/git_include.rs" = "1aa5717f7451484f" }
+
+[[mark]]
+file = "tools/check-readme-docs-list.py"
+mode = "restatement-ngram"
+unit = "343ede0555e74a09-95ce318643b7c240"
+copies = 1
+note = "Matches the version-check comment the deleted tools/check-pending-marks.py shared with every tools/ script; it is still true of this script, whose check precedes its imports."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "tools/test_python_minimum.py"
+mode = "restatement-ngram"
+unit = "7d74645589d5dab5-eee287baf0533270"
+copies = 1
+note = "Matches the version-check boilerplate the deleted tools/check-pending-marks.py shared; the docstring still describes every remaining tools/ script's check."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
