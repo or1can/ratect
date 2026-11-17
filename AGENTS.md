@@ -407,9 +407,10 @@ for — note that in `TODO.md` instead.
 14. **Architecture Decision Records** ([`decisions/`](decisions/)): the home for a decision's rationale is decided by whether it's **cross-cutting or version-scoped**. A decision referenced from more than one place — the two-binary split, the labels namespace, the native config format — becomes an ADR — a new `decisions/NNNN-slug.md`<!-- example --> file (`NNNN` the next number in sequence) with `Status`, `Context`, `Decision`, `Alternatives considered`, and `Consequences` sections; `RELEASES.md`'s own entry for that release then just links to it, same as it links to the release's Milestone. A decision that belongs to one release stays **inline** in that release's own GitHub issue (its "Implementation Decisions" section — see [decisions/0008](decisions/0008-tracking-release-scope-with-github-issues.md)) — don't extract it. Practical trigger: a decision earns an ADR the moment it's about to be referenced from a *second* place; most never cross that line. ADRs are append-only like the versioned lists once the release implementing them ships — supersede and link forward, never delete; before that, a refinement found while implementing one is folded into the record, its status line saying what changed and naming the rework issue, which goes in the same Milestone. See [`decisions/README.md`](decisions/README.md) for the full convention.
 15. **Review before committing, not after.** Run `/ready` over the working
     diff *before* each commit, not over a run of commits afterwards, and
-    before reporting work as done: it runs whichever of the bug review and
-    the two-axis review hasn't covered the change yet, and its review rules
-    are the checks both reviewers apply.
+    before reporting work as done: it reviews the change until both the bug
+    review and the two-axis review cover it, and its review rules are the
+    checks both reviewers apply. A call that ends blocked, at its
+    design stop or its Windows check, means no commit yet.
 16. **Fix the class, not the instance — and say what you swept.** A review
     finding is a *sample*. Before fixing it, ask what else in the codebase has
     that shape and go and look; then report the sweep, including when it comes

@@ -18623,3 +18623,21 @@ note = "Read the one-shared-CHANGELOG.md bullet: still one CHANGELOG.md with com
 by = "Claude Code agent, approved by Kevin Rogers"
 extent = "partial"
 subjects = { "CHANGELOG.md" = "057a95fe5c39567082337fe7312741dac7a93a53", "CLAUDE.md" = "0435506533d6aabb" }
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "be16e9706e8fddf9-3cdef64c1a3c6494"
+copies = 1
+note = "Read against settle-design step 3: this is its own rule for its design-review passes, independent of the ready step-4 wording the draft removed, and still true of settle-design as it stands."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "cf823899b215d6d7-2a851a920d01a067"
+copies = 1
+note = "Same sentence as line 79, read against settle-design step 3; still true of its own design-review loop."
+by = "Claude Code agent, pending review by Kevin Rogers"
+subjects = {}
