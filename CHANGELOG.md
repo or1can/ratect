@@ -40,6 +40,7 @@ history, from when it was the only binary.
 - `tools/check-windows-build.py` runs Windows Check's `cargo check` from a macOS or Linux host. No effect on the released binaries; contributor-tooling only.
 - A `/settle-design` Claude Code skill finds what a ticket's brief or ADR leaves open and settles it as a design before code is written; a prompt starting `/triage`, `/implement` or `/implement-spec` gets a reminder to run it, and `/ready`'s design stop recommends it. No effect on the released binaries; contributor-tooling only.
 - `tools/claims.py` runs the `claims` CLI at the release the pre-commit hook pins. CI's new Claims Marks job fails while a mark in `claims.checked.toml` is still pending the maintainer's review. No effect on the released binaries; contributor-tooling only.
+- `tools/design-record.py` reads and writes an issue's design record, the record ADR 0028's review skills are moving to. No effect on the released binaries; contributor-tooling only.
 
 ### Changed
 

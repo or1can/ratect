@@ -14,6 +14,13 @@ it's still being written. Every release since has had its short entry
 written once, after shipping; no in-progress entry under the old convention
 remains.
 
+Amended since (ratect#926): an issue `/to-spec` publishes is now labelled
+`needs-triage`, not `ready-for-agent`, so that `settle-design` writes its
+design record before any agent takes it up
+([0028](0028-design-and-implementation-review.md),
+[`agents/issue-tracker.md`](../agents/issue-tracker.md)). The Decision's
+first bullet describes the convention as it stood.
+
 ## Context
 
 `RELEASES.md` is the append-only, per-binary record of what each version
