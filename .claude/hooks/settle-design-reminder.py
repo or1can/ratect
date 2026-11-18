@@ -14,14 +14,18 @@
 # limitations under the License.
 
 """Claude Code `UserPromptSubmit` hook: remind the agent to run the
-`settle-design` skill when a prompt starts triage or implementation.
+`settle-design` skill when a prompt starts triage, and to read the design
+record when one starts implementation.
 
 The `mattpocock-skills` plugin's `triage`, `implement` and `implement-spec`
 skills can't be edited from this repo, and each sets
 `disable-model-invocation`, so a typed prompt is the only way any of them
 starts. That makes the prompt a deterministic signal for the two moments
-`settle-design` runs at (ratect#902): the end of triage, and before any
-code is written. AGENTS.md's "Settling design" section says why.
+design is checked at: the end of triage, where `settle-design` runs
+(ratect#902), and before any code is written. `settle-design` runs at
+triage only (ratect#927), so until ratect#930 retargets the implementation
+reminder to `check-design`, it says to read the record instead.
+AGENTS.md's "Settling design" section says why.
 
 This is a reminder, not a gate: it adds a line to the agent's context and
 never blocks the prompt. A skill started some other way (a paraphrase, a
@@ -39,8 +43,12 @@ AT_TRIAGE = (
     "run the settle-design skill on it (AGENTS.md, \"Settling design\")."
 )
 AT_IMPLEMENTATION = (
-    "Before writing any code for this ticket, run the settle-design skill on "
-    "it (AGENTS.md, \"Settling design\")."
+    "Before writing any code for this ticket, read its design record with "
+    "`uv run tools/design-record.py get <number>` and check that the brief's "
+    "acceptance criteria agree with it (agents/issue-tracker.md). settle-design "
+    "runs at triage only, so a ticket whose record is empty (`source` `none`) "
+    "goes back to needs-triage, and on exit 1 you stop (AGENTS.md, "
+    "\"Settling design\")."
 )
 
 # The skill's name, bare or plugin-qualified, at the very start of the

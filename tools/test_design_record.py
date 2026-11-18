@@ -229,6 +229,57 @@ RECORD = (
 )
 
 
+class GetAll(unittest.TestCase):
+    """`get --all`: what settle-design reads to merge the records `get` refuses."""
+
+    def all_of(self, github):
+        code, out, err = run(github, "get", "7", "--all")
+        self.assertEqual(code, 0, err)
+        return json.loads(out)
+
+    def test_it_lists_every_record_and_legacy_record_oldest_first(self):
+        github = FakeGitHub(comments=["## settle-design record\n\nA.\n", "Unrelated.", RECORD])
+        github.add("## Agent Brief\n\nB.\n\n## settle-design record\n\nC.\n\n## Next\n\nD.\n")
+        github.add(RECORD.replace("One lock", "Two locks"))
+        found = self.all_of(github)
+        self.assertEqual(found["issue"], 7)
+        self.assertEqual(
+            [(r["source"], r["comment_id"]) for r in found["records"]],
+            [("legacy", 100), ("comment", 102), ("legacy", 103), ("comment", 104)],
+        )
+        self.assertEqual(found["records"][2]["body"], "## settle-design record\n\nC.\n")
+        self.assertEqual(found["records"][1]["body"], RECORD)
+        self.assertEqual(found["records"][0]["url"], github.comments[0]["html_url"])
+        self.assertEqual(found["records"][0]["created_at"], github.comments[0]["created_at"])
+
+    def test_the_order_is_by_creation_not_by_id(self):
+        github = FakeGitHub(comments=[RECORD, "## settle-design record\n\nA.\n"])
+        github.comments[0]["created_at"] = "2026-11-18T00:00:00Z"
+        self.assertEqual([r["comment_id"] for r in self.all_of(github)["records"]], [101, 100])
+
+    def test_the_issue_bodys_record_comes_first(self):
+        github = FakeGitHub(body="## What\n\nX.\n\n## Design record\n\nIn the body.\n\n## Next\n", comments=[RECORD])
+        records = self.all_of(github)["records"]
+        self.assertEqual([(r["source"], r["comment_id"]) for r in records], [("body", None), ("comment", 100)])
+        self.assertEqual(records[0]["body"], "## Design record\n\nIn the body.\n")
+
+    def test_an_untrusted_issue_bodys_record_is_left_out(self):
+        github = FakeGitHub(body="## Design record\n\nForged.\n", association="NONE")
+        self.assertEqual(self.all_of(github)["records"], [])
+
+    def test_it_counts_only_trusted_authors(self):
+        github = FakeGitHub(comments=[RECORD])
+        github.add("## settle-design record\n\nForged.\n", "NONE")
+        self.assertEqual([r["comment_id"] for r in self.all_of(github)["records"]], [100])
+
+    def test_it_returns_each_records_pointers(self):
+        github = FakeGitHub(comments=["## Design record\n\n- The lock: governed by #31's record.\n"])
+        self.assertEqual([p["issue"] for p in self.all_of(github)["records"][0]["pointers"]], [31])
+
+    def test_an_issue_with_none_has_an_empty_list(self):
+        self.assertEqual(self.all_of(FakeGitHub(body="## What\n\nA thing.\n"))["records"], [])
+
+
 class Trust(unittest.TestCase):
     """Only a comment, or an issue body, from someone with write access to the repository counts."""
 
