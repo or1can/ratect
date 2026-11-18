@@ -14,7 +14,6 @@ unit = "7de6d467fef0312c-dd5f39433163093c"
 copies = 1
 note = "The phrase is ready's own design-stop rule, unchanged until #928; settle-design's rewording (second pass, \"not yet understood\") is #924's D13 and doesn't retract it."
 by = "Claude Code agent"
-review = "pending"
 subjects = {}
 
 [[mark]]
@@ -33,7 +32,6 @@ unit = "b7595e2a863957fc"
 copies = 1
 note = "Read the Steps against agents/review-brief.md after #927 added a reviewer check: steps 2 and 3 still brief with it; the design stop's settle-design wording is read by AGENTS.md's interim paragraph until #928 (#927's D2)."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "agents/probing.md" = "bf91674285619801", "agents/review-brief.md" = "b001a5ef04a01887", "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
 
 [[mark]]
@@ -43,7 +41,6 @@ unit = "d03aa2177bb3df09"
 copies = 1
 note = "Read Author habits against agents/review-brief.md: the brief still holds reviewer checks only, and the new #920 check is one a reviewer applies, not an author habit."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "agents/review-brief.md" = "b001a5ef04a01887" }
 
 [[mark]]
@@ -433,7 +430,6 @@ unit = "c039bd9f2054eb39"
 copies = 1
 note = "Re-read against `uv run tools/design-record.py --help` after #927 added `get --all`: its \"Which record\" section still says which record an issue has, and \"Who writes what\" who may write what."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "tools/design-record.py" = "f5581d6e70076156" }
 
 [[mark]]
@@ -893,7 +889,6 @@ unit = "b9a5a7da8c1a3046"
 copies = 1
 note = "Read against .claude/skills/settle-design/SKILL.md after #927: its description and intro name the end of triage as its one entry point, and the hook's implementation reminder now says to read the record (tools/test_settle_design_reminder.py)."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "tools/design-record.py" = "f5581d6e70076156" }
 
 [[mark]]
@@ -1021,7 +1016,6 @@ copies = 1
 note = "Read guidelines 15 and 16 against agents/review-brief.md and ADR 0028 after #927: guideline 15 still has /ready brief both reviewers with the brief, and nothing in either names settle-design's entry points."
 by = "Claude Code agent"
 extent = "partial"
-review = "pending"
 subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "CONTRIBUTING.md" = "ada95f99e7f9a943", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "b001a5ef04a01887", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "c0ca83a9e98e7a0a", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "5bcf6cadcab0e521", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
 
 [[mark]]
@@ -1096,7 +1090,6 @@ unit = "cdb56ba0afdce587"
 copies = 1
 note = "Read against agents/issue-tracker.md after #927 removed its interim paragraph: it is still the GitHub Issues/gh tracker doc for or1can/ratect."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "agents/issue-tracker.md" = "0d9149df2f5cdc42" }
 
 [[mark]]
@@ -1566,7 +1559,6 @@ unit = "8455c6b89596f6a9"
 copies = 1
 note = "Read the Design review terms against ADR 0028 after #927's Consequences edit: design stop (\"the design goes back to be settled again\") and every other term still hold."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "decisions/0028-design-and-implementation-review.md" = "5bcf6cadcab0e521" }
 
 [[mark]]
@@ -2444,7 +2436,6 @@ unit = "57c8e234debc95bb"
 copies = 1
 note = "Read against CONTEXT.md and decisions/: both still at the repo root, single-context, ADRs not under docs/adr/; #927's CHANGELOG.md edit doesn't bear on it."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "d60c5818ead7728c" }
 
 [[mark]]
@@ -2535,7 +2526,6 @@ unit = "04214ab48a17be41"
 copies = 1
 note = "Read Conventions against `uv run tools/design-record.py --help` after #927 added `get --all`: reading a ticket's record with `get <number>` is unchanged."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "tools/design-record.py" = "f5581d6e70076156" }
 
 [[mark]]
@@ -2545,7 +2535,6 @@ unit = "fab075cc0fa01e32"
 copies = 1
 note = "Read against `uv run tools/design-record.py --help`: `get <number>` still reads the ticket's design record; `--all` is settle-design's merge read, not a ticket read."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "tools/design-record.py" = "f5581d6e70076156" }
 
 [[mark]]
@@ -2762,7 +2751,6 @@ unit = "612e18e542b67ca4"
 copies = 1
 note = "Counted against #920's Evidence section: it lists five problems (inline arrays, header spacing, U+2028 in a note, a quoted `by` key, a hand-copied header regex) the bug review's second pass found in #905."
 by = "Claude Code agent"
-review = "pending"
 subjects = {}
 
 [[mark]]
@@ -2916,7 +2904,6 @@ unit = "2ac8ff8d7ace6258"
 copies = 1
 note = "Read the intro against ADR 0028 and settle-design's SKILL.md after #927: settle-design still briefs its break-the-design passes with this file, and ready both its reviews."
 by = "Claude Code agent"
-review = "pending"
 subjects = { ".claude/skills/ready/SKILL.md" = "da76acde2b2dad34", "decisions/0028-design-and-implementation-review.md" = "5bcf6cadcab0e521" }
 
 [[mark]]
@@ -3007,7 +2994,6 @@ unit = "de00163e80311042"
 copies = 1
 note = "Read against CHANGELOG.md: still one shared file with combined release headings; the per-binary annotation is now guideline 7's leading **ratect only:** marker rather than this shipped ADR's \"(ratect only)\" spelling, which this append-only record keeps as decided."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "CLAUDE.md" = "eecf16025a99b59a" }
 
 [[mark]]
@@ -3396,7 +3382,6 @@ unit = "86ae35d58a6aa3b5"
 copies = 1
 note = "Read against agents/: issue-tracker.md, domain.md and triage-labels.md all still live there; #927 changed only issue-tracker.md's design-record paragraph."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "agents/domain.md" = "befc2eb13561a492", "agents/issue-tracker.md" = "0d9149df2f5cdc42", "agents/triage-labels.md" = "4f53c9b40ce2651e" }
 
 [[mark]]
@@ -3415,7 +3400,6 @@ unit = "073c1634c496cdb6"
 copies = 1
 note = "Read against agents/issue-tracker.md's \"Tickets from to-tickets or to-spec\": it still labels them needs-triage so settle-design writes a record, as the Status's amendment says."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "agents/issue-tracker.md" = "0d9149df2f5cdc42" }
 
 [[mark]]
@@ -3425,7 +3409,6 @@ unit = "86ae35d58a6aa3b5"
 copies = 1
 note = "Read against agents/issue-tracker.md: the first bullet's ready-for-agent convention is superseded by needs-triage, which this ADR's Status already records (\"describes the convention as it stood\"); #927 doesn't touch it."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "agents/issue-tracker.md" = "0d9149df2f5cdc42" }
 
 [[mark]]
@@ -3643,7 +3626,6 @@ unit = "86ae35d58a6aa3b5"
 copies = 1
 note = "Read against tools/changelog-section.py, release.yml and dist-workspace.toml: none changed in #927, and the section's create-draft-release/changelog-section.py account is unaffected by its CHANGELOG.md edit."
 by = "Claude Code agent"
-review = "pending"
 subjects = { ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "dist-workspace.toml" = "17839d788f79ca82", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
@@ -11559,7 +11541,6 @@ unit = "02b5c0b9f0171be1"
 copies = 1
 note = "Read Decision 3 against agents/review-brief.md after #927's new check: the classes, the dispute rule and where the checks live are unchanged."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "agents/review-brief.md" = "b001a5ef04a01887" }
 
 [[mark]]
@@ -11569,7 +11550,6 @@ unit = "204787a676b2366f"
 copies = 1
 note = "Read Decision 2 against agents/issue-tracker.md after #927 removed its interim paragraph: it still tells the skills this repo can't edit that the record outranks the brief, and what to hand their subagents."
 by = "Claude Code agent"
-review = "pending"
 subjects = { "agents/issue-tracker.md" = "0d9149df2f5cdc42" }
 
 [[mark]]
@@ -19547,7 +19527,6 @@ unit = "0aea44408e51c2ad-85c9db4575e4ec1c"
 copies = 1
 note = "The script describes its own README docs-list parsing, not design records; the deleted issue-tracker.md sentence about legacy record sections makes no claim about it."
 by = "Claude Code agent"
-review = "pending"
 subjects = {}
 
 [[mark]]
