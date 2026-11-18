@@ -183,8 +183,9 @@ are defined in [CONTEXT.md](../CONTEXT.md)'s "Design review" section.
 - **Process terms enter a product glossary.** [`agents/domain.md`](../agents/domain.md)
   makes CONTEXT.md the single glossary, so they go there, named so that
   "gap" never collides with **Parity gap**.
-- **The tools land one sub-issue at a time.** Until #928 and #930 land,
-  `ready` keeps its current procedure and `check-design` doesn't exist;
+- **The tools land one sub-issue at a time.** Until #930 lands,
+  `check-design` doesn't exist, and until #929 does, `ready` finds what's
+  unreviewed as it did before #928;
   [AGENTS.md](../AGENTS.md)'s "Settling design" section says how the
   interim works now that #927 has made `settle-design` triage-only. Work
   on #924 itself is reviewed under its interim rule.

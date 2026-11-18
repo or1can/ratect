@@ -44,6 +44,7 @@ history, from when it was the only binary.
 
 ### Changed
 
+- `/ready` reviews a change against its issue's design record: each finding is classed as a bug, design gap, design flaw or dispute, a design gap is appended to the record, and only a confirmed design flaw stops the review. Its fix loop ends by fix round 3, followed by one two-axis review and at most one more bug pass. No effect on the released binaries; contributor-tooling only.
 - `/ready` and `/settle-design` brief their reviewers from `agents/review-brief.md`, which holds the checks a reviewer applies and classes what a reviewer raises as a bug, design gap, design flaw or dispute. No effect on the released binaries; contributor-tooling only.
 - A `services` key in a Batect-format (YAML) file is refused as a field only a native `ratect.toml` can declare.
 - The `claims` commit hook refuses a commit that brings in an unmarked `claim-words`, `temporal-words` or `restatement` finding, or that leaves an orphaned mark for one. No effect on the released binaries; contributor-tooling only.
