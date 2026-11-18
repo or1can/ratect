@@ -10,15 +10,6 @@ subjects = {}
 [[mark]]
 file = ".claude/skills/ready/SKILL.md"
 mode = "restatement-ngram"
-unit = "7de6d467fef0312c-dd5f39433163093c"
-copies = 1
-note = "The phrase is ready's own design-stop rule, unchanged until #928; settle-design's rewording (second pass, \"not yet understood\") is #924's D13 and doesn't retract it."
-by = "Claude Code agent"
-subjects = {}
-
-[[mark]]
-file = ".claude/skills/ready/SKILL.md"
-mode = "restatement-ngram"
 unit = "b02fb846afa3985b-03c20eae62d9b3df"
 copies = 1
 note = "Moved, not retracted: the reviewer-side check about briefs went to agents/review-brief.md, and this author habit about handoffs stays; both are true."
@@ -42,6 +33,66 @@ copies = 1
 note = "Read Author habits against agents/review-brief.md: the brief still holds reviewer checks only, and the new #920 check is one a reviewer applies, not an author habit."
 by = "Claude Code agent"
 subjects = { "agents/review-brief.md" = "b001a5ef04a01887" }
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "06e77025d830ca15-3cdef64c1a3c6494"
+copies = 1
+note = "settle-design's own second-pass rule (#924's D13), unaffected by #928 removing ready's old recurrence-based design stop (replaced by D15's candidate check)."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "8499bb30bdc8a31c-5e3a78eaa0da36c1"
+copies = 1
+note = "Still true: #928's ready sends a confirmed design flaw back through the maintainer, who sends the issue to needs-triage; the phrase left ready and AGENTS.md's interim paragraph because ready now says it itself, not because it was retracted."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "95c3c7b317103e6c-6fbfe732e34eb149"
+copies = 1
+note = "Still true (#924's D11); #928 moved the same rule from AGENTS.md's interim paragraph into ready's design stop, which still says it."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "a5b7dac1abe018bf-355f26038e2cfa2c"
+copies = 1
+note = "Still true (#924's D11); ready's design stop says the same after #928."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "a6954726790fe608-665475ab254038eb"
+copies = 1
+note = "Still true: settle-design's passes are briefed with agents/review-brief.md; ready's steps 3 and 4 still brief with it too, reworded in #928."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/settle-design/SKILL.md"
+mode = "restatement-ngram"
+unit = "cf8c40599ea0097f-dde0696832a67104"
+copies = 1
+note = "Still true: ready's design stop (#928) has the maintainer send the issue back to needs-triage, where settle-design runs again."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
 
 [[mark]]
 file = ".claude/skills/settle-design/SKILL.md"
@@ -422,15 +473,6 @@ copies = 1
 note = "The 'elsewhere' half checked in ratect/src/main.rs: diagnose (doctor) pushes the Docker daemon reachable/not reachable and connection-options-unusable findings and both doctor and validate_config push the one-line \"<file> loads\" Fine finding, none of them from diagnostics.rs."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ratect-core/src/diagnostics.rs" = "e8322fb2ac9a3a3d" }
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-about-elsewhere"
-unit = "c039bd9f2054eb39"
-copies = 1
-note = "Re-read against `uv run tools/design-record.py --help` after #927 added `get --all`: its \"Which record\" section still says which record an issue has, and \"Who writes what\" who may write what."
-by = "Claude Code agent"
-subjects = { "tools/design-record.py" = "f5581d6e70076156" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1013,10 +1055,10 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
-note = "Read guidelines 15 and 16 against agents/review-brief.md and ADR 0028 after #927: guideline 15 still has /ready brief both reviewers with the brief, and nothing in either names settle-design's entry points."
+note = "Read the whole section against the three files it names that moved: guideline 15 still matches the new ready skill and agents/review-brief.md; guideline 16's classes match ADR 0028 Decision 3; guidelines 8, 9 and 14 cite 0008, whose #926 amendment (to-spec issues labelled needs-triage) contradicts none of them."
 by = "Claude Code agent"
-extent = "partial"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "CONTRIBUTING.md" = "ada95f99e7f9a943", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "b001a5ef04a01887", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "c0ca83a9e98e7a0a", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "5bcf6cadcab0e521", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
+review = "pending"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "c50de73eee2755fcc384fc59c80f716b26d3f969", "CONTRIBUTING.md" = "ada95f99e7f9a943", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "b001a5ef04a01887", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "c0ca83a9e98e7a0a", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "9c717c29ee6b1ac4", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1557,9 +1599,10 @@ file = "CONTEXT.md"
 mode = "stale-claims"
 unit = "8455c6b89596f6a9"
 copies = 1
-note = "Read the Design review terms against ADR 0028 after #927's Consequences edit: design stop (\"the design goes back to be settled again\") and every other term still hold."
+note = "Read the Design review terms against ADR 0028 after #928's Consequences edit (coverage interim now #929 only): every term, design stop and ledger included, still matches ready's new routing."
 by = "Claude Code agent"
-subjects = { "decisions/0028-design-and-implementation-review.md" = "5bcf6cadcab0e521" }
+review = "pending"
+subjects = { "decisions/0028-design-and-implementation-review.md" = "9c717c29ee6b1ac4" }
 
 [[mark]]
 file = "CONTEXT.md"
@@ -2531,6 +2574,16 @@ subjects = { "tools/design-record.py" = "f5581d6e70076156" }
 [[mark]]
 file = "agents/issue-tracker.md"
 mode = "stale-claims"
+unit = "f42eb9b2d18902b7"
+copies = 1
+note = "Read the whole section against ADR 0028's #928 Consequences edit, which changes only what is still to land (#929, #930): the record still outranks the brief, and \"exits 1 ... stop\" agrees with ready's step 2, which ends the call blocked; the Reading a ticket rule is what ready's step 4 now briefs its Spec sub-agent with."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "decisions/0028-design-and-implementation-review.md" = "9c717c29ee6b1ac4", "tools/design-record.py" = "f5581d6e70076156" }
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "stale-claims"
 unit = "fab075cc0fa01e32"
 copies = 1
 note = "Read against `uv run tools/design-record.py --help`: `get <number>` still reads the ticket's design record; `--all` is settle-design's merge read, not a ticket read."
@@ -2902,9 +2955,10 @@ file = "agents/review-brief.md"
 mode = "stale-claims"
 unit = "2ac8ff8d7ace6258"
 copies = 1
-note = "Read the intro against ADR 0028 and settle-design's SKILL.md after #927: settle-design still briefs its break-the-design passes with this file, and ready both its reviews."
+note = "Read the whole brief against ADR 0028's #928 edit and ready's new Routing findings: the four classes, the dispute rule and the design stop wording all still agree; ready restates only the routes (\"fix it if it's worth fixing\", \"fix it in flow\"), not the definitions."
 by = "Claude Code agent"
-subjects = { ".claude/skills/ready/SKILL.md" = "da76acde2b2dad34", "decisions/0028-design-and-implementation-review.md" = "5bcf6cadcab0e521" }
+review = "pending"
+subjects = { ".claude/skills/ready/SKILL.md" = "b27e41863d027eb4", "decisions/0028-design-and-implementation-review.md" = "9c717c29ee6b1ac4" }
 
 [[mark]]
 file = "decisions/0001-two-binaries.md"
