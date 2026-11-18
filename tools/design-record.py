@@ -45,7 +45,9 @@ as a legacy record.
 
 An issue has at most one design record: the comment holding a line that is
 exactly `## Design record`, outside a code fence, so a comment quoting the
-format is not one. Two of them is an error: the maintainer deletes all but
+format is not one, and only from someone who can write to the repository
+(an owner, member or collaborator): anyone can comment on a public issue.
+Two of them is an error: the maintainer deletes all but
 one, and settle-design merges what the others held into it with `rewrite`.
 With none, a comment holding a line exactly `## settle-design record` (the
 form before ADR 0028) serves, if there is one: its section of the comment,
@@ -152,6 +154,9 @@ OPEN_HEADING = "### Open points"
 GAPS_HEADING = "### Design gaps"
 LOG_HEADING = "### Amendment log"
 TOOLS = ("settle-design", "check-design", "ready")
+# Who can write to the repository. Anyone can comment on a public issue, so a
+# comment from anyone else is never a record, or a second one.
+TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
 HEADING_LINE = re.compile(r"^(#{1,6}) ")
 FENCE = re.compile(r"^\s*(```|~~~)")
 DECISION_LINE = re.compile(r"^\*\*D\d+\.")
@@ -262,7 +267,7 @@ def pointers(text):
 
 def scan(repo, issue):
     """The issue's design-record comments, and its legacy `## settle-design record` ones."""
-    every = comments(repo, issue)
+    every = [c for c in comments(repo, issue) if c.get("author_association") in TRUSTED]
     return (
         [c for c in every if has_line(c["body"], HEADING)],
         [c for c in every if has_line(c["body"], LEGACY_HEADING)],

@@ -59,7 +59,7 @@ class FakeGitHub:
         for text in comments:
             self.add(text)
 
-    def add(self, text):
+    def add(self, text, association="OWNER"):
         self.clock += 1
         stamp = f"2026-11-17T00:00:{self.clock:02d}Z"
         comment = {
@@ -67,6 +67,7 @@ class FakeGitHub:
             "body": text,
             "created_at": stamp,
             "updated_at": stamp,
+            "author_association": association,
             "html_url": f"https://github.com/o/r/issues/7#issuecomment-{100 + len(self.comments)}",
         }
         self.comments.append(comment)
@@ -225,6 +226,24 @@ RECORD = (
     "### Open points\n\n- **Timeouts** (who settles it: #9).\n\n"
     "### Amendment log\n\n- 2026-11-01: created by settle-design.\n"
 )
+
+
+class Trust(unittest.TestCase):
+    """Only a comment from someone with write access to the repository counts."""
+
+    def test_a_record_from_outside_the_repository_is_not_one(self):
+        for association in ("NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"):
+            github = FakeGitHub(comments=[RECORD])
+            github.add("## Design record\n\n**D1. Mine.**\n", association)
+            github.add("## settle-design record\n\nNewer.\n", association)
+            found = get(github)
+            self.assertEqual((found["source"], found["comment_id"]), ("comment", 100), association)
+
+    def test_collaborators_and_members_count(self):
+        for association in ("COLLABORATOR", "MEMBER"):
+            github = FakeGitHub()
+            github.add("## Design record\n", association)
+            self.assertEqual(get(github)["source"], "comment", association)
 
 
 class Create(unittest.TestCase):
