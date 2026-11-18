@@ -57,9 +57,10 @@ any tool reads it, and the maintainer confirms any conflict between them. A
 legacy record posted after the design record is refused the same way until
 settle-design merges it in with `rewrite`, whose log line names its URL;
 an edit to the record that doesn't name it doesn't count. With none of either, the issue body's own `## Design record` section,
-up to its next heading, is the record (`source` `body`): triage writes the
-body, so it is never edited, and the first append starts the comment from
-it. Otherwise the record is empty (`source` `none`), which is also what a
+up to its next heading, is the record (`source` `body`), if someone who can
+write to the repository opened the issue: triage writes the body, so it
+is never edited, and the first append starts the comment from it.
+Otherwise the record is empty (`source` `none`), which is also what a
 change with no ticket is reviewed against; there, anything that would
 change a decision goes to the maintainer as "reopen?". Appending to an
 empty record posts a design record comment holding only what was appended,
@@ -155,7 +156,8 @@ GAPS_HEADING = "### Design gaps"
 LOG_HEADING = "### Amendment log"
 TOOLS = ("settle-design", "check-design", "ready")
 # Who can write to the repository. Anyone can comment on a public issue, so a
-# comment from anyone else is never a record, or a second one.
+# comment from anyone else is never a record, or a second one, and nor is the
+# body of an issue they opened.
 TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
 HEADING_LINE = re.compile(r"^(#{1,6}) ")
 FENCE = re.compile(r"^\s*(```|~~~)")
@@ -329,7 +331,8 @@ def find(repo, issue, merging=False):
         span = section_span(legacy[0]["body"], LEGACY_HEADING)
         text = legacy[0]["body"][span[0] : span[1]].rstrip() + "\n"
         return found(issue, "legacy", legacy[0], text, span)
-    body = json.loads(gh("api", f"repos/{repo}/issues/{issue}"))["body"] or ""
+    reply = json.loads(gh("api", f"repos/{repo}/issues/{issue}"))
+    body = (reply["body"] or "") if reply.get("author_association") in TRUSTED else ""
     span = section_span(body, HEADING)
     text = body[span[0] : span[1]].rstrip() + "\n" if span else ""
     return found(issue, "body" if text else "none", None, text)

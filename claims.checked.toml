@@ -420,10 +420,10 @@ file = "AGENTS.md"
 mode = "claim-words-about-elsewhere"
 unit = "c80c375de8fc2e80"
 copies = 1
-note = "Re-read against `uv run tools/design-record.py --help`: its \"Which record\" section says which record an issue has, and \"Who writes what\" which tool may write what."
+note = "Re-read against `uv run tools/design-record.py --help` after the issue-body trust fix: \"Which record\" still says which record an issue has, now counting a body record only from an issue someone who can write to the repo opened, and \"Who writes what\" which tool may write what."
 by = "Claude Code agent"
 review = "pending"
-subjects = { "tools/design-record.py" = "1c78da161513fce9" }
+subjects = { "tools/design-record.py" = "671699a3543e5300" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -970,9 +970,10 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "086809ea8332eda3"
 copies = 1
-note = "Read the whole section against tools/design-record.py at HEAD: the one sentence naming it says a gap is appended with it and its --help says which record and who writes, both true; the rest names the skills, hook and ADR, which this change does not touch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { ".claude/hooks/settle-design-reminder.py" = "1638186496703d0c", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "tools/design-record.py" = "7861786a60687bfc" }
+note = "Read the whole section against tools/design-record.py after the issue-body trust fix: the one sentence naming it says a gap is appended with it and its --help says which record and who writes, both still true; the rest names the skills, hook and ADR, which this change does not touch."
+by = "Claude Code agent"
+review = "pending"
+subjects = { ".claude/hooks/settle-design-reminder.py" = "1638186496703d0c", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "tools/design-record.py" = "671699a3543e5300" }
 
 [[mark]]
 file = "AGENTS.md"

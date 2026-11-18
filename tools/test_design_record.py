@@ -51,8 +51,9 @@ REPO = "repos/{owner}/{repo}"
 class FakeGitHub:
     """One issue, number 7, as `gh api` would serve it."""
 
-    def __init__(self, body="", comments=()):
+    def __init__(self, body="", comments=(), association="OWNER"):
         self.body = body
+        self.association = association
         self.comments = []
         self.calls = []
         self.clock = 0
@@ -87,7 +88,7 @@ class FakeGitHub:
         assert path.startswith(REPO + "/"), path
         path = path[len(REPO) + 1 :]
         if method == "GET" and path == "issues/7":
-            return json.dumps({"number": 7, "body": self.body})
+            return json.dumps({"number": 7, "body": self.body, "author_association": self.association})
         if method == "GET" and path == "issues/7/comments":
             assert "--paginate" in args, args
             # Two pages, as `--paginate` writes them: arrays back to back.
@@ -229,7 +230,7 @@ RECORD = (
 
 
 class Trust(unittest.TestCase):
-    """Only a comment from someone with write access to the repository counts."""
+    """Only a comment, or an issue body, from someone with write access to the repository counts."""
 
     def test_a_record_from_outside_the_repository_is_not_one(self):
         for association in ("NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"):
@@ -238,6 +239,17 @@ class Trust(unittest.TestCase):
             github.add("## settle-design record\n\nNewer.\n", association)
             found = get(github)
             self.assertEqual((found["source"], found["comment_id"]), ("comment", 100), association)
+
+    def test_a_body_record_from_outside_the_repository_is_not_one(self):
+        for association in ("NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"):
+            github = FakeGitHub(body="## Design record\n\n**D1. Mine.**\n", association=association)
+            self.assertEqual(get(github)["source"], "none", association)
+
+    def test_an_append_does_not_copy_a_body_record_from_outside(self):
+        github = FakeGitHub(body="## Design record\n\n**D1. Mine.**\n", association="NONE")
+        code, _, err = run(github, "append", "7", "gap", "--by", "ready", stdin="A gap.")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("Mine", github.comments[0]["body"])
 
     def test_collaborators_and_members_count(self):
         for association in ("COLLABORATOR", "MEMBER"):
