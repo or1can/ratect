@@ -115,12 +115,11 @@ Changing a decision goes back to settle-design through the maintainer.
 
 # What outranks what
 
-ADR 0028's Decision 2, stated here too because this is where the tools read
-the record. The record outranks the acceptance criteria: settle-design writes them from
-it, check-design checks they still agree, and a disagreement ready finds is
-a design flaw, not a choice for ready to make by picking a side. Where the
-record and an ADR that hasn't shipped disagree, that too is a design flaw for
-settle-design.
+The record outranks the agent brief, acceptance criteria included, and a
+disagreement between them is a design flaw. ADR 0028's Decision 2 says why,
+and agents/issue-tracker.md says what each skill reading or writing a ticket
+does about it. Where the record and an ADR that hasn't shipped disagree,
+that too is a design flaw for settle-design.
 
 # Two writers at once
 

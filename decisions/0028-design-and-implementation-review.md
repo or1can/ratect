@@ -9,7 +9,12 @@ decisions below are D1, D13–D17, D19, D20 and D23 of
 [#924's design record](https://github.com/or1can/ratect/issues/924#issuecomment-6954635807),
 confirmed by the maintainer on 2026-11-17, with Decision 2 summarising
 D5–D9, whose detail is #926's. Each tool's own procedure stays in its
-skill.
+skill. Amended while implementing #926: Decision 2 named `settle-design`
+as the author of the acceptance criteria, when the `triage` skill writes
+them in its brief, after `settle-design` has run, so Decision 1 also no
+longer has `settle-design` read a brief at triage; #924's D9 and D13 are
+amended to match, and ratect#927 brings `settle-design`'s own step 1
+into line.
 
 ## Context
 
@@ -50,7 +55,8 @@ argument.
 | **`check-design`** (new) | before implementation starts | A light pass, close to triage: given what is known now, does each decision still hold, is a case missing, and do the acceptance criteria still agree with the record? | critique the design, run a reviewer, or loop |
 | **`ready`** | before each commit ([AGENTS.md](../AGENTS.md) guideline 15) | Is the implementation good, does it meet the record, the spec and this repo's standards, and does it have bugs? | change a recorded decision |
 
-`settle-design` reads the ticket, its brief, the ADRs they cite, its
+`settle-design` reads the ticket, what triage has established so far (or
+its brief, on a re-run after one is posted), the ADRs they cite, its
 siblings' records and the `//!` doc of each module that owns a mechanism,
 and runs at most two break-the-design passes, each briefed with the
 record's decisions and rejected alternatives. `check-design` reads the
@@ -69,11 +75,16 @@ log. `settle-design` writes it, and the maintainer confirms each decision.
 changes a decision. Changing one goes back to `settle-design`, through the
 maintainer.
 
-The record outranks the acceptance criteria: `settle-design` writes the
-criteria from it, `check-design` checks they still agree, and a
+The record outranks the agent brief, acceptance criteria included. The
+`triage` skill writes the brief after `settle-design` has written the
+record, so it takes the criteria from the record, citing its decision ids,
+and restates no decision; `check-design` checks they still agree, and a
 disagreement `ready` finds is a design flaw, not a choice for `ready` to
-make by picking a side. The record's format, write rules and tooling are
-#926's.
+make by picking a side. The skills this repo can't edit learn this from
+[`agents/issue-tracker.md`](../agents/issue-tracker.md), the tracker doc
+they consult for fetching and writing tickets, which also says what to
+hand their subagents, who don't read it. The record's format, write rules
+and tooling are #926's.
 
 ### 3. One classification, shared by `settle-design` and `ready`
 

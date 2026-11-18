@@ -420,10 +420,10 @@ file = "AGENTS.md"
 mode = "claim-words-about-elsewhere"
 unit = "c80c375de8fc2e80"
 copies = 1
-note = "Re-read against `uv run tools/design-record.py --help` after the issue-body trust fix: \"Which record\" still says which record an issue has, now counting a body record only from an issue someone who can write to the repo opened, and \"Who writes what\" which tool may write what."
+note = "Re-read against `uv run tools/design-record.py --help` after the design-record-outranks-brief change: its \"Which record\" section still says which record an issue has, and its write rules who may write what."
 by = "Claude Code agent"
 review = "pending"
-subjects = { "tools/design-record.py" = "671699a3543e5300" }
+subjects = { "tools/design-record.py" = "27fbab0274e58b2d" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -970,10 +970,10 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "086809ea8332eda3"
 copies = 1
-note = "Read the whole section against tools/design-record.py after the issue-body trust fix: the one sentence naming it says a gap is appended with it and its --help says which record and who writes, both still true; the rest names the skills, hook and ADR, which this change does not touch."
+note = "Read the whole section against tools/design-record.py, ADR 0028 and agents/issue-tracker.md after the design-record-outranks-brief change: the three tools, their timing, the reminder hook and the interim note all still hold; the one sentence naming design-record.py says a gap is appended with it and its --help says which record and who writes, both true."
 by = "Claude Code agent"
 review = "pending"
-subjects = { ".claude/hooks/settle-design-reminder.py" = "1638186496703d0c", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "tools/design-record.py" = "671699a3543e5300" }
+subjects = { ".claude/hooks/settle-design-reminder.py" = "1638186496703d0c", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0028-design-and-implementation-review.md" = "744c94496a1ba5a9", "tools/design-record.py" = "27fbab0274e58b2d" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -989,11 +989,11 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
-note = "Read the guidelines naming CONTRIBUTING.md, ci.yml and CHANGELOG.md against this branch rebased on #932: CONTRIBUTING.md still states 3.11 for tools/ and its DCO text is untouched; ci.yml still pins 3.11 as the tools/ minimum and only #932 changed it, swapping the Claims Marks job to `pending-marks`, which guideline 12 already lists as not required; the one new CHANGELOG bullet is unmarked contributor tooling."
+note = "Read the guidelines naming decisions/0028 (guideline 16's design-record bullet) against the ADR as amended: a finding showing the record wrong is a design flaw, one it is silent on a design gap, one arguing a decision a dispute, all unchanged."
 by = "Claude Code agent"
 extent = "partial"
 review = "pending"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "8d2969256c9f126f34d2fa0b1aafb425114d4821", "CONTRIBUTING.md" = "ada95f99e7f9a943", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "8d2969256c9f126f34d2fa0b1aafb425114d4821", "CONTRIBUTING.md" = "ada95f99e7f9a943", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "c0ca83a9e98e7a0a", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "744c94496a1ba5a9", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1059,6 +1059,16 @@ copies = 1
 note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "CHANGELOG.md" = "15fbb3ef3845b5b5a1c5b1400927ac404320a798", "ROADMAP.md" = "25955ca943036063", "agents/docs.md" = "252e6e2722865b23" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
+unit = "cdb56ba0afdce587"
+copies = 1
+note = "Read against agents/issue-tracker.md after its design-record section was added: still GitHub Issues via gh on or1can/ratect, and the file still holds the conventions."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "agents/issue-tracker.md" = "3c348d71c85f68b3" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1519,6 +1529,16 @@ copies = 1
 note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0016-exit-codes.md" = "db82ab6fd68eb96d" }
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "stale-claims"
+unit = "8455c6b89596f6a9"
+copies = 1
+note = "Read the Design review glossary against ADR 0028 after Decisions 1 and 2 were amended: no term there names who writes the acceptance criteria or what settle-design reads, and every definition still holds."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "decisions/0028-design-and-implementation-review.md" = "744c94496a1ba5a9" }
 
 [[mark]]
 file = "CONTEXT.md"
@@ -2421,9 +2441,80 @@ file = "agents/domain.md"
 mode = "stale-claims"
 unit = "dbc8351d469b2fd3"
 copies = 1
-note = "The section cites decisions/0004 and guideline 14, neither changed. Earlier reading: Flag ADR conflicts re-read: decisions/0004 is titled Git-include host-path trust, matching the example quote, and line 43's claims hold (see the domain.md:43 entries)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "AGENTS.md" = "ffd5702f09a657c0", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6" }
+note = "Read against decisions/0008 after its Status gained the #926 note: 0008 is still the boundary before which version-scoped decisions live in RELEASES.md, which is all this section uses it for."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "decisions/0008-tracking-release-scope-with-github-issues.md" = "c0ca83a9e98e7a0a" }
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "claim-words-counts"
+unit = "39c6b6e6756e67c6"
+copies = 1
+note = "Read against design-record.py --help \"Which record\": exit 1 is its refusal for two design records, several legacy ones, or a legacy one posted after the design record, all of which settle-design merges with the maintainer confirming."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "claim-words-counts"
+unit = "6aa2bc4311523835"
+copies = 1
+note = "Read against #924's D7 and D9 as amended 2026-11-18: criteria come from the record, cite D-ids, and restate no decision."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "claim-words-counts"
+unit = "981bed5295c1ea19"
+copies = 1
+note = "Read against AGENTS.md \"Settling design\" (settle-design at the end of triage, before the label moves) and triage SKILL.md step 5 (the brief is posted as the outcome is applied): the two documents and their order are as stated."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "decisions/0028-design-and-implementation-review.md" = "744c94496a1ba5a9" }
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "claim-words-counts"
+unit = "fa3347cab6f1114d"
+copies = 1
+note = "Read against #924's D16 (dispute goes to the maintainer as \"reopen Dn?\")."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "claim-words-totalising"
+unit = "a2c421b4bbd93a86"
+copies = 1
+note = "Read against #924's D6 and design-record.py's pointers(): a shared mechanism's decisions live only in its owning record, which `get N` returns."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "claim-words-totalising"
+unit = "c982cf9081491313"
+copies = 1
+note = "Read against #924's D8 and D9 as amended 2026-11-18: only settle-design creates or changes decisions (check-design and ready append gaps only); to-spec and to-tickets apply ready-for-agent by default, per their SKILL.md files."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "agents/issue-tracker.md"
+mode = "temporal-words-phrase"
+unit = "39c6b6e6756e67c6"
+copies = 1
+note = "\"not yet merged\" names a state the record can be in (legacy records awaiting settle-design's rewrite), not a moment in time; true against design-record.py --help."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
 
 [[mark]]
 file = "agents/probing.md"
@@ -2766,6 +2857,16 @@ copies = 1
 note = "Read against #924's record D16/D20 and, for each moved check, its former wording in ready/SKILL.md's Review rules (origin/main), unchanged apart from merging the two harness checks."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
+
+[[mark]]
+file = "agents/review-brief.md"
+mode = "stale-claims"
+unit = "2ac8ff8d7ace6258"
+copies = 1
+note = "Read the whole brief against ADR 0028 after Decisions 1 and 2 were amended: the classes, the dispute rule and the checks are unchanged by the amendment, which only moved who writes the criteria and what settle-design reads."
+by = "Claude Code agent"
+review = "pending"
+subjects = { ".claude/skills/ready/SKILL.md" = "da76acde2b2dad34", "decisions/0028-design-and-implementation-review.md" = "744c94496a1ba5a9" }
 
 [[mark]]
 file = "decisions/0001-two-binaries.md"
@@ -3242,9 +3343,10 @@ file = "decisions/0007-where-agent-process-docs-live.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
-note = "I read the whole 6-line Decision. agents/ exists, holding issue-tracker.md, domain.md and triage-labels.md. The 'today' list was true when written (d6d4a892, ratect-compat/v0.27.0). agents/docs.md was added later (469bec3f, 2026-09-22), so the list is now incomplete, which is fine for shipped history. Shipped."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "agents/domain.md" = "befc2eb13561a492", "agents/issue-tracker.md" = "786e5d0a2116054e", "agents/triage-labels.md" = "4f53c9b40ce2651e" }
+note = "Read against agents/: issue-tracker.md, domain.md and triage-labels.md still live there as agent-consulted reference docs; the new design-record section is that kind of content."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "agents/domain.md" = "befc2eb13561a492", "agents/issue-tracker.md" = "3c348d71c85f68b3", "agents/triage-labels.md" = "4f53c9b40ce2651e" }
 
 [[mark]]
 file = "decisions/0007-where-agent-process-docs-live.md"
@@ -3260,9 +3362,10 @@ file = "decisions/0008-tracking-release-scope-with-github-issues.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
-note = "Read against guidelines 8, 9 and 14 and the repo's milestone names."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "CHANGELOG.md" = "8e096c328bd513dabe9eb631195af67ba281b095", "agents/issue-tracker.md" = "786e5d0a2116054e" }
+note = "Read the Decision against agents/issue-tracker.md as changed for #926: its first bullet (to-spec issues labelled ready-for-agent) no longer holds, and the Status section now says so and links forward to 0028 and the tracker doc; the Decision stays as written, since a shipped ADR is append-only (guideline 14). The other bullets are unaffected."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "CHANGELOG.md" = "8d2969256c9f126f34d2fa0b1aafb425114d4821", "agents/issue-tracker.md" = "3c348d71c85f68b3" }
 
 [[mark]]
 file = "decisions/0008-tracking-release-scope-with-github-issues.md"
@@ -11040,15 +11143,6 @@ subjects = {}
 [[mark]]
 file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-counts"
-unit = "0d7f7cd92235ff4f"
-copies = 1
-note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0028-design-and-implementation-review.md"
-mode = "claim-words-counts"
 unit = "1a454a1ea43b1fba"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
@@ -11062,6 +11156,16 @@ unit = "1c29e96cf8ebe08f"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "claim-words-counts"
+unit = "1c50010b4bc3f7e6"
+copies = 1
+note = "Read against #924's amendment log (D9 and D13 amended 2026-11-18) and #927's scope (settle-design re-scope)."
+by = "Claude Code agent"
+review = "pending"
 subjects = {}
 
 [[mark]]
@@ -11098,6 +11202,16 @@ unit = "4a2f7089d0cbf8e5"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "claim-words-counts"
+unit = "57c2398eb9453a59"
+copies = 1
+note = "Read against #924's D13 as amended 2026-11-18: these are settle-design's inputs and its two-pass cap."
+by = "Claude Code agent"
+review = "pending"
 subjects = {}
 
 [[mark]]
@@ -11359,6 +11473,26 @@ unit = "ed9b503817933366"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "restatement-ngram"
+unit = "988757bc4e6c0fd0-5a31a20dd38c6b28"
+copies = 1
+note = "The ADR's Decision 2 is where this rule now lives; design-record.py's docstring was changed to point here instead of restating it. True against #924's D9."
+by = "Claude Code agent"
+review = "pending"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "restatement-ngram"
+unit = "aca22e101a12b9a8-778d53fe4a739e34"
+copies = 1
+note = "Same sentence as line 81; Decision 2 is the rule's one statement, true against #924's D9."
+by = "Claude Code agent"
+review = "pending"
 subjects = {}
 
 [[mark]]
