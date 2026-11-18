@@ -58,8 +58,8 @@ legacy record posted after the design record is refused the same way until
 settle-design merges it in with `rewrite`, whose log line names its URL;
 an edit to the record that doesn't name it doesn't count. With none of either, the issue body's own `## Design record` section,
 up to its next heading, is the record (`source` `body`), if someone who can
-write to the repository opened the issue: triage writes the body, so it
-is never edited, and the first append starts the comment from it.
+write to the repository opened the issue: the body is its author's text,
+so it is never edited, and the first append starts the comment from it.
 Otherwise the record is empty (`source` `none`), which is also what a
 change with no ticket is reviewed against; there, anything that would
 change a decision goes to the maintainer as "reopen?". Appending to an
