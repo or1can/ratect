@@ -494,7 +494,9 @@ and until ratect#927 and ratect#928 land, `settle-design` and `ready` keep
 their current steps, including `ready`'s design stop recommending
 `settle-design`. Meanwhile the brief's classes label a finding without
 changing those steps: a dispute is listed with why it wasn't fixed, and a
-design gap is appended to the issue's `## settle-design record`.
+design gap is appended to the issue's design record with
+`tools/design-record.py`, whose `--help` says which record that is and who
+may write what.
 
 ### Domain docs
 

@@ -319,15 +319,6 @@ subjects = {}
 [[mark]]
 file = "AGENTS.md"
 mode = "claim-words-about-elsewhere"
-unit = "3a6a125ba2159d88"
-copies = 1
-note = "Interim note read against ready/SKILL.md steps 2-4 (fix or list with why not) and settle-design/SKILL.md step 4's '## settle-design record' heading."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "AGENTS.md"
-mode = "claim-words-about-elsewhere"
 unit = "3d0080a6f0387069"
 copies = 1
 note = "Checked against the Command enum in ratect/src/main.rs: Run, Tasks, Services (Up/Down/List), Caches, Includes, Resources, Doctor, Config, Completions."
@@ -423,6 +414,16 @@ copies = 1
 note = "Checked against ROADMAP.md's Batect Parity section: it is now a pointer at docs/differences-from-batect.md and the conformance corpus, not an itemized list, as the sentence's example says."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "ROADMAP.md" = "b2bfb89c20e69299" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "claim-words-about-elsewhere"
+unit = "c80c375de8fc2e80"
+copies = 1
+note = "Re-read against `uv run tools/design-record.py --help`: its \"Which record\" section says which record an issue has, and \"Who writes what\" which tool may write what."
+by = "Claude Code agent"
+review = "pending"
+subjects = { "tools/design-record.py" = "1c78da161513fce9" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -967,6 +968,15 @@ subjects = { "ratect-core/src/panic_hook.rs" = "1cafb96c9bd654b0" }
 [[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
+unit = "086809ea8332eda3"
+copies = 1
+note = "Read the whole section against tools/design-record.py at HEAD: the one sentence naming it says a gap is appended with it and its --help says which record and who writes, both true; the rest names the skills, hook and ADR, which this change does not touch."
+by = "Claude Code agent, approved by Kevin Rogers"
+subjects = { ".claude/hooks/settle-design-reminder.py" = "1638186496703d0c", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "tools/design-record.py" = "7861786a60687bfc" }
+
+[[mark]]
+file = "AGENTS.md"
+mode = "stale-claims"
 unit = "0a1b1b5f0bb6313c"
 copies = 1
 note = "Pointer section read: probing.md still gives a method for rootful Linux, rootless and userns-remap, each run on a Mac, so \"each one runs on a Mac\" holds."
@@ -978,10 +988,11 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
-note = "Read the guidelines naming CONTRIBUTING.md, ci.yml and CHANGELOG.md against this branch: guideline 8's tools/ minimum-Python list (CONTRIBUTING's tools section, ci.yml's python-version) is unchanged by its edits, which only drop check-pending-marks.py from the tools list and swap the Claims Marks step."
+note = "Read the guidelines naming CONTRIBUTING.md, ci.yml and CHANGELOG.md against this branch rebased on #932: CONTRIBUTING.md still states 3.11 for tools/ and its DCO text is untouched; ci.yml still pins 3.11 as the tools/ minimum and only #932 changed it, swapping the Claims Marks job to `pending-marks`, which guideline 12 already lists as not required; the one new CHANGELOG bullet is unmarked contributor tooling."
 by = "Claude Code agent"
 extent = "partial"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "25bfe19ca97926a4536da47ff35405a98395ac14", "CONTRIBUTING.md" = "c9c2770bd3f5f46b", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
+review = "pending"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "8d2969256c9f126f34d2fa0b1aafb425114d4821", "CONTRIBUTING.md" = "ada95f99e7f9a943", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "657042ecbcb3f9e6", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "9affc07bada9315c", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
 
 [[mark]]
 file = "AGENTS.md"

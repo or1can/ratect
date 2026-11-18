@@ -58,8 +58,10 @@ prune the orphan.
 The Python scripts under `tools/` (release notes extraction, the docs'
 captures and their `ansi` preprocessor, the README and doc-link checks,
 the release binaries' minimum-OS check, the local Windows type check,
-and the `claims` CLI at the hook's pinned release)
-need Python 3.11 or later and nothing outside the standard library. Run
+the `claims` CLI at the hook's pinned release and the design-record
+reader and writer)
+need Python 3.11 or later and nothing outside the standard library
+(the design-record script also runs an authenticated `gh`). Run
 them with
 [uv](https://docs.astral.sh/uv/), which fetches a matching Python when
 yours is older:
