@@ -214,13 +214,21 @@ jobs:
   # (`agents/claims.md`). The whole file, not the PR's change: `main` holds no
   # pending mark, so one there is a merge that skipped the rewrite, and every
   # PR showing it is how it gets noticed. Not a required status check unless
-  # the maintainer makes it one.
+  # the maintainer makes it one. `pending-marks` runs no check, so this needs
+  # only the pinned release, read as the Claims job reads it.
   claims-marks:
     name: Claims Marks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: python3 tools/check-pending-marks.py
+      - name: Check out the pinned claims release
+        shell: bash
+        run: |
+          rev=$(python3 tools/claims.py --print-rev)
+          echo "claims $rev"
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$rev" \
+            https://github.com/or1can/claims "$RUNNER_TEMP/claims"
+      - run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli pending-marks --repo-root .
 
   docker-integration:
     name: Docker Integration Test

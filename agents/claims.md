@@ -112,32 +112,31 @@ while checked` count says how many marks applied.
 ## An agent's marks
 
 An agent doesn't wait for the maintainer before marking. It writes its
-marks as pending, `--by "Claude Code agent, pending review by Kevin
-Rogers"`, and carries on. It never writes `approved by` itself, even
-after an approval: only `--approve`, below, does. Its pull request's
-body lists them, as `uv run tools/check-pending-marks.py --list` prints
-them: every mark pending in the file committed at `HEAD`, under that
-commit's SHA. A mark written later goes in a new list, under its own
-SHA, and so does every mark when a rebase or amend replaces the listed
-commit.
+marks pending review, `mark-checked --pending --by "Claude Code agent"`,
+and carries on. A pending mark keeps its finding quiet like any other,
+and is written with `review = "pending"`. Its pull request's body lists
+them, as `uv run tools/claims.py pending-marks --at HEAD` prints them:
+every mark pending in the file committed at `HEAD`. Name that commit's
+full SHA above the list. A mark written later goes in a new list, under
+its own SHA, and so does every mark when a rebase or amend replaces the
+listed commit. Re-marking a pending finding without `--pending` would
+record it as reviewed, so an agent re-marks with `--pending` too.
 
 The maintainer approves the marks pending at a SHA. A mark they reject
 is removed in a new commit, which is the SHA they then approve: `uv run
-tools/check-pending-marks.py --approve <sha>` approves every mark
-pending at that SHA whose keys are unchanged since, so a rejected mark
-still there would be approved with the rest. Fixed or read again, it is
-marked anew and listed for a later approval. The script rewrites
-`pending review by` to `approved by`, and leaves any other pending mark
-as it is. It edits only `by`, which `claims` never reads, so the mark
-applies exactly as before. Approving by re-marking would record the
-subjects as they are on disk now, which nobody may have read. The
-rewrite is its own commit on the pull request's branch, before merge.
-Merging is not approval.
-
-CI's Claims Marks job runs `tools/check-pending-marks.py`, which fails
-while any mark in `claims.checked.toml` is pending, so a forgotten
-rewrite shows on the pull request. It blocks the merge only once the
-maintainer makes it a required status. It checks the whole file, not the
-pull request's change, so a pending mark that does reach `main` fails
-every pull request until one rewrites it, with the maintainer's
+tools/claims.py approve-marks <sha>` approves every mark pending at that
+SHA whose keys are unchanged since, so a rejected mark still there would
+be approved with the rest. Fixed or read again, it is marked anew and
+listed for a later approval. Approving removes `review` and leaves every
+other key, and every other pending mark, as it is, so the mark applies
+exactly as before. Approving by re-marking would record the subjects as
+they are on disk now, which nobody may have read. The approval is its
+own commit on the pull request's branch, before merge. Merging is not
 approval.
+
+CI's Claims Marks job runs `pending-marks`, which fails while any mark
+in `claims.checked.toml` is pending, so a forgotten approval shows on
+the pull request. It blocks the merge only once the maintainer makes it
+a required status. It checks the whole file, not the pull request's
+change, so a pending mark that does reach `main` fails every pull
+request until one approves it, with the maintainer's approval.
