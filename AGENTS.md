@@ -488,15 +488,21 @@ plugin's `triage`, `implement` and `implement-spec` skills can't call any
 of them, so `.claude/hooks/settle-design-reminder.py` adds a reminder when
 a prompt starts one of them.
 
-The tools are being built in ratect#924's sub-issues. Until ratect#930
-adds `check-design`, the reminder at implementation names `settle-design`,
-and until ratect#927 and ratect#928 land, `settle-design` and `ready` keep
-their current steps, including `ready`'s design stop recommending
-`settle-design`. Meanwhile the brief's classes label a finding without
-changing those steps: a dispute is listed with why it wasn't fixed, and a
-design gap is appended to the issue's design record with
-`tools/design-record.py`, whose `--help` says which record that is and who
-may write what.
+The tools are being built in ratect#924's sub-issues. `settle-design`
+runs at triage only, so until ratect#930 adds `check-design`, the reminder
+at implementation says to read the design record with
+`tools/design-record.py` and check the brief against it, and a ticket with
+no record goes back to `needs-triage`. Until ratect#928 lands, `ready`
+keeps its current steps; its design stop's "rethink it with
+`settle-design` on that mechanism" means a fresh run at triage: the
+maintainer sends the issue back to `needs-triage`, and `settle-design`
+runs on that mechanism there, so the `ready` call stops, leaving the code
+as it is. A ticketless change that reaches the design stop gets a ticket
+first, since design work that needs a record needs one. Meanwhile the
+brief's classes label a `ready` finding without changing its other steps:
+a dispute is listed with why it wasn't fixed, and a design gap is appended
+to the issue's design record with `tools/design-record.py`, whose `--help`
+says which record that is and who may write what.
 
 ### Domain docs
 

@@ -86,10 +86,16 @@ class Reminder(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(out.getvalue(), expected)
 
-    def test_each_reminder_names_the_skill(self):
-        for text in [hook.AT_TRIAGE, hook.AT_IMPLEMENTATION]:
-            with self.subTest(text=text):
-                self.assertIn("settle-design", text)
+    def test_the_triage_reminder_names_the_skill(self):
+        self.assertIn("run the settle-design skill", hook.AT_TRIAGE)
+
+    def test_the_implementation_reminder_reads_the_record_instead_of_running_the_skill(self):
+        # settle-design runs at triage only (ratect#927's design record, D1):
+        # until check-design exists, implementation reads the record, and a
+        # ticket with none goes back to triage.
+        self.assertNotIn("run the settle-design skill", hook.AT_IMPLEMENTATION)
+        self.assertIn("uv run tools/design-record.py get", hook.AT_IMPLEMENTATION)
+        self.assertIn("needs-triage", hook.AT_IMPLEMENTATION)
 
 
 if __name__ == "__main__":

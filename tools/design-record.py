@@ -21,6 +21,7 @@
 """Reads and writes an issue's one design record.
 
     uv run tools/design-record.py get ISSUE
+    uv run tools/design-record.py get ISSUE --all
     uv run tools/design-record.py create ISSUE --by settle-design       < record
     uv run tools/design-record.py rewrite ISSUE --by settle-design --why WHY < record
     uv run tools/design-record.py append ISSUE gap --by TOOL            < text
@@ -29,7 +30,8 @@
 
 Each takes `--repo OWNER/REPO`, the current repository by default, and
 prints the record as JSON: `issue`, `source`, `comment_id`, `url`,
-`updated_at`, `body` and `pointers`. TOOL is `settle-design`,
+`updated_at`, `body` and `pointers`; `get --all` prints `issue` and
+`records`, a list of those (`issue` aside, `created_at` added). TOOL is `settle-design`,
 `check-design` or `ready`. Exits 1 when the rules below refuse a request,
 2 when `gh` can't be run, fails, or replies with something other than
 GitHub's JSON.
@@ -37,9 +39,9 @@ GitHub's JSON.
 It is meant to be the only way the three review tools of ADR 0028 read or
 write a design record. ratect#924's design record (D5-D12 and D21) settles
 what follows, and ratect#926 settles the parts that record left open. The
-skills move to it as ratect#927, #928 and #930 land; until then
-`settle-design` still posts a `## settle-design record`, which this reads
-as a legacy record.
+skills move to it as ratect#927, #928 and #930 land; a
+`## settle-design record`, the form `settle-design` posted before
+ratect#927, is read as a legacy record.
 
 # Which record
 
@@ -53,7 +55,12 @@ With none, a comment holding a line exactly `## settle-design record` (the
 form before ADR 0028) serves, if there is one: its section of the comment,
 up to the next `##` heading, since triage posts one inside its brief. With
 several of those, settle-design merges them into a design record before
-any tool reads it, and the maintainer confirms any conflict between them. A
+any tool reads it, and the maintainer confirms any conflict between them.
+`get --all` is how settle-design reads what it merges: the issue body's
+section, then every design record and legacy record comment, oldest
+first, each as `get` would return it alone, refused for none of the
+reasons above. A legacy record older than the design record, or named in
+its log, is one the design record has already absorbed. A
 legacy record posted after the design record is refused the same way until
 settle-design merges it in with `rewrite`, whose log line names its URL;
 an edit to the record that doesn't name it doesn't count. With none of either, the issue body's own `## Design record` section,
@@ -337,6 +344,31 @@ def find(repo, issue, merging=False):
     return found(issue, "body" if text else "none", None, text)
 
 
+def every_record(repo, issue):
+    """Every record on the issue, never refusing: the body's, then each comment's, oldest first."""
+    listed = []
+    reply = json.loads(gh("api", f"repos/{repo}/issues/{issue}"))
+    body = (reply["body"] or "") if reply.get("author_association") in TRUSTED else ""
+    span = section_span(body, HEADING)
+    if span:
+        listed.append(found(issue, "body", None, body[span[0] : span[1]].rstrip() + "\n"))
+        listed[-1]["created_at"] = reply.get("created_at")
+    trusted = [c for c in comments(repo, issue) if c.get("author_association") in TRUSTED]
+    for comment in sorted(trusted, key=lambda c: c["created_at"]):
+        if has_line(comment["body"], HEADING):
+            listed.append(found(issue, "comment", comment, comment["body"]))
+        elif has_line(comment["body"], LEGACY_HEADING):
+            start, end = section_span(comment["body"], LEGACY_HEADING)
+            listed.append(found(issue, "legacy", comment, comment["body"][start:end].rstrip() + "\n"))
+        else:
+            continue
+        listed[-1]["created_at"] = comment["created_at"]
+    return {
+        "issue": issue,
+        "records": [{k: v for k, v in r.items() if k != "issue" and not k.startswith("_")} for r in listed],
+    }
+
+
 def post(repo, issue, text):
     """Posts `text` as the issue's design record comment."""
     comment = json.loads(
@@ -520,6 +552,11 @@ def parser():
     commands = parser.add_subparsers(dest="command", required=True)
     get = commands.add_parser("get", help="Print the issue's design record as JSON.")
     get.add_argument("issue", type=int)
+    get.add_argument(
+        "--all",
+        action="store_true",
+        help="List every design record and legacy record comment instead, for settle-design to merge.",
+    )
     create_ = commands.add_parser("create", help="Post the record on stdin as the issue's design record.")
     create_.add_argument("issue", type=int)
     by(create_)
@@ -548,7 +585,9 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
-        if args.command == "get":
+        if args.command == "get" and args.all:
+            result = every_record(args.repo, args.issue)
+        elif args.command == "get":
             result = find(args.repo, args.issue)
         elif args.command == "create":
             result = create(args.repo, args.issue, args.by, sys.stdin.read())

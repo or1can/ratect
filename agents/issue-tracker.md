@@ -57,11 +57,7 @@ about being the contract. `uv run tools/design-record.py get <number>`
 returns the record: it knows which comment holds it and whose comments
 count. When it exits 1 (two records, or legacy ones not yet merged), stop:
 merging them is `settle-design`'s, with the maintainer confirming, and no
-reader picks one. Until ratect#927 lands, `settle-design` still writes its
-record as a `## settle-design record` section inside the brief, with no
-decision ids; `get` reads that section, up to the next `##` heading, as
-the record (so a `##` heading inside it cuts it short), and the rules
-below apply to it as far as it goes.
+reader picks one.
 
 - **Reading a ticket** (`implement`, `implement-spec`, `code-review`):
   read the brief and the record together, and for each pointer `get`

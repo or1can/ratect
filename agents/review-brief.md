@@ -57,6 +57,11 @@ that only restates one of them is a dispute.
 - **A mutation check counts once it has shown red.** A green result from a
   mutation that disabled nothing proves nothing.
 - **A design record names the axes its probes didn't vary.**
+- **For each file the design writes that another tool also writes, name
+  whose parser defines its format.** A file two tools write is a mechanism
+  (ratect#920): in ratect#905, the bug review found five problems where
+  `--approve` rewrote `claims.checked.toml` by its own reading of a format
+  `claims` defines.
 - **A comment calling a behaviour deliberate should say whose decision it
   was.** Behaviour carried over from Batect can be a platform default it
   inherited (the JVM's `user.home`,
