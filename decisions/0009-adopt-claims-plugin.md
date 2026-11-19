@@ -10,7 +10,9 @@ clone where `pre-commit install` has been run; and the same checks run in
 CI on every pull request (ratect#707), so the Consequences below that say
 they are not in CI no longer hold. Nor do the Decision and Consequences
 lines saying CI's `Tools Tests` job tests only `changelog-section.py`: it
-runs every `tools/test_*.py` file. What follows is the decision as it was
+runs every `tools/test_*.py` file. Nor does the Consequences line saying
+`claims` has no tagged release to pin CI against: the hook and CI both pin
+one, the `rev` in `.pre-commit-config.yaml`. What follows is the decision as it was
 taken; `AGENTS.md`'s Tooling & CI section describes the current setup.
 
 ## Context

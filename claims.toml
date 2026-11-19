@@ -5,14 +5,20 @@
 
 [hook]
 # CI and the pre-push hook fail on any unmarked advisory finding. A finding
-# from these three is brought in by the commit's own edit — a sentence it
-# added, or one it retracted that another file still asserts — so that commit
-# is where it's cheapest to fix or mark, and the commit hook blocks on them.
-# Not stale-claims or spliced-docs, whose findings rank or sweep text the
-# commit didn't write, and not judgment-agent, whose candidates (every
-# backticked Rust/Swift name a diff touched) each want an agent's reading:
-# those stay with pre-push and CI.
-fail_on_unmarked = ["claim-words", "temporal-words", "restatement"]
+# from these four is brought in by the commit's own edit — a sentence it
+# added, one it retracted that another file still asserts, or a file it
+# changed that a doc section names — so that commit is where it's cheapest to
+# fix or mark, and the commit hook blocks on them. An agent marks what it
+# reads there in that same commit (agents/claims.md), and a `--pending` mark
+# lets the commit through. stale-claims counts the commit being made since
+# claims v0.29.2, so its finding reaches the commit that causes it rather than
+# surfacing only at pre-push. Its cost: a commit that edits no doc can be
+# blocked by a doc section, which it never edited, naming a file it changed,
+# until the section is re-read and fixed or marked. Not spliced-docs, whose
+# findings come from doc comments however old, not from the commit's edit, and
+# not judgment-agent, whose candidates (every backticked Rust/Swift name a
+# diff touched) each want an agent's reading: those stay with pre-push and CI.
+fail_on_unmarked = ["claim-words", "temporal-words", "restatement", "stale-claims"]
 
 [stale-claims]
 # A bare backtick name (`` `cache` ``, no extension) is ambiguous — as often

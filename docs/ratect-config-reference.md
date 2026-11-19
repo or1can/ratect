@@ -1210,14 +1210,14 @@ The container fields, by area:
 | Area | Fields | Semantics |
 | --- | --- | --- |
 | Image | `image`, `image_pull_policy`, `build_directory`, `dockerfile`, `build_target`, `build_args`, `build_secrets`, `build_ssh` | [Image building](ratect-compat-config-reference.md#image-building) |
-| Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](ratect-compat-config-reference.md#volume-path-resolution), [caches](ratect-compat-config-reference.md#cache-volumes), [tmpfs](ratect-compat-config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* — the linked section describes project-keyed storage, which `scope = "shared"` deliberately does not use. |
+| Mounts | `volumes` (host / `cache` / `tmpfs`) | [Volumes](ratect-compat-config-reference.md#volume-path-resolution), [caches](ratect-compat-config-reference.md#cache-volumes), [tmpfs](ratect-compat-config-reference.md#tmpfs-mounts). A cache also takes [`scope`](#shared-caches) *(native only)* |
 | Runtime | `command`, `entrypoint`, `working_directory`, `environment`, `enable_init_process`, `privileged`, `shm_size`, `capabilities_to_add`, `capabilities_to_drop`, `devices`, `labels`, `log_driver`, `log_options` | [Container](ratect-compat-config-reference.md#container) |
 | Graceful shutdown | `stop_signal`, `stop_grace_period` | [above](#stop_signalstop_grace_period-graceful-shutdown) *(native only)* |
 | Resource limits | `ulimits` | [above](#ulimits-per-resource-limits) *(native only)* |
 | Name resolution | `dns`, `dns_search`, `dns_options` | [above](#dnsdns_searchdns_options-name-resolution) *(native only)* |
 | Networking | `ports`, `additional_hostnames`, `additional_hosts`, `dependencies` | [Ports](ratect-compat-config-reference.md#port-mappings), [readiness](dependency-readiness.md) |
 | Network mode | `network_mode` | [above](#network_mode-leaving-the-tasks-network) *(native only)* |
-| Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). Both are inert on a task's own container — see [Where the semantics differ](#where-the-semantics-differ). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
+| Readiness | `health_check`, `setup_commands` | [Dependency Readiness](dependency-readiness.md). A setup command also takes [`run_in`](#run_in-setup-commands-in-another-container) *(native only)* |
 | Init containers | `run_to_completion` | [above](#run_to_completion-init-containers) *(native only)* |
 | External checks | `external_health_check` | [above](#external_health_check-checking-a-container-from-outside-it) *(native only)* |
 | User | `identity`, `user`, `group`, `groups` | [`identity`](#identity-your-files-and-the-same-home-everywhere) and [`user`/`group`/`groups`](#usergroupgroups-running-as-a-specific-user) *(native only)* |

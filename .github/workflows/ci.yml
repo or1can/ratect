@@ -211,16 +211,22 @@ jobs:
         run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli --repo-root . --diff-range "origin/$BASE_REF" --fail-on-unmarked
 
   # No mark in `claims.checked.toml` still pending the maintainer's review
-  # (`agents/claims.md`). The whole file, not the PR's change: `main` holds no
-  # pending mark, so one there is a merge that skipped the rewrite, and every
-  # PR showing it is how it gets noticed. Not a required status check unless
-  # the maintainer makes it one. `pending-marks` runs no check, so this needs
-  # only the pinned release, read as the Claims job reads it.
+  # (`agents/claims.md`). A required status check, so a pending mark can't
+  # merge. The whole file, not the PR's change: `main` holds no pending mark,
+  # so one there is a merge that skipped its approval, and every PR showing
+  # it is how it gets noticed. `pending-marks` runs no check, so this needs
+  # only the pinned release, read as the Claims job reads it. On a pull
+  # request it also fails while a commit in it has a `fixup!` subject: the
+  # approval fold folds a correction into the commit it names, and one still
+  # there after it is a draft nothing will fold.
   claims-marks:
     name: Claims Marks
     runs-on: ubuntu-latest
     steps:
+      # Full history, so the pull request's own commits can be listed.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Check out the pinned claims release
         shell: bash
         run: |
@@ -229,6 +235,21 @@ jobs:
           git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$rev" \
             https://github.com/or1can/claims "$RUNNER_TEMP/claims"
       - run: PYTHONPATH="$RUNNER_TEMP/claims" python3 -m claims.cli pending-marks --repo-root .
+      - name: Fail on an unfolded fixup! commit
+        # Also after a pending-marks failure, so one run reports both.
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        # `pipefail`, so a `git log` that fails fails the step.
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          fixups=$(git log --format='%H %s' "$BASE_SHA..$HEAD_SHA" | awk '$2 ~ /^fixup!/')
+          if [ -n "$fixups" ]; then
+            echo "::error::A fixup! commit is still in this pull request; fold it with the approval fold (agents/claims.md):"
+            echo "$fixups"
+            exit 1
+          fi
 
   docker-integration:
     name: Docker Integration Test
