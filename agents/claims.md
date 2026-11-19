@@ -111,32 +111,115 @@ while checked` count says how many marks applied.
 
 ## An agent's marks
 
-An agent doesn't wait for the maintainer before marking. It writes its
-marks pending review, `mark-checked --pending --by "Claude Code agent"`,
-and carries on. A pending mark keeps its finding quiet like any other,
-and is written with `review = "pending"`. Its pull request's body lists
-them, as `uv run tools/claims.py pending-marks --at HEAD` prints them:
-every mark pending in the file committed at `HEAD`. Name that commit's
-full SHA above the list. A mark written later goes in a new list, under
-its own SHA, and so does every mark when a rebase or amend replaces the
-listed commit. Re-marking a pending finding without `--pending` would
-record it as reviewed, so an agent re-marks with `--pending` too.
+An agent doesn't wait for the maintainer, to mark or to carry on. It
+marks what its own pre-commit run shows, whether the hook blocks on the
+finding or only prints it, in that same commit, not in a marks commit at
+the end of a branch: `uv run tools/claims.py mark-checked --pending --by
+"Claude Code agent"`, staged with the change that raises the finding. A
+pending mark keeps its finding quiet like any other, and is written with
+`review = "pending"`. A later commit that changes a marked subject
+re-marks it pending in that commit. Re-marking a pending finding without
+`--pending` would record it as reviewed, so an agent re-marks with
+`--pending` too.
 
-The maintainer approves the marks pending at a SHA. A mark they reject
-is removed in a new commit, which is the SHA they then approve: `uv run
-tools/claims.py approve-marks <sha>` approves every mark pending at that
-SHA whose keys are unchanged since, so a rejected mark still there would
-be approved with the rest. Fixed or read again, it is marked anew and
-listed for a later approval. Approving removes `review` and leaves every
-other key, and every other pending mark, as it is, so the mark applies
-exactly as before. Approving by re-marking would record the subjects as
-they are on disk now, which nobody may have read. The approval is its
-own commit on the pull request's branch, before merge. Merging is not
-approval.
+A finding raised after its commit, by the pre-push hook's branch range
+or by CI, still belongs to the commit that raised it: the last commit
+that changed any of the mark's subjects (for `stale-claims`, the section
+or a file it names), since the mark records them as they are at the tip.
+Its pending mark goes in a `fixup!` commit whose subject is `fixup!
+<that commit's full SHA>`, which the approval fold below folds in. That
+SHA names the commit only until the branch is rewritten, so a rebase of
+a branch holding a `fixup!` folds it in first, with
+`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash <onto>` (without
+`-i`, git before 2.44 ignores `--autosquash`), and if that rebase stops,
+it is aborted with `git rebase --abort` and the agent asks. A branch
+holding pending marks or a `fixup!` is updated only that way: never with
+GitHub's "Update branch", whose rebase leaves the `fixup!` naming
+nothing and whose merge commit the fold refuses, and never with `git
+merge`.
 
-CI's Claims Marks job runs `pending-marks`, which fails while any mark
-in `claims.checked.toml` is pending, so a forgotten approval shows on
-the pull request. It blocks the merge only once the maintainer makes it
-a required status. It checks the whole file, not the pull request's
-change, so a pending mark that does reach `main` fails every pull
-request until one approves it, with the maintainer's approval.
+The pull request's body lists, for each commit in it, the marks that
+commit added or changed, as `uv run tools/claims.py pending-marks --at
+<sha> --own` prints them, under its full SHA. A `fixup!` commit's marks
+are listed under the commit it folds into, below that commit's own,
+since the fold approves them only by that commit's SHA. The list is
+replaced whenever the head moves, and reads "No marks pending" once none
+is. A subagent's report names its branch, its worktree's path, its tip's
+full SHA and that list, and the session that started it puts the list to
+the maintainer.
+
+Only the maintainer approves or rejects a mark: by a reply in the
+session, or by a comment on the pull request from their own account. The
+repository is public, so anyone else's comment is ignored. They approve
+the marks of some or all of the listed commits, a commit's marks all
+together, or reject marks. A commit holding a mark they haven't read
+stays pending until they read it. An approval names the SHAs listed when
+it was given, so after a rewrite the marks are listed again and approved
+again. A rejection is of the versions listed, and each commit whose
+listed version was rejected gets a `fixup!` commit of its own, holding
+the fix, the deletion of the rejected entry, and a `--pending` re-mark
+only if a second reading found it true, with a note on that entry saying
+what the reading found; the commit can then be approved, and the deleted
+entry, no longer in the tree, isn't. Merging is not approval.
+
+Approving is the approval fold, `claims`' `fold-approvals` ([Folding
+approvals into their
+commits](https://github.com/or1can/claims/blob/main/docs/checked-marks.md#folding-approvals-into-their-commits)
+says how it works and what it refuses). It approves each mark inside the
+commit that wrote it, as written there, so a mark re-marked in three
+commits is three approvals, one in each. It runs only where the
+maintainer can answer the prompts for it and for the force-push, both of
+which `.claude/settings.json` asks before running, as typed; an approval
+given in a pull request comment is carried out in the maintainer's next
+session. It runs from a clean tree, after `git fetch`, and, where
+`origin/<branch>` exists, only if it is an ancestor of `HEAD`, so
+nothing pushed from elsewhere is overwritten; otherwise stop and ask.
+The push uses the lease below, not the one the fold prints, which names
+the old local tip:
+
+```sh
+uv run tools/claims.py fold-approvals "$(git merge-base origin/main HEAD)" --by "<maintainer>" --approve <sha> ...
+uv run tools/claims.py fold-approvals "$(git merge-base origin/main HEAD)" --by "<maintainer>" --approve <sha> ... --apply
+git push --force-with-lease=<branch>:<origin/<branch>'s SHA>
+```
+
+The first run only previews: each commit with its own pending marks and
+the `fixup!` commits that fold into it. `--approve` names each commit
+whose marks the maintainer approved, by the SHA they were listed under,
+and covers the `fixup!` commits listed under it too, a rejected mark's
+`--pending` re-mark included, so those are read in the preview first.
+`--apply` folds every `fixup!` and writes the maintainer's bare name as
+each approved entry's `by`: there is no approval commit and no message
+line, and `by` is the record of who approved. A commit not named keeps
+its marks pending. If the fold's rebase stops, it puts the branch back;
+the agent asks the maintainer rather than reworking the `fixup!`
+unasked. A branch never pushed is pushed with `git push -u origin
+<branch>`, with no force, and a rejected lease means stop and fetch, not
+retry. Approving at commit time is the same fold over one commit.
+Approving by re-marking instead would record the subjects as they are on
+disk now, which nobody may have read.
+
+A rewrite for any other reason lists the pending marks again, and leaves
+an approved mark approved if every key is unchanged: an approval holds
+for a mark's content, not for a commit (`claims`' [ADR
+0015](https://github.com/or1can/claims/blob/main/decisions/0015-an-approval-holds-for-content-not-for-a-commit.md)).
+
+CI's Claims Marks job is a required status. It runs `pending-marks`,
+which fails while any mark in `claims.checked.toml` is pending, so a
+pending mark can't merge, and on a pull request it also fails while a
+commit in it has a subject starting `fixup!`, so a correction nobody
+folded can't merge either. `fold-approvals` refuses a range with nothing
+pending; that range's `fixup!` commits are folded by hand with
+`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash "$(git merge-base
+origin/main HEAD)"`, under the fold's preconditions: `HEAD`'s SHA is
+noted first, `git diff <that SHA> HEAD` must be empty afterwards, and
+the result is pushed as above. If the rebase stops, it is aborted with
+`git rebase --abort`; if the diff isn't empty, the branch goes back with
+`git reset --hard <that SHA>`; either way the agent asks. The job checks
+the whole file, not the pull request's change. A pending mark that
+reaches `main` anyway can't be folded, since `main` can't be rewritten:
+it is approved by a commit of its own, in a pull request of its own,
+made with `uv run tools/claims.py approve-marks <sha> --by
+"<maintainer>"`. A branch whose base holds it runs no fold until that
+pull request merges and the branch rebases onto `main`, and
+`fold-approvals` refuses a base holding a pending mark.

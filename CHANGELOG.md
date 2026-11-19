@@ -39,7 +39,8 @@ history, from when it was the only binary.
 - CI's Windows Check job compiles the workspace, tests included, for Windows; nothing is run there. `nix` is a dependency on Unix targets only. No effect on the released binaries, none of which targets Windows.
 - `tools/check-windows-build.py` runs Windows Check's `cargo check` from a macOS or Linux host. No effect on the released binaries; contributor-tooling only.
 - A `/settle-design` Claude Code skill, run at the end of triage, finds what a ticket leaves open, settles it as a design and writes the issue's design record; a prompt starting `/triage` gets a reminder to run it, and one starting `/implement` or `/implement-spec` a reminder to read the design record. No effect on the released binaries; contributor-tooling only.
-- `tools/claims.py` runs the `claims` CLI at the release the pre-commit hook pins. CI's new Claims Marks job fails while a mark in `claims.checked.toml` is still pending the maintainer's review. No effect on the released binaries; contributor-tooling only.
+- `tools/claims.py` runs the `claims` CLI at the release the pre-commit hook pins. CI's new Claims Marks job fails while a mark in `claims.checked.toml` is still pending the maintainer's review, or while a pull request holds a `fixup!` commit. No effect on the released binaries; contributor-tooling only.
+- A pending `claims` mark is approved inside the commit that wrote it, with `claims fold-approvals`, which writes the approver's name as the mark's `by`, rather than in an approval commit of its own. No effect on the released binaries; contributor-tooling only.
 - `tools/design-record.py` reads and writes an issue's design record, the record ADR 0028's review skills are moving to. No effect on the released binaries; contributor-tooling only.
 
 ### Changed
@@ -47,7 +48,7 @@ history, from when it was the only binary.
 - `/ready` reviews a change against its issue's design record: each finding is classed as a bug, design gap, design flaw or dispute, a design gap is appended to the record, and only a confirmed design flaw stops the review. Its fix loop ends by fix round 3, followed by one two-axis review and at most one more bug pass. No effect on the released binaries; contributor-tooling only.
 - `/ready` and `/settle-design` brief their reviewers from `agents/review-brief.md`, which holds the checks a reviewer applies and classes what a reviewer raises as a bug, design gap, design flaw or dispute. No effect on the released binaries; contributor-tooling only.
 - A `services` key in a Batect-format (YAML) file is refused as a field only a native `ratect.toml` can declare.
-- The `claims` commit hook refuses a commit that brings in an unmarked `claim-words`, `temporal-words` or `restatement` finding, or that leaves an orphaned mark for one. No effect on the released binaries; contributor-tooling only.
+- The `claims` commit hook refuses a commit that brings in an unmarked `claim-words`, `temporal-words`, `restatement` or `stale-claims` finding, or that leaves an orphaned mark for one. No effect on the released binaries; contributor-tooling only.
 - The `tools/` scripts need Python 3.11 or later, and are run as `uv run tools/<script>.py`, which fetches one; a plain `python3` older than that, from 3.9, stops with a message saying so. `mdbook build` needs `uv` on `PATH`. No effect on the released binaries; contributor-tooling only.
 
 ### Fixed
