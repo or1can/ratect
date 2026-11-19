@@ -1662,9 +1662,9 @@ file = "README.md"
 mode = "stale-claims"
 unit = "caf9f906b16a91cb"
 copies = 1
-note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/comparison.md" = "0eb7bb383099fed1", "docs/connecting-to-docker.md" = "3c5685291bc57cfa", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "893a5840df601d71", "docs/includes.md" = "7327593788ec3ba8", "docs/index.md" = "44c68e79c054a6cf", "docs/installation.md" = "f090088ec7661efd", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "5349d598e5d0c602", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "c8e426c4c33360b1", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
+note = "Read in full against docs/SUMMARY.md, docs/CNAME and book.toml: the four groups and 25 links match SUMMARY in order. True."
+by = "Kevin Rogers"
+subjects = { "docs/comparison.md" = "0eb7bb383099fed1", "docs/connecting-to-docker.md" = "3c5685291bc57cfa", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/how-it-works.md" = "893a5840df601d71", "docs/includes.md" = "7327593788ec3ba8", "docs/index.md" = "44c68e79c054a6cf", "docs/installation.md" = "f090088ec7661efd", "docs/interactive-mode.md" = "62237e88d0ab158d", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "5349d598e5d0c602", "docs/proxies.md" = "b11bfa8c414314de", "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-compat-cli.md" = "38f473844c48ef26", "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "5fe6b12262cd5073", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/troubleshooting.md" = "c8e426c4c33360b1", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "docs/worked-examples.md" = "e78371101742f5a7" }
 
 [[mark]]
 file = "README.md"
@@ -2465,27 +2465,27 @@ file = "agents/docs.md"
 mode = "stale-claims"
 unit = "01b8016fdce455c4"
 copies = 1
-note = "Read in full against docs/SUMMARY.md, README.md's Documentation list, ci.yml's Tools Tests job and docs/ratect-config-reference.md's mapping table, and the named model pages. True, except that rule 1's Semantics column holds more than a link in two rows: Mounts (a project-keyed storage aside) and Readiness (\"Both are inert on a task's own container\"), so the rows, not the rule, are what differ. The #158 audit and the history are not checkable in the repo."
+note = "Read in full against the field-reference table as trimmed in this commit (every Semantics cell now a link with at most a native-only qualifier), docs/SUMMARY.md, the named model pages, AGENTS.md guideline 9 and ci.yml's Tools Tests job, with tools/check-readme-docs-list.py run. True; the #158 audit and the list's history aren't checkable in the repo."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "ROADMAP.md" = "25955ca943036063", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "7327593788ec3ba8", "docs/installation.md" = "f090088ec7661efd", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "docs/ratect-config-reference.md#field-reference" = "26b25fdae4a72f87", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
+subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "ROADMAP.md" = "25955ca943036063", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "7327593788ec3ba8", "docs/installation.md" = "f090088ec7661efd", "docs/ratect-config-reference.md" = "5fe6b12262cd5073", "docs/ratect-config-reference.md#field-reference" = "ee1c9a7a72561f02", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
 
 [[mark]]
 file = "agents/docs.md"
 mode = "stale-claims"
 unit = "25e8a1870e46a028"
 copies = 1
-note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "81ffb2428cda34ab" }
+note = "Read in full against both config references and CHANGELOG.md's 0.25.0 section. True as the rationale for the Where the semantics differ table; it quotes the field reference's \"applies, with the same meaning\" without its \"except where\" clause, and 0.25.0's image-source validation shipped alongside two other divergences that now have rows (expressions in image, nested Git includes)."
+by = "Kevin Rogers"
+subjects = { "docs/ratect-compat-config-reference.md" = "32249b9090bad7eb", "docs/ratect-config-reference.md" = "5fe6b12262cd5073" }
 
 [[mark]]
 file = "agents/docs.md"
 mode = "stale-claims"
 unit = "53f9fac61c746451"
 copies = 1
-note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "book.toml" = "5be1237a684817bc", "docs/demo.cast" = "dea031efbde9ac70", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "5349d598e5d0c602", "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "90b2416bf81dab8d", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "044487bde4ba7725" }
+note = "Read in full against tools/capture-output.py, book.toml's ansi preprocessor, docs/captures/, every include site's provenance line, config.rs's task listing and ci.yml's worked-examples job. True; the includes-list and includes-clean-leftovers captures come from a conformance project and a scratch HOME rather than a checked-in example, and dependency-readiness.md's reuse of output-styles-simple is missing from Captured so far."
+by = "Kevin Rogers"
+subjects = { "book.toml" = "5be1237a684817bc", "docs/demo.cast" = "dea031efbde9ac70", "docs/file-ownership.md" = "a0b4bff25d0273bd", "docs/getting-started.md" = "c66d620dcac483dc", "docs/migrating-batect-project.md" = "e32ecb9a4e1c930a", "docs/output-styles.md" = "5349d598e5d0c602", "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-config-reference.md" = "5fe6b12262cd5073", "docs/worked-examples.md" = "e78371101742f5a7", "tools/capture-output.py" = "90b2416bf81dab8d", "tools/mdbook-ansi.css" = "47064c78584b2e76", "tools/mdbook-ansi.py" = "044487bde4ba7725" }
 
 [[mark]]
 file = "agents/docs.md"
@@ -3104,9 +3104,9 @@ file = "decisions/0001-two-binaries.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read in full against git tags, each crate's version, the fixture counts (99 and 22), labels.rs, CHANGELOG.md, AGENTS.md guideline 7 and dist-workspace.toml. The \"(ratect only)\" marker line no longer holds (now a leading bold marker), and the Status records it; everything else holds."
+note = "Re-read after 3c91cbda changed AGENTS.md (CLAUDE.md links to it) in its cargo doc sentence alone: the section names CLAUDE.md only for the \"Where a fixture lives — by layer\" heading, still at AGENTS.md:183, so the earlier full reading against git tags, crate versions, fixture counts, labels.rs, CHANGELOG.md, guideline 7 and dist-workspace.toml stands."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "CLAUDE.md" = "20c071028724159a" }
+subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "CLAUDE.md" = "800ea70e66547b7f" }
 
 [[mark]]
 file = "decisions/0002-runtime-ownership-labels.md"
@@ -4510,9 +4510,9 @@ file = "decisions/0011-container-identity.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Re-read against the only change since its last mark, the exit-options rename (exit_condition/exit_code_from, ExitCondition, condition_met) and its doc fixes: the section names none of the renamed fields, types or functions, and its other claims were checked earlier this branch."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
+note = "Read in full; present-tense facts checked against user.rs, identity.rs, daemon_class.rs, docker.rs, diagnostics.rs, CONTEXT.md, the schemas and the 0.13.0 milestone. True, except that the hand-over also takes root-owned directories between a home and a mount below it, as identity.rs's own doc comment says; the probed daemon behaviours aren't checkable in the tree."
+by = "Kevin Rogers"
+subjects = { "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "docs/ratect-config-reference.md" = "5fe6b12262cd5073", "ratect-compat/tests/fixtures/tmpfs.yml" = "600721b2e9076c63" }
 
 [[mark]]
 file = "decisions/0012-native-task-container-has-no-readiness-gate.md"
@@ -17516,6 +17516,15 @@ subjects = {}
 
 [[mark]]
 file = "docs/ratect-config-reference.md"
+mode = "claim-words-totalising"
+unit = "edf00124257672dc"
+copies = 1
+note = "Read against the #shared-caches section: a cache mount's scope key is native-only, and the row now links it with that qualifier alone. True."
+by = "Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "docs/ratect-config-reference.md"
 mode = "judgment-agent-added"
 unit = "a3763a041a147701"
 copies = 1
@@ -17619,15 +17628,6 @@ mode = "restatement-ngram"
 unit = "6d892ded04461f73-6d4675159c16d411"
 copies = 1
 note = "Retracted: the old 'refused the first time a release changes...' sentence and the diagnostics.rs comment. The surviving 'counts as written for 0.3.0' is confirmed by the refusal message"
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "docs/ratect-config-reference.md"
-mode = "restatement-ngram"
-unit = "8007d8a6816cce25-90abfa1bcbb5540d"
-copies = 1
-note = "Retracted: engine.rs interactive-TTY comment ('task's own container (see'). Only a shared phrase, different subject (readiness inert)"
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = {}
 
@@ -19581,9 +19581,9 @@ file = "research/service-group-exit-option-names.md"
 mode = "stale-claims"
 unit = "2c2bc34ada1e23f7"
 copies = 1
-note = "Section describes Ratect at the pinned commit 80972f0c (ExitTrigger, exit_code, ExitCodeRule, run_as_current_user refused, identity and health_check tables); checked against config.rs and the config reference."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = { "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-config-reference.md" = "81ffb2428cda34ab", "ratect-core/src/config.rs" = "1adef80de57f99d5" }
+note = "Read in full. A snapshot pinned at its own commit (research/README.md: never revised to follow its sources); the fields have since shipped as exit_condition and exit_code_from, which the section, true at its commit, doesn't claim otherwise."
+by = "Kevin Rogers"
+subjects = { "docs/ratect-cli.md" = "0069b8d8f7fad8dd", "docs/ratect-config-reference.md" = "5fe6b12262cd5073", "ratect-core/src/config.rs" = "1adef80de57f99d5" }
 
 [[mark]]
 file = "research/service-group-exit-option-names.md"

@@ -55,7 +55,8 @@ Ratect is a **Cargo workspace** with four crates (the
   pipeline; the notes below are per-module gotchas, not a full walkthrough.
   Each module carries its own notes as a `//!` doc comment — what it does, the
   gotchas, and the decisions that are easy to undo by accident. Read the module,
-  not this file; `cargo doc --open -p ratect-core` renders them all. What lives
+  not this file; `cargo doc --open -p ratect-core --all-features --document-private-items`
+  renders them all, the private and `schema`-gated ones included. What lives
   where:
 
   | Module | Responsibility |
