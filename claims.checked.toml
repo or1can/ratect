@@ -10,6 +10,15 @@ subjects = {}
 [[mark]]
 file = ".claude/skills/ready/SKILL.md"
 mode = "restatement-ngram"
+unit = "7fa3378562533556-a194716f4bb637ac"
+copies = 1
+note = "Not retracted: #938 added --max-findings all to settle-design's passes only; ready's own bug review still runs code-review at high, as ADR 0028's Decision 5 says."
+by = "Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = ".claude/skills/ready/SKILL.md"
+mode = "restatement-ngram"
 unit = "b02fb846afa3985b-03c20eae62d9b3df"
 copies = 1
 note = "Moved, not retracted: the reviewer-side check about briefs went to agents/review-brief.md, and this author habit about handoffs stays; both are true."
@@ -21,26 +30,35 @@ file = ".claude/skills/ready/SKILL.md"
 mode = "stale-claims"
 unit = "124b860dce9f3508"
 copies = 1
-note = "Read in full against the same skill's Steps, claims.toml, agents/claims.md, .pre-commit-config.yaml and AGENTS.md guidelines 9 and 16. True; the ratect#911 and #906 history isn't checkable in the repo."
+note = "Read The sweep in full against guidelines 9 and 16; the CHANGELOG edit is to an Unreleased bullet, so \"a shipped entry stands\" still holds."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d" }
+
+[[mark]]
+file = ".claude/skills/ready/SKILL.md"
+mode = "stale-claims"
+unit = "817cd51318b6b9da"
+copies = 1
+note = "Read in full at 4e4f974b by a read-only subagent, against the review brief's classes and design-record.py's append gap; true. After review-brief.md dropped its settle-design gap-timing sentence (#938's D1 amended), Claude Code agent re-read the whole current brief and this section's sentences citing it: the four classes and the in-flow gap route still match."
+by = "Kevin Rogers"
+subjects = { "agents/review-brief.md" = "b001a5ef04a01887", "tools/design-record.py" = "339bc6804a04e3dc" }
 
 [[mark]]
 file = ".claude/skills/ready/SKILL.md"
 mode = "stale-claims"
 unit = "b7595e2a863957fc"
 copies = 1
-note = "Read the Steps against agents/review-brief.md after #927 added a reviewer check: steps 2 and 3 still brief with it; the design stop's settle-design wording is read by AGENTS.md's interim paragraph until #928 (#927's D2)."
-by = "Claude Code agent"
-subjects = { "CHANGELOG.md" = "d75e1ff7a63a038ccd25d7b55f12c04c18002fb5", "agents/probing.md" = "bf91674285619801", "agents/review-brief.md" = "b001a5ef04a01887", "tools/check-windows-build.py" = "f595fdaa44a0a1d8" }
+note = "Read in full at 4e4f974b by a read-only subagent, against design-record.py --help (exit codes 1 and 2), ADR 0028, agents/probing.md, agents/issue-tracker.md and the review brief's four classes; true. After review-brief.md dropped its settle-design gap-timing sentence (#938's D1 amended), Claude Code agent re-read the whole current brief and this section's sentences citing it: steps 3 and 4 still brief with it and its four classes."
+by = "Kevin Rogers"
+subjects = { "agents/issue-tracker.md" = "5a93df9f86acc3c4", "agents/probing.md" = "bf91674285619801", "agents/review-brief.md" = "b001a5ef04a01887", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/design-record.py" = "339bc6804a04e3dc" }
 
 [[mark]]
 file = ".claude/skills/ready/SKILL.md"
 mode = "stale-claims"
 unit = "d03aa2177bb3df09"
 copies = 1
-note = "Read Author habits against agents/review-brief.md: the brief still holds reviewer checks only, and the new #920 check is one a reviewer applies, not an author habit."
-by = "Claude Code agent"
+note = "Read in full at 4e4f974b by a read-only subagent, against agents/review-brief.md; true. After review-brief.md dropped its settle-design gap-timing sentence (#938's D1 amended), Claude Code agent re-read the whole current brief and this section's sentences citing it: it holds only reviewer checks, including the error-naming item this section points to."
+by = "Kevin Rogers"
 subjects = { "agents/review-brief.md" = "b001a5ef04a01887" }
 
 [[mark]]
@@ -82,15 +100,6 @@ subjects = {}
 [[mark]]
 file = ".claude/skills/settle-design/SKILL.md"
 mode = "restatement-ngram"
-unit = "a6954726790fe608-665475ab254038eb"
-copies = 1
-note = "Still true: settle-design's passes are briefed with agents/review-brief.md; ready's steps 3 and 4 still brief with it too, reworded in #928."
-by = "Claude Code agent"
-subjects = {}
-
-[[mark]]
-file = ".claude/skills/settle-design/SKILL.md"
-mode = "restatement-ngram"
 unit = "cf8c40599ea0097f-dde0696832a67104"
 copies = 1
 note = "Still true: ready's design stop (#928) has the maintainer send the issue back to needs-triage, where settle-design runs again."
@@ -102,9 +111,9 @@ file = ".claude/skills/settle-design/SKILL.md"
 mode = "stale-claims"
 unit = "b7595e2a863957fc"
 copies = 1
-note = "Read in full against tools/design-record.py's --help and source, agents/review-brief.md, agents/issue-tracker.md, agents/triage-labels.md, CHANGELOG.md's headings, gh issue list's JSON fields and AGENTS.md guideline 14. True; #924's record and the mattpocock-skills instruments are outside the repo."
+note = "Claude Code agent read Steps 1-4 in full, against agents/review-brief.md and agents/issue-tracker.md read in full, and against design-record.py --help, agents/triage-labels.md and CHANGELOG.md's headings searched for each claim made (get --all, exit 1, the sources, create/amend/rewrite, What a record holds; the two labels; the dated headings); true. For the gap-fixing order step 3 cites #924's D27, not the brief, which no longer states it (#938's D1 amended)."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "agents/issue-tracker.md" = "0d9149df2f5cdc42", "agents/review-brief.md" = "b001a5ef04a01887", "tools/design-record.py" = "f5581d6e70076156" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "agents/issue-tracker.md" = "5a93df9f86acc3c4", "agents/review-brief.md" = "b001a5ef04a01887", "tools/design-record.py" = "339bc6804a04e3dc" }
 
 [[mark]]
 file = ".github/workflows/ci.yml"
@@ -1039,9 +1048,9 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "086809ea8332eda3"
 copies = 1
-note = "Read the whole section against tools/design-record.py, ADR 0028 and agents/issue-tracker.md after the design-record-outranks-brief change: the three tools, their timing, the reminder hook and the interim note all still hold; the one sentence naming design-record.py says a gap is appended with it and its --help says which record and who writes, both true."
-by = "Claude Code agent"
-subjects = { ".claude/hooks/settle-design-reminder.py" = "1638186496703d0c", "agents/review-brief.md" = "9fb9c7b07e2f6547", "decisions/0028-design-and-implementation-review.md" = "744c94496a1ba5a9", "tools/design-record.py" = "27fbab0274e58b2d" }
+note = "Read in full at 4e4f974b by a read-only subagent, against ADR 0028's Decision 1 table, both skills and settle-design-reminder.py; true. After review-brief.md dropped its settle-design gap-timing sentence (#938's D1 amended), Claude Code agent re-read the whole current brief and this section's sentences citing it: both tools still brief reviewers with it."
+by = "Kevin Rogers"
+subjects = { ".claude/hooks/settle-design-reminder.py" = "4b8a093907935055", "agents/review-brief.md" = "b001a5ef04a01887", "decisions/0028-design-and-implementation-review.md" = "6ec11cf7d3a70c0e", "tools/design-record.py" = "339bc6804a04e3dc" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1057,9 +1066,9 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "2f519634b0b93218"
 copies = 1
-note = "Read the whole section against the three files it names that moved: guideline 15 still matches the new ready skill and agents/review-brief.md; guideline 16's classes match ADR 0028 Decision 3; guidelines 8, 9 and 14 cite 0008, whose #926 amendment (to-spec issues labelled needs-triage) contradicts none of them."
-by = "Claude Code agent"
-subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "730ba9bceb692ab6", ".github/workflows/ci.yml" = "9784eb2993e058e7", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "c50de73eee2755fcc384fc59c80f716b26d3f969", "CONTRIBUTING.md" = "ada95f99e7f9a943", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "b001a5ef04a01887", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "c0ca83a9e98e7a0a", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "9c717c29ee6b1ac4", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
+note = "Read in full at 4e4f974b by a read-only subagent, checking guidelines 1-16's review-brief, ADR 0028 and CHANGELOG claims against those files, changelog-section.py, written_for.rs and settings.json; true. After review-brief.md dropped its settle-design gap-timing sentence (#938's D1 amended), Claude Code agent re-read the whole current brief and this section's sentences citing it: guideline 15's description of it (the checks and how a finding is classed) still holds."
+by = "Kevin Rogers"
+subjects = { ".claude/hooks/unfiltered-check-output.py" = "2669bb63e517912b", ".claude/settings.json" = "5b5e46e2df738119", ".github/workflows/ci.yml" = "ae3bf2c164f8ba4e", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "CONTRIBUTING.md" = "6358148c87e0d64d", "ROADMAP.md" = "25955ca943036063", "agents/releasing.md" = "f4bbda4dc76cc0b1", "agents/review-brief.md" = "b001a5ef04a01887", "decisions/0001-two-binaries.md#consequences" = "8eba7eb5478a489d", "decisions/0008-tracking-release-scope-with-github-issues.md" = "c0ca83a9e98e7a0a", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "decisions/0015-native-project-records-its-written-for-version.md" = "34fe311ac30c1968", "decisions/0017-output-streams-and-styles.md" = "7f8603dfa9e1662c", "decisions/0028-design-and-implementation-review.md" = "6ec11cf7d3a70c0e", "decisions/README.md" = "d60c5818ead7728c", "docs/worked-examples.md" = "e78371101742f5a7", "ratect-compat/tests/fixtures/smoke.yml" = "3beca31cc4731323", "ratect-core/src/config.rs" = "1adef80de57f99d5", "ratect-core/src/docker.rs" = "18f229ca2b75ca4a", "ratect-core/src/engine.rs" = "9605e3afb6fcb847", "ratect-core/src/ui.rs" = "3ffc84bcb3bd3eaa", "tools/changelog-section.py" = "45082c17a3944098", "tools/check-doc-links.py" = "bd4bfeb573196e1f", "tools/check-windows-build.py" = "f595fdaa44a0a1d8", "tools/test_python_minimum.py" = "59f30e135461f62a" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1111,18 +1120,18 @@ file = "AGENTS.md"
 mode = "stale-claims"
 unit = "b8f51c8bb848e6ed"
 copies = 1
-note = "Read in full against agents/docs.md's headings: the two config references' deferral rule, the three kinds of example, captured output and Ownership. True."
+note = "Read in full against agents/docs.md's sections (deferral rule, three kinds of example, captured-output rules, Ownership); CHANGELOG.md and ROADMAP.md sit outside docs/."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "ROADMAP.md" = "25955ca943036063", "agents/docs.md" = "252e6e2722865b23" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "ROADMAP.md" = "25955ca943036063", "agents/docs.md" = "252e6e2722865b23" }
 
 [[mark]]
 file = "AGENTS.md"
 mode = "stale-claims"
 unit = "cdb56ba0afdce587"
 copies = 1
-note = "Read against agents/issue-tracker.md after #927 removed its interim paragraph: it is still the GitHub Issues/gh tracker doc for or1can/ratect."
-by = "Claude Code agent"
-subjects = { "agents/issue-tracker.md" = "0d9149df2f5cdc42" }
+note = "Read in full: the tracker is GitHub Issues via gh on or1can/ratect, and agents/issue-tracker.md exists and says so."
+by = "Kevin Rogers"
+subjects = { "agents/issue-tracker.md" = "5a93df9f86acc3c4" }
 
 [[mark]]
 file = "AGENTS.md"
@@ -1253,15 +1262,6 @@ subjects = {}
 [[mark]]
 file = "CONTEXT.md"
 mode = "claim-words-counts"
-unit = "79e7c3bc1ce22bcd"
-copies = 1
-note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "claim-words-counts"
 unit = "79fa92bf77818878"
 copies = 1
 note = "Checked against OwnershipLabels::shared for Owner::ServiceInstance in labels.rs: project, service, instance, start-directory; Ratect writes no run or task label for it, and a network per instance."
@@ -1329,6 +1329,15 @@ unit = "cb4ee4eddeac20af"
 copies = 1
 note = "Checked against engine.rs: one run id (Uuid) per task execution at run_task_internal, network created per execution unless --use-network; fourth review pass confirmed."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-counts"
+unit = "cf0e8d42b9c54239"
+copies = 1
+note = "Checked against #924's D24, D5 and D7: the listed contents are the record's sections, with the Problem only where a run since #938 made a decision."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -1415,6 +1424,15 @@ subjects = {}
 [[mark]]
 file = "CONTEXT.md"
 mode = "claim-words-totalising"
+unit = "3db600e234a6c2a2"
+copies = 1
+note = "Checked against #924's D27: at triage a gap is fixed in flow only after the simpler-design line and any remove-or-reduce decision; elsewhere D16's \"fix it in flow\" stands."
+by = "Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
 unit = "4014dda4e50c5852"
 copies = 1
 note = "Checked against resources::find: RunState::Alive is counted and skipped whatever `all` is."
@@ -1447,15 +1465,6 @@ copies = 1
 note = "engine.rs:53-58 and 2859-2881 and decisions/0019: a dependency's readiness gates only the start of what depends on it. decisions/0012: in the native dialect the task container has no gate. In the compat dialect its gate runs alongside the main command (cancelling it on failure) but holds nothing back, so 'gates nothing' holds in the gating sense. Readers may still conflate that with 'has no gate'."
 by = "Claude Code agent, approved by Kevin Rogers"
 subjects = { "decisions/0012-native-task-container-has-no-readiness-gate.md" = "65be0317e52a91d1", "decisions/0019-readiness-gates-starting-only.md" = "28532204c45f085d" }
-
-[[mark]]
-file = "CONTEXT.md"
-mode = "claim-words-totalising"
-unit = "79e7c3bc1ce22bcd"
-copies = 1
-note = "Glossary entry read against #924's record D5, D7, D16 and D19 and agents/domain.md's single-glossary rule."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
 
 [[mark]]
 file = "CONTEXT.md"
@@ -1518,6 +1527,15 @@ unit = "c84ff0812042158c"
 copies = 1
 note = "entry_lock::attempt plus #877's OrbStack flock result: the lock normally excludes, two holders possible across kernels"
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "CONTEXT.md"
+mode = "claim-words-totalising"
+unit = "cf0e8d42b9c54239"
+copies = 1
+note = "Checked against #924's D24 and gaps G4 and G5: a record holds a Problem only where a settle-design run on that issue since #938 made a decision; \"the one record\" is D5's one record per issue."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -2465,9 +2483,9 @@ file = "agents/docs.md"
 mode = "stale-claims"
 unit = "01b8016fdce455c4"
 copies = 1
-note = "Read in full against the field-reference table as trimmed in this commit (every Semantics cell now a link with at most a native-only qualifier), docs/SUMMARY.md, the named model pages, AGENTS.md guideline 9 and ci.yml's Tools Tests job, with tools/check-readme-docs-list.py run. True; the #158 audit and the list's history aren't checkable in the repo."
+note = "Read the Ownership section in full against ratect-config-reference.md#field-reference, includes.md, installation.md and the other pages it names; every claim holds."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "ROADMAP.md" = "25955ca943036063", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "7327593788ec3ba8", "docs/installation.md" = "f090088ec7661efd", "docs/ratect-config-reference.md" = "5fe6b12262cd5073", "docs/ratect-config-reference.md#field-reference" = "ee1c9a7a72561f02", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "ROADMAP.md" = "25955ca943036063", "decisions/0001-two-binaries.md" = "488c1f45582e5ed3", "decisions/0004-git-include-host-path-trust.md" = "3959f8c321ae3d2d", "decisions/0010-release-binary-distribution.md" = "0ec24c8a1226ce64", "docs/SUMMARY.md" = "7da083d464908433", "docs/comparison.md" = "0eb7bb383099fed1", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/faq.md" = "ab4df46c434b0e66", "docs/getting-started.md" = "c66d620dcac483dc", "docs/includes.md" = "7327593788ec3ba8", "docs/installation.md" = "f090088ec7661efd", "docs/ratect-config-reference.md" = "5fe6b12262cd5073", "docs/ratect-config-reference.md#field-reference" = "ee1c9a7a72561f02", "docs/reusable-building-blocks.md" = "8f231568722de8b7", "docs/task-lifecycle.md" = "997c855099b026a7", "docs/using-ratect-with.md" = "f67a23d7dbfe7a27", "tools/check-readme-docs-list.py" = "ad94f1bb9f2d89b9" }
 
 [[mark]]
 file = "agents/docs.md"
@@ -2510,9 +2528,9 @@ file = "agents/docs.md"
 mode = "stale-claims"
 unit = "f2571114ef32d2be"
 copies = 1
-note = "Read in full against docs/ and docs/SUMMARY.md. True."
+note = "Read the section in full against docs/SUMMARY.md and the root contributor files; CHANGELOG.md, ROADMAP.md, RELEASES.md and decisions/ are outside docs/."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "ROADMAP.md" = "25955ca943036063" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "ROADMAP.md" = "25955ca943036063" }
 
 [[mark]]
 file = "agents/domain.md"
@@ -2537,9 +2555,9 @@ file = "agents/domain.md"
 mode = "stale-claims"
 unit = "57c8e234debc95bb"
 copies = 1
-note = "Read in full: CONTEXT.md, decisions/README.md and decisions/0001 exist, agents/docs.md says why ADRs aren't in docs/adr/, and dockerignore depends only on regex and path-clean. True."
+note = "Read in full against CONTEXT.md, decisions/README.md and agents/docs.md; true."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "d60c5818ead7728c" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "agents/docs.md" = "252e6e2722865b23", "decisions/README.md" = "d60c5818ead7728c" }
 
 [[mark]]
 file = "agents/domain.md"
@@ -2616,10 +2634,10 @@ subjects = {}
 [[mark]]
 file = "agents/issue-tracker.md"
 mode = "claim-words-totalising"
-unit = "c982cf9081491313"
+unit = "ba6bde966c122945"
 copies = 1
-note = "Read against #924's D8 and D9 as amended 2026-11-18: only settle-design creates or changes decisions (check-design and ready append gaps only); to-spec and to-tickets apply ready-for-agent by default, per their SKILL.md files."
-by = "Claude Code agent"
+note = "Checked against #924's D8 (only settle-design writes decisions), D9 (triage runs it on each ticket) and G4 (a pointer-only record gets its Problem where the run made a decision)."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -2627,9 +2645,9 @@ file = "agents/issue-tracker.md"
 mode = "stale-claims"
 unit = "04214ab48a17be41"
 copies = 1
-note = "Read Conventions against `uv run tools/design-record.py --help` after #927 added `get --all`: reading a ticket's record with `get <number>` is unchanged."
-by = "Claude Code agent"
-subjects = { "tools/design-record.py" = "f5581d6e70076156" }
+note = "Read Conventions in full: the get <number> invocation matches design-record.py's usage."
+by = "Kevin Rogers"
+subjects = { "tools/design-record.py" = "339bc6804a04e3dc" }
 
 [[mark]]
 file = "agents/issue-tracker.md"
@@ -2645,9 +2663,9 @@ file = "agents/issue-tracker.md"
 mode = "stale-claims"
 unit = "fab075cc0fa01e32"
 copies = 1
-note = "Read against `uv run tools/design-record.py --help`: `get <number>` still reads the ticket's design record; `--all` is settle-design's merge read, not a ticket read."
-by = "Claude Code agent"
-subjects = { "tools/design-record.py" = "f5581d6e70076156" }
+note = "Read the section in full against design-record.py's get ISSUE usage; true."
+by = "Kevin Rogers"
+subjects = { "tools/design-record.py" = "339bc6804a04e3dc" }
 
 [[mark]]
 file = "agents/issue-tracker.md"
@@ -3014,9 +3032,9 @@ file = "agents/review-brief.md"
 mode = "stale-claims"
 unit = "2ac8ff8d7ace6258"
 copies = 1
-note = "Read the whole brief against ADR 0028's #928 edit and ready's new Routing findings: the four classes, the dispute rule and the design stop wording all still agree; ready restates only the routes (\"fix it if it's worth fixing\", \"fix it in flow\"), not the definitions."
-by = "Claude Code agent"
-subjects = { ".claude/skills/ready/SKILL.md" = "b27e41863d027eb4", "decisions/0028-design-and-implementation-review.md" = "9c717c29ee6b1ac4" }
+note = "Read the intro in full against ADR 0028's Decision 3, settle-design's pass briefing and ready's steps 3-4 and Author habits; true."
+by = "Kevin Rogers"
+subjects = { ".claude/skills/ready/SKILL.md" = "b27e41863d027eb4", "decisions/0028-design-and-implementation-review.md" = "6ec11cf7d3a70c0e" }
 
 [[mark]]
 file = "decisions/0001-two-binaries.md"
@@ -3104,9 +3122,9 @@ file = "decisions/0001-two-binaries.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Re-read after 3c91cbda changed AGENTS.md (CLAUDE.md links to it) in its cargo doc sentence alone: the section names CLAUDE.md only for the \"Where a fixture lives — by layer\" heading, still at AGENTS.md:183, so the earlier full reading against git tags, crate versions, fixture counts, labels.rs, CHANGELOG.md, guideline 7 and dist-workspace.toml stands."
+note = "Read Consequences in full against CHANGELOG.md and the bare v0.1.0-v0.21.0 tags; the \"(ratect only)\" spelling is history its Status already corrects."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "CLAUDE.md" = "800ea70e66547b7f" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "CLAUDE.md" = "800ea70e66547b7f" }
 
 [[mark]]
 file = "decisions/0002-runtime-ownership-labels.md"
@@ -3492,9 +3510,9 @@ file = "decisions/0007-where-agent-process-docs-live.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
-note = "Read against agents/: issue-tracker.md, domain.md and triage-labels.md all still live there; #927 changed only issue-tracker.md's design-record paragraph."
-by = "Claude Code agent"
-subjects = { "agents/domain.md" = "befc2eb13561a492", "agents/issue-tracker.md" = "0d9149df2f5cdc42", "agents/triage-labels.md" = "4f53c9b40ce2651e" }
+note = "Read the Decision in full: true as decided; agents/ now holds more docs than the three it lists \"today\", which is history, and docs/ and decisions/ scope are unchanged."
+by = "Kevin Rogers"
+subjects = { "agents/domain.md" = "befc2eb13561a492", "agents/issue-tracker.md" = "5a93df9f86acc3c4", "agents/triage-labels.md" = "4f53c9b40ce2651e" }
 
 [[mark]]
 file = "decisions/0007-where-agent-process-docs-live.md"
@@ -3510,18 +3528,18 @@ file = "decisions/0008-tracking-release-scope-with-github-issues.md"
 mode = "stale-claims"
 unit = "073c1634c496cdb6"
 copies = 1
-note = "Read against agents/issue-tracker.md's \"Tickets from to-tickets or to-spec\": it still labels them needs-triage so settle-design writes a record, as the Status's amendment says."
-by = "Claude Code agent"
-subjects = { "agents/issue-tracker.md" = "0d9149df2f5cdc42" }
+note = "Read the Status in full: agents/issue-tracker.md labels a to-spec issue needs-triage, as its ratect#926 amendment says."
+by = "Kevin Rogers"
+subjects = { "agents/issue-tracker.md" = "5a93df9f86acc3c4" }
 
 [[mark]]
 file = "decisions/0008-tracking-release-scope-with-github-issues.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
-note = "Read in full against agents/issue-tracker.md and AGENTS.md guidelines 8, 9 and 14. The /to-spec ready-for-agent line no longer holds (needs-triage since ratect#926), and the ADR's Status already records that; everything else holds. Whether /to-spec writes an Implementation Decisions section is a fact about an external skill."
+note = "Read the Decision in full against agents/issue-tracker.md and CHANGELOG.md's headings: the first bullet's ready-for-agent is history the Status already amends (ratect#926); the milestone naming matches."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "agents/issue-tracker.md" = "0d9149df2f5cdc42" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "agents/issue-tracker.md" = "5a93df9f86acc3c4" }
 
 [[mark]]
 file = "decisions/0008-tracking-release-scope-with-github-issues.md"
@@ -3735,9 +3753,9 @@ file = "decisions/0010-release-binary-distribution.md"
 mode = "stale-claims"
 unit = "86ae35d58a6aa3b5"
 copies = 1
-note = "Read in full against dist-workspace.toml, release.yml, ci.yml's Release Pipeline Config job, the main branch protection ruleset and dist plan output. \"It reports today rather than blocks\" no longer holds: the check is required, which the same ADR's Consequences records. Everything else holds."
+note = "Read the Decision in full against dist-workspace.toml, release.yml and ci.yml; true, except \"reports today rather than blocks\", history its Status already corrects (ratect#844)."
 by = "Kevin Rogers"
-subjects = { ".github/workflows/ci.yml" = "ae3bf2c164f8ba4e", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "dist-workspace.toml" = "17839d788f79ca82", "tools/changelog-section.py" = "45082c17a3944098" }
+subjects = { ".github/workflows/ci.yml" = "ae3bf2c164f8ba4e", ".github/workflows/release.yml" = "b6792a8571c0bd61", "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "dist-workspace.toml" = "17839d788f79ca82", "tools/changelog-section.py" = "45082c17a3944098" }
 
 [[mark]]
 file = "decisions/0010-release-binary-distribution.md"
@@ -5573,9 +5591,9 @@ file = "decisions/0016-exit-codes.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read in full against exit_code.rs, both binaries' clap error handling, CONTEXT.md, differences-from-batect.md, both CLI pages' exit-code sections, and spot runs of ratect's debug binary (tasks list with no ratect.toml exits 2, run --bogus exits 125). True."
+note = "Read Consequences in full against CHANGELOG.md's Breaking entries, exit_code.rs's codes and CONTEXT.md; true."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "docs/captures/doctor.ansi" = "233c1ab50cc7e71f", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
 
 [[mark]]
 file = "decisions/0017-output-streams-and-styles.md"
@@ -6500,9 +6518,9 @@ file = "decisions/0017-output-streams-and-styles.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read in full against docs/output-styles.md, ratect's PROGRESS stream, ui.rs's per-stream terminal facts and shared exit wording, CONTEXT.md and differences-from-batect.md. True."
+note = "Read Consequences in full against CHANGELOG.md's stream and notice entries, output-styles.md and CONTEXT.md; true."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "docs/output-styles.md" = "5349d598e5d0c602", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "docs/output-styles.md" = "5349d598e5d0c602", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245", "ratect-core/src/ui/simple.rs" = "03b7005f1d755103", "ratect-core/src/written_for.rs" = "9f69f30a00185f2b" }
 
 [[mark]]
 file = "decisions/0017-output-streams-and-styles.md"
@@ -7400,9 +7418,9 @@ file = "decisions/0019-readiness-gates-starting-only.md"
 mode = "stale-claims"
 unit = "de00163e80311042"
 copies = 1
-note = "Read in full against docs/how-it-works.md, docs/dependency-readiness.md, CONTEXT.md, differences-from-batect.md's --max-parallelism row, the 0.33.0 CHANGELOG entry and docker.rs's create_container. True; the #500/#505 sequencing lines are history."
+note = "Read Consequences in full against CHANGELOG.md, how-it-works.md, dependency-readiness.md and CONTEXT.md's Readiness gate; true."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/how-it-works.md" = "893a5840df601d71", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "docs/dependency-readiness.md" = "f3180b4fb01601e1", "docs/how-it-works.md" = "893a5840df601d71", "ratect-core/src/ui/fancy.rs" = "baab50f84e562245" }
 
 [[mark]]
 file = "decisions/0020-bundle-records-its-written-for-version.md"
@@ -11260,19 +11278,19 @@ subjects = {}
 [[mark]]
 file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-about-elsewhere"
-unit = "22ae231e76944895"
+unit = "2b0a6b820665f302"
 copies = 1
-note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Checked against agents/review-brief.md's four class entries and #924's D16 and D27: the classes, the dispute rule and the in-flow gap route match the brief; the settle-design gap order is the ADR's own, which the brief no longer states (#938's D1 amended)."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
 file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-about-elsewhere"
-unit = "4a2f7089d0cbf8e5"
+unit = "7ed3ff10e1ceecfd"
 copies = 1
-note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Checked against #924's D13's \"Why all\" (code-review's default keeps the 10 most severe survivors) and the settle-design skill's step 3, which gives the flag on every pass."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -11282,6 +11300,15 @@ unit = "c3848dd2d4b2b3c8"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "claim-words-counts"
+unit = "05b6e8defb3bbcf4"
+copies = 1
+note = "Checked against #924's D13: at most two passes, each code-review at high --max-findings all over the whole current design, briefed with decisions and rejected alternatives and no earlier findings; D27 for the question after each."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -11350,24 +11377,6 @@ subjects = {}
 [[mark]]
 file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-counts"
-unit = "4a2f7089d0cbf8e5"
-copies = 1
-note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0028-design-and-implementation-review.md"
-mode = "claim-words-counts"
-unit = "57c2398eb9453a59"
-copies = 1
-note = "Read against #924's D13 as amended 2026-11-18: these are settle-design's inputs and its two-pass cap."
-by = "Claude Code agent"
-subjects = {}
-
-[[mark]]
-file = "decisions/0028-design-and-implementation-review.md"
-mode = "claim-words-counts"
 unit = "5b0478a555a81f58"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
@@ -11399,6 +11408,24 @@ unit = "6c5e4aa72b669165"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "claim-words-counts"
+unit = "73c996161eb74f3e"
+copies = 1
+note = "Checked against #924's D7 as amended by D24 and the design-record.py help's \"What a record holds\": problem where the run made a decision, decisions with their four parts, mechanisms, open points, log."
+by = "Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "claim-words-counts"
+unit = "7ed3ff10e1ceecfd"
+copies = 1
+note = "Checked against #924's D13: two passes, each at --max-findings all, because the default keeps the 10 most severe; \"not yet understood\" after the simpler-design line (D27) and no third pass."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -11440,10 +11467,10 @@ subjects = {}
 [[mark]]
 file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-counts"
-unit = "ac419b0ab087d862"
+unit = "a3a945e92237a680"
 copies = 1
-note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Checked the list against the ADR's Decisions 1-6 and #924's record and amendment log: D22 (amended), D24 and D27 are confirmed 2026-11-20, the rest 2026-11-17; D25 stays in the skill."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -11459,15 +11486,6 @@ subjects = {}
 file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-counts"
 unit = "d510d966827ec103"
-copies = 1
-note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, approved by Kevin Rogers"
-subjects = {}
-
-[[mark]]
-file = "decisions/0028-design-and-implementation-review.md"
-mode = "claim-words-counts"
-unit = "d7449cb890491ff2"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
 by = "Claude Code agent, approved by Kevin Rogers"
@@ -11502,6 +11520,15 @@ subjects = {}
 
 [[mark]]
 file = "decisions/0028-design-and-implementation-review.md"
+mode = "claim-words-counts"
+unit = "fe093895b3d792e4"
+copies = 1
+note = "Checked the decision ids against #924's amendment log line of 2026-11-20 (D13 and D22 amended, D24, D25 and D27 added) and against the five ADR parts the diff changes."
+by = "Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-totalising"
 unit = "141e4c852c87cb26"
 copies = 1
@@ -11521,10 +11548,10 @@ subjects = {}
 [[mark]]
 file = "decisions/0028-design-and-implementation-review.md"
 mode = "claim-words-totalising"
-unit = "22ae231e76944895"
+unit = "2b0a6b820665f302"
 copies = 1
-note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
-by = "Claude Code agent, approved by Kevin Rogers"
+note = "Checked against #924's D16 (the four classes and routes) and D27 (in settle-design a gap waits for the simpler-design check and any remove-or-reduce decision)."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -11624,6 +11651,15 @@ unit = "ed9b503817933366"
 copies = 1
 note = "Read against #924's design record (D1, D5-D9, D13-D17, D19, D20, D23, accepted costs) and #911's figures (1 of 98, 9 or 10, 28 in 18, present flipped three times)."
 by = "Claude Code agent, approved by Kevin Rogers"
+subjects = {}
+
+[[mark]]
+file = "decisions/0028-design-and-implementation-review.md"
+mode = "claim-words-totalising"
+unit = "fe093895b3d792e4"
+copies = 1
+note = "Checked against the staged diff of this ADR: #938 changes exactly Decision 1, Decision 2's contents, Decision 3's gap routing, the two-passes consequence and the interim rule's end, as #938's D1 and G1 list."
+by = "Kevin Rogers"
 subjects = {}
 
 [[mark]]
@@ -17709,9 +17745,9 @@ file = "docs/ratect-config-reference.md"
 mode = "stale-claims"
 unit = "9d67410bcb6185a0"
 copies = 1
-note = "Read in full against written_for.rs, config.rs's misplaced ratect_version check, diagnostics.rs, ratect's main.rs, the written-for fixture and capture, and CHANGELOG.md's ratect.toml Breaking entries (11, matching BREAKING_CHANGES). True."
+note = "Read the section in full against written_for.rs BREAKING_CHANGES and CHANGELOG.md's ratect.toml Breaking entries, which match."
 by = "Kevin Rogers"
-subjects = { "CHANGELOG.md" = "d5372819989f5774e60591ff5d4fd05f3c00d031", "docs/captures/written-for-refusal.ansi" = "3ae8730f1b5399f7" }
+subjects = { "CHANGELOG.md" = "bcbd306cf3d3d8cd6e35ff279bc8dd06fc6f9e8d", "docs/captures/written-for-refusal.ansi" = "3ae8730f1b5399f7" }
 
 [[mark]]
 file = "docs/ratect-config-reference.md"

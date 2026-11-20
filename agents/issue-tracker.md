@@ -93,7 +93,7 @@ reader picks one.
   `settle-design` writes a record's decisions, so triage runs it on each
   ticket; where a parent's record already governs every mechanism the
   ticket changes, the record it writes is a short "governed by #N's
-  design record" one.
+  design record" one, plus its Problem where the run made a decision.
 
 ## When a ticket declares a Parent
 
