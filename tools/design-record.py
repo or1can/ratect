@@ -87,8 +87,17 @@ settle-design's to keep.
 
 `## Design record`, then, as `###` sections:
 
+- `Problem`, first, in the record of an issue whose settle-design run
+  made at least one decision, even where all its mechanisms are pointers:
+  the constraints any design must meet, what must hold and for whom, the
+  cost being saved and how it was measured, and what happens if nothing
+  is built (ratect#924's D24). A record whose run made no decision has
+  none, nor does one from before ratect#938 until a later run on that
+  issue makes a decision. Adding one to a record is a `rewrite`.
 - `Mechanisms`: each mechanism the issue changes, its actors, and a table
   of state by actor where one fits; or a pointer to its owning record.
+  Either form carries each break-the-design pass's simpler-design line
+  for it from this issue's run.
 - `Decisions`: each a paragraph starting `**D1. <what>.**`, saying why, with
   the alternatives rejected and why (`- *Rejected:* ...`) and its accepted
   cost (`- *Accepted cost:* ...`). The rejected alternatives are what let a
@@ -102,7 +111,8 @@ settle-design's to keep.
   changed. An amend's or rewrite's line says why; a gap's or doubt's why
   is its own entry, which the line names.
 
-ratect#924's record is the worked example.
+ratect#924's record is the worked example, and ratect#938's shows where
+a Problem goes, which #924's predates.
 
 # Who writes what
 

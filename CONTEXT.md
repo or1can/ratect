@@ -286,8 +286,10 @@ this is the one glossary. Three tools share these terms
 ([0028](decisions/0028-design-and-implementation-review.md)).
 
 **Design record** — the one record of an issue's design, kept on the issue:
-its decisions, the mechanisms they cover, its open points and an amendment
-log. Links to an ADR's decisions rather than restating them.
+its problem, stated apart from any solution (where a `settle-design` run on
+this issue since #938 has made a decision); its decisions, the mechanisms
+they cover, its open points and an amendment log. Links to an ADR's
+decisions rather than restating them.
 
 **Decision** — one settled choice in a design record, with an id (D1, D2…),
 what was decided and why, the alternatives rejected and why, and its
@@ -302,8 +304,10 @@ naming who must settle it.
 its spec.
 
 **Design gap** — a finding that a design record is silent on a case. Settled
-in flow and appended to the record. Not a **parity gap**, which is a
-difference from Batect.
+in flow and appended to the record; at triage, only once the author has
+asked whether the pass's findings point at a simpler design, and after any
+decision to remove or reduce the mechanism that leads to. Not a **parity
+gap**, which is a difference from Batect.
 
 **Design flaw** — a finding that a design record is wrong, or one whose fix
 would change a decision.
